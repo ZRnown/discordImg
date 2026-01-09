@@ -1,0 +1,22 @@
+import { NextRequest, NextResponse } from 'next/server'
+
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001'
+
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/accounts/${params.id}`, {
+      method: 'DELETE'
+    })
+
+    if (response.ok) {
+      return NextResponse.json({ success: true })
+    } else {
+      return NextResponse.json({ error: 'Failed to delete account' }, { status: response.status })
+    }
+  } catch (error) {
+    return NextResponse.json({ error: 'Backend connection failed' }, { status: 500 })
+  }
+}
