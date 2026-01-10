@@ -14,7 +14,7 @@ export function ImageSearchView() {
   const [uploadedImage, setUploadedImage] = useState<string | null>(null)
   const [isSearching, setIsSearching] = useState(false)
   const [searchHistory, setSearchHistory] = useState<any[]>([])
-  const [threshold, setThreshold] = useState(75) // 0-100
+  const [threshold, setThreshold] = useState(60) // 0-100，默认60%
 
   // 加载搜索历史
   useEffect(() => {

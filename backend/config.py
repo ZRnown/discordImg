@@ -6,7 +6,7 @@ class Config:
 
     # PP-ShiTuV2 & Milvus 配置
     VECTOR_DIMENSION = 512  # PP-ShiTuV2 输出512维特征向量
-    SIMILARITY_THRESHOLD = 0.75  # Milvus 相似度阈值 (0.75 = 75%相似度)
+    SIMILARITY_THRESHOLD = 0.6  # Milvus 相似度阈值 (0.6 = 60%相似度)
 
     # 图像处理配置 (PP-ShiTuV2 自动处理)
     IMAGE_SIZE = (224, 224)  # 预处理后的大小

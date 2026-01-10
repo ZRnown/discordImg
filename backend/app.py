@@ -37,7 +37,7 @@ def search_similar():
             return jsonify({'error': 'No image provided'}), 400
 
         image_file = request.files['image']
-        threshold = float(request.form.get('threshold', 0.75))  # 从0到1
+        threshold = float(request.form.get('threshold', 0.6))  # 从0到1，默认60%
 
         # 保存查询图片到临时文件
         import uuid
