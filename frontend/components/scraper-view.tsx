@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { Search, Copy, ChevronLeft, ChevronRight, Trash2, ImageIcon, Edit, X, Settings } from "lucide-react"
+import { Search, Copy, ChevronLeft, ChevronRight, Trash2, ImageIcon, Edit, X } from "lucide-react"
 import { toast } from "sonner"
 import {
   Dialog,
@@ -36,28 +36,11 @@ export function ScraperView() {
   const [selectedProducts, setSelectedProducts] = useState<number[]>([])
   const [selectAll, setSelectAll] = useState(false)
   const [indexedIds, setIndexedIds] = useState<string[]>([])
-  const [globalMinDelay, setGlobalMinDelay] = useState(3)
-  const [globalMaxDelay, setGlobalMaxDelay] = useState(8)
-  const [showSettings, setShowSettings] = useState(false)
 
   useEffect(() => {
     fetchProducts()
     fetchIndexedIds()
-    fetchGlobalDelay()
   }, [])
-
-  const fetchGlobalDelay = async () => {
-    try {
-      const res = await fetch('/api/global-delay')
-      if (res.ok) {
-        const data = await res.json()
-        setGlobalMinDelay(data.min_delay || 3)
-        setGlobalMaxDelay(data.max_delay || 8)
-      }
-    } catch (e) {
-      console.log("获取全局延迟设置失败:", e)
-    }
-  }
 
   const fetchProducts = async () => {
     try {
@@ -189,87 +172,9 @@ export function ScraperView() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start justify-between">
-        <div className="flex-1">
-          <h2 className="text-3xl font-bold tracking-tight">微店抓取与规则中心</h2>
-          <p className="text-muted-foreground">抓取商品 ID 建立图库索引，CNFans 英文标题将自动作为 Discord 匹配关键词</p>
-        </div>
-        <Dialog open={showSettings} onOpenChange={setShowSettings}>
-          <DialogTrigger asChild>
-            <Button variant="outline" size="sm">
-              <Settings className="w-4 h-4 mr-2" />
-              全局设置
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="max-w-md">
-            <DialogHeader>
-              <DialogTitle>全局延迟设置</DialogTitle>
-              <DialogDescription>
-                设置所有商品自动回复的默认延迟范围，新添加的商品将使用此设置
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4 py-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="min-delay">最小延迟 (秒)</Label>
-                  <Input
-                    id="min-delay"
-                    type="number"
-                    min="0"
-                    max="300"
-                    value={globalMinDelay}
-                    onChange={(e) => setGlobalMinDelay(parseInt(e.target.value) || 0)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="max-delay">最大延迟 (秒)</Label>
-                  <Input
-                    id="max-delay"
-                    type="number"
-                    min="0"
-                    max="300"
-                    value={globalMaxDelay}
-                    onChange={(e) => setGlobalMaxDelay(parseInt(e.target.value) || 0)}
-                  />
-                </div>
-              </div>
-              <div className="p-3 bg-muted/50 rounded-lg">
-                <p className="text-sm text-muted-foreground">
-                  当前设置: {globalMinDelay}-{globalMaxDelay}秒随机延迟
-                </p>
-              </div>
-            </div>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setShowSettings(false)}>
-                取消
-              </Button>
-              <Button
-                onClick={async () => {
-                  try {
-                    const res = await fetch('/api/global-delay', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        min_delay: globalMinDelay,
-                        max_delay: globalMaxDelay
-                      })
-                    })
-                    if (res.ok) {
-                      toast.success("全局延迟设置已保存")
-                      setShowSettings(false)
-                    } else {
-                      toast.error("保存失败")
-                    }
-                  } catch (e) {
-                    toast.error("网络错误")
-                  }
-                }}
-              >
-                保存设置
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+      <div>
+        <h2 className="text-3xl font-bold tracking-tight">微店抓取与规则中心</h2>
+        <p className="text-muted-foreground">抓取商品 ID 建立图库索引，CNFans 英文标题将自动作为 Discord 匹配关键词</p>
       </div>
 
       <Card>

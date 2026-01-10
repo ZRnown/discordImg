@@ -561,52 +561,6 @@ def get_current_account():
         logger.error(f"获取当前账号失败: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/global-delay', methods=['GET'])
-def get_global_delay():
-    """获取全局延迟设置"""
-    try:
-        # 这里可以从数据库或配置文件读取
-        # 暂时返回默认值
-        return jsonify({
-            'min_delay': 3,
-            'max_delay': 8
-        })
-    except Exception as e:
-        logger.error(f"获取全局延迟失败: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/global-delay', methods=['POST'])
-def update_global_delay():
-    """更新全局延迟设置"""
-    try:
-        data = request.json
-        min_delay = data.get('min_delay', 3)
-        max_delay = data.get('max_delay', 8)
-
-        # 验证输入
-        if not isinstance(min_delay, int) or not isinstance(max_delay, int):
-            return jsonify({'error': '延迟必须是整数'}), 400
-
-        if min_delay < 0 or max_delay < 0:
-            return jsonify({'error': '延迟不能为负数'}), 400
-
-        if min_delay > max_delay:
-            return jsonify({'error': '最小延迟不能大于最大延迟'}), 400
-
-        # 这里可以保存到数据库或配置文件
-        # 暂时只返回成功响应
-
-        logger.info(f"全局延迟设置已更新: {min_delay}-{max_delay}秒")
-
-        return jsonify({
-            'success': True,
-            'min_delay': min_delay,
-            'max_delay': max_delay
-        })
-
-    except Exception as e:
-        logger.error(f"更新全局延迟失败: {e}")
-        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/get_indexed_ids', methods=['GET'])
 def get_indexed_ids():

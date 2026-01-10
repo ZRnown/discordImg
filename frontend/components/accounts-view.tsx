@@ -17,7 +17,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Plus, RefreshCw, Trash2, Clock, Save } from "lucide-react"
+import { Plus, RefreshCw, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 export function AccountsView() {
@@ -26,8 +26,6 @@ export function AccountsView() {
   const [newToken, setNewToken] = useState("")
   const [rotationEnabled, setRotationEnabled] = useState(false)
   const [rotationInterval, setRotationInterval] = useState(10)
-  const [globalMinDelay, setGlobalMinDelay] = useState(3)
-  const [globalMaxDelay, setGlobalMaxDelay] = useState(8)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -326,87 +324,6 @@ export function AccountsView() {
           </CardContent>
         </Card>
 
-        <Card className="shadow-sm border-2 border-blue-200/50">
-          <CardHeader className="py-5 border-b bg-blue-50/50">
-            <CardTitle className="text-2xl font-bold flex items-center gap-2">
-              <Clock className="size-6 text-blue-600" />
-              全局延迟设置
-            </CardTitle>
-            <CardDescription className="text-sm">设置所有商品自动回复的默认延迟范围</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6 pt-6">
-            <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label className="text-sm font-bold">默认最小延迟 (秒)</Label>
-                  <Input
-                    type="number"
-                    min="0"
-                    max="300"
-                    value={globalMinDelay}
-                    onChange={(e) => setGlobalMinDelay(parseInt(e.target.value) || 0)}
-                    className="h-10"
-                  />
-                  <p className="text-xs text-muted-foreground">自动回复的最小延迟时间</p>
-                </div>
-                <div className="space-y-2">
-                  <Label className="text-sm font-bold">默认最大延迟 (秒)</Label>
-                  <Input
-                    type="number"
-                    min="0"
-                    max="300"
-                    value={globalMaxDelay}
-                    onChange={(e) => setGlobalMaxDelay(parseInt(e.target.value) || 0)}
-                    className="h-10"
-                  />
-                  <p className="text-xs text-muted-foreground">自动回复的最大延迟时间</p>
-                </div>
-              </div>
-
-              <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
-                <div className="text-sm space-y-2">
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground font-medium">当前设置:</span>
-                    <Badge className="bg-blue-600 hover:bg-blue-700">
-                      {globalMinDelay}-{globalMaxDelay}秒随机延迟
-                    </Badge>
-                  </div>
-                  <div className="text-xs text-muted-foreground">
-                    新添加的商品将使用此延迟范围，现有商品可在编辑中单独调整
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <Button
-              className="w-full h-11 text-sm font-bold shadow-sm"
-              variant="default"
-              onClick={async () => {
-                try {
-                  const response = await fetch('/api/global-delay', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                      min_delay: globalMinDelay,
-                      max_delay: globalMaxDelay
-                    })
-                  })
-
-                  if (response.ok) {
-                    toast.success("全局延迟设置已保存")
-                  } else {
-                    toast.error("保存失败")
-                  }
-                } catch (error) {
-                  toast.error("网络错误，请重试")
-                }
-              }}
-            >
-              <Save className="mr-2 size-4" />
-              保存全局延迟设置
-            </Button>
-          </CardContent>
-        </Card>
       </div>
 
     </div>

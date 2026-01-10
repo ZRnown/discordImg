@@ -69,7 +69,7 @@ export function ImageSearchView() {
       formData.append('threshold', (threshold / 100).toString()); // 转换为0-1
 
       // 发送到后端进行向量搜索
-      const searchRes = await fetch('/search_similar', {
+      const searchRes = await fetch('/api/search_similar', {
         method: 'POST',
         body: formData
       });
