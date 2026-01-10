@@ -377,7 +377,8 @@ class Database:
                             print(f"DEBUG DB: Product info not found for product_id {entity['product_id']}")
                     else:
                         print(f"DEBUG DB: Score {score} below threshold {threshold}, skipping")
-                            break  # 只返回最相似的一个结果
+
+            return matched_results
 
             return matched_results
 
