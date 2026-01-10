@@ -647,6 +647,70 @@ def get_global_reply_delay():
         logger.error(f"获取全局回复延迟失败: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/test_similarity', methods=['POST'])
+def test_similarity():
+    """测试两张图片的相似度"""
+    try:
+        if 'image1' not in request.files or 'image2' not in request.files:
+            return jsonify({'error': '需要提供两张图片'}), 400
+
+        image1_file = request.files['image1']
+        image2_file = request.files['image2']
+
+        # 保存临时文件
+        import uuid
+        temp_dir = os.path.join(config.IMAGE_SAVE_DIR, 'temp')
+        os.makedirs(temp_dir, exist_ok=True)
+
+        image1_path = os.path.join(temp_dir, f'test1_{uuid.uuid4()}.jpg')
+        image2_path = os.path.join(temp_dir, f'test2_{uuid.uuid4()}.jpg')
+
+        image1_file.save(image1_path)
+        image2_file.save(image2_path)
+
+        try:
+            # 提取特征
+            features1 = extract_features(image1_path)
+            features2 = extract_features(image2_path)
+
+            if features1 is None or features2 is None:
+                return jsonify({'error': '特征提取失败'}), 500
+
+            # 计算余弦相似度
+            import numpy as np
+            dot_product = np.dot(features1, features2)
+            norm1 = np.linalg.norm(features1)
+            norm2 = np.linalg.norm(features2)
+
+            if norm1 == 0 or norm2 == 0:
+                cosine_similarity = 0.0
+            else:
+                cosine_similarity = dot_product / (norm1 * norm2)
+
+            # 确保相似度在[0,1]范围内
+            cosine_similarity = max(0.0, min(1.0, cosine_similarity))
+
+            return jsonify({
+                'similarity': float(cosine_similarity),
+                'similarity_percentage': float(cosine_similarity * 100),
+                'model': 'PPLCNetV2_base (PP-ShiTuV2)',
+                'vector_dimension': len(features1),
+                'features1_norm': float(norm1),
+                'features2_norm': float(norm2),
+                'dot_product': float(dot_product)
+            })
+
+        finally:
+            # 清理临时文件
+            if os.path.exists(image1_path):
+                os.remove(image1_path)
+            if os.path.exists(image2_path):
+                os.remove(image2_path)
+
+    except Exception as e:
+        logger.error(f"相似度测试失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/config/global-reply-delay', methods=['POST'])
 def update_global_reply_delay():
     """更新全局回复延迟配置"""

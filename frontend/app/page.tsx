@@ -5,6 +5,7 @@ import { DashboardView } from "@/components/dashboard-view"
 import { AccountsView } from "@/components/accounts-view"
 import { ScraperView } from "@/components/scraper-view"
 import { ImageSearchView } from "@/components/image-search-view"
+import { SimilarityTestView } from "@/components/similarity-test-view"
 import { RulesView } from "@/components/rules-view"
 import { LogsView } from "@/components/logs-view"
 import { AppSidebar } from "@/components/app-sidebar"
@@ -27,6 +28,7 @@ export default function Page() {
           {currentView === "accounts" && <AccountsView />}
           {currentView === "scraper" && <ScraperView />}
           {currentView === "image-search" && <ImageSearchView />}
+          {currentView === "similarity-test" && <SimilarityTestView />}
           {currentView === "logs" && <LogsView />}
         </main>
       </SidebarInset>

@@ -1,6 +1,6 @@
 "use client"
 
-import { LayoutDashboard, Users, Search, ImageIcon, ListTree, ScrollText, Bot, Settings } from "lucide-react"
+import { LayoutDashboard, Users, Search, ImageIcon, ListTree, ScrollText, Bot, Settings, TestTube } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -18,6 +18,7 @@ const menuItems = [
   { id: "accounts", icon: Users, label: "账号与规则" },
   { id: "scraper", icon: Search, label: "微店抓取" },
   { id: "image-search", icon: ImageIcon, label: "以图搜图" },
+  { id: "similarity-test", icon: TestTube, label: "相似度测试" },
   { id: "logs", icon: ScrollText, label: "实时日志" },
 ]
 
