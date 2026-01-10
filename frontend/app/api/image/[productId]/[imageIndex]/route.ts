@@ -4,11 +4,12 @@ const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:500
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { productId: string; imageIndex: string } }
+  { params }: { params: Promise<{ productId: string; imageIndex: string }> }
 ) {
   try {
-    const productId = params.productId;
-    const imageIndex = params.imageIndex;
+    const resolvedParams = await params;
+    const productId = resolvedParams.productId;
+    const imageIndex = resolvedParams.imageIndex;
 
     const response = await fetch(`${BACKEND_URL}/api/image/${productId}/${imageIndex}`);
 
