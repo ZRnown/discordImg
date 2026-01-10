@@ -416,62 +416,6 @@ export function AccountsView() {
               </div>
             </div>
 
-            {/* 状态信息区域 */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="p-4 bg-purple-50/30 rounded-lg border border-purple-200/50">
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="w-2 h-2 bg-purple-500 rounded-full"></div>
-                  <span className="font-medium text-sm">相似度阈值</span>
-                </div>
-                <div className="text-2xl font-bold text-purple-600">
-                  {(discordThreshold * 100).toFixed(0)}%
-                </div>
-                <div className="text-xs text-muted-foreground mt-1">
-                  Discord图片匹配标准
-                </div>
-              </div>
-
-              <div className="p-4 bg-green-50/30 rounded-lg border border-green-200/50">
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                  <span className="font-medium text-sm">回复延迟</span>
-                </div>
-                <div className="text-2xl font-bold text-green-600">
-                  {globalMinDelay}-{globalMaxDelay}秒
-                </div>
-                <div className="text-xs text-muted-foreground mt-1">
-                  随机延迟范围
-                </div>
-              </div>
-
-              <div className="p-4 bg-orange-50/30 rounded-lg border border-orange-200/50">
-                <div className="flex items-center gap-2 mb-2">
-                  <div className="w-2 h-2 bg-orange-500 rounded-full"></div>
-                  <span className="font-medium text-sm">活跃账户</span>
-                </div>
-                <div className="text-2xl font-bold text-orange-600">
-                  {accounts.filter(a => a.status === 'online').length}
-                </div>
-                <div className="text-xs text-muted-foreground mt-1">
-                  已连接的Discord账户
-                </div>
-              </div>
-            </div>
-
-            {/* 配置说明 */}
-            <div className="p-4 bg-blue-50 rounded-lg border border-blue-200">
-              <div className="flex items-start gap-3">
-                <div className="text-blue-600 mt-0.5">ℹ️</div>
-                <div className="space-y-2">
-                  <div className="font-medium text-sm text-blue-800">配置说明</div>
-                  <div className="text-sm text-blue-700 space-y-1">
-                    <div>• 相似度阈值：控制Discord机器人识别图片的敏感度，建议40-60%</div>
-                    <div>• 全局延迟：所有自动回复都使用此延迟范围，避免被平台检测</div>
-                    <div>• 修改设置后需要重启Discord机器人服务才能生效</div>
-                  </div>
-                </div>
-              </div>
-            </div>
 
             {/* 保存按钮 */}
             <div className="flex gap-3">

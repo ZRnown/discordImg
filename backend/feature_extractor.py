@@ -90,24 +90,6 @@ class PPShiTuV2FeatureExtractor:
             except Exception:
                 logger.debug("未检测到 PaddleClas，使用 paddle.vision 的 mobilenet 作为后备")
 
-            # 最后回退：使用 paddle.vision 的 mobilenet_v3_small
-            from paddle.vision.models import mobilenet_v3_small
-            logger.info("正在加载 PaddlePaddle MobileNetV3Small 特征提取模型（后备）...")
-            full_model = mobilenet_v3_small(pretrained=True)
-            # 移除分类层以获得特征向量
-            self.model = paddle.nn.Sequential(
-                full_model.conv,
-                full_model.blocks,
-                full_model.lastconv,
-                full_model.avgpool,
-                paddle.nn.Flatten()
-            )
-            self.model.eval()
-            self._use_paddleclas = False
-            self._use_inference = False
-            self.predictor = None
-            logger.info("✅ MobileNetV3Small (后备) 模型加载成功！")
-
         except Exception as e:
             logger.error(f"❌ PP-ShiTuV2 模型加载失败: {e}")
             logger.error("❌ 严格要求使用 PP-ShiTuV2 模型，不提供任何后备方案")
