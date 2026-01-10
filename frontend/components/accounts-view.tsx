@@ -27,6 +27,8 @@ export function AccountsView() {
   const [rotationEnabled, setRotationEnabled] = useState(false)
   const [rotationInterval, setRotationInterval] = useState(10)
   const [discordThreshold, setDiscordThreshold] = useState(0.4)
+  const [globalMinDelay, setGlobalMinDelay] = useState(3)
+  const [globalMaxDelay, setGlobalMaxDelay] = useState(8)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -34,6 +36,19 @@ export function AccountsView() {
     fetchRotationConfig()
     fetchGlobalDelay()
   }, [])
+
+  const fetchGlobalDelay = async () => {
+    try {
+      const response = await fetch('/api/global-delay')
+      if (response.ok) {
+        const data = await response.json()
+        setGlobalMinDelay(data.min_delay || 3)
+        setGlobalMaxDelay(data.max_delay || 8)
+      }
+    } catch (error) {
+      console.error('Failed to fetch global delay:', error)
+    }
+  }
 
   const fetchAccounts = async () => {
     try {
@@ -325,50 +340,200 @@ export function AccountsView() {
           </CardContent>
         </Card>
 
+        <Card className="shadow-sm border-2 border-green-200/50">
+          <CardHeader className="py-5 border-b bg-green-50/50">
+            <CardTitle className="text-2xl font-bold flex items-center gap-2">
+              <Clock className="size-6 text-green-600" />
+              全局回复延迟设置
+            </CardTitle>
+            <CardDescription className="text-sm">设置所有自动回复的延迟时间范围</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6 pt-6">
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label className="text-sm font-bold">最小延迟 (秒)</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="300"
+                    value={globalMinDelay}
+                    onChange={(e) => setGlobalMinDelay(parseInt(e.target.value) || 0)}
+                    className="h-10"
+                    placeholder="3"
+                  />
+                  <p className="text-xs text-muted-foreground">自动回复的最小延迟时间</p>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-sm font-bold">最大延迟 (秒)</Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="300"
+                    value={globalMaxDelay}
+                    onChange={(e) => setGlobalMaxDelay(parseInt(e.target.value) || 0)}
+                    className="h-10"
+                    placeholder="8"
+                  />
+                  <p className="text-xs text-muted-foreground">自动回复的最大延迟时间</p>
+                </div>
+              </div>
+
+              <div className="p-4 bg-green-50 rounded-lg border border-green-200">
+                <div className="text-sm space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted-foreground font-medium">当前全局延迟设置:</span>
+                    <Badge className="bg-green-600 hover:bg-green-700">
+                      {globalMinDelay}-{globalMaxDelay}秒随机延迟
+                    </Badge>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    所有启用自动回复的商品都将使用此延迟范围，避免被检测为机器人
+                  </div>
+                  <div className="text-xs text-muted-foreground mt-2">
+                    💡 建议设置: 电商场景推荐3-8秒，内容社区可适当延长
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <Button
+              className="w-full h-11 text-sm font-bold shadow-sm"
+              variant="default"
+              onClick={async () => {
+                try {
+                  const response = await fetch('/api/global-delay', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      min_delay: globalMinDelay,
+                      max_delay: globalMaxDelay
+                    })
+                  })
+
+                  if (response.ok) {
+                    toast.success("全局延迟设置已保存")
+                  } else {
+                    toast.error("保存失败")
+                  }
+                } catch (error) {
+                  toast.error("网络错误，请重试")
+                }
+              }}
+            >
+              <Save className="mr-2 size-4" />
+              保存全局延迟设置
+            </Button>
+          </CardContent>
+        </Card>
+
         <Card className="shadow-sm border-2 border-purple-200/50">
           <CardHeader className="py-5 border-b bg-purple-50/50">
             <CardTitle className="text-2xl font-bold flex items-center gap-2">
               <MessageCircle className="size-6 text-purple-600" />
-              Discord 机器人配置
+              Discord 机器人高级配置
             </CardTitle>
             <CardDescription className="text-sm">设置 Discord 自动回复的相似度阈值</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6 pt-6">
-            <div className="space-y-4">
-              <div className="grid grid-cols-1 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* 相似度阈值设置 */}
+              <div className="space-y-3">
+                <Label className="text-sm font-bold flex items-center gap-2">
+                  🎯 相似度阈值
+                  <Badge className="bg-purple-600 hover:bg-purple-700 text-xs">
+                    {(discordThreshold * 100).toFixed(0)}%
+                  </Badge>
+                </Label>
                 <div className="space-y-2">
-                  <Label className="text-sm font-bold">Discord 相似度阈值</Label>
-                  <div className="flex items-center gap-4">
-                    <Input
-                      type="number"
-                      min="0"
-                      max="1"
-                      step="0.05"
-                      value={discordThreshold}
-                      onChange={(e) => setDiscordThreshold(parseFloat(e.target.value) || 0.4)}
-                      className="h-10 w-24"
-                      placeholder="0.4"
-                    />
-                    <span className="text-sm text-muted-foreground">
-                      {(discordThreshold * 100).toFixed(0)}%
-                    </span>
-                  </div>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={discordThreshold}
+                    onChange={(e) => setDiscordThreshold(parseFloat(e.target.value) || 0.4)}
+                    className="h-10"
+                    placeholder="0.4"
+                  />
                   <p className="text-xs text-muted-foreground">
-                    Discord 机器人只对相似度超过此阈值的图片进行自动回复 (0.0-1.0)
+                    只有相似度超过此值的图片才会触发自动回复
                   </p>
                 </div>
               </div>
 
-              <div className="p-4 bg-purple-50 rounded-lg border border-purple-200">
-                <div className="text-sm space-y-2">
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground font-medium">当前Discord阈值:</span>
-                    <Badge className="bg-purple-600 hover:bg-purple-700">
-                      {(discordThreshold * 100).toFixed(0)}%
+              {/* 回复策略设置 */}
+              <div className="space-y-3">
+                <Label className="text-sm font-bold flex items-center gap-2">
+                  🚀 回复策略
+                </Label>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between p-3 bg-purple-50/50 rounded-lg border">
+                    <div>
+                      <div className="font-medium text-sm">使用全局延迟</div>
+                      <div className="text-xs text-muted-foreground">应用统一的回复延迟设置</div>
+                    </div>
+                    <Badge className="bg-green-600 hover:bg-green-700">
+                      {globalMinDelay}-{globalMaxDelay}秒
                     </Badge>
                   </div>
-                  <div className="text-xs text-muted-foreground">
-                    Discord 机器人将使用此阈值自动回复图片消息
+                </div>
+              </div>
+            </div>
+
+            {/* 机器人状态信息 */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="p-4 bg-purple-50/30 rounded-lg border border-purple-200/50">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                  <span className="font-medium text-sm">活跃账户</span>
+                </div>
+                <div className="text-2xl font-bold text-green-600">
+                  {accounts.filter(a => a.status === 'online').length}
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  已连接的Discord账户
+                </div>
+              </div>
+
+              <div className="p-4 bg-blue-50/30 rounded-lg border border-blue-200/50">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                  <span className="font-medium text-sm">监听频道</span>
+                </div>
+                <div className="text-2xl font-bold text-blue-600">
+                  #{config?.DISCORD_CHANNEL_ID || '全部'}
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  机器人监听的频道范围
+                </div>
+              </div>
+
+              <div className="p-4 bg-orange-50/30 rounded-lg border border-orange-200/50">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-2 h-2 bg-orange-500 rounded-full"></div>
+                  <span className="font-medium text-sm">PP-ShiTuV2</span>
+                </div>
+                <div className="text-2xl font-bold text-orange-600">
+                  512维
+                </div>
+                <div className="text-xs text-muted-foreground mt-1">
+                  图像特征向量维度
+                </div>
+              </div>
+            </div>
+
+            {/* 高级设置提示 */}
+            <div className="p-4 bg-yellow-50 rounded-lg border border-yellow-200">
+              <div className="flex items-start gap-3">
+                <div className="text-yellow-600 mt-0.5">⚠️</div>
+                <div className="space-y-2">
+                  <div className="font-medium text-sm text-yellow-800">重要提醒</div>
+                  <div className="text-sm text-yellow-700 space-y-1">
+                    <div>• 相似度阈值过低可能导致误触发，过高可能错过相似商品</div>
+                    <div>• 建议在电商场景设置40-60%，内容社区可适当降低</div>
+                    <div>• 修改设置后需要重启Discord机器人服务才能生效</div>
+                    <div>• 机器人只处理包含图片的消息，文字消息不会触发</div>
                   </div>
                 </div>
               </div>
@@ -386,9 +551,8 @@ export function AccountsView() {
                       threshold: discordThreshold
                     })
                   })
-
                   if (response.ok) {
-                    toast.success("Discord 阈值设置已保存")
+                    toast.success("Discord 高级配置已保存")
                   } else {
                     toast.error("保存失败")
                   }
@@ -398,7 +562,7 @@ export function AccountsView() {
               }}
             >
               <Save className="mr-2 size-4" />
-              保存 Discord 阈值设置
+              保存 Discord 高级配置
             </Button>
           </CardContent>
         </Card>

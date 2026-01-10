@@ -5,6 +5,10 @@ class Config:
     DISCORD_CHANNEL_ID = int(os.getenv('DISCORD_CHANNEL_ID', 0)) if os.getenv('DISCORD_CHANNEL_ID') else 0
     DISCORD_SIMILARITY_THRESHOLD = float(os.getenv('DISCORD_SIMILARITY_THRESHOLD', '0.4'))  # Discord机器人相似度阈值
 
+    # 全局回复延迟配置
+    GLOBAL_MIN_DELAY = int(os.getenv('GLOBAL_MIN_DELAY', '3'))  # 全局最小延迟秒数
+    GLOBAL_MAX_DELAY = int(os.getenv('GLOBAL_MAX_DELAY', '8'))  # 全局最大延迟秒数
+
     # PP-ShiTuV2 & Milvus 配置
     VECTOR_DIMENSION = 512  # PP-ShiTuV2 输出512维特征向量
     SIMILARITY_THRESHOLD = 0.3  # Milvus 相似度阈值 (0.3 = 30%相似度，更宽容)

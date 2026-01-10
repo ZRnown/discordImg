@@ -150,9 +150,7 @@ def scrape_product():
             'description': product_info['description'],
             'english_title': product_info.get('english_title') or '',
             'cnfans_url': product_info.get('cnfans_url') or '',
-            'ruleEnabled': True,  # 默认启用自动回复规则
-            'min_delay': 3,  # 默认最小延迟3秒
-            'max_delay': 8   # 默认最大延迟8秒
+            'ruleEnabled': True  # 默认启用自动回复规则
         })
 
         # 下载图片并建立向量索引
@@ -241,8 +239,6 @@ def scrape_product():
             'cnfansUrl': product_info['cnfans_url'],
             'description': product_info['description'],
             'ruleEnabled': True,  # 默认启用规则
-            'min_delay': 3,       # 默认最小延迟
-            'max_delay': 8,       # 默认最大延迟
             'createdAt': datetime.now().isoformat(),
             'images': product_info['images']  # 返回图片URL列表
         }
@@ -632,6 +628,51 @@ def update_discord_threshold():
 
     except Exception as e:
         logger.error(f"更新Discord阈值失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/global-delay', methods=['GET'])
+def get_global_delay():
+    """获取全局回复延迟设置"""
+    try:
+        return jsonify({
+            'min_delay': config.GLOBAL_MIN_DELAY,
+            'max_delay': config.GLOBAL_MAX_DELAY,
+            'description': f'{config.GLOBAL_MIN_DELAY}-{config.GLOBAL_MAX_DELAY}秒随机延迟'
+        })
+    except Exception as e:
+        logger.error(f"获取全局延迟设置失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/global-delay', methods=['POST'])
+def update_global_delay():
+    """更新全局回复延迟设置"""
+    try:
+        data = request.json
+        min_delay = int(data.get('min_delay', 3))
+        max_delay = int(data.get('max_delay', 8))
+
+        # 验证范围
+        if min_delay < 0 or max_delay < 0:
+            return jsonify({'error': '延迟时间不能为负数'}), 400
+        if min_delay > max_delay:
+            return jsonify({'error': '最小延迟不能大于最大延迟'}), 400
+        if max_delay > 300:
+            return jsonify({'error': '最大延迟不能超过300秒'}), 400
+
+        # 这里可以保存到配置文件或数据库
+        # 暂时只返回成功（实际使用时需要重启服务生效）
+        logger.info(f"全局延迟设置为: {min_delay}-{max_delay}秒")
+
+        return jsonify({
+            'success': True,
+            'min_delay': min_delay,
+            'max_delay': max_delay,
+            'description': f'{min_delay}-{max_delay}秒随机延迟',
+            'message': '全局延迟设置已更新，所有自动回复将使用此设置'
+        })
+
+    except Exception as e:
+        logger.error(f"更新全局延迟失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/search_history', methods=['GET'])

@@ -42,8 +42,6 @@ class Database:
                     english_title TEXT,
                     cnfans_url TEXT,
                     ruleEnabled BOOLEAN DEFAULT 1,
-                    min_delay INTEGER DEFAULT 3,
-                    max_delay INTEGER DEFAULT 8,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
@@ -51,16 +49,6 @@ class Database:
             # 为现有表添加新字段（如果不存在）
             try:
                 cursor.execute('ALTER TABLE products ADD COLUMN ruleEnabled BOOLEAN DEFAULT 1')
-            except sqlite3.OperationalError:
-                pass  # 字段已存在
-
-            try:
-                cursor.execute('ALTER TABLE products ADD COLUMN min_delay INTEGER DEFAULT 3')
-            except sqlite3.OperationalError:
-                pass  # 字段已存在
-
-            try:
-                cursor.execute('ALTER TABLE products ADD COLUMN max_delay INTEGER DEFAULT 8')
             except sqlite3.OperationalError:
                 pass  # 字段已存在
 
@@ -217,17 +205,15 @@ class Database:
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT OR REPLACE INTO products
-                (product_url, title, description, english_title, cnfans_url, ruleEnabled, min_delay, max_delay)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (product_url, title, description, english_title, cnfans_url, ruleEnabled)
+                VALUES (?, ?, ?, ?, ?, ?)
             ''', (
                 product_data['product_url'],
                 product_data.get('title', ''),
                 product_data.get('description', ''),
                 product_data.get('english_title', ''),
                 product_data.get('cnfans_url', ''),
-                product_data.get('ruleEnabled', True),
-                product_data.get('min_delay', 3),
-                product_data.get('max_delay', 8)
+                product_data.get('ruleEnabled', True)
             ))
             product_id = cursor.lastrowid
             conn.commit()

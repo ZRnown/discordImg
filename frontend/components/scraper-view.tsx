@@ -377,7 +377,6 @@ export function ScraperView() {
                       {((product.createdAt) || (product.created_at)) && (
                         <span className="text-[11px] text-muted-foreground italic">创建: {new Date(product.createdAt || product.created_at).toLocaleString()}</span>
                       )}
-                      {product.ruleEnabled && <span className="text-[11px] text-purple-600 font-bold">延迟: {product.min_delay}-{product.max_delay}s</span>}
                     </div>
                   </div>
                 </div>
@@ -500,34 +499,6 @@ export function ScraperView() {
                             </div>
                           </div>
 
-                              <div className="space-y-2">
-                                <Label>回复延迟范围 (秒)</Label>
-                                <div className="flex gap-2">
-                                  <div className="flex-1">
-                                    <Label className="text-xs text-gray-600">最小</Label>
-                                    <Input
-                                      type="number"
-                                      min="0"
-                                      max="300"
-                                      placeholder="0"
-                                      value={editingProduct?.min_delay || 0}
-                                      onChange={(e) => setEditingProduct({...editingProduct, min_delay: parseInt(e.target.value) || 0})}
-                                    />
-                                  </div>
-                                  <div className="flex-1">
-                                    <Label className="text-xs text-gray-600">最大</Label>
-                                    <Input
-                                      type="number"
-                                      min="0"
-                                      max="300"
-                                      placeholder="0"
-                                      value={editingProduct?.max_delay || 0}
-                                      onChange={(e) => setEditingProduct({...editingProduct, max_delay: parseInt(e.target.value) || 0})}
-                                    />
-                                  </div>
-                                </div>
-                                <p className="text-xs text-gray-500">在指定范围内随机延迟回复，0表示立即回复</p>
-                              </div>
                             </>
                           )}
                         </div>
