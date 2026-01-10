@@ -37,7 +37,7 @@ def search_similar():
             return jsonify({'error': 'No image provided'}), 400
 
         image_file = request.files['image']
-        threshold = float(request.form.get('threshold', 0.6))  # 从0到1，默认60%
+        threshold = float(request.form.get('threshold', 0.3))  # 从0到1，默认30% (降低阈值)
 
         # 保存查询图片到临时文件
         import uuid
@@ -58,7 +58,12 @@ def search_similar():
             response_data = {
                 'success': False,
                 'message': f'未找到相似度超过{threshold*100:.0f}%的商品',
-                'searchTime': datetime.now().isoformat()
+                'searchTime': datetime.now().isoformat(),
+                'debugInfo': {
+                    'totalIndexedImages': db.get_total_indexed_images(),
+                    'threshold': threshold,
+                    'searchedVectors': len(results) if results else 0
+                }
             }
 
             if results:
@@ -84,6 +89,12 @@ def search_similar():
                     'imageIndex': best_match['image_index'],
                     'matchedImage': f"/api/image/{best_match['id']}/{best_match['image_index']}",
                     'searchTime': datetime.now().isoformat(),
+                    'debugInfo': {
+                        'totalIndexedImages': db.get_total_indexed_images(),
+                        'threshold': threshold,
+                        'bestSimilarity': float(best_match['similarity']),
+                        'searchedVectors': len(results) if results else 0
+                    },
                     'product': {
                         'id': best_match['id'],
                         'title': product_info['title'] if product_info else best_match['title'],

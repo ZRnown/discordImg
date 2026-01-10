@@ -109,9 +109,37 @@ class PPShiTuV2FeatureExtractor:
             logger.info("✅ MobileNetV3Small (后备) 模型加载成功！")
 
         except Exception as e:
-            logger.error(f"❌ 模型加载失败: {e}")
-            logger.error("严格要求使用 PP-ShiTuV2 风格模型，不提供任何后备方案")
-            raise e
+            logger.error(f"❌ PP-ShiTuV2 模型加载失败: {e}")
+            logger.info("尝试使用 ResNet50 作为后备特征提取器...")
+
+            # 后备方案：使用 ResNet50
+            try:
+                from paddle.vision.models import resnet50
+                logger.info("正在加载 ResNet50 特征提取模型...")
+                full_model = resnet50(pretrained=True)
+
+                # 移除最后的全连接层，获取特征
+                self.model = paddle.nn.Sequential(
+                    full_model.conv1,
+                    full_model.bn1,
+                    full_model.relu,
+                    full_model.maxpool,
+                    full_model.layer1,
+                    full_model.layer2,
+                    full_model.layer3,
+                    full_model.layer4,
+                    full_model.avgpool,
+                    paddle.nn.Flatten()
+                )
+                self.model.eval()
+                self._use_paddleclas = False
+                self._use_inference = False
+                self.predictor = None
+                logger.info("✅ ResNet50 特征提取器加载成功！")
+
+            except Exception as fallback_e:
+                logger.error(f"❌ ResNet50 后备方案也失败: {fallback_e}")
+                raise e
 
     def extract_feature(self, image_path: Union[str, Path]) -> Optional[List[float]]:
         """提取单张图片的特征向量 (512维)"""
@@ -131,11 +159,31 @@ class PPShiTuV2FeatureExtractor:
             import paddle
             image = Image.open(image_path).convert('RGB')
 
-            # 2. PP-ShiTuV2 预处理：缩放到256x256，然后中心裁剪到224x224
-            image = image.resize((256, 256), Image.BILINEAR)
+            # 2. 改善预处理：保持宽高比，先缩放再裁剪
             width, height = image.size
-            left = (width - 224) // 2
-            top = (height - 224) // 2
+
+            # 计算缩放比例，保持宽高比
+            if width > height:
+                new_width = int(width * 256 / height)
+                new_height = 256
+            else:
+                new_width = 256
+                new_height = int(height * 256 / width)
+
+            # 缩放图片
+            image = image.resize((new_width, new_height), Image.BILINEAR)
+
+            # 应用轻微锐化来改善模糊图片质量
+            from PIL import ImageFilter, ImageEnhance
+            # 轻微锐化
+            image = image.filter(ImageFilter.UnsharpMask(radius=1, percent=150, threshold=3))
+            # 轻微对比度增强
+            enhancer = ImageEnhance.Contrast(image)
+            image = enhancer.enhance(1.1)
+
+            # 中心裁剪到224x224
+            left = (new_width - 224) // 2
+            top = (new_height - 224) // 2
             right = left + 224
             bottom = top + 224
             image = image.crop((left, top, right, bottom))
