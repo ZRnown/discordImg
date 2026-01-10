@@ -81,6 +81,12 @@ ID: {sku_id}
 CNFans: {product.get('cnfansUrl', 'N/A')}
 """
 
+                            # 使用全局延迟配置
+                            if config.GLOBAL_REPLY_MIN_DELAY > 0 or config.GLOBAL_REPLY_MAX_DELAY > 0:
+                                delay = random.uniform(config.GLOBAL_REPLY_MIN_DELAY, config.GLOBAL_REPLY_MAX_DELAY)
+                                logger.info(f"延迟回复 {delay:.2f} 秒...")
+                                await asyncio.sleep(delay)
+
                             await message.channel.send(response)
                         else:
                             await message.channel.send('❌ 未能识别出相似商品')

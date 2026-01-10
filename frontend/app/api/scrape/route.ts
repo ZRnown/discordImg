@@ -133,7 +133,7 @@ export async function DELETE(request: Request) {
       method: 'DELETE'
     });
     if (response.ok) {
-      return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true });
     } else {
       const err = await response.json();
       return NextResponse.json(err, { status: response.status });

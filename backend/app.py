@@ -143,7 +143,7 @@ def scrape_product():
         if not product_info:
             return jsonify({'error': '商品信息抓取失败，请检查URL是否正确'}), 500
 
-        # 保存到数据库
+        # 保存到数据库（使用全局延迟配置）
         product_id = db.insert_product({
             'product_url': product_info['weidian_url'],
             'title': product_info['title'],
@@ -313,6 +313,9 @@ def list_products():
                 prod['englishTitle'] = prod.get('english_title') or prod.get('englishTitle') or ''
                 prod['cnfansUrl'] = prod.get('cnfans_url') or prod.get('cnfansUrl') or ''
                 prod['createdAt'] = prod.get('created_at') or prod.get('createdAt')
+                # 移除商品级别延迟，使用全局延迟
+                prod.pop('min_delay', None)
+                prod.pop('max_delay', None)
                 products.append(prod)
         return jsonify(products)
     except Exception as e:
@@ -630,22 +633,23 @@ def update_discord_threshold():
         logger.error(f"更新Discord阈值失败: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/global-delay', methods=['GET'])
-def get_global_delay():
-    """获取全局回复延迟设置"""
+@app.route('/api/config/global-reply-delay', methods=['GET'])
+def get_global_reply_delay():
+    """获取全局回复延迟配置"""
     try:
+        delay_config = db.get_global_reply_config()
         return jsonify({
-            'min_delay': config.GLOBAL_MIN_DELAY,
-            'max_delay': config.GLOBAL_MAX_DELAY,
-            'description': f'{config.GLOBAL_MIN_DELAY}-{config.GLOBAL_MAX_DELAY}秒随机延迟'
+            'min_delay': delay_config['min_delay'],
+            'max_delay': delay_config['max_delay'],
+            'description': f'{delay_config["min_delay"]}-{delay_config["max_delay"]}秒随机延迟'
         })
     except Exception as e:
-        logger.error(f"获取全局延迟设置失败: {e}")
+        logger.error(f"获取全局回复延迟失败: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/global-delay', methods=['POST'])
-def update_global_delay():
-    """更新全局回复延迟设置"""
+@app.route('/api/config/global-reply-delay', methods=['POST'])
+def update_global_reply_delay():
+    """更新全局回复延迟配置"""
     try:
         data = request.json
         min_delay = int(data.get('min_delay', 3))
@@ -659,20 +663,22 @@ def update_global_delay():
         if max_delay > 300:
             return jsonify({'error': '最大延迟不能超过300秒'}), 400
 
-        # 这里可以保存到配置文件或数据库
-        # 暂时只返回成功（实际使用时需要重启服务生效）
-        logger.info(f"全局延迟设置为: {min_delay}-{max_delay}秒")
+        # 保存到数据库
+        if db.update_global_reply_config(min_delay, max_delay):
+            logger.info(f"全局回复延迟设置为: {min_delay}-{max_delay}秒")
 
-        return jsonify({
-            'success': True,
-            'min_delay': min_delay,
-            'max_delay': max_delay,
-            'description': f'{min_delay}-{max_delay}秒随机延迟',
-            'message': '全局延迟设置已更新，所有自动回复将使用此设置'
-        })
+            return jsonify({
+                'success': True,
+                'min_delay': min_delay,
+                'max_delay': max_delay,
+                'description': f'{min_delay}-{max_delay}秒随机延迟',
+                'message': '全局回复延迟设置已更新，所有自动回复将使用此设置'
+            })
+        else:
+            return jsonify({'error': '保存失败'}), 500
 
     except Exception as e:
-        logger.error(f"更新全局延迟失败: {e}")
+        logger.error(f"更新全局回复延迟失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/search_history', methods=['GET'])

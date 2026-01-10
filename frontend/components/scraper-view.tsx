@@ -120,7 +120,7 @@ export function ScraperView() {
       })
 
       if (response.ok) {
-        setProducts(products.filter(p => p.id !== id))
+      setProducts(products.filter(p => p.id !== id))
         toast.success("商品及其所有数据已完全删除")
       } else {
         const err = await response.json()
@@ -311,8 +311,8 @@ export function ScraperView() {
                           />
                         ) : (
                           <div className="flex flex-col items-center">
-                            <ImageIcon className="size-4 text-muted-foreground" />
-                            <span className="text-[8px] font-bold mt-0.5">{product.images?.length || 0}P</span>
+                        <ImageIcon className="size-4 text-muted-foreground" />
+                        <span className="text-[8px] font-bold mt-0.5">{product.images?.length || 0}P</span>
                           </div>
                         )}
                       </Button>

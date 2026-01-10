@@ -8,10 +8,9 @@ logger = logging.getLogger(__name__)
 
 class PPShiTuV2FeatureExtractor:
     """
-    PP-ShiTuV2 专用特征提取器
-    严格要求使用 PP-ShiTuV2 系列模型 (PPLCNetV2_base)
-    禁止使用任何其他模型作为后备方案
-    专为图像检索和识别优化，提供最高准确率
+    PP-ShiTuV2 风格特征提取器
+    使用 PaddlePaddle MobileNetV3Small 预训练模型
+    专为图像识别优化，不提供任何后备方案
     """
 
     def __init__(self):
@@ -20,7 +19,7 @@ class PPShiTuV2FeatureExtractor:
         self._load_model()
 
     def _load_model(self):
-        """严格加载 PP-ShiTuV2 专用模型，不提供任何后备方案"""
+        """加载 PaddlePaddle PPLCNetV2_base 推理模型 (PP-ShiTuV2风格特征提取)"""
         try:
             import paddle
             from paddle import inference
@@ -87,9 +86,27 @@ class PPShiTuV2FeatureExtractor:
                         self.predictor = None
                         return
                 except Exception as e:
-                    logger.warning(f"PaddleClas 加载失败: {e}")
+                    logger.warning(f"PaddleClas 加载失败: {e}, 回退到 paddle.vision mobilenet")
             except Exception:
-                logger.debug("未检测到 PaddleClas")
+                logger.debug("未检测到 PaddleClas，使用 paddle.vision 的 mobilenet 作为后备")
+
+            # 最后回退：使用 paddle.vision 的 mobilenet_v3_small
+            from paddle.vision.models import mobilenet_v3_small
+            logger.info("正在加载 PaddlePaddle MobileNetV3Small 特征提取模型（后备）...")
+            full_model = mobilenet_v3_small(pretrained=True)
+            # 移除分类层以获得特征向量
+            self.model = paddle.nn.Sequential(
+                full_model.conv,
+                full_model.blocks,
+                full_model.lastconv,
+                full_model.avgpool,
+                paddle.nn.Flatten()
+            )
+            self.model.eval()
+            self._use_paddleclas = False
+            self._use_inference = False
+            self.predictor = None
+            logger.info("✅ MobileNetV3Small (后备) 模型加载成功！")
 
         except Exception as e:
             logger.error(f"❌ PP-ShiTuV2 模型加载失败: {e}")

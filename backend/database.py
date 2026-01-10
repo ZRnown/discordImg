@@ -32,7 +32,7 @@ class Database:
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
 
-            # 创建商品表
+            # 创建商品表（移除商品级别延迟，使用全局延迟）
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS products (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,6 +49,16 @@ class Database:
             # 为现有表添加新字段（如果不存在）
             try:
                 cursor.execute('ALTER TABLE products ADD COLUMN ruleEnabled BOOLEAN DEFAULT 1')
+            except sqlite3.OperationalError:
+                pass  # 字段已存在
+
+            try:
+                cursor.execute('ALTER TABLE products ADD COLUMN min_delay INTEGER DEFAULT 3')
+            except sqlite3.OperationalError:
+                pass  # 字段已存在
+
+            try:
+                cursor.execute('ALTER TABLE products ADD COLUMN max_delay INTEGER DEFAULT 8')
             except sqlite3.OperationalError:
                 pass  # 字段已存在
 
@@ -118,6 +128,22 @@ class Database:
                     search_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (matched_product_id) REFERENCES products (id) ON DELETE SET NULL
                 )
+            ''')
+
+            # 创建全局延迟配置表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS global_reply_config (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),
+                    min_delay INTEGER DEFAULT 3,
+                    max_delay INTEGER DEFAULT 8,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            # 插入默认全局延迟配置
+            cursor.execute('''
+                INSERT OR IGNORE INTO global_reply_config (id, min_delay, max_delay)
+                VALUES (1, 3, 8)
             ''')
 
             conn.commit()
@@ -205,15 +231,17 @@ class Database:
             cursor = conn.cursor()
             cursor.execute('''
                 INSERT OR REPLACE INTO products
-                (product_url, title, description, english_title, cnfans_url, ruleEnabled)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (product_url, title, description, english_title, cnfans_url, ruleEnabled, min_delay, max_delay)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 product_data['product_url'],
                 product_data.get('title', ''),
                 product_data.get('description', ''),
                 product_data.get('english_title', ''),
                 product_data.get('cnfans_url', ''),
-                product_data.get('ruleEnabled', True)
+                product_data.get('ruleEnabled', True),
+                product_data.get('min_delay', 3),
+                product_data.get('max_delay', 8)
             ))
             product_id = cursor.lastrowid
             conn.commit()
@@ -561,6 +589,36 @@ class Database:
                 return True
         except Exception as e:
             logger.error(f"清空搜索历史失败: {e}")
+            return False
+
+    def get_global_reply_config(self) -> Dict[str, int]:
+        """获取全局回复延迟配置"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT min_delay, max_delay FROM global_reply_config WHERE id = 1')
+                row = cursor.fetchone()
+                if row:
+                    return {'min_delay': row[0], 'max_delay': row[1]}
+                return {'min_delay': 3, 'max_delay': 8}  # 默认值
+        except Exception as e:
+            logger.error(f"获取全局回复配置失败: {e}")
+            return {'min_delay': 3, 'max_delay': 8}
+
+    def update_global_reply_config(self, min_delay: int, max_delay: int) -> bool:
+        """更新全局回复延迟配置"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE global_reply_config
+                    SET min_delay = ?, max_delay = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = 1
+                ''', (min_delay, max_delay))
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"更新全局回复配置失败: {e}")
             return False
 
 # 全局数据库实例
