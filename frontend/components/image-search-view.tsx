@@ -7,29 +7,81 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Upload, Search, ExternalLink, X, Trash2, Clock, Settings } from "lucide-react"
+import { Upload, Search, ExternalLink, Settings, X, Clock, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 export function ImageSearchView() {
   const [uploadedImage, setUploadedImage] = useState<string | null>(null)
   const [isSearching, setIsSearching] = useState(false)
-  const [searchHistory, setSearchHistory] = useState<any[]>([])
+  const [searchResults, setSearchResults] = useState<any[]>([])
   const [threshold, setThreshold] = useState(30) // 0-100，默认30% (降低阈值以提高匹配成功率)
+  const [maxResults, setMaxResults] = useState(5) // 返回最相似的前N个结果
+
+  // 搜索历史相关状态
+  const [searchHistory, setSearchHistory] = useState<any[]>([])
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalHistory, setTotalHistory] = useState(0)
+  const [hasMoreHistory, setHasMoreHistory] = useState(false)
 
   // 加载搜索历史
   useEffect(() => {
     fetchSearchHistory()
   }, [])
 
-  const fetchSearchHistory = async () => {
+  const fetchSearchHistory = async (page: number = 1) => {
     try {
-      const response = await fetch('/api/search_history')
+      const limit = 10 // 每页显示10条记录
+      const offset = (page - 1) * limit
+      const response = await fetch(`/api/search_history?limit=${limit}&offset=${offset}`)
       if (response.ok) {
-        const history = await response.json()
-        setSearchHistory(history)
+        const result = await response.json()
+        setSearchHistory(result.history || [])
+        setTotalHistory(result.total || 0)
+        setHasMoreHistory(result.has_more || false)
+        setCurrentPage(page)
       }
     } catch (error) {
       console.error('Failed to fetch search history:', error)
+    }
+  }
+
+  // 删除单条搜索历史
+  const handleDeleteHistory = async (historyId: number) => {
+    try {
+      const response = await fetch(`/api/search_history/${historyId}`, {
+        method: 'DELETE',
+      })
+      if (response.ok) {
+        setSearchHistory(prev => prev.filter(h => h.id !== historyId))
+        setTotalHistory(prev => prev - 1)
+        toast.success('搜索记录已删除')
+      } else {
+        toast.error('删除失败')
+      }
+    } catch (error) {
+      console.error('Failed to delete history:', error)
+      toast.error('删除失败')
+    }
+  }
+
+  // 清空所有搜索历史
+  const handleClearAllHistory = async () => {
+    if (!confirm('确定要清空所有搜索记录吗？此操作不可撤销。')) return
+
+    try {
+      const response = await fetch('/api/search_history', {
+        method: 'DELETE',
+      })
+      if (response.ok) {
+        setSearchHistory([])
+        setTotalHistory(0)
+        toast.success('所有搜索记录已清空')
+      } else {
+        toast.error('清空失败')
+      }
+    } catch (error) {
+      console.error('Failed to clear history:', error)
+      toast.error('清空失败')
     }
   }
 
@@ -67,6 +119,7 @@ export function ImageSearchView() {
       const formData = new FormData();
       formData.append('image', blob, 'search.jpg');
       formData.append('threshold', (threshold / 100).toString()); // 转换为0-1
+      formData.append('limit', maxResults.toString()); // 返回结果数量
 
       // 发送到后端进行向量搜索
       const searchRes = await fetch('/api/search_similar', {
@@ -76,11 +129,14 @@ export function ImageSearchView() {
 
       if (searchRes.ok) {
         const result = await searchRes.json();
-        if (result.success && result.product) {
+        if (result.success && result.results && result.results.length > 0) {
+          // 设置搜索结果
+          setSearchResults(result.results)
           // 重新加载搜索历史（新记录已保存到数据库）
           await fetchSearchHistory()
-          toast.success(`找到相似商品，相似度 ${(result.similarity * 100).toFixed(1)}%`);
+          toast.success(`找到 ${result.results.length} 个相似商品，最佳相似度 ${(result.results[0].similarity * 100).toFixed(1)}%`);
         } else {
+          setSearchResults([])
           toast.info(result.message || "未找到相似商品");
         }
       } else {
@@ -100,37 +156,7 @@ export function ImageSearchView() {
     setUploadedImage(null)
   }
 
-  const handleDeleteHistory = async (historyId: number) => {
-    try {
-      const response = await fetch(`/api/search_history/${historyId}`, {
-        method: 'DELETE'
-      })
-      if (response.ok) {
-        setSearchHistory(prev => prev.filter(h => h.id !== historyId))
-        toast.success("已删除搜索记录")
-      } else {
-        toast.error("删除失败")
-      }
-    } catch (error) {
-      toast.error("删除失败")
-    }
-  }
 
-  const handleClearAllHistory = async () => {
-    try {
-      const response = await fetch('/api/search_history', {
-        method: 'DELETE'
-      })
-      if (response.ok) {
-        setSearchHistory([])
-        toast.success("已清空所有搜索历史")
-      } else {
-        toast.error("清空失败")
-      }
-    } catch (error) {
-      toast.error("清空失败")
-    }
-  }
 
   return (
     <div className="space-y-6">
@@ -196,6 +222,25 @@ export function ImageSearchView() {
                   <p className="text-xs text-muted-foreground">只显示相似度超过此阈值的商品 (0-100%)</p>
                 </div>
 
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-medium">返回结果数量</label>
+                    <span className="text-sm text-muted-foreground">{maxResults}个</span>
+                  </div>
+                  <select
+                    value={maxResults}
+                    onChange={(e) => setMaxResults(Number.parseInt(e.target.value))}
+                    className="w-full px-3 py-2 border border-input rounded-md bg-background text-sm"
+                  >
+                    <option value={1}>1个</option>
+                    <option value={3}>3个</option>
+                    <option value={5}>5个</option>
+                    <option value={10}>10个</option>
+                    <option value={20}>20个</option>
+                  </select>
+                  <p className="text-xs text-muted-foreground">返回最相似的前N个结果进行筛选</p>
+                </div>
+
                 <Button
                   className="w-full"
                   onClick={handleSearch}
@@ -217,6 +262,87 @@ export function ImageSearchView() {
             </div>
           </CardContent>
         </Card>
+
+        {/* 搜索结果 */}
+        {searchResults && searchResults.length > 0 && (
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <Search className="w-5 h-5" />
+                    搜索结果
+                  </CardTitle>
+                  <CardDescription>
+                    找到 {searchResults.length} 个相似商品，按相似度排序
+                  </CardDescription>
+                </div>
+                <div className="flex items-center gap-3">
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <div className="space-y-4">
+                {searchResults.map((result, index) => (
+                  <div key={index} className="border rounded-lg p-4 hover:bg-muted/50 transition-colors">
+                    <div className="flex items-start gap-4">
+                      <div className="flex-shrink-0">
+                        <div className="w-16 h-16 bg-muted rounded-lg overflow-hidden">
+                          <img
+                            src={result.matchedImage}
+                            alt={result.product.title}
+                            className="w-full h-full object-cover"
+                            onError={(e) => {
+                              e.currentTarget.src = '/placeholder.jpg'
+                            }}
+                          />
+                        </div>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary">
+                            #{result.rank}
+                          </span>
+                          <span className="text-sm font-medium text-green-600">
+                            相似度 {(result.similarity * 100).toFixed(1)}%
+                          </span>
+                        </div>
+                        <h3 className="font-medium text-sm mb-1 line-clamp-2">
+                          {result.product.title}
+                        </h3>
+                        {result.product.englishTitle && (
+                          <p className="text-xs text-muted-foreground mb-2 line-clamp-1">
+                            {result.product.englishTitle}
+                          </p>
+                        )}
+                        <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                          <a
+                            href={result.product.weidianUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="hover:text-primary underline"
+                          >
+                            查看商品
+                          </a>
+                          {result.product.cnfansUrl && (
+                            <a
+                              href={result.product.cnfansUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="hover:text-primary underline"
+                            >
+                              CNFans链接
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* 搜索历史 - 列表形式 */}
         <Card>
@@ -344,6 +470,36 @@ export function ImageSearchView() {
                     <Progress value={history.similarity * 100} className="h-2 mt-3" />
                   </div>
                 ))}
+
+                {/* 分页控件 */}
+                {totalHistory > 10 && (
+                  <div className="flex items-center justify-between pt-4 border-t">
+                    <div className="text-sm text-muted-foreground">
+                      显示 {((currentPage - 1) * 10) + 1} - {Math.min(currentPage * 10, totalHistory)} 条，共 {totalHistory} 条记录
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => fetchSearchHistory(currentPage - 1)}
+                        disabled={currentPage <= 1}
+                      >
+                        上一页
+                      </Button>
+                      <span className="px-3 py-1 text-sm">
+                        {currentPage}
+                      </span>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => fetchSearchHistory(currentPage + 1)}
+                        disabled={!hasMoreHistory || searchHistory.length === 0}
+                      >
+                        下一页
+                      </Button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </CardContent>

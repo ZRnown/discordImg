@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { Search, Copy, ChevronLeft, ChevronRight, Trash2, ImageIcon, Edit, X } from "lucide-react"
+import { Search, Copy, ChevronLeft, ChevronRight, Trash2, ImageIcon, Edit, X, Download, Loader2, List, Upload, Store, CheckSquare, Square, RotateCcw } from "lucide-react"
 import { toast } from "sonner"
 import {
   Dialog,
@@ -24,10 +24,10 @@ import { Switch } from "@/components/ui/switch"
 import { Checkbox } from "@/components/ui/checkbox"
 
 export function ScraperView() {
-  const [weidianId, setWeidianId] = useState("")
   const [searchTerm, setSearchTerm] = useState("")
-  const [isScraing, setIsScraing] = useState(false)
-  const [progress, setProgress] = useState(0)
+  const [batchIds, setBatchIds] = useState('')
+  const [isBatchScraping, setIsBatchScraping] = useState(false)
+  const [batchProgress, setBatchProgress] = useState(0)
   const [products, setProducts] = useState<any[]>([])
   const [currentPage, setCurrentPage] = useState(1)
   const [jumpPage, setJumpPage] = useState("")
@@ -36,10 +36,17 @@ export function ScraperView() {
   const [selectedProducts, setSelectedProducts] = useState<number[]>([])
   const [selectAll, setSelectAll] = useState(false)
   const [indexedIds, setIndexedIds] = useState<string[]>([])
+  const [shopFilter, setShopFilter] = useState('__ALL__')
+  const [keywordSearch, setKeywordSearch] = useState('')
+  // 抓取相关状态
+  const [shopId, setShopId] = useState('')
+  const [isShopScraping, setIsShopScraping] = useState(false)
+  const [shopScrapeProgress, setShopScrapeProgress] = useState(0)
 
   useEffect(() => {
     fetchProducts()
     fetchIndexedIds()
+
   }, [])
 
   const fetchProducts = async () => {
@@ -62,53 +69,6 @@ export function ScraperView() {
     }
   }
 
-  const handleScrape = async () => {
-    if (!weidianId.trim()) {
-      toast.error("请输入微店商品 ID")
-      return
-    }
-
-    if (products.some(p => p.weidianId === weidianId.trim())) {
-      toast.error("该商品 ID 已存在于库中，禁止重复上传")
-      return
-    }
-
-    setIsScraing(true)
-    setProgress(10)
-    
-    try {
-      const response = await fetch('/api/scrape', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: `https://weidian.com/item.html?itemID=${weidianId.trim()}` })
-      })
-      
-      if (!response.ok) {
-        const errorData = await response.json()
-        if (errorData.error && errorData.error.includes('已存在')) {
-          throw new Error("该商品ID已存在，请勿重复添加")
-        }
-        throw new Error(errorData.error || "抓取失败")
-      }
-      
-      const newProduct = await response.json()
-      
-      setProgress(100)
-      setTimeout(async () => {
-        setIsScraing(false)
-        // 拉取完整的产品列表（以便获取后端生成的缩略图 URL / created_at 等字段）
-        await fetchProducts()
-        setWeidianId("")
-        fetchIndexedIds() // 刷新索引状态
-        toast.success(`抓取成功`)
-      }, 500)
-
-    } catch (error: any) {
-      setIsScraing(false)
-      setProgress(0)
-      toast.error(`抓取失败: ${error.message}`)
-    }
-  }
 
   const handleDeleteProduct = async (id: number) => {
     try {
@@ -151,6 +111,129 @@ export function ScraperView() {
     }
   }
 
+  // 店铺相关处理函数
+  const handleScrapeShop = async () => {
+    if (!shopId.trim()) {
+      toast.error("请输入店铺ID")
+      return
+    }
+
+    setIsShopScraping(true)
+    setShopScrapeProgress(10)
+
+    try {
+      const response = await fetch('/api/scrape/shop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shopId: shopId.trim() })
+      })
+
+      if (response.ok) {
+        const result = await response.json()
+
+        // 模拟进度更新
+        const progressInterval = setInterval(() => {
+          setShopScrapeProgress(prev => {
+            if (prev >= 90) {
+              clearInterval(progressInterval)
+              return prev
+            }
+            return prev + 10
+          })
+        }, 1000)
+
+        toast.success(`店铺抓取完成，共获取 ${result.totalProducts || 0} 个商品`)
+
+        // 刷新商品列表
+        await fetchProducts()
+        setShopId('')
+        setShopScrapeProgress(100)
+
+        setTimeout(() => {
+          setShopScrapeProgress(0)
+        }, 2000)
+      } else {
+        const error = await response.json()
+        toast.error(error.error || "店铺抓取失败")
+      }
+    } catch (error) {
+      console.error('Shop scraping error:', error)
+      toast.error("网络错误，请重试")
+    } finally {
+      setIsShopScraping(false)
+    }
+  }
+
+
+  const handleBatchScrape = async () => {
+    const ids = batchIds.split('\n').map(id => id.trim()).filter(id => id && id.match(/^\d+$/))
+
+    if (ids.length === 0) {
+      toast.error("请输入有效的商品ID")
+      return
+    }
+
+    if (ids.length > 50) {
+      toast.error("单次最多支持50个商品ID")
+      return
+    }
+
+    setIsBatchScraping(true)
+    setBatchProgress(0)
+
+    let successCount = 0
+    let skipCount = 0
+
+    try {
+      for (let i = 0; i < ids.length; i++) {
+        const id = ids[i]
+
+        try {
+          const response = await fetch('/api/scrape', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ weidianId: id })
+          })
+
+          if (response.ok) {
+            successCount++
+          } else if (response.status === 409) {
+            // 商品已存在
+            skipCount++
+          } else {
+            console.warn(`Failed to scrape ${id}:`, await response.text())
+          }
+        } catch (error) {
+          console.error(`Error scraping ${id}:`, error)
+        }
+
+        // 更新进度
+        setBatchProgress(((i + 1) / ids.length) * 100)
+
+        // 添加小延迟避免请求过于频繁
+        if (i < ids.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 200))
+        }
+      }
+
+      if (successCount > 0) {
+        toast.success(`批量抓取完成：成功 ${successCount} 个，跳过 ${skipCount} 个`)
+        await fetchProducts()
+        setBatchIds('')
+      } else if (skipCount > 0) {
+        toast.info(`所有商品已存在，跳过 ${skipCount} 个`)
+      } else {
+        toast.error("批量抓取失败")
+      }
+
+    } catch (error) {
+      console.error('Batch scraping error:', error)
+      toast.error("批量抓取过程中发生错误")
+    } finally {
+      setIsBatchScraping(false)
+      setBatchProgress(0)
+    }
+  }
 
   const handleJumpPage = () => {
     const page = parseInt(jumpPage)
@@ -162,76 +245,199 @@ export function ScraperView() {
     }
   }
 
-  const filteredProducts = products.filter(p => 
-    p.title?.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    p.weidianId?.includes(searchTerm)
-  )
+  // 获取所有不重复的店铺名称
+  const uniqueShops = Array.from(new Set(products.map(p => p.shopName).filter(Boolean))).sort()
+
+  const filteredProducts = products.filter(p => {
+    const matchesKeyword = !keywordSearch ||
+      p.title?.toLowerCase().includes(keywordSearch.toLowerCase()) ||
+      p.englishTitle?.toLowerCase().includes(keywordSearch.toLowerCase()) ||
+      p.weidianId?.includes(keywordSearch)
+
+    const matchesShop = !shopFilter || shopFilter === "__ALL__" ||
+      p.shopName === shopFilter
+
+    return matchesKeyword && matchesShop
+  })
 
   const totalPages = Math.ceil(filteredProducts.length / itemsPerPage)
   const currentProducts = filteredProducts.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
+      {/* 页面标题 */}
       <div>
-        <h2 className="text-3xl font-bold tracking-tight">微店抓取与规则中心</h2>
-        <p className="text-muted-foreground">抓取商品 ID 建立图库索引，CNFans 英文标题将自动作为 Discord 匹配关键词</p>
+        <h2 className="text-3xl font-bold tracking-tight">微店抓取</h2>
+        <p className="text-muted-foreground">批量抓取商品或通过店铺获取所有商品</p>
       </div>
 
-      <Card>
-        <CardHeader className="py-4">
-          <CardTitle className="text-lg">开始抓取并建立规则</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4 py-2">
-          <div className="space-y-2">
-            <Label htmlFor="weidian-id">微店商品 ID</Label>
-            <div className="flex gap-2">
+      {/* 店铺商品抓取 - 顶部 */}
+      <Card className="border-2 border-dashed border-purple-300/50 hover:border-purple-400 transition-colors">
+        <CardContent className="p-6">
+          <div className="space-y-4">
+            <div className="flex items-center gap-4">
+              <div className="p-3 bg-purple-100 rounded-xl">
+                <Store className="h-6 w-6 text-purple-600" />
+              </div>
+              <div>
+                <h4 className="text-xl font-bold">店铺商品抓取</h4>
+                <p className="text-sm text-muted-foreground">通过店铺ID抓取所有商品</p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
               <Input
-                id="weidian-id"
-                placeholder="在此输入商品 ID (例如: 7612504902)"
-                value={weidianId}
-                onChange={(e) => setWeidianId(e.target.value)}
-                disabled={isScraing}
+                placeholder="输入店铺ID (例如: 12345678)"
+                value={shopId}
+                onChange={(e) => setShopId(e.target.value)}
+                disabled={isShopScraping}
                 className="h-10"
               />
-              <Button onClick={handleScrape} disabled={isScraing} className="h-10 px-6 font-bold">
-                <Search className="mr-2 h-4 w-4" />
-                {isScraing ? "正在抓取数据..." : "建立索引与规则"}
+              <Button
+                onClick={handleScrapeShop}
+                disabled={!shopId.trim() || isShopScraping}
+                className="w-full h-11 text-base font-semibold"
+                size="lg"
+              >
+                {isShopScraping ? (
+                  <>
+                    <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                    抓取中...
+                  </>
+                ) : (
+                  <>
+                    <Download className="mr-2 h-5 w-5" />
+                    抓取店铺商品
+                  </>
+                )}
               </Button>
             </div>
           </div>
-          {isScraing && (
-            <div className="space-y-2">
-              <Progress value={progress} className="h-2" />
-              <p className="text-[10px] text-blue-500 animate-pulse font-medium">正在解析数据，下载高清图片...</p>
-            </div>
-          )}
         </CardContent>
       </Card>
 
-      <Card className="shadow-sm">
+      {/* 批量商品上传 - 中间 */}
+      <Card className="border-2 border-dashed border-green-300/50 hover:border-green-400 transition-colors">
+        <CardContent className="p-6">
+          <div className="space-y-4">
+            <div className="flex items-center gap-4">
+              <div className="p-3 bg-green-100 rounded-xl">
+                <List className="h-6 w-6 text-green-600" />
+              </div>
+              <div>
+                <h4 className="text-xl font-bold">批量商品上传</h4>
+                <p className="text-sm text-muted-foreground">批量上传多个商品</p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <textarea
+                placeholder="每行一个商品ID&#10;7516912690&#10;7480992768&#10;7478836242"
+                value={batchIds}
+                onChange={(e) => setBatchIds(e.target.value)}
+                disabled={isBatchScraping}
+                className="w-full h-32 p-4 text-sm border-2 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
+              />
+              <div className="flex gap-3">
+                <Button
+                  onClick={handleBatchScrape}
+                  disabled={!batchIds.trim() || isBatchScraping}
+                  className="flex-1 h-11 text-base font-semibold"
+                  size="lg"
+                >
+                  {isBatchScraping ? (
+                    <>
+                      <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                      上传中...
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="mr-2 h-5 w-5" />
+                      批量上传 ({batchIds.split('\n').filter(id => id.trim()).length})
+                    </>
+                  )}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => setBatchIds('')}
+                  disabled={isBatchScraping}
+                  size="lg"
+                  className="h-11 px-6"
+                >
+                  <X className="h-5 w-5" />
+                </Button>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* 进度条 */}
+      {(isBatchScraping || isShopScraping) && (
+        <div className="space-y-3">
+          <Progress value={
+            isBatchScraping ? batchProgress : shopScrapeProgress
+          } className="h-3" />
+          <div className="flex items-center justify-between text-sm">
+            <p className="text-blue-600 animate-pulse font-medium">
+              {isBatchScraping ? '正在批量上传商品...' : '正在抓取店铺商品...'}
+            </p>
+            <p className="text-muted-foreground">
+              {isBatchScraping ? `${batchProgress.toFixed(1)}%` : `${shopScrapeProgress.toFixed(1)}%`}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* 商品库 - 底部 */}
+      <div className="space-y-4">
+        <Card className="shadow-sm">
         <CardHeader className="py-4 border-b">
           <div className="flex flex-row items-center justify-between">
           <div className="flex flex-col gap-1">
             <CardTitle className="text-xl font-bold">商品库</CardTitle>
             <CardDescription className="text-xs font-medium">共 {products.length} 个规则已生效。</CardDescription>
           </div>
-          <div className="flex items-center gap-2">
-            <Checkbox
-              checked={selectAll && currentProducts.length > 0}
-              onCheckedChange={(checked) => {
-                setSelectAll(checked as boolean)
-                if (checked) {
-                  setSelectedProducts(currentProducts.map(p => p.id))
-                } else {
+          <div className="flex items-center gap-3">
+            <Button
+              variant={selectedProducts.length === filteredProducts.length && filteredProducts.length > 0 ? "default" : "outline"}
+              size="sm"
+              onClick={() => {
+                if (selectedProducts.length === filteredProducts.length) {
+                  // 取消全选
                   setSelectedProducts([])
+                  setSelectAll(false)
+                } else {
+                  // 全选所有筛选结果
+                  setSelectedProducts(filteredProducts.map(p => p.id))
+                  setSelectAll(true)
                 }
               }}
-            />
-            <span className="text-sm text-muted-foreground">全选</span>
+              className="h-9 px-4 text-sm font-medium shadow-sm hover:shadow-md transition-all"
+              disabled={filteredProducts.length === 0}
+            >
+              {selectedProducts.length === filteredProducts.length && filteredProducts.length > 0 ? (
+                <>
+                  <CheckSquare className="h-4 w-4 mr-2" />
+                  已全选 ({currentProducts.length})
+                </>
+              ) : (
+                <>
+                  <Square className="h-4 w-4 mr-2" />
+                  全选 ({currentProducts.length})
+                </>
+              )}
+            </Button>
+
+            {selectedProducts.length > 0 && selectedProducts.length < currentProducts.length && (
+              <span className="text-sm text-muted-foreground">
+                已选择 {selectedProducts.length} 项 (共 {filteredProducts.length} 项)
+              </span>
+            )}
           </div>
             {selectedProducts.length > 0 && (
               <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground">已选择 {selectedProducts.length} 个商品</span>
+                <span className="text-sm text-muted-foreground">已选择 {selectedProducts.length} 个商品 (共 {filteredProducts.length} 个)</span>
                 <Button variant="outline" size="sm" onClick={() => {
                   setSelectedProducts([])
                   setSelectAll(false)
@@ -282,7 +488,60 @@ export function ScraperView() {
             </div>
           </div>
         </CardHeader>
-        <CardContent className="p-0">
+
+        <CardContent>
+          {/* 商品库筛选控件 */}
+          <div className="px-6 py-4 border-b bg-muted/20">
+          <div className="flex flex-col sm:flex-row gap-4 items-end">
+            {/* 关键词搜索 */}
+            <div className="flex-1 space-y-2">
+              <Label className="text-sm font-medium">搜索商品</Label>
+              <Input
+                placeholder="输入商品标题、英文标题或商品ID..."
+                value={keywordSearch}
+                onChange={(e) => setKeywordSearch(e.target.value)}
+                className="h-9"
+              />
+            </div>
+
+            {/* 店铺筛选 */}
+            <div className="flex-1 space-y-2">
+              <Label className="text-sm font-medium">筛选店铺</Label>
+              <Select value={shopFilter} onValueChange={setShopFilter}>
+                <SelectTrigger className="h-9">
+                  <SelectValue placeholder="选择店铺..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__ALL__">全部店铺</SelectItem>
+                  {uniqueShops.map(shop => (
+                    <SelectItem key={shop} value={shop}>{shop}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* 重置按钮 */}
+            <Button
+              variant="outline"
+              onClick={() => {
+                setKeywordSearch('')
+                setShopFilter('__ALL__')
+              }}
+              className="h-9 px-4"
+            >
+              <RotateCcw className="w-4 h-4 mr-2" />
+              重置
+            </Button>
+          </div>
+
+          {(keywordSearch || (shopFilter && shopFilter !== '__ALL__')) && (
+            <div className="mt-3 text-sm text-muted-foreground">
+              筛选结果: {filteredProducts.length} 个商品
+              {keywordSearch && <span className="ml-2">关键词: "{keywordSearch}"</span>}
+              {shopFilter && shopFilter !== '__ALL__' && <span className="ml-2">店铺: "{shopFilter}"</span>}
+            </div>
+          )}
+        </div>
           <div className="divide-y">
             {currentProducts.map((product) => (
               <div key={product.id} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3">
@@ -291,9 +550,13 @@ export function ScraperView() {
                     checked={selectedProducts.includes(product.id)}
                     onCheckedChange={(checked) => {
                       if (checked) {
-                        setSelectedProducts([...selectedProducts, product.id])
+                        const newSelected = [...selectedProducts, product.id]
+                        setSelectedProducts(newSelected)
+                        // 检查是否全选
+                        setSelectAll(newSelected.length === filteredProducts.length)
                       } else {
-                        setSelectedProducts(selectedProducts.filter(id => id !== product.id))
+                        const newSelected = selectedProducts.filter(id => id !== product.id)
+                        setSelectedProducts(newSelected)
                         setSelectAll(false)
                       }
                     }}
@@ -373,9 +636,19 @@ export function ScraperView() {
                     </div>
                     <div className="flex items-center gap-2 mt-1">
                       <Badge variant="secondary" className="text-[11px] h-4 px-2 font-mono">ID: {product.weidianId}</Badge>
+                      {product.shopName && (
+                        <Badge variant="outline" className="text-[11px] h-4 px-2 font-mono">店铺: {product.shopName}</Badge>
+                      )}
                       <span className="text-[11px] text-muted-foreground italic">{product.images?.length || 0}张图片</span>
                       {((product.createdAt) || (product.created_at)) && (
-                        <span className="text-[11px] text-muted-foreground italic">创建: {new Date(product.createdAt || product.created_at).toLocaleString()}</span>
+                        <span className="text-[11px] text-muted-foreground italic">创建: {(() => {
+                          try {
+                            const date = new Date(product.createdAt || product.created_at);
+                            return isNaN(date.getTime()) ? '未知时间' : date.toLocaleString('zh-CN');
+                          } catch {
+                            return '未知时间';
+                          }
+                        })()}</span>
                       )}
                     </div>
                   </div>
@@ -407,6 +680,20 @@ export function ScraperView() {
                         </Button>
                       </div>
                     </div>
+                    {product.acbuyUrl && (
+                      <div className="flex items-center gap-1.5">
+                        <Badge className="text-[9px] px-1 py-0 h-4 bg-orange-600 border-none shrink-0 text-white">AcBuy</Badge>
+                        <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
+                          <a href={product.acbuyUrl} target="_blank" rel="noopener noreferrer" className="text-orange-600 font-mono font-bold hover:underline">{product.acbuyUrl}</a>
+                          <Button variant="ghost" size="icon" className="h-4 w-4 shrink-0 ml-2" onClick={() => {
+                            navigator.clipboard.writeText(product.acbuyUrl);
+                            toast.success("链接已复制");
+                          }}>
+                            <Copy className="h-2.5 w-2.5" />
+                          </Button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <div className="flex items-center gap-1.5">
                     <Dialog open={editingProduct?.id === product.id} onOpenChange={(open) => !open && setEditingProduct(null)}>
@@ -573,6 +860,7 @@ export function ScraperView() {
           )}
         </CardContent>
       </Card>
+      </div>
     </div>
   )
 }

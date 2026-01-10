@@ -17,7 +17,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Plus, RefreshCw, Trash2, MessageCircle, Save } from "lucide-react"
+import { Plus, RefreshCw, Trash2, MessageCircle, Save, Play, Square, Shield, Users, Settings, Bot } from "lucide-react"
 import { toast } from "sonner"
 
 export function AccountsView() {
@@ -26,9 +26,14 @@ export function AccountsView() {
   const [newToken, setNewToken] = useState("")
   const [rotationEnabled, setRotationEnabled] = useState(false)
   const [rotationInterval, setRotationInterval] = useState(10)
-  const [discordThreshold, setDiscordThreshold] = useState(0.4)
+  const [discordThreshold, setDiscordThreshold] = useState(0.6)  // 默认0.6
   const [globalMinDelay, setGlobalMinDelay] = useState(3)
   const [globalMaxDelay, setGlobalMaxDelay] = useState(8)
+  const [downloadThreads, setDownloadThreads] = useState(4)
+  const [featureExtractThreads, setFeatureExtractThreads] = useState(4)
+  const [discordChannelId, setDiscordChannelId] = useState('')
+  const [cnfansChannelId, setCnfansChannelId] = useState('')
+  const [acbuyChannelId, setAcbuyChannelId] = useState('')
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -36,6 +41,8 @@ export function AccountsView() {
     fetchRotationConfig()
     fetchGlobalDelay()
     fetchDiscordThreshold()
+    fetchThreadConfig()
+    fetchDiscordChannel()
   }, [])
 
   const fetchAccounts = async () => {
@@ -43,7 +50,7 @@ export function AccountsView() {
       const response = await fetch('/api/accounts')
       if (response.ok) {
         const data = await response.json()
-        setAccounts(data)
+        setAccounts(data.accounts || [])
       }
     } catch (error) {
       console.error('Failed to fetch accounts:', error)
@@ -87,6 +94,33 @@ export function AccountsView() {
       }
     } catch (error) {
       console.error('Failed to fetch Discord threshold:', error)
+    }
+  }
+
+  const fetchThreadConfig = async () => {
+    try {
+      const response = await fetch('/api/config/threads')
+      if (response.ok) {
+        const data = await response.json()
+        setDownloadThreads(data.download_threads)
+        setFeatureExtractThreads(data.feature_extract_threads)
+      }
+    } catch (error) {
+      console.error('Failed to fetch thread config:', error)
+    }
+  }
+
+  const fetchDiscordChannel = async () => {
+    try {
+      const response = await fetch('/api/config/discord-channel')
+      if (response.ok) {
+        const data = await response.json()
+        setDiscordChannelId(data.channel_id)
+        setCnfansChannelId(data.cnfans_channel_id || '')
+        setAcbuyChannelId(data.acbuy_channel_id || '')
+      }
+    } catch (error) {
+      console.error('Failed to fetch Discord channel config:', error)
     }
   }
 
@@ -165,10 +199,92 @@ export function AccountsView() {
           <p className="text-sm text-muted-foreground mt-1">管理 Discord 机器人账号、轮换设置及自动回复规则</p>
         </div>
         <div className="flex gap-3">
-          <Button variant="outline" onClick={() => toast.info("正在验证所有 Token...")}>
-            <RefreshCw className="mr-2 size-5" />
+          <Button
+            variant="outline"
+            onClick={async () => {
+              try {
+                toast.info("正在验证所有账号...")
+                const response = await fetch('/api/accounts/verify-all', {
+                  method: 'POST'
+                })
+
+                if (response.ok) {
+                  const data = await response.json()
+                  if (data.success) {
+                    toast.success(`验证完成！${data.verified}个有效，${data.invalid}个无效`)
+                    // 重新加载账号列表
+                    fetchAccounts()
+                  } else {
+                    toast.error("验证失败")
+                  }
+                } else {
+                  toast.error("验证请求失败")
+                }
+              } catch (error) {
+                toast.error("网络错误，请重试")
+              }
+            }}
+          >
+            <Shield className="mr-2 size-5" />
             重新验证所有
           </Button>
+
+          {accounts.length > 0 && (
+            <>
+              <Button
+                variant="default"
+                className="bg-green-600 hover:bg-green-700"
+                onClick={async () => {
+                  try {
+                    const response = await fetch('/api/accounts/bulk-status', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ status: 'online' })
+                    })
+
+                    if (response.ok) {
+                      const data = await response.json()
+                      toast.success(`已开启 ${data.updated_count} 个账号`)
+                      fetchAccounts()
+                    } else {
+                      toast.error("批量开启失败")
+                    }
+                  } catch (error) {
+                    toast.error("网络错误，请重试")
+                  }
+                }}
+              >
+                <Play className="mr-2 size-5" />
+                开启所有账号
+              </Button>
+
+              <Button
+                variant="destructive"
+                onClick={async () => {
+                  try {
+                    const response = await fetch('/api/accounts/bulk-status', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ status: 'offline' })
+                    })
+
+                    if (response.ok) {
+                      const data = await response.json()
+                      toast.success(`已停止 ${data.updated_count} 个账号`)
+                      fetchAccounts()
+                    } else {
+                      toast.error("批量停止失败")
+                    }
+                  } catch (error) {
+                    toast.error("网络错误，请重试")
+                  }
+                }}
+              >
+                <Square className="mr-2 size-5" />
+                停止所有账号
+              </Button>
+            </>
+          )}
           <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
             <DialogTrigger asChild>
               <Button>
@@ -205,8 +321,8 @@ export function AccountsView() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        <Card className="lg:col-span-2 shadow-sm">
+      <div className="grid grid-cols-1 gap-8">
+        <Card className="shadow-sm">
           <CardHeader className="py-5 border-b">
             <CardTitle className="text-2xl font-bold">账号列表</CardTitle>
             <CardDescription className="text-sm">
@@ -229,7 +345,9 @@ export function AccountsView() {
                     <TableCell className="font-medium py-3 pl-6">
                       <div className="flex flex-col gap-1">
                         <span className="text-base font-semibold">{account.username}</span>
-                        <span className="text-xs text-muted-foreground font-mono">{account.token.substring(0, 20)}...</span>
+                        <span className="text-xs text-muted-foreground font-mono">
+                          {account.token && typeof account.token === 'string' ? `${account.token.substring(0, 20)}...` : 'Token 无效'}
+                        </span>
                       </div>
                     </TableCell>
                     <TableCell className="py-3">
@@ -260,205 +378,282 @@ export function AccountsView() {
                 ))}
               </TableBody>
             </Table>
-          </CardContent>
-        </Card>
 
-        <Card className="shadow-sm border-2 border-primary/10">
-          <CardHeader className="py-5 border-b bg-primary/5">
-            <CardTitle className="text-2xl font-bold">全局轮换设置</CardTitle>
-            <CardDescription className="text-sm">配置多账号自动切换逻辑</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6 pt-6">
-            <div className="flex items-center justify-between space-x-2 border-b pb-5">
-              <div className="space-y-1">
-                <Label className="text-base font-bold">启用账号轮换</Label>
-                <p className="text-xs text-muted-foreground">
-                  触发频率限制时自动切换账号
-                </p>
-              </div>
-              <Switch
-                className="scale-110"
-                checked={rotationEnabled}
-                onCheckedChange={setRotationEnabled}
-              />
-            </div>
-            
-            <div className="space-y-3">
-              <div className="flex justify-between items-center">
-                <Label className="text-sm font-bold">轮换间隔 (秒)</Label>
-                <span className="text-sm font-mono font-bold text-blue-600 bg-blue-50 px-2 py-1 rounded">{rotationInterval}s</span>
-              </div>
-              <Input 
-                type="number" 
-                value={rotationInterval} 
-                onChange={(e) => setRotationInterval(parseInt(e.target.value) || 0)}
-                disabled={!rotationEnabled}
-                min={1}
-                className="h-10 text-base"
-              />
-            </div>
-
-            <div className="pt-2">
-              <div className="bg-muted p-4 rounded-xl border">
-                <div className="text-xs space-y-2">
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground font-medium">活跃轮换池:</span>
-                    <span className="font-bold text-sm">{accounts.filter(a => a.status === 'online').length} 个</span>
-                  </div>
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground font-medium">轮换模式:</span>
-                    <span className={`font-bold text-sm ${rotationEnabled ? "text-green-600" : "text-gray-400"}`}>
-                      {rotationEnabled ? "已激活运行" : "未开启"}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-            
-            <Button className="w-full h-11 text-sm font-bold shadow-sm" variant="default" onClick={async () => {
-              try {
-                const response = await fetch('/api/accounts/rotation', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    enabled: rotationEnabled,
-                    rotationInterval: rotationInterval
-                  })
-                })
-
-                if (response.ok) {
-                  toast.success("全局配置已保存");
-                } else {
-                  toast.error("保存配置失败");
-                }
-              } catch (error) {
-                toast.error("网络错误，请重试");
-              }
-            }}>
-              保存设置并应用
-            </Button>
-          </CardContent>
-        </Card>
-
-        <Card className="shadow-sm border-2 border-purple-200/50">
-          <CardHeader className="py-5 border-b bg-purple-50/50">
-            <CardTitle className="text-2xl font-bold flex items-center gap-2">
-              <MessageCircle className="size-6 text-purple-600" />
-              Discord 机器人配置
-            </CardTitle>
-            <CardDescription className="text-sm">Discord自动回复参数和全局延迟设置</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6 pt-6">
-            {/* 主要配置区域 */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Discord阈值设置 */}
-              <div className="space-y-3">
-                <Label className="text-sm font-bold flex items-center gap-2">
-                  🎯 相似度阈值
-                  <Badge className="bg-purple-600 hover:bg-purple-700 text-xs">
-                    {(discordThreshold * 100).toFixed(0)}%
-                  </Badge>
-                </Label>
-                <div className="space-y-2">
-                  <Input
-                    type="number"
-                    min="0"
-                    max="1"
-                    step="0.05"
-                    value={discordThreshold}
-                    onChange={(e) => setDiscordThreshold(parseFloat(e.target.value) || 0.4)}
-                    className="h-10"
-                    placeholder="0.4"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    只有相似度超过此值的图片才会触发自动回复
-                  </p>
-                </div>
-              </div>
-
-              {/* 全局延迟设置 */}
-              <div className="space-y-3">
-                <Label className="text-sm font-bold flex items-center gap-2">
-                  ⏱️ 全局回复延迟
-                  <Badge className="bg-green-600 hover:bg-green-700 text-xs">
-                    {globalMinDelay}-{globalMaxDelay}秒
-                  </Badge>
-                </Label>
-                <div className="grid grid-cols-2 gap-2">
+            {/* 综合设置 - 全局轮换 + 系统配置 */}
+            <div className="border-t">
+              <div className="p-6 space-y-6">
+                <div className="flex items-center justify-between">
                   <div>
-                    <Label className="text-xs text-gray-600">最小</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      max="300"
-                      value={globalMinDelay}
-                      onChange={(e) => setGlobalMinDelay(parseInt(e.target.value) || 0)}
-                      className="h-8 text-sm"
-                      placeholder="3"
-                    />
+                    <h3 className="text-lg font-bold">系统设置</h3>
+                    <p className="text-sm text-muted-foreground">账号轮换、多线程、Discord配置</p>
                   </div>
-                  <div>
-                    <Label className="text-xs text-gray-600">最大</Label>
-                    <Input
-                      type="number"
-                      min="0"
-                      max="300"
-                      value={globalMaxDelay}
-                      onChange={(e) => setGlobalMaxDelay(parseInt(e.target.value) || 0)}
-                      className="h-8 text-sm"
-                      placeholder="8"
-                    />
-                  </div>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={async () => {
+                      try {
+                        // 保存账号轮换
+                        const rotationRes = await fetch('/api/accounts/rotation', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            enabled: rotationEnabled,
+                            rotationInterval: rotationInterval
+                          })
+                        })
+
+                        // 保存多线程配置
+                        const threadRes = await fetch('/api/config/threads', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            download_threads: downloadThreads,
+                            feature_extract_threads: featureExtractThreads
+                          })
+                        })
+
+                        // 保存Discord阈值
+                        const thresholdRes = await fetch('/api/config/discord-threshold', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            threshold: discordThreshold
+                          })
+                        })
+
+                        // 保存全局延迟
+                        const delayRes = await fetch('/api/config/global-reply-delay', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            min_delay: globalMinDelay,
+                            max_delay: globalMaxDelay
+                          })
+                        })
+
+                        // 保存Discord频道ID
+                        const channelRes = await fetch('/api/config/discord-channel', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            channel_id: discordChannelId,
+                            cnfans_channel_id: cnfansChannelId,
+                            acbuy_channel_id: acbuyChannelId
+                          })
+                        })
+
+                        if (rotationRes.ok && threadRes.ok && thresholdRes.ok && delayRes.ok && channelRes.ok) {
+                          toast.success("所有配置已保存")
+                        } else {
+                          toast.error("保存失败")
+                        }
+                      } catch (error) {
+                        toast.error("网络错误，请重试")
+                      }
+                    }}
+                  >
+                    <Save className="mr-2 size-4" />
+                    保存设置
+                  </Button>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  自动回复将在此范围内随机延迟，避免被检测
-                </p>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                  {/* 账号管理设置 */}
+                  <Card>
+                    <CardHeader className="pb-4">
+                      <CardTitle className="text-base flex items-center gap-2">
+                        <Users className="h-4 w-4" />
+                        账号管理
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="space-y-3">
+                        <div className="flex items-center justify-between">
+                          <Label className="text-sm font-medium">启用账号轮换</Label>
+                          <Switch
+                            checked={rotationEnabled}
+                            onCheckedChange={setRotationEnabled}
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label className="text-xs text-muted-foreground">轮换间隔 (秒)</Label>
+                          <Input
+                            type="number"
+                            value={rotationInterval}
+                            onChange={(e) => setRotationInterval(parseInt(e.target.value) || 0)}
+                            disabled={!rotationEnabled}
+                            min={1}
+                            className="h-9"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            {rotationEnabled ? `每 ${rotationInterval} 秒轮换一个账号` : '账号轮换已禁用'}
+                          </p>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  {/* 系统性能设置 */}
+                  <Card>
+                    <CardHeader className="pb-4">
+                      <CardTitle className="text-base flex items-center gap-2">
+                        <Settings className="h-4 w-4" />
+                        系统性能
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-4">
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label className="text-xs text-muted-foreground">下载线程数</Label>
+                          <Input
+                            type="number"
+                            min="1"
+                            max="8"
+                            value={downloadThreads}
+                            onChange={(e) => setDownloadThreads(parseInt(e.target.value) || 4)}
+                            className="h-9"
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label className="text-xs text-muted-foreground">特征提取线程数</Label>
+                          <Input
+                            type="number"
+                            min="1"
+                            max="8"
+                            value={featureExtractThreads}
+                            onChange={(e) => setFeatureExtractThreads(parseInt(e.target.value) || 4)}
+                            className="h-9"
+                          />
+                        </div>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        推荐配置: 下载 4 线程，特征提取 4 线程
+                      </p>
+                    </CardContent>
+                  </Card>
+
+                  {/* Discord 频道配置 */}
+                  <Card className="lg:col-span-2">
+                    <CardHeader className="pb-4">
+                      <CardTitle className="text-base flex items-center gap-2">
+                        <Bot className="h-4 w-4" />
+                        Discord 配置
+                      </CardTitle>
+                      <CardDescription className="text-sm">
+                        配置机器人监听和回复行为
+                      </CardDescription>
+                    </CardHeader>
+                    <CardContent className="space-y-6">
+                      {/* 监听配置 */}
+                      <div className="space-y-4">
+                        <h4 className="text-sm font-medium">监听设置</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                          <div className="space-y-2">
+                            <Label className="text-xs text-muted-foreground">监听频道ID</Label>
+                            <Input
+                              type="text"
+                              value={discordChannelId}
+                              onChange={(e) => setDiscordChannelId(e.target.value)}
+                              placeholder="留空监听所有频道"
+                              className="h-9"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              {discordChannelId ? "只监听指定频道" : "监听所有频道"}
+                            </p>
+                          </div>
+                          <div className="space-y-2">
+                            <Label className="text-xs text-muted-foreground">相似度阈值</Label>
+                            <Input
+                              type="number"
+                              min="0"
+                              max="1"
+                              step="0.05"
+                              value={discordThreshold}
+                              onChange={(e) => setDiscordThreshold(parseFloat(e.target.value) || 0.4)}
+                              className="h-9"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              相似度高于 {discordThreshold * 100}% 时才回复
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 回复设置 */}
+                      <div className="space-y-4">
+                        <h4 className="text-sm font-medium">回复设置</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="space-y-2">
+                            <Label className="text-xs text-muted-foreground">回复延迟范围</Label>
+                            <div className="grid grid-cols-2 gap-2">
+                              <Input
+                                type="number"
+                                min="0"
+                                max="300"
+                                step="0.1"
+                                value={globalMinDelay}
+                                onChange={(e) => setGlobalMinDelay(parseFloat(e.target.value) || 0)}
+                                placeholder="最小延迟"
+                                className="h-9"
+                              />
+                              <Input
+                                type="number"
+                                min="0"
+                                max="300"
+                                step="0.1"
+                                value={globalMaxDelay}
+                                onChange={(e) => setGlobalMaxDelay(parseFloat(e.target.value) || 0)}
+                                placeholder="最大延迟"
+                                className="h-9"
+                              />
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              回复前随机延迟 {globalMinDelay}-{globalMaxDelay} 秒
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 频道设置 */}
+                      <div className="space-y-4">
+                        <h4 className="text-sm font-medium">频道设置</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          <div className="space-y-2">
+                            <Label className="text-xs text-muted-foreground">CNFans 频道ID</Label>
+                            <Input
+                              type="text"
+                              value={cnfansChannelId}
+                              onChange={(e) => setCnfansChannelId(e.target.value)}
+                              placeholder="发送CNFans链接的频道ID"
+                              className="h-9"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              留空在所有频道发送CNFans链接
+                            </p>
+                          </div>
+                          <div className="space-y-2">
+                            <Label className="text-xs text-muted-foreground">AcBuy 频道ID</Label>
+                            <Input
+                              type="text"
+                              value={acbuyChannelId}
+                              onChange={(e) => setAcbuyChannelId(e.target.value)}
+                              placeholder="发送AcBuy链接的频道ID"
+                              className="h-9"
+                            />
+                            <p className="text-xs text-muted-foreground">
+                              留空在所有频道发送AcBuy链接
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
               </div>
-            </div>
-
-
-            {/* 保存按钮 */}
-            <div className="flex gap-3">
-              <Button
-                className="flex-1 h-11 text-sm font-bold shadow-sm"
-                variant="default"
-                onClick={async () => {
-                  try {
-                    // 保存Discord阈值
-                    const thresholdRes = await fetch('/api/config/discord-threshold', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        threshold: discordThreshold
-                      })
-                    })
-
-                    // 保存全局延迟
-                    const delayRes = await fetch('/api/config/global-reply-delay', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        min_delay: globalMinDelay,
-                        max_delay: globalMaxDelay
-                      })
-                    })
-
-                    if (thresholdRes.ok && delayRes.ok) {
-                      toast.success("Discord配置已保存")
-                    } else {
-                      toast.error("保存失败")
-                    }
-                  } catch (error) {
-                    toast.error("网络错误，请重试")
-                  }
-                }}
-              >
-                <Save className="mr-2 size-4" />
-                保存所有设置
-              </Button>
             </div>
           </CardContent>
         </Card>
+
 
       </div>
 
