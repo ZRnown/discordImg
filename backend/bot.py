@@ -98,6 +98,7 @@ CNFans: {product.get('cnfansUrl', 'N/A')}
                 # 准备图片数据
                 form_data = aiohttp.FormData()
                 form_data.add_field('image', image_data, filename='image.jpg', content_type='image/jpeg')
+                form_data.add_field('threshold', str(config.DISCORD_SIMILARITY_THRESHOLD))
 
                 # 调用 PP-ShiTuV2 + Milvus 服务（本地）
                 async with session.post('http://localhost:5001/search_similar', data=form_data) as resp:

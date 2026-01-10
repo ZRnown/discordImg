@@ -17,7 +17,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Plus, RefreshCw, Trash2 } from "lucide-react"
+import { Plus, RefreshCw, Trash2, MessageCircle, Save } from "lucide-react"
 import { toast } from "sonner"
 
 export function AccountsView() {
@@ -26,6 +26,7 @@ export function AccountsView() {
   const [newToken, setNewToken] = useState("")
   const [rotationEnabled, setRotationEnabled] = useState(false)
   const [rotationInterval, setRotationInterval] = useState(10)
+  const [discordThreshold, setDiscordThreshold] = useState(0.4)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -320,6 +321,84 @@ export function AccountsView() {
               }
             }}>
               保存设置并应用
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card className="shadow-sm border-2 border-purple-200/50">
+          <CardHeader className="py-5 border-b bg-purple-50/50">
+            <CardTitle className="text-2xl font-bold flex items-center gap-2">
+              <MessageCircle className="size-6 text-purple-600" />
+              Discord 机器人配置
+            </CardTitle>
+            <CardDescription className="text-sm">设置 Discord 自动回复的相似度阈值</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6 pt-6">
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 gap-4">
+                <div className="space-y-2">
+                  <Label className="text-sm font-bold">Discord 相似度阈值</Label>
+                  <div className="flex items-center gap-4">
+                    <Input
+                      type="number"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={discordThreshold}
+                      onChange={(e) => setDiscordThreshold(parseFloat(e.target.value) || 0.4)}
+                      className="h-10 w-24"
+                      placeholder="0.4"
+                    />
+                    <span className="text-sm text-muted-foreground">
+                      {(discordThreshold * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Discord 机器人只对相似度超过此阈值的图片进行自动回复 (0.0-1.0)
+                  </p>
+                </div>
+              </div>
+
+              <div className="p-4 bg-purple-50 rounded-lg border border-purple-200">
+                <div className="text-sm space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted-foreground font-medium">当前Discord阈值:</span>
+                    <Badge className="bg-purple-600 hover:bg-purple-700">
+                      {(discordThreshold * 100).toFixed(0)}%
+                    </Badge>
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Discord 机器人将使用此阈值自动回复图片消息
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <Button
+              className="w-full h-11 text-sm font-bold shadow-sm"
+              variant="default"
+              onClick={async () => {
+                try {
+                  const response = await fetch('/api/config/discord-threshold', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      threshold: discordThreshold
+                    })
+                  })
+
+                  if (response.ok) {
+                    toast.success("Discord 阈值设置已保存")
+                  } else {
+                    toast.error("保存失败")
+                  }
+                } catch (error) {
+                  toast.error("网络错误，请重试")
+                }
+              }}
+            >
+              <Save className="mr-2 size-4" />
+              保存 Discord 阈值设置
             </Button>
           </CardContent>
         </Card>

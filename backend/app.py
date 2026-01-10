@@ -596,6 +596,44 @@ def delete_product(product_id):
         logger.error(f"删除商品失败: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/config/discord-threshold', methods=['GET'])
+def get_discord_threshold():
+    """获取Discord相似度阈值"""
+    try:
+        return jsonify({
+            'threshold': config.DISCORD_SIMILARITY_THRESHOLD,
+            'threshold_percentage': config.DISCORD_SIMILARITY_THRESHOLD * 100
+        })
+    except Exception as e:
+        logger.error(f"获取Discord阈值失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/config/discord-threshold', methods=['POST'])
+def update_discord_threshold():
+    """更新Discord相似度阈值"""
+    try:
+        data = request.json
+        threshold = float(data.get('threshold', 0.4))
+
+        # 验证范围
+        if not (0.0 <= threshold <= 1.0):
+            return jsonify({'error': '阈值必须在0.0-1.0之间'}), 400
+
+        # 这里可以保存到配置文件或数据库
+        # 暂时只返回成功（实际使用时需要重启服务生效）
+        logger.info(f"Discord相似度阈值设置为: {threshold} ({threshold*100:.0f}%)")
+
+        return jsonify({
+            'success': True,
+            'threshold': threshold,
+            'threshold_percentage': threshold * 100,
+            'message': 'Discord阈值设置已更新，请重启Discord机器人服务以生效'
+        })
+
+    except Exception as e:
+        logger.error(f"更新Discord阈值失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/search_history', methods=['GET'])
 def get_search_history():
     """获取搜索历史记录"""

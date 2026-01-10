@@ -110,36 +110,9 @@ class PPShiTuV2FeatureExtractor:
 
         except Exception as e:
             logger.error(f"❌ PP-ShiTuV2 模型加载失败: {e}")
-            logger.info("尝试使用 ResNet50 作为后备特征提取器...")
-
-            # 后备方案：使用 ResNet50
-            try:
-                from paddle.vision.models import resnet50
-                logger.info("正在加载 ResNet50 特征提取模型...")
-                full_model = resnet50(pretrained=True)
-
-                # 移除最后的全连接层，获取特征
-                self.model = paddle.nn.Sequential(
-                    full_model.conv1,
-                    full_model.bn1,
-                    full_model.relu,
-                    full_model.maxpool,
-                    full_model.layer1,
-                    full_model.layer2,
-                    full_model.layer3,
-                    full_model.layer4,
-                    full_model.avgpool,
-                    paddle.nn.Flatten()
-                )
-                self.model.eval()
-                self._use_paddleclas = False
-                self._use_inference = False
-                self.predictor = None
-                logger.info("✅ ResNet50 特征提取器加载成功！")
-
-            except Exception as fallback_e:
-                logger.error(f"❌ ResNet50 后备方案也失败: {fallback_e}")
-                raise e
+            logger.error("❌ 严格要求使用 PP-ShiTuV2 模型，不提供任何后备方案")
+            logger.error("请确保 PP-ShiTuV2 模型文件正确安装")
+            raise RuntimeError("PP-ShiTuV2 模型加载失败，系统无法运行") from e
 
     def extract_feature(self, image_path: Union[str, Path]) -> Optional[List[float]]:
         """提取单张图片的特征向量 (512维)"""

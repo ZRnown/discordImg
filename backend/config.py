@@ -3,6 +3,7 @@ import os
 class Config:
     # Discord 配置
     DISCORD_CHANNEL_ID = int(os.getenv('DISCORD_CHANNEL_ID', 0)) if os.getenv('DISCORD_CHANNEL_ID') else 0
+    DISCORD_SIMILARITY_THRESHOLD = float(os.getenv('DISCORD_SIMILARITY_THRESHOLD', '0.4'))  # Discord机器人相似度阈值
 
     # PP-ShiTuV2 & Milvus 配置
     VECTOR_DIMENSION = 512  # PP-ShiTuV2 输出512维特征向量
