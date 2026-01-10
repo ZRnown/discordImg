@@ -58,8 +58,12 @@ def search_similar():
 
             # 使用 Milvus 向量搜索
             print(f"DEBUG: Searching with threshold: {threshold}, vector length: {len(query_features)}")
-            results = db.search_similar_images(query_features, limit=1, threshold=threshold)
-            print(f"DEBUG: Search results: {results}")
+            # 临时将阈值设为0，确保能返回结果进行调试
+            debug_threshold = max(0.0, threshold)  # 确保不为负数
+            results = db.search_similar_images(query_features, limit=1, threshold=debug_threshold)
+            print(f"DEBUG: Search results count: {len(results) if results else 0}")
+            if results:
+                print(f"DEBUG: Best match similarity: {results[0]['similarity']}")
             print(f"DEBUG: Total indexed images: {db.get_total_indexed_images()}")
 
             response_data = {

@@ -351,10 +351,13 @@ class Database:
             matched_results = []
 
             if results and len(results) > 0:
+                print(f"DEBUG DB: Processing {len(results[0])} search results")
                 for hit in results[0]:
-                    score = hit['distance']  # COSINE 距离分数
+                    score = hit['distance']  # COSINE 相似度分数 (0-1)
 
-                    # 只有当相似度分数大于阈值时才返回结果
+                    print(f"DEBUG DB: Hit score: {score}, threshold: {threshold}")
+
+                    # 只有当相似度分数大于等于阈值时才返回结果
                     if score >= threshold:
                         entity = hit['entity']
 
@@ -369,6 +372,11 @@ class Database:
                                 'image_path': entity['image_path']
                             }
                             matched_results.append(result)
+                            print(f"DEBUG DB: Added result with similarity {score}")
+                        else:
+                            print(f"DEBUG DB: Product info not found for product_id {entity['product_id']}")
+                    else:
+                        print(f"DEBUG DB: Score {score} below threshold {threshold}, skipping")
                             break  # 只返回最相似的一个结果
 
             return matched_results
@@ -479,12 +487,9 @@ class Database:
             # 确保 Milvus 已初始化
             self._ensure_milvus_initialized()
 
-            # 使用 num_entities 获取集合中的实体数量
-            stats = self.milvus_client.query(
-                collection_name="image_embeddings",
-                output_fields=["count(*)"]
-            )
-            return len(stats) if stats else 0
+            # 使用 get_collection_stats 获取集合中的实体数量
+            stats = self.milvus_client.get_collection_stats(collection_name="image_embeddings")
+            return stats.get('row_count', 0)
         except Exception as e:
             logger.error(f"获取索引图片数量失败: {e}")
             return 0
