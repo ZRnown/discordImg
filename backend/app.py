@@ -39,6 +39,10 @@ def search_similar():
         image_file = request.files['image']
         threshold = float(request.form.get('threshold', 0.3))  # 从0到1，默认30% (降低阈值)
 
+        # 调试信息
+        print(f"DEBUG: Received threshold: {threshold}")
+        print(f"DEBUG: Form data: {list(request.form.keys())}")
+
         # 保存查询图片到临时文件
         import uuid
         temp_filename = f"{uuid.uuid4()}.jpg"
@@ -53,7 +57,10 @@ def search_similar():
                 return jsonify({'error': 'Feature extraction failed'}), 500
 
             # 使用 Milvus 向量搜索
+            print(f"DEBUG: Searching with threshold: {threshold}, vector length: {len(query_features)}")
             results = db.search_similar_images(query_features, limit=1, threshold=threshold)
+            print(f"DEBUG: Search results: {results}")
+            print(f"DEBUG: Total indexed images: {db.get_total_indexed_images()}")
 
             response_data = {
                 'success': False,
@@ -646,6 +653,38 @@ def get_global_reply_delay():
     except Exception as e:
         logger.error(f"获取全局回复延迟失败: {e}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/debug/milvus_status', methods=['GET'])
+def get_milvus_status():
+    """获取Milvus数据库状态"""
+    try:
+        db._ensure_milvus_initialized()
+        stats = db.milvus_client.get_collection_stats(collection_name="image_embeddings")
+        entity_count = stats.get('row_count', 0)
+
+        # 尝试搜索一个测试向量
+        test_vector = [0.0] * 512  # 512维零向量
+        test_results = db.milvus_client.search(
+            collection_name="image_embeddings",
+            data=[test_vector],
+            limit=1,
+            search_params={"metric_type": "COSINE", "params": {}}
+        )
+
+        return jsonify({
+            'collection_exists': True,
+            'entity_count': entity_count,
+            'test_search_works': len(test_results) > 0 if test_results else False,
+            'vector_dimension': 512,
+            'metric_type': 'COSINE'
+        })
+    except Exception as e:
+        logger.error(f"获取Milvus状态失败: {e}")
+        return jsonify({
+            'error': str(e),
+            'collection_exists': False,
+            'entity_count': 0
+        }), 500
 
 @app.route('/api/test_similarity', methods=['POST'])
 def test_similarity():

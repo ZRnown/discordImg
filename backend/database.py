@@ -328,6 +328,8 @@ class Database:
         try:
             # 确保 Milvus 已初始化
             self._ensure_milvus_initialized()
+            print(f"DEBUG DB: Starting search, threshold: {threshold}, limit: {limit}")
+            print(f"DEBUG DB: Query vector length: {len(query_vector)}")
 
             # 搜索参数
             search_params = {
@@ -336,6 +338,7 @@ class Database:
             }
 
             # 执行搜索
+            print(f"DEBUG DB: Executing Milvus search...")
             results = self.milvus_client.search(
                 collection_name="image_embeddings",
                 data=[query_vector],
@@ -343,6 +346,7 @@ class Database:
                 search_params=search_params,
                 limit=limit  # 只取最相似的一个
             )
+            print(f"DEBUG DB: Raw Milvus results: {results}")
 
             matched_results = []
 
