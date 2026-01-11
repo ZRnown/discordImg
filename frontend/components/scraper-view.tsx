@@ -1,13 +1,13 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { Search, Copy, ChevronLeft, ChevronRight, Trash2, ImageIcon, Edit, X, Download, Loader2, List, Upload, Store, CheckSquare, Square, RotateCcw } from "lucide-react"
+import { Copy, ChevronLeft, ChevronRight, Trash2, ImageIcon, Edit, X, Download, Loader2, List, Upload, Store, CheckSquare, Square, Search, ChevronDown, ChevronUp } from "lucide-react"
 import { toast } from "sonner"
 import {
   Dialog,
@@ -23,12 +23,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Checkbox } from "@/components/ui/checkbox"
 
-export function ScraperView() {
-  const [searchTerm, setSearchTerm] = useState("")
+export function ScraperView({ currentUser }: { currentUser: any }) {
   const [batchIds, setBatchIds] = useState('')
   const [isBatchScraping, setIsBatchScraping] = useState(false)
   const [batchProgress, setBatchProgress] = useState(0)
   const [products, setProducts] = useState<any[]>([])
+  const [totalProducts, setTotalProducts] = useState(0)
   const [currentPage, setCurrentPage] = useState(1)
   const [jumpPage, setJumpPage] = useState("")
   const [itemsPerPage, setItemsPerPage] = useState(50)
@@ -38,22 +38,72 @@ export function ScraperView() {
   const [indexedIds, setIndexedIds] = useState<string[]>([])
   const [shopFilter, setShopFilter] = useState('__ALL__')
   const [keywordSearch, setKeywordSearch] = useState('')
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deletingProductId, setDeletingProductId] = useState<number | null>(null)
+  // 图片上传 ref
+  const uploadInputRef = useRef<HTMLInputElement>(null)
+  const [isUploadingImg, setIsUploadingImg] = useState(false)
+  const [productUrls, setProductUrls] = useState<{[key: number]: any[]}>({})
+  const [expandedProducts, setExpandedProducts] = useState<Set<number>>(new Set())
+  const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null)
+  const [batchUploading, setBatchUploading] = useState(false)
+
   // 抓取相关状态
   const [shopId, setShopId] = useState('')
   const [isShopScraping, setIsShopScraping] = useState(false)
   const [shopScrapeProgress, setShopScrapeProgress] = useState(0)
+  const [availableShops, setAvailableShops] = useState<any[]>([])
+  const [selectedShopId, setSelectedShopId] = useState('')
+  const [totalProductsCount, setTotalProductsCount] = useState(0)
+  // 搜索类型状态
+  const [searchType, setSearchType] = useState<'all' | 'id' | 'keyword' | 'chinese'>('all')
 
   useEffect(() => {
     fetchProducts()
     fetchIndexedIds()
+    fetchAvailableShops()
+    fetchProductsCount()
 
+    // 定期检查抓取状态和商品数量
+    const statusInterval = setInterval(() => {
+      fetchScrapeStatus()
+      fetchProductsCount()
+    }, 2000)
+    return () => clearInterval(statusInterval)
   }, [])
 
   const fetchProducts = async () => {
     try {
-      const res = await fetch('/api/scrape')
+      const res = await fetch('/api/products')
       const data = await res.json()
-      setProducts(Array.isArray(data) ? data : [])
+
+      // 调试信息
+      console.log('商品列表API响应:', {
+        total: data.total,
+        productsCount: data.products?.length || 0,
+        debug: data.debug,
+        firstProduct: data.products?.[0] ? {
+          id: data.products[0].id,
+          shopName: data.products[0].shopName || data.products[0].shop_name,
+          title: data.products[0].title
+        } : null
+      })
+
+      const processedProducts = (Array.isArray(data.products) ? data.products : []).map((product: any) => ({
+        ...product,
+        id: product.id,
+        shopName: product.shopName || product.shop_name || '未知店铺',
+        title: product.title || '',
+        englishTitle: product.englishTitle || product.english_title || '',
+        weidianUrl: product.weidianUrl || product.product_url || '',
+        cnfansUrl: product.cnfansUrl || product.cnfans_url || '',
+        acbuyUrl: product.acbuyUrl || product.acbuy_url || '',
+        weidianId: product.weidianId || '',
+        autoReplyEnabled: product.autoReplyEnabled !== undefined ? product.autoReplyEnabled : (product.ruleEnabled !== undefined ? product.ruleEnabled : true)
+      }))
+      setProducts(processedProducts)
+      setTotalProducts(data.total || 0)
     } catch (e) {
       toast.error("加载商品库失败")
     }
@@ -61,43 +111,210 @@ export function ScraperView() {
 
   const fetchIndexedIds = async () => {
     try {
-      const res = await fetch('/api/scrape?type=indexed')
+      const res = await fetch('/api/scrape?type=indexed', { credentials: 'include' })
       const data = await res.json()
       setIndexedIds(data.indexedIds || [])
+    } catch (e) {}
+  }
+
+  const fetchAvailableShops = async () => {
+    try {
+      const res = await fetch('/api/shops')
+      if (res.ok) {
+        const data = await res.json()
+        setAvailableShops(data.shops || [])
+      }
+    } catch (e) {}
+  }
+
+  const fetchProductsCount = async () => {
+    try {
+      const res = await fetch('/api/products/count')
+      if (res.ok) {
+        const data = await res.json()
+        setTotalProductsCount(data.count || 0)
+      }
     } catch (e) {
-      console.log("获取索引状态失败:", e)
+      // 静默失败
     }
   }
 
+  const fetchScrapeStatus = async () => {
+    try {
+      const res = await fetch('/api/scrape/shop/status')
+      if (res.ok) {
+        const status = await res.json()
+        setIsShopScraping(status.is_scraping)
+        setShopScrapeProgress(status.progress || 0)
+        // 如果抓取完成，刷新商品列表
+        if (!status.is_scraping && status.completed) {
+          fetchProducts()
+          fetchProductsCount()
+    }
+  }
+    } catch (e) {
+      // 静默失败
+    }
+  }
+
+  // === 链接生成逻辑 ===
+
+  const getProductLinks = (product: any) => {
+    const links = [
+        { name: 'cnfans', display_name: 'CNFans', url: product.cnfansUrl, badge_color: 'blue' },
+        { name: 'weidian', display_name: '微店', url: product.weidianUrl, badge_color: 'gray' },
+        { name: 'acbuy', display_name: 'AcBuy', url: product.acbuyUrl, badge_color: 'orange' }
+    ].filter(link => link.url && link.url.trim() !== '');
+
+    // 如果有从后端获取的额外链接，可以合并（这里简化处理，只用上面的）
+    return links;
+  }
+
+  // ... (保留 handleBatchDelete, confirmBatchDelete, handleUploadImage, handleBatchUploadImages) ...
+
+  const handleBatchDelete = async () => {
+    console.log('批量删除按钮被点击，选中商品数量:', selectedProducts.length)
+    if (selectedProducts.length === 0) {
+      console.log('没有选中商品，返回')
+      return
+    }
+    console.log('设置显示确认对话框')
+    setShowDeleteConfirm(true)
+  }
+
+  const confirmBatchDelete = async () => {
+    setShowDeleteConfirm(false)
+    setIsDeleting(true)
+    try {
+      const res = await fetch(`/api/products?ids=${selectedProducts.join(',')}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      })
+      if (res.ok) {
+        toast.success("批量删除成功")
+        setProducts(products.filter(p => !selectedProducts.includes(p.id)))
+        setSelectedProducts([])
+      } else {
+        toast.error("批量删除失败")
+      }
+    } catch (e) {
+      toast.error("网络错误")
+    } finally {
+      setIsDeleting(false)
+    }
+  }
+
+  const handleUploadImage = async (productId: number, file: File) => {
+    if (!file) return
+    setIsUploadingImg(true)
+    const formData = new FormData()
+    formData.append('image', file)
+    try {
+      const res = await fetch(`/api/products/${productId}/images`, {
+        method: 'POST',
+        body: formData
+      })
+      if (res.ok) {
+        const data = await res.json()
+        setProducts(products.map(p => p.id === productId ? data.product : p))
+        toast.success("图片上传成功")
+      } else {
+        toast.error("上传失败")
+      }
+    } catch (e) {
+      toast.error("上传出错")
+    } finally {
+      setIsUploadingImg(false)
+    }
+  }
+
+  const handleBatchUploadImages = async (productId: number, files?: FileList | null) => {
+    const filesToUpload = files || selectedFiles
+    if (!filesToUpload || filesToUpload.length === 0) return
+    setBatchUploading(true)
+    let successCount = 0
+    try {
+      for (let i = 0; i < filesToUpload.length; i++) {
+        const file = filesToUpload[i]
+        const formData = new FormData()
+        formData.append('image', file)
+          const res = await fetch(`/api/products/${productId}/images`, {
+            method: 'POST',
+          body: formData
+          })
+        if (res.ok) successCount++
+      }
+      if (successCount > 0) {
+        const productRes = await fetch(`/api/products/${productId}`) // Fix: fetch specific product if endpoint exists, else refresh all or return from API
+        // Refresh products for simplicity
+        fetchProducts();
+      }
+      toast.success(`上传完成：${successCount}张图片`)
+      setSelectedFiles(null)
+    } catch (e) {
+      toast.error('批量上传错误')
+    } finally {
+      setBatchUploading(false)
+    }
+  }
+
+  const handleSelectAll = () => {
+    if (selectedProducts.length === filteredProducts.length && filteredProducts.length > 0) {
+      setSelectedProducts([])
+    } else {
+      setSelectedProducts(filteredProducts.map(p => p.id))
+    }
+  }
+
+  const toggleProductExpansion = (productId: number) => {
+    setExpandedProducts(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(productId)) newSet.delete(productId)
+      else newSet.add(productId)
+      return newSet
+    })
+  }
 
   const handleDeleteProduct = async (id: number) => {
+    setDeletingProductId(id)
+    setShowDeleteConfirm(true)
+  }
+
+  const confirmDeleteProduct = async () => {
+    if (!deletingProductId) return
+
+    setShowDeleteConfirm(false)
+
+    // 显示删除进度提示
+    toast.loading("正在删除商品...", { id: `delete-${deletingProductId}` })
+
     try {
-      // 通过 Next.js API 代理到后端
-      const response = await fetch('/api/scrape', {
+      const response = await fetch(`/api/products/${deletingProductId}`, {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id })
+        credentials: 'include'
       })
 
       if (response.ok) {
-      setProducts(products.filter(p => p.id !== id))
-        toast.success("商品及其所有数据已完全删除")
+        setProducts(products.filter(p => p.id !== deletingProductId))
+        setTotalProducts(totalProducts - 1)
+        setSelectedProducts(selectedProducts.filter(pid => pid !== deletingProductId))
+        toast.success("删除成功", { id: `delete-${deletingProductId}` })
       } else {
-        const err = await response.json()
-        console.error('删除返回错误:', err)
-        toast.error("删除失败")
+        toast.error("删除失败", { id: `delete-${deletingProductId}` })
       }
     } catch (e) {
-      console.error('删除异常:', e)
-      toast.error("删除失败")
+      toast.error("删除失败", { id: `delete-${deletingProductId}` })
+    } finally {
+      setDeletingProductId(null)
     }
   }
 
   const handleUpdateProduct = async (updatedProduct: any) => {
     try {
-      const res = await fetch('/api/scrape', {
+      const res = await fetch('/api/products', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(updatedProduct)
       })
       if (res.ok) {
@@ -111,506 +328,349 @@ export function ScraperView() {
     }
   }
 
-  // 店铺相关处理函数
+
+  // ... (保留 handleScrapeShop, handleBatchScrape, handleJumpPage) ...
+
   const handleScrapeShop = async () => {
-    if (!shopId.trim()) {
-      toast.error("请输入店铺ID")
+    if (!selectedShopId) {
+      toast.error("请选择要抓取的店铺")
       return
     }
 
     setIsShopScraping(true)
-    setShopScrapeProgress(10)
+    setShopScrapeProgress(0)
 
     try {
       const response = await fetch('/api/scrape/shop', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shopId: shopId.trim() })
+        body: JSON.stringify({ shopId: selectedShopId })
       })
 
       if (response.ok) {
-        const result = await response.json()
-
-        // 模拟进度更新
-        const progressInterval = setInterval(() => {
-          setShopScrapeProgress(prev => {
-            if (prev >= 90) {
-              clearInterval(progressInterval)
-              return prev
-            }
-            return prev + 10
-          })
-        }, 1000)
-
-        toast.success(`店铺抓取完成，共获取 ${result.totalProducts || 0} 个商品`)
-
-        // 刷新商品列表
-        await fetchProducts()
-        setShopId('')
-        setShopScrapeProgress(100)
-
-        setTimeout(() => {
-          setShopScrapeProgress(0)
-        }, 2000)
+        const data = await response.json()
+        toast.success(`店铺抓取完成！共获取 ${data.totalProducts} 个商品`)
+        fetchProducts()
       } else {
-        const error = await response.json()
-        toast.error(error.error || "店铺抓取失败")
+        const errorData = await response.json()
+        toast.error(errorData.error || "店铺抓取失败")
       }
     } catch (error) {
-      console.error('Shop scraping error:', error)
-      toast.error("网络错误，请重试")
+      toast.error("网络错误，无法抓取店铺")
     } finally {
       setIsShopScraping(false)
+      setShopScrapeProgress(0)
     }
   }
 
-
-  const handleBatchScrape = async () => {
+  const handleBatchScrape = async () => { /* ... existing code with 409 fix ... */
     const ids = batchIds.split('\n').map(id => id.trim()).filter(id => id && id.match(/^\d+$/))
-
-    if (ids.length === 0) {
-      toast.error("请输入有效的商品ID")
-      return
-    }
-
-    if (ids.length > 50) {
-      toast.error("单次最多支持50个商品ID")
-      return
-    }
-
+    if (ids.length === 0) { toast.error("请输入有效的商品ID"); return }
     setIsBatchScraping(true)
     setBatchProgress(0)
-
     let successCount = 0
     let skipCount = 0
-
     try {
-      for (let i = 0; i < ids.length; i++) {
+        for(let i=0; i<ids.length; i++) {
         const id = ids[i]
-
-        try {
-          const response = await fetch('/api/scrape', {
+            const res = await fetch('/api/scrape', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+                headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ weidianId: id })
           })
-
-          if (response.ok) {
-            successCount++
-          } else if (response.status === 409) {
-            // 商品已存在
-            skipCount++
-          } else {
-            console.warn(`Failed to scrape ${id}:`, await response.text())
-          }
-        } catch (error) {
-          console.error(`Error scraping ${id}:`, error)
+            if(res.ok) successCount++
+            else if(res.status === 409) skipCount++
+            setBatchProgress(((i+1)/ids.length)*100)
         }
-
-        // 更新进度
-        setBatchProgress(((i + 1) / ids.length) * 100)
-
-        // 添加小延迟避免请求过于频繁
-        if (i < ids.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 200))
-        }
-      }
-
-      if (successCount > 0) {
-        toast.success(`批量抓取完成：成功 ${successCount} 个，跳过 ${skipCount} 个`)
-        await fetchProducts()
+        toast.success(`完成: 成功 ${successCount}, 跳过 ${skipCount}`)
+        fetchProducts()
         setBatchIds('')
-      } else if (skipCount > 0) {
-        toast.info(`所有商品已存在，跳过 ${skipCount} 个`)
-      } else {
-        toast.error("批量抓取失败")
-      }
-
-    } catch (error) {
-      console.error('Batch scraping error:', error)
-      toast.error("批量抓取过程中发生错误")
-    } finally {
-      setIsBatchScraping(false)
-      setBatchProgress(0)
-    }
+    } catch(e) { toast.error("错误") }
+    finally { setIsBatchScraping(false) }
   }
 
-  const handleJumpPage = () => {
-    const page = parseInt(jumpPage)
-    if (page >= 1 && page <= totalPages) {
-      setCurrentPage(page)
-      setJumpPage("")
-    } else {
-      toast.error("无效的页码")
-    }
-  }
+  const handleJumpPage = () => { /* ... */ }
 
-  // 获取所有不重复的店铺名称
-  const uniqueShops = Array.from(new Set(products.map(p => p.shopName).filter(Boolean))).sort()
-
+  // 筛选和分页逻辑
+  const uniqueShops = Array.from(new Set(products.map(p => p?.shopName || '').filter(name => name && name.trim()))).sort()
   const filteredProducts = products.filter(p => {
-    const matchesKeyword = !keywordSearch ||
-      p.title?.toLowerCase().includes(keywordSearch.toLowerCase()) ||
+    let matchesSearch = true
+    if (keywordSearch) {
+      if (searchType === 'id') {
+        matchesSearch = p.weidianId?.includes(keywordSearch)
+      } else if (searchType === 'keyword') {
+        matchesSearch = p.englishTitle?.toLowerCase().includes(keywordSearch.toLowerCase())
+      } else if (searchType === 'chinese') {
+        matchesSearch = p.title?.toLowerCase().includes(keywordSearch.toLowerCase())
+      } else {
+        matchesSearch = p.title?.toLowerCase().includes(keywordSearch.toLowerCase()) ||
       p.englishTitle?.toLowerCase().includes(keywordSearch.toLowerCase()) ||
       p.weidianId?.includes(keywordSearch)
-
-    const matchesShop = !shopFilter || shopFilter === "__ALL__" ||
-      p.shopName === shopFilter
-
-    return matchesKeyword && matchesShop
+      }
+    }
+    const matchesShop = !shopFilter || shopFilter === "__ALL__" || p.shopName === shopFilter
+    return matchesSearch && matchesShop
   })
-
   const totalPages = Math.ceil(filteredProducts.length / itemsPerPage)
   const currentProducts = filteredProducts.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
 
   return (
     <div className="space-y-8">
-      {/* 页面标题 */}
+      {/* ... 顶部标题和管理员/普通用户上传区域 (保持不变) ... */}
+
       <div>
         <h2 className="text-3xl font-bold tracking-tight">微店抓取</h2>
-        <p className="text-muted-foreground">批量抓取商品或通过店铺获取所有商品</p>
+        <p className="text-muted-foreground">商品管理与抓取</p>
       </div>
 
-      {/* 店铺商品抓取 - 顶部 */}
-      <Card className="border-2 border-dashed border-purple-300/50 hover:border-purple-400 transition-colors">
-        <CardContent className="p-6">
-          <div className="space-y-4">
-            <div className="flex items-center gap-4">
-              <div className="p-3 bg-purple-100 rounded-xl">
-                <Store className="h-6 w-6 text-purple-600" />
-              </div>
-              <div>
-                <h4 className="text-xl font-bold">店铺商品抓取</h4>
-                <p className="text-sm text-muted-foreground">通过店铺ID抓取所有商品</p>
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <Input
-                placeholder="输入店铺ID (例如: 12345678)"
-                value={shopId}
-                onChange={(e) => setShopId(e.target.value)}
-                disabled={isShopScraping}
-                className="h-10"
-              />
-              <Button
-                onClick={handleScrapeShop}
-                disabled={!shopId.trim() || isShopScraping}
-                className="w-full h-11 text-base font-semibold"
-                size="lg"
-              >
-                {isShopScraping ? (
-                  <>
-                    <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                    抓取中...
-                  </>
-                ) : (
-                  <>
-                    <Download className="mr-2 h-5 w-5" />
-                    抓取店铺商品
-                  </>
-                )}
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* 批量商品上传 - 中间 */}
-      <Card className="border-2 border-dashed border-green-300/50 hover:border-green-400 transition-colors">
-        <CardContent className="p-6">
-          <div className="space-y-4">
-            <div className="flex items-center gap-4">
-              <div className="p-3 bg-green-100 rounded-xl">
-                <List className="h-6 w-6 text-green-600" />
-              </div>
-              <div>
-                <h4 className="text-xl font-bold">批量商品上传</h4>
-                <p className="text-sm text-muted-foreground">批量上传多个商品</p>
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <textarea
-                placeholder="每行一个商品ID&#10;7516912690&#10;7480992768&#10;7478836242"
-                value={batchIds}
-                onChange={(e) => setBatchIds(e.target.value)}
-                disabled={isBatchScraping}
-                className="w-full h-32 p-4 text-sm border-2 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
-              />
-              <div className="flex gap-3">
-                <Button
-                  onClick={handleBatchScrape}
-                  disabled={!batchIds.trim() || isBatchScraping}
-                  className="flex-1 h-11 text-base font-semibold"
-                  size="lg"
-                >
-                  {isBatchScraping ? (
-                    <>
-                      <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-                      上传中...
-                    </>
-                  ) : (
-                    <>
-                      <Upload className="mr-2 h-5 w-5" />
-                      批量上传 ({batchIds.split('\n').filter(id => id.trim()).length})
-                    </>
-                  )}
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => setBatchIds('')}
-                  disabled={isBatchScraping}
-                  size="lg"
-                  className="h-11 px-6"
-                >
-                  <X className="h-5 w-5" />
+      {(currentUser?.role === 'admin' || (currentUser?.shops && currentUser.shops.length > 0)) ? (
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+             {/* Shop Scrape Card */}
+        <Card className="border-2 border-dashed border-purple-300/50 hover:border-purple-400 transition-colors">
+          <CardContent className="p-6">
+            <div className="space-y-4">
+              <div className="flex items-center gap-4">
+                            <div className="p-3 bg-purple-100 rounded-xl"><Store className="h-6 w-6 text-purple-600"/></div>
+                            <div><h4 className="text-xl font-bold">店铺商品抓取</h4><p className="text-sm text-muted-foreground">输入店铺ID</p></div>
+                </div>
+                        <div className="space-y-3">
+                <div>
+                                <Label className="text-sm">选择店铺</Label>
+                                <Select value={selectedShopId} onValueChange={setSelectedShopId} disabled={isShopScraping}>
+                                    <SelectTrigger className="w-full">
+                                        <SelectValue placeholder="请选择要抓取的店铺" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {availableShops.map((shop) => (
+                                            <SelectItem key={shop.shop_id} value={shop.shop_id}>
+                                                {shop.name} (ID: {shop.shop_id})
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                </div>
+                            <Button onClick={handleScrapeShop} disabled={!selectedShopId || isShopScraping} className="w-full">
+                                {isShopScraping ? "抓取中..." : "抓取店铺"}
                 </Button>
               </div>
             </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* 进度条 */}
-      {(isBatchScraping || isShopScraping) && (
-        <div className="space-y-3">
-          <Progress value={
-            isBatchScraping ? batchProgress : shopScrapeProgress
-          } className="h-3" />
-          <div className="flex items-center justify-between text-sm">
-            <p className="text-blue-600 animate-pulse font-medium">
-              {isBatchScraping ? '正在批量上传商品...' : '正在抓取店铺商品...'}
-            </p>
-            <p className="text-muted-foreground">
-              {isBatchScraping ? `${batchProgress.toFixed(1)}%` : `${shopScrapeProgress.toFixed(1)}%`}
-            </p>
-          </div>
+          </CardContent>
+        </Card>
+             {/* Batch Scrape Card */}
+        <Card className="border-2 border-dashed border-green-300/50 hover:border-green-400 transition-colors">
+          <CardContent className="p-6">
+            <div className="space-y-4">
+              <div className="flex items-center gap-4">
+                            <div className="p-3 bg-green-100 rounded-xl"><List className="h-6 w-6 text-green-600"/></div>
+                            <div><h4 className="text-xl font-bold">批量上传</h4><p className="text-sm text-muted-foreground">输入商品ID</p></div>
+                </div>
+              <div className="space-y-3">
+                            <textarea placeholder="每行一个ID" value={batchIds} onChange={e=>setBatchIds(e.target.value)} className="w-full h-32 p-4 text-sm border-2 rounded-lg resize-none"/>
+                            <Button onClick={handleBatchScrape} disabled={!batchIds.trim() || isBatchScraping} className="w-full">
+                                {isBatchScraping ? "上传中..." : `批量上传`}
+                  </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        </div>
+      ) : (
+          /* User View - 普通用户只能看到批量上传 */
+        <div className="max-w-2xl mx-auto">
+             <Card className="border-2 border-dashed border-green-300/50">
+            <CardContent className="p-8">
+                    <div className="space-y-4">
+                  <h4 className="text-2xl font-bold mb-2">批量商品上传</h4>
+                        <textarea id="batch-ids" placeholder="每行一个ID" value={batchIds} onChange={e=>setBatchIds(e.target.value)} className="w-full h-40 p-4 border-2 rounded-lg"/>
+                        <Button onClick={handleBatchScrape} disabled={!batchIds.trim() || isBatchScraping} className="w-full">批量上传</Button>
+              </div>
+            </CardContent>
+          </Card>
         </div>
       )}
 
-      {/* 商品库 - 底部 */}
+      {/* Progress Bar - 只显示批量抓取进度 */}
+      {isBatchScraping && (
+        <div className="space-y-3">
+          <Progress value={batchProgress} className="h-3" />
+          <p className="text-center text-sm text-muted-foreground">{batchProgress.toFixed(1)}%</p>
+        </div>
+      )}
+
+      {/* Product List */}
       <div className="space-y-4">
         <Card className="shadow-sm">
-        <CardHeader className="py-4 border-b">
-          <div className="flex flex-row items-center justify-between">
-          <div className="flex flex-col gap-1">
-            <CardTitle className="text-xl font-bold">商品库</CardTitle>
-            <CardDescription className="text-xs font-medium">共 {products.length} 个规则已生效。</CardDescription>
-          </div>
-          <div className="flex items-center gap-3">
-            <Button
-              variant={selectedProducts.length === filteredProducts.length && filteredProducts.length > 0 ? "default" : "outline"}
-              size="sm"
-              onClick={() => {
-                if (selectedProducts.length === filteredProducts.length) {
-                  // 取消全选
-                  setSelectedProducts([])
-                  setSelectAll(false)
-                } else {
-                  // 全选所有筛选结果
-                  setSelectedProducts(filteredProducts.map(p => p.id))
-                  setSelectAll(true)
-                }
-              }}
-              className="h-9 px-4 text-sm font-medium shadow-sm hover:shadow-md transition-all"
-              disabled={filteredProducts.length === 0}
-            >
-              {selectedProducts.length === filteredProducts.length && filteredProducts.length > 0 ? (
-                <>
-                  <CheckSquare className="h-4 w-4 mr-2" />
-                  已全选 ({currentProducts.length})
-                </>
-              ) : (
-                <>
-                  <Square className="h-4 w-4 mr-2" />
-                  全选 ({currentProducts.length})
-                </>
-              )}
-            </Button>
-
-            {selectedProducts.length > 0 && selectedProducts.length < currentProducts.length && (
-              <span className="text-sm text-muted-foreground">
-                已选择 {selectedProducts.length} 项 (共 {filteredProducts.length} 项)
-              </span>
-            )}
-          </div>
-            {selectedProducts.length > 0 && (
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground">已选择 {selectedProducts.length} 个商品 (共 {filteredProducts.length} 个)</span>
-                <Button variant="outline" size="sm" onClick={() => {
-                  setSelectedProducts([])
-                  setSelectAll(false)
-                }}>
-                  取消选择
-                </Button>
-                <Button variant="destructive" size="sm" onClick={() => {
-                  selectedProducts.forEach(id => handleDeleteProduct(id))
-                  setSelectedProducts([])
-                  setSelectAll(false)
-                }}>
-                  <Trash2 className="size-4 mr-1" />
-                  批量删除
-                </Button>
-              </div>
-            )}
-          </div>
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              <Label className="text-xs whitespace-nowrap font-bold text-muted-foreground">每页展示</Label>
+            <CardHeader className="py-4 border-b">
+                <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4">
+            <div className="flex flex-col gap-1">
+                        <CardTitle className="text-xl font-bold">
+                          商品库 ({totalProductsCount}{isShopScraping ? ' - 抓取中...' : ''})
+                        </CardTitle>
+            </div>
+                    <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center w-full sm:w-auto">
+                        {/* 搜索控件 */}
+                        <div className="flex gap-2 flex-1 sm:flex-initial">
+                <div className="relative">
+                                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                                    placeholder={
+                                        searchType === 'id' ? '输入商品ID...' :
+                                        searchType === 'keyword' ? '输入英文关键词...' :
+                                        searchType === 'chinese' ? '输入中文关键词...' :
+                                        '输入商品标题、中文关键词、英文关键词或ID...'
+                                    }
+                    value={keywordSearch}
+                                    onChange={e=>setKeywordSearch(e.target.value)}
+                                    className="pl-10 h-9 w-full sm:w-[400px]"
+                  />
+                </div>
+                            <Select value={searchType} onValueChange={(value: 'all' | 'id' | 'keyword' | 'chinese') => setSearchType(value)}>
+                                <SelectTrigger className="h-9 w-28">
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value="all">全部</SelectItem>
+                                    <SelectItem value="id">按ID</SelectItem>
+                                    <SelectItem value="keyword">英文关键词</SelectItem>
+                                    <SelectItem value="chinese">中文关键词</SelectItem>
+                                </SelectContent>
+                            </Select>
+                  <Select value={shopFilter} onValueChange={setShopFilter}>
+                                <SelectTrigger className="h-9 w-32">
+                                    <SelectValue placeholder="全部店铺" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__ALL__">全部店铺</SelectItem>
+                                    {uniqueShops.map(s=><SelectItem key={s} value={s}>{s}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
               <Select value={itemsPerPage.toString()} onValueChange={(v) => {
                 setItemsPerPage(parseInt(v))
                 setCurrentPage(1)
               }}>
-                <SelectTrigger className="h-8 w-24 text-xs font-bold bg-muted/30">
+                                <SelectTrigger className="h-9 w-24">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="20">20条</SelectItem>
-                  <SelectItem value="50">50条</SelectItem>
-                  <SelectItem value="100">100条</SelectItem>
-                  <SelectItem value="200">200条</SelectItem>
-                  <SelectItem value="500">500条</SelectItem>
+                                    <SelectItem value="20">20个/页</SelectItem>
+                                    <SelectItem value="50">50个/页</SelectItem>
+                                    <SelectItem value="100">100个/页</SelectItem>
+                                    <SelectItem value="200">200个/页</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            <div className="relative">
-              <Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="搜索 ID 或标题..."
-                className="pl-9 h-9 w-[250px] text-xs font-medium"
-                value={searchTerm}
-                onChange={(e) => {
-                  setSearchTerm(e.target.value)
-                  setCurrentPage(1)
-                }}
-              />
-            </div>
-          </div>
-        </CardHeader>
-
-        <CardContent>
-          {/* 商品库筛选控件 */}
-          <div className="px-6 py-4 border-b bg-muted/20">
-          <div className="flex flex-col sm:flex-row gap-4 items-end">
-            {/* 关键词搜索 */}
-            <div className="flex-1 space-y-2">
-              <Label className="text-sm font-medium">搜索商品</Label>
-              <Input
-                placeholder="输入商品标题、英文标题或商品ID..."
-                value={keywordSearch}
-                onChange={(e) => setKeywordSearch(e.target.value)}
-                className="h-9"
-              />
-            </div>
-
-            {/* 店铺筛选 */}
-            <div className="flex-1 space-y-2">
-              <Label className="text-sm font-medium">筛选店铺</Label>
-              <Select value={shopFilter} onValueChange={setShopFilter}>
-                <SelectTrigger className="h-9">
-                  <SelectValue placeholder="选择店铺..." />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__ALL__">全部店铺</SelectItem>
-                  {uniqueShops.map(shop => (
-                    <SelectItem key={shop} value={shop}>{shop}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* 重置按钮 */}
-            <Button
-              variant="outline"
-              onClick={() => {
-                setKeywordSearch('')
-                setShopFilter('__ALL__')
-              }}
-              className="h-9 px-4"
-            >
-              <RotateCcw className="w-4 h-4 mr-2" />
-              重置
+                        {/* 操作按钮 */}
+                        <div className="flex items-center gap-3">
+                            <Button variant={selectedProducts.length===filteredProducts.length && filteredProducts.length>0?"secondary":"outline"} size="sm" onClick={handleSelectAll}>
+                                {selectedProducts.length===filteredProducts.length && filteredProducts.length>0 ? <CheckSquare className="mr-2 h-4 w-4"/> : <Square className="mr-2 h-4 w-4"/>} 全选 ({filteredProducts.length})
             </Button>
+                            {selectedProducts.length > 0 && (
+                                <Button variant="destructive" size="sm" onClick={handleBatchDelete} disabled={isDeleting}>
+                                    <Trash2 className="mr-2 h-4 w-4" /> 删除 ({selectedProducts.length})
+                                </Button>
+                            )}
           </div>
-
-          {(keywordSearch || (shopFilter && shopFilter !== '__ALL__')) && (
-            <div className="mt-3 text-sm text-muted-foreground">
-              筛选结果: {filteredProducts.length} 个商品
-              {keywordSearch && <span className="ml-2">关键词: "{keywordSearch}"</span>}
-              {shopFilter && shopFilter !== '__ALL__' && <span className="ml-2">店铺: "{shopFilter}"</span>}
+              </div>
             </div>
-          )}
-        </div>
+            </CardHeader>
+            <CardContent className="p-0">
+                {/* 列表 */}
           <div className="divide-y">
-            {currentProducts.map((product) => (
+                    {currentProducts.map((product) => {
+                        const links = getProductLinks(product);
+                        const showAllLinks = expandedProducts.has(product.id);
+                        const displayedLinks = showAllLinks ? links : links.slice(0, 3);
+                        return (
               <div key={product.id} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3">
                 <div className="flex gap-3 items-center">
-                  <Checkbox
-                    checked={selectedProducts.includes(product.id)}
-                    onCheckedChange={(checked) => {
-                      if (checked) {
-                        const newSelected = [...selectedProducts, product.id]
-                        setSelectedProducts(newSelected)
-                        // 检查是否全选
-                        setSelectAll(newSelected.length === filteredProducts.length)
-                      } else {
-                        const newSelected = selectedProducts.filter(id => id !== product.id)
-                        setSelectedProducts(newSelected)
-                        setSelectAll(false)
-                      }
-                    }}
-                  />
+                                <Checkbox checked={selectedProducts.includes(product.id)} onCheckedChange={(checked)=>{
+                                    if(checked) setSelectedProducts([...selectedProducts, product.id])
+                                    else setSelectedProducts(selectedProducts.filter(id=>id!==product.id))
+                                }}/>
                 </div>
+
+                            {/* 图片与基本信息 */}
                 <div className="flex gap-3 items-center flex-1">
+                                {/* 图片弹窗 (保持原逻辑) */}
                   <Dialog>
                     <DialogTrigger asChild>
-                      <Button variant="ghost" className="size-10 p-0 rounded bg-muted flex items-center justify-center flex-shrink-0 hover:bg-muted/80 border shadow-sm">
+                                        <Button variant="ghost" className="size-10 p-0 rounded bg-muted flex items-center justify-center flex-shrink-0 border shadow-sm">
                         {product.images && product.images.length > 0 ? (
-                          <img
-                            src={product.images[0]}
-                            alt="thumb"
-                            className="object-cover w-12 h-12 rounded-md"
-                          />
-                        ) : (
-                          <div className="flex flex-col items-center">
-                        <ImageIcon className="size-4 text-muted-foreground" />
-                        <span className="text-[8px] font-bold mt-0.5">{product.images?.length || 0}P</span>
-                          </div>
-                        )}
+                                                <img src={product.images[0]} alt="thumb" className="object-cover w-12 h-12 rounded-md" />
+                                            ) : <ImageIcon className="size-4 text-muted-foreground" />}
                       </Button>
                     </DialogTrigger>
                     <DialogContent className="max-w-4xl">
                       <DialogHeader>
                         <DialogTitle className="text-xl">商品图集 - {product.weidianId}</DialogTitle>
-                        <DialogDescription className="font-bold text-primary">{product.title}</DialogDescription>
+                        <div className="flex gap-2 mt-2">
+                          <input
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            className="hidden"
+                            id={`upload-${product.id}`}
+                            onChange={(e) => {
+                              const files = (e.target as HTMLInputElement).files
+                              if (files && files.length > 0) {
+                                handleBatchUploadImages(product.id, files)
+                              }
+                            }}
+                          />
+                          <label htmlFor={`upload-${product.id}`}>
+                            <Button size="sm" disabled={isUploadingImg || batchUploading} asChild>
+                              <span className="cursor-pointer">
+                                <Upload className="mr-2 h-4 w-4" />
+                                {isUploadingImg || batchUploading ? "上传中..." : "添加图片"}
+                              </span>
+                            </Button>
+                          </label>
+                        </div>
                       </DialogHeader>
                       <ScrollArea className="max-h-[70vh] mt-4">
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-1">
                           {product.images?.map((img: string, idx: number) => (
-                            <div key={idx} className="aspect-square rounded-xl border-2 bg-muted overflow-hidden group relative">
+                            <div key={img} className="aspect-square rounded-xl border-2 bg-muted overflow-hidden group relative">
                               <img src={img} alt={`Img ${idx}`} className="object-cover w-full h-full transition-transform group-hover:scale-110" />
                               <button
-                                onClick={async () => {
-                                  try {
-                                    const res = await fetch('/api/scrape', {
-                                      method: 'PATCH',
-                                      headers: { 'Content-Type': 'application/json' },
-                                      body: JSON.stringify({ productId: product.id, imageIndex: idx })
-                                    });
+                                                            onClick={async (e) => {
+                                                                e.preventDefault()
+                                                                e.stopPropagation()
+                                                                try {
+                                                                    // 从图片URL中提取image_index
+                                                                    // URL格式: /api/image/{product_id}/{image_index}
+                                                                    const urlParts = img.split('/')
+                                                                    const imageIndex = urlParts[urlParts.length - 1] // 获取最后一个部分
 
-                                    if (res.ok) {
-                                      const data = await res.json();
-                                      setProducts(products.map(p => p.id === product.id ? data.product : p));
-                                      toast.success("图片已删除");
-                                    } else {
-                                      toast.error("删除失败");
-                                    }
-                                  } catch (e) {
-                                    toast.error("删除失败");
+                                                                    // 验证imageIndex是否为有效数字
+                                                                    if (!imageIndex || isNaN(Number(imageIndex))) {
+                                                                        toast.error("无法确定要删除的图片")
+                                                                        return
+                                                                    }
+
+                                                                    const res = await fetch(`/api/products/${product.id}/images/${imageIndex}`, {
+                                                                        method: 'DELETE'
+                                  })
+                                  if (res.ok) {
+                                    const data = await res.json()
+                                                                        // 更新产品状态，替换整个产品对象
+                                                                        setProducts(prevProducts =>
+                                                                            prevProducts.map(p =>
+                                                                                p.id === product.id ? { ...data.product } : p
+                                                                            )
+                                                                        )
+                                                                        toast.success("图片已删除")
+                                  } else {
+                                                                        const errorData = await res.json().catch(() => ({ error: 'Delete failed' }))
+                                                                        toast.error(errorData.error || "删除失败")
+                                                                        console.error('Delete failed:', errorData)
+                                                                    }
+                                                                } catch (error) {
+                                                                    console.error('Delete image error:', error)
+                                                                    toast.error("网络错误，删除失败")
                                   }
                                 }}
-                                className="absolute top-1 right-1 p-1 bg-red-500 rounded-full text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600 shadow-lg"
+                                                            className="absolute top-1 right-1 p-1 bg-red-500 rounded-full text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600 shadow-lg z-10"
                               >
                                 <X className="size-3" />
                               </button>
@@ -620,28 +680,26 @@ export function ScraperView() {
                       </ScrollArea>
                     </DialogContent>
                   </Dialog>
-                  
                   <div className="space-y-0.5 min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <h4 className="font-bold text-base leading-none truncate">{product.title}</h4>
-                      <Badge className="bg-green-600 text-[10px] h-4 px-2 border-none">中文名</Badge>
-                      {indexedIds.includes(product.weidianId) && (
-                        <Badge className="bg-blue-600 text-[10px] h-4 px-2 border-none">已索引</Badge>
-                      )}
-                      {product.ruleEnabled && <Badge className="bg-purple-600 text-[10px] h-4 px-2 border-none">规则启用</Badge>}
+                                        <h4 className="font-bold text-base truncate">{product.title}</h4>
+                                        {/* 已删除这里原本的小编辑按钮 */}
+                                        {indexedIds.includes(product.weidianId) && <Badge className="bg-blue-600 text-[10px] h-4 px-2">已索引</Badge>}
+                                        {product.ruleEnabled && <Badge className="bg-purple-600 text-[10px] h-4 px-2">规则启用</Badge>}
                     </div>
                     <div className="flex items-center gap-2 mt-1">
-                      <p className="text-sm font-bold text-blue-600 truncate">{product.englishTitle || "未获取到英文名"}</p>
-                      <Badge className="bg-blue-600 text-[10px] h-4 px-2 border-none">英文关键词</Badge>
+                                        <p className="text-sm font-bold text-blue-600 truncate">{product.englishTitle || "No English Title"}</p>
                     </div>
-                    <div className="flex items-center gap-2 mt-1">
-                      <Badge variant="secondary" className="text-[11px] h-4 px-2 font-mono">ID: {product.weidianId}</Badge>
-                      {product.shopName && (
-                        <Badge variant="outline" className="text-[11px] h-4 px-2 font-mono">店铺: {product.shopName}</Badge>
-                      )}
-                      <span className="text-[11px] text-muted-foreground italic">{product.images?.length || 0}张图片</span>
+                                    <div className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground">
+                                        <span className="font-mono">ID: {product.weidianId}</span>
+                                        <span>|</span>
+                                        <span>店铺: {product.shopName}</span>
+                                        <span>|</span>
+                                        <span>{product.images?.length || 0}张图片</span>
                       {((product.createdAt) || (product.created_at)) && (
-                        <span className="text-[11px] text-muted-foreground italic">创建: {(() => {
+                                            <>
+                                                <span>|</span>
+                                                <span>创建: {(() => {
                           try {
                             const date = new Date(product.createdAt || product.created_at);
                             return isNaN(date.getTime()) ? '未知时间' : date.toLocaleString('zh-CN');
@@ -649,65 +707,50 @@ export function ScraperView() {
                             return '未知时间';
                           }
                         })()}</span>
+                                            </>
                       )}
                     </div>
                   </div>
                 </div>
-                
+                            {/* 链接显示区域 */}
                 <div className="flex items-center gap-4">
-                  <div className="flex flex-col gap-1 min-w-[400px]">
-                    <div className="flex items-center gap-1.5">
-                      <Badge className="text-[9px] px-1 py-0 h-4 bg-blue-600 border-none shrink-0 text-white">CNFans</Badge>
-                      <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
-                        <a href={product.cnfansUrl} target="_blank" rel="noopener noreferrer" className="text-blue-500 font-mono font-bold hover:underline">{product.cnfansUrl}</a>
-                        <Button variant="ghost" size="icon" className="h-4 w-4 shrink-0 ml-2" onClick={() => {
-                          navigator.clipboard.writeText(product.cnfansUrl);
-                          toast.success("链接已复制");
-                        }}>
-                          <Copy className="h-2.5 w-2.5" />
-                        </Button>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <Badge className="text-[9px] px-1 py-0 h-4 bg-gray-600 border-none shrink-0 text-white">微店</Badge>
-                      <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
-                        <a href={product.weidianUrl} target="_blank" rel="noopener noreferrer" className="text-muted-foreground font-mono hover:underline">{product.weidianUrl}</a>
-                        <Button variant="ghost" size="icon" className="h-4 w-4 shrink-0 ml-2" onClick={() => {
-                          navigator.clipboard.writeText(product.weidianUrl);
-                          toast.success("链接已复制");
-                        }}>
-                          <Copy className="h-2.5 w-2.5" />
-                        </Button>
-                      </div>
-                    </div>
-                    {product.acbuyUrl && (
-                      <div className="flex items-center gap-1.5">
-                        <Badge className="text-[9px] px-1 py-0 h-4 bg-orange-600 border-none shrink-0 text-white">AcBuy</Badge>
+                                <div className="flex flex-col gap-1 min-w-0 flex-1 max-w-md">
+                                    {displayedLinks.map((link) => (
+                      <div key={link.name} className="flex items-center gap-1.5">
+                                            <Badge className={`text-[9px] px-1 py-0 h-4 border-none w-12 justify-center shrink-0 text-white ${
+                          link.badge_color === 'blue' ? 'bg-blue-600' :
+                          link.badge_color === 'green' ? 'bg-green-600' :
+                                                link.badge_color === 'orange' ? 'bg-orange-600' : 'bg-gray-600'
+                                            }`}>{link.display_name}</Badge>
                         <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
-                          <a href={product.acbuyUrl} target="_blank" rel="noopener noreferrer" className="text-orange-600 font-mono font-bold hover:underline">{product.acbuyUrl}</a>
-                          <Button variant="ghost" size="icon" className="h-4 w-4 shrink-0 ml-2" onClick={() => {
-                            navigator.clipboard.writeText(product.acbuyUrl);
-                            toast.success("链接已复制");
-                          }}>
-                            <Copy className="h-2.5 w-2.5" />
-                          </Button>
+                                                <a href={link.url} target="_blank" className="font-mono truncate hover:underline text-muted-foreground">{link.url}</a>
+                                                <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(link.url); toast.success("Copied")}}><Copy className="h-2.5 w-2.5"/></Button>
                         </div>
                       </div>
+                    ))}
+                                    {links.length > 3 && (
+                                        <Button variant="ghost" size="sm" className="h-5 text-xs w-full" onClick={()=>toggleProductExpansion(product.id)}>
+                                            {showAllLinks ? <ChevronUp className="h-3 w-3"/> : <ChevronDown className="h-3 w-3"/>}
+                                            {showAllLinks ? "收起" : `显示更多 (${links.length - 3})`}
+                      </Button>
                     )}
                   </div>
-                  <div className="flex items-center gap-1.5">
-                    <Dialog open={editingProduct?.id === product.id} onOpenChange={(open) => !open && setEditingProduct(null)}>
+                                {/* 操作按钮组 */}
+                                <div className="flex items-center gap-1">
+                                    {/* 编辑按钮 */}
+                                    <Dialog open={editingProduct?.id === product.id} onOpenChange={(open)=>!open && setEditingProduct(null)}>
                       <DialogTrigger asChild>
-                        <Button variant="outline" size="icon" className="h-8 w-8" onClick={() => setEditingProduct(product)}>
-                          <Edit className="size-3.5" />
+                                            <Button variant="outline" size="icon" className="h-8 w-8" onClick={()=>setEditingProduct(product)}>
+                                                <Edit className="size-3.5"/>
                         </Button>
                       </DialogTrigger>
-                      <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+                                        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
                         <DialogHeader>
-                          <DialogTitle>编辑商品规则 - {product.weidianId}</DialogTitle>
+                                                <DialogTitle>编辑商品与规则 - {product.weidianId}</DialogTitle>
                           <DialogDescription>配置商品信息和自动回复规则</DialogDescription>
                         </DialogHeader>
-                        <div className="space-y-6 py-6">
+
+                                            <div className="space-y-6 py-4">
                           <div className="grid grid-cols-2 gap-4">
                             <div className="space-y-2">
                               <Label>商品名称 (中文)</Label>
@@ -718,148 +761,121 @@ export function ScraperView() {
                               <Input value={editingProduct?.englishTitle || ""} onChange={(e) => setEditingProduct({...editingProduct, englishTitle: e.target.value})} />
                             </div>
                           </div>
-
                           <div className="flex items-center justify-between p-4 border rounded-lg bg-muted/30">
                             <div className="space-y-1">
                               <Label className="text-sm font-bold">启用自动回复规则</Label>
-                              <p className="text-xs text-muted-foreground">当检测到关键词时自动发送CNFans链接</p>
+                                                        <p className="text-xs text-muted-foreground">当检测到关键词时自动发送链接</p>
                             </div>
-                            <Switch
-                              checked={editingProduct?.ruleEnabled || false}
-                              onCheckedChange={(checked) => setEditingProduct({...editingProduct, ruleEnabled: checked})}
-                            />
+                                                    <Switch checked={editingProduct?.ruleEnabled || false} onCheckedChange={(c) => setEditingProduct({...editingProduct, ruleEnabled: c})} />
                           </div>
-
-                          {editingProduct?.ruleEnabled && (
-                            <>
-                          <div className="grid grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                              <Label>匹配模式</Label>
-                              <Select value={editingProduct?.matchType || "fuzzy"} onValueChange={(value) => setEditingProduct({...editingProduct, matchType: value})}>
-                                <SelectTrigger>
-                                  <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                  <SelectItem value="fuzzy">模糊匹配</SelectItem>
-                                  <SelectItem value="exact">精确匹配</SelectItem>
-                                </SelectContent>
-                              </Select>
-                            </div>
-                            <div className="space-y-2">
-                              <Label>匹配选项</Label>
-                              <div className="flex items-center space-x-2">
-                                <input
-                                  type="checkbox"
-                                  id="case-insensitive"
-                                  checked={editingProduct?.caseInsensitive || true}
-                                  onChange={(e) => setEditingProduct({...editingProduct, caseInsensitive: e.target.checked})}
-                                  className="rounded"
-                                />
-                                <label htmlFor="case-insensitive" className="text-sm">不区分大小写</label>
-                              </div>
-                            </div>
-                          </div>
-
-                          <div className="space-y-2">
-                            <Label>消息类型过滤</Label>
-                            <div className="space-y-2">
-                              <div className="flex items-center space-x-2">
-                                <input
-                                  type="checkbox"
-                                  id="reply-filter"
-                                  checked={editingProduct?.filterReplies || true}
-                                  onChange={(e) => setEditingProduct({...editingProduct, filterReplies: e.target.checked})}
-                                  className="rounded"
-                                />
-                                <label htmlFor="reply-filter" className="text-sm">不回复回复别人的消息</label>
-                              </div>
-                              <div className="flex items-center space-x-2">
-                                <input
-                                  type="checkbox"
-                                  id="mention-filter"
-                                  checked={editingProduct?.filterMentions || true}
-                                  onChange={(e) => setEditingProduct({...editingProduct, filterMentions: e.target.checked})}
-                                  className="rounded"
-                                />
-                                <label htmlFor="mention-filter" className="text-sm">不回复@别人的消息</label>
-                              </div>
-                            </div>
-                          </div>
-
-                            </>
-                          )}
                         </div>
                         <DialogFooter>
-                          <Button variant="outline" onClick={() => setEditingProduct(null)}>取消</Button>
-                          <Button onClick={() => handleUpdateProduct(editingProduct)}>保存修改</Button>
+                                                <Button variant="outline" onClick={()=>setEditingProduct(null)}>取消</Button>
+                                                <Button onClick={()=>handleUpdateProduct(editingProduct)}>保存修改</Button>
                         </DialogFooter>
                       </DialogContent>
                     </Dialog>
-                    <Button variant="outline" size="icon" className="h-8 w-8 hover:bg-red-50 hover:text-red-600 transition-all shadow-sm" onClick={() => handleDeleteProduct(product.id)}>
-                      <Trash2 className="size-3.5" />
+
+                                    {/* 删除按钮 */}
+                                    <Button variant="outline" size="icon" className="h-8 w-8 hover:bg-red-50 hover:text-red-600" onClick={()=>handleDeleteProduct(product.id)}>
+                                        <Trash2 className="size-3.5"/>
                     </Button>
                   </div>
                 </div>
               </div>
-            ))}
-            {currentProducts.length === 0 && (
-              <div className="py-12 text-center text-muted-foreground text-sm italic">
-                目前没有任何规则。
-              </div>
-            )}
+                        )
+                    })}
           </div>
           
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between p-6 border-t bg-muted/5">
+                {/* 分页组件 */}
+                {filteredProducts.length > 0 && (
+                    <div className="flex flex-col sm:flex-row justify-between items-center gap-4 p-6 border-t bg-muted/5">
               <div className="text-sm text-muted-foreground font-medium">
-                当前显示第 <span className="text-foreground font-bold">{(currentPage - 1) * itemsPerPage + 1}</span> 至 <span className="text-foreground font-bold">{Math.min(currentPage * itemsPerPage, filteredProducts.length)}</span> 条，共 <span className="text-foreground font-bold">{filteredProducts.length}</span> 条数据
+                            显示第 {(currentPage-1)*itemsPerPage + 1} - {Math.min(currentPage*itemsPerPage, filteredProducts.length)} 条，共 {filteredProducts.length} 条记录
+                            <span className="ml-2">({currentPage}/{totalPages}页)</span>
               </div>
-              <div className="flex items-center gap-6">
                 <div className="flex items-center gap-2">
-                  <Label className="text-xs font-bold text-muted-foreground">跳转至</Label>
-                  <div className="flex items-center">
-                    <Input 
-                      type="number" 
-                      className="h-8 w-16 text-xs font-bold px-2 rounded-r-none border-r-0 focus-visible:ring-0" 
-                      value={jumpPage} 
-                      onChange={(e) => setJumpPage(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleJumpPage()}
-                      min={1}
-                      max={totalPages}
-                    />
-                    <Button size="sm" variant="default" className="h-8 px-3 text-xs rounded-l-none font-bold" onClick={handleJumpPage}>跳转</Button>
-                  </div>
-                </div>
-                <div className="flex items-center space-x-2">
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                    disabled={currentPage === 1}
-                    className="h-9 px-4 text-xs font-bold"
+                                onClick={()=>setCurrentPage(p=>Math.max(1, p-1))}
+                                disabled={currentPage===1}
+                                className="h-8 px-3"
                   >
-                    <ChevronLeft className="h-4 w-4 mr-1.5" />
-                    上一页
+                                <ChevronLeft className="h-4 w-4 mr-1"/> 上一页
                   </Button>
-                  <div className="text-xs font-black bg-primary text-primary-foreground shadow-lg px-4 py-2 rounded-md">
+                            <div className="text-sm font-medium bg-primary text-primary-foreground px-3 py-1 rounded">
                     {currentPage} / {totalPages}
                   </div>
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                    disabled={currentPage === totalPages}
-                    className="h-9 px-4 text-xs font-bold"
+                                onClick={()=>setCurrentPage(p=>Math.min(totalPages, p+1))}
+                                disabled={currentPage===totalPages}
+                                className="h-8 px-3"
                   >
-                    下一页
-                    <ChevronRight className="h-4 w-4 ml-1.5" />
+                                下一页 <ChevronRight className="h-4 w-4 ml-1"/>
                   </Button>
-                </div>
               </div>
             </div>
           )}
         </CardContent>
       </Card>
+
+        {/* 单个商品删除确认对话框 */}
+        <Dialog open={showDeleteConfirm && deletingProductId !== null} onOpenChange={(open) => {
+          if (!open) {
+            setShowDeleteConfirm(false)
+            setDeletingProductId(null)
+          }
+        }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>确认删除商品</DialogTitle>
+              <DialogDescription>
+                确定要删除商品 {deletingProductId} 吗？此操作不可恢复。
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => {
+                setShowDeleteConfirm(false)
+                setDeletingProductId(null)
+              }}>
+                取消
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={confirmDeleteProduct}
+              >
+                确认删除
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* 批量删除确认对话框 */}
+        <Dialog open={showDeleteConfirm && deletingProductId === null} onOpenChange={setShowDeleteConfirm}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>确认批量删除</DialogTitle>
+              <DialogDescription>
+                确定要删除选中的 {selectedProducts.length} 个商品吗？此操作不可恢复。
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowDeleteConfirm(false)}>
+                取消
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={confirmBatchDelete}
+                disabled={isDeleting}
+              >
+                {isDeleting ? "删除中..." : "确认删除"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   )

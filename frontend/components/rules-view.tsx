@@ -56,8 +56,8 @@ export function RulesView() {
     setIsDialogOpen(true)
   }
 
-  const filteredRules = rules.filter(r => 
-    r.keywords.some(k => k.toLowerCase().includes(ruleSearch.toLowerCase())) ||
+  const filteredRules = rules.filter((r: any) =>
+    r.keywords.some((k: string) => k.toLowerCase().includes(ruleSearch.toLowerCase())) ||
     r.replyText.toLowerCase().includes(ruleSearch.toLowerCase())
   )
 
@@ -302,7 +302,7 @@ export function RulesView() {
                       </div>
                     ) : (
                       <div className="flex flex-wrap gap-1.5">
-                        {rule.keywords.map((keyword, i) => (
+                        {rule.keywords.map((keyword: string, i: number) => (
                           <Badge key={i} variant="secondary" className="text-[11px] font-medium h-5 bg-orange-50 text-orange-700 border-orange-200">
                             {keyword}
                           </Badge>

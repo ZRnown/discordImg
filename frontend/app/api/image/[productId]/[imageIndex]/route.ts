@@ -7,9 +7,8 @@ export async function GET(
   { params }: { params: Promise<{ productId: string; imageIndex: string }> }
 ) {
   try {
-    const resolvedParams = await params;
-    const productId = resolvedParams.productId;
-    const imageIndex = resolvedParams.imageIndex;
+    const resolvedParams = await params
+    const { productId, imageIndex } = resolvedParams;
 
     const response = await fetch(`${BACKEND_URL}/api/image/${productId}/${imageIndex}`);
 

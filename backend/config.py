@@ -30,8 +30,8 @@ class Config:
     SIMILARITY_THRESHOLD = 0.6
 
     # 图像处理配置
-    YOLO_MODEL_PATH = os.getenv('YOLO_MODEL_PATH', 'yolov8n.pt')
-    USE_YOLO_CROP = os.getenv('USE_YOLO_CROP', 'False').lower() == 'true'  # 暂时禁用YOLO裁剪
+    YOLO_MODEL_PATH = os.getenv('YOLO_MODEL_PATH', 'yolov8s-world.pt')  # 升级到YOLO-World
+    USE_YOLO_CROP = os.getenv('USE_YOLO_CROP', 'True').lower() == 'true'  # 启用YOLO-World裁剪
 
     # 多线程配置
     DOWNLOAD_THREADS = int(os.getenv('DOWNLOAD_THREADS', '4'))  # 图片下载线程数

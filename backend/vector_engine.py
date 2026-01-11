@@ -138,23 +138,76 @@ class VectorEngine:
 
     def remove_vector_by_db_id(self, db_id: int) -> bool:
         """
-        FAISS删除向量比较复杂，通常建议重建索引。
-        对于这个量级，如果删除操作不频繁，可以考虑重建索引。
-
-        当前实现：标记为删除，但物理上仍然存在
-        生产环境建议定期重建索引来清理已删除的向量
+        从FAISS索引中删除向量。由于FAISS不支持直接删除单个向量，
+        我们标记删除并定期重建索引（性能优化版本）。
         """
         try:
-            # 在id_map中找到对应的位置并标记为None
+            # 标记要删除的向量
+            vector_removed = False
             for i, mapped_id in enumerate(self.id_map):
                 if mapped_id == db_id:
                     self.id_map[i] = None
+                    vector_removed = True
                     logger.info(f"标记向量删除: db_id={db_id}, faiss_id={i}")
                     break
+
+            # 性能优化：不立即重建索引，只保存状态
+            # 只有当删除的向量比例超过阈值时才重建
+            if vector_removed:
+                deleted_count = sum(1 for id_val in self.id_map if id_val is None)
+                total_count = len(self.id_map)
+                deletion_ratio = deleted_count / total_count if total_count > 0 else 0
+
+                # 如果删除比例超过30%，则重建索引清理碎片
+                if deletion_ratio > 0.3:
+                    logger.info(f"删除比例({deletion_ratio:.1%})过高，重建索引清理碎片")
+                    self._rebuild_index_after_removal()
+                else:
+                    # 只保存索引状态，不重建
+                    self.save()
+
             return True
         except Exception as e:
             logger.error(f"删除向量失败: {e}")
             return False
+
+    def _rebuild_index_after_removal(self):
+        """删除向量后重建索引"""
+        try:
+            # 获取所有未删除的向量数据
+            from database import db
+            valid_vectors = []
+
+            with db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT id, image_path FROM product_images WHERE id IS NOT NULL")
+                for row in cursor.fetchall():
+                    img_id = row['id']
+                    # 检查这个向量是否在我们的id_map中且未被标记删除
+                    if img_id in self.id_map and self.id_map[self.id_map.index(img_id)] is not None:
+                        # 重新提取特征（或者从缓存中获取）
+                        # 这里为了简单，我们假设特征需要重新提取
+                        # 在生产环境中，应该缓存特征或定期重建
+                        try:
+                            # 这里需要导入特征提取器
+                            from feature_extractor import get_feature_extractor
+                            extractor = get_feature_extractor()
+                            features = extractor.extract_feature(row['image_path'])
+                            if features is not None:
+                                valid_vectors.append((img_id, features))
+                        except Exception as e:
+                            logger.warning(f"重新提取特征失败 {row['image_path']}: {e}")
+
+            # 重建索引
+            self._create_new_index()
+            for img_id, features in valid_vectors:
+                self.add_vector(img_id, features)
+
+            self.save()
+            logger.info(f"索引重建完成，包含 {len(valid_vectors)} 个向量")
+
+        except Exception as e:
+            logger.error(f"重建索引失败: {e}")
 
     def rebuild_index(self, vectors_data: List[Tuple[int, np.ndarray]]) -> bool:
         """

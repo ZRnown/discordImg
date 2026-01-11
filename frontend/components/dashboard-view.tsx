@@ -1,79 +1,324 @@
 "use client"
 
+import { useState, useEffect } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Activity, MessageSquare, ShoppingBag, TrendingUp } from "lucide-react"
-import { Bar, BarChart, CartesianGrid, XAxis, YAxis, ResponsiveContainer } from "recharts"
-import { ChartContainer, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
+import { Button } from "@/components/ui/button"
+import { Store, Package, ImageIcon, Users, Megaphone, Plus, Edit, Trash2 } from "lucide-react"
+import { toast } from "sonner"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 
-const statsData = [
-  { title: "运行中账号", value: "12", change: "+2", icon: Activity, color: "text-chart-1" },
-  { title: "今日匹配", value: "248", change: "+18%", icon: MessageSquare, color: "text-chart-2" },
-  { title: "已抓取商品", value: "1,547", change: "+127", icon: ShoppingBag, color: "text-chart-3" },
-  { title: "转化率", value: "68.2%", change: "+5.1%", icon: TrendingUp, color: "text-chart-4" },
-]
+interface SystemStats {
+  shop_count: number
+  product_count: number
+  image_count: number
+  user_count: number
+}
 
-const chartData = [
-  { day: "周一", matches: 186 },
-  { day: "周二", matches: 305 },
-  { day: "周三", matches: 237 },
-  { day: "周四", matches: 273 },
-  { day: "周五", matches: 209 },
-  { day: "周六", matches: 214 },
-  { day: "周日", matches: 248 },
-]
+interface Announcement {
+  id: number
+  title: string
+  content: string
+  created_at: string
+  updated_at: string
+}
 
-export function DashboardView() {
+export function DashboardView({ currentUser }: { currentUser: any }) {
+  const [stats, setStats] = useState<SystemStats | null>(null)
+  const [announcements, setAnnouncements] = useState<Announcement[]>([])
+  const [showAddAnnouncement, setShowAddAnnouncement] = useState(false)
+  const [editingAnnouncement, setEditingAnnouncement] = useState<Announcement | null>(null)
+  const [newAnnouncement, setNewAnnouncement] = useState({
+    title: '',
+    content: ''
+  })
+
+  useEffect(() => {
+    fetchStats()
+      fetchAnnouncements()
+  }, [currentUser])
+
+  const fetchStats = async () => {
+    try {
+      const res = await fetch('/api/system/stats')
+      if (res.ok) {
+        const data = await res.json()
+        console.log('统计数据:', data)
+        setStats(data)
+      } else {
+        console.error('获取统计信息失败:', res.status, res.statusText)
+      }
+    } catch (e) {
+      console.error('获取统计信息失败:', e)
+    }
+  }
+
+  const fetchAnnouncements = async () => {
+    try {
+      const res = await fetch('/api/announcements', { credentials: 'include' })
+      if (res.ok) {
+        const data = await res.json()
+        setAnnouncements(data.announcements || [])
+      }
+    } catch (e) {
+      console.error('获取公告失败:', e)
+    }
+  }
+
+  const handleAddAnnouncement = async () => {
+    try {
+      const res = await fetch('/api/announcements', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newAnnouncement)
+      })
+      if (res.ok) {
+        toast.success('公告添加成功')
+        setShowAddAnnouncement(false)
+        setNewAnnouncement({ title: '', content: '' })
+        fetchAnnouncements()
+      } else {
+        toast.error('添加失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
+  const handleUpdateAnnouncement = async () => {
+    if (!editingAnnouncement) return
+    try {
+      const res = await fetch(`/api/announcements/${editingAnnouncement.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: editingAnnouncement.title,
+          content: editingAnnouncement.content,
+          is_active: true
+        })
+      })
+      if (res.ok) {
+        toast.success('公告更新成功')
+        setEditingAnnouncement(null)
+        fetchAnnouncements()
+      } else {
+        toast.error('更新失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
+  const handleDeleteAnnouncement = async (announcement: Announcement) => {
+    if (!confirm(`确定要删除公告 "${announcement.title}" 吗？`)) return
+    try {
+      const res = await fetch(`/api/announcements/${announcement.id}`, { method: 'DELETE' })
+      if (res.ok) {
+        toast.success('公告删除成功')
+        fetchAnnouncements()
+      } else {
+        toast.error('删除失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <div>
-        <h2 className="text-3xl font-bold tracking-tight">概览仪表板</h2>
-        <p className="text-muted-foreground">实时监控系统运行状态和关键指标</p>
+        <h2 className="text-4xl font-bold tracking-tight">仪表盘</h2>
+        <p className="text-muted-foreground mt-2">系统概览和公告管理</p>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        {statsData.map((stat, index) => (
-          <Card key={index}>
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">{stat.title}</CardTitle>
-              <stat.icon className={`size-4 ${stat.color}`} />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{stat.value}</div>
-              <p className="text-xs text-muted-foreground mt-1">
-                <span className="text-emerald-600 font-medium">{stat.change}</span> 较昨日
-              </p>
-            </CardContent>
-          </Card>
-        ))}
+      {/* 统计信息 */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">店铺数量</CardTitle>
+            <Store className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats?.shop_count ?? 0}</div>
+            <p className="text-xs text-muted-foreground">已收录的店铺</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">商品数量</CardTitle>
+            <Package className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats?.product_count ?? 0}</div>
+            <p className="text-xs text-muted-foreground">已抓取的商品</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">图片数量</CardTitle>
+            <ImageIcon className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats?.image_count ?? 0}</div>
+            <p className="text-xs text-muted-foreground">已索引的图片</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">用户数量</CardTitle>
+            <Users className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats?.user_count ?? 0}</div>
+            <p className="text-xs text-muted-foreground">活跃用户</p>
+          </CardContent>
+        </Card>
       </div>
 
+      {/* 公告管理 - 所有用户可见，但只有管理员可修改 */}
       <Card>
         <CardHeader>
-          <CardTitle>本周匹配趋势</CardTitle>
-          <CardDescription>过去 7 天的消息匹配数量统计</CardDescription>
+          <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4">
+            <div>
+              <CardTitle className="flex items-center">
+                <Megaphone className="w-5 h-5 mr-2" />
+                系统公告
+              </CardTitle>
+              <CardDescription>查看最新系统通知和重要更新</CardDescription>
+            </div>
+            {currentUser?.role === 'admin' && (
+              <Dialog open={showAddAnnouncement} onOpenChange={setShowAddAnnouncement}>
+                <DialogTrigger asChild>
+                  <Button size="sm" className="shrink-0">
+                    <Plus className="w-4 h-4 mr-2" />
+                    添加公告
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>添加系统公告</DialogTitle>
+                    <DialogDescription>创建新的系统公告</DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4">
+                    <div>
+                      <Label>公告标题</Label>
+                      <Input
+                        value={newAnnouncement.title}
+                        onChange={e => setNewAnnouncement(prev => ({ ...prev, title: e.target.value }))}
+                        placeholder="请输入公告标题"
+                      />
+                    </div>
+                    <div>
+                      <Label>公告内容</Label>
+                      <Textarea
+                        value={newAnnouncement.content}
+                        onChange={e => setNewAnnouncement(prev => ({ ...prev, content: e.target.value }))}
+                        placeholder="请输入公告内容"
+                        rows={4}
+                      />
+                    </div>
+                  </div>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setShowAddAnnouncement(false)}>取消</Button>
+                    <Button onClick={handleAddAnnouncement}>添加公告</Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+            )}
+          </div>
         </CardHeader>
         <CardContent>
-          <ChartContainer
-            config={{
-              matches: {
-                label: "匹配数",
-                color: "hsl(var(--chart-1))",
-              },
-            }}
-            className="h-[300px]"
-          >
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="day" />
-                <YAxis />
-                <ChartTooltip content={<ChartTooltipContent />} />
-                <Bar dataKey="matches" fill="var(--color-matches)" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </ChartContainer>
+          <div className="space-y-4">
+            {announcements.length === 0 ? (
+              <div className="text-center py-8 text-muted-foreground">
+                暂无公告
+              </div>
+            ) : (
+              announcements.map((announcement) => (
+                <div key={announcement.id} className="border rounded-lg p-4 hover:bg-muted/30 transition-colors">
+                  <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3">
+                    <div className="flex-1 min-w-0">
+                      <h4 className="font-semibold text-base mb-2">{announcement.title}</h4>
+                      <p className="text-sm text-muted-foreground mb-3 leading-relaxed">{announcement.content}</p>
+                      <div className="text-xs text-muted-foreground">
+                        更新时间: {new Date(announcement.updated_at).toLocaleString('zh-CN')}
+                      </div>
+                    </div>
+                    {currentUser?.role === 'admin' && (
+                      <div className="flex gap-2 shrink-0">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setEditingAnnouncement(announcement)}
+                          className="h-8 w-8 p-0"
+                          title="编辑公告"
+                        >
+                          <Edit className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleDeleteAnnouncement(announcement)}
+                          className="h-8 w-8 p-0 hover:bg-red-50 hover:text-red-600 hover:border-red-200"
+                          title="删除公告"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
         </CardContent>
       </Card>
+
+      {/* 编辑公告对话框 */}
+      {editingAnnouncement && (
+        <Dialog open={!!editingAnnouncement} onOpenChange={() => setEditingAnnouncement(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>编辑公告</DialogTitle>
+              <DialogDescription>修改公告内容</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div>
+                <Label>公告标题</Label>
+                <Input
+                  value={editingAnnouncement.title}
+                  onChange={e => setEditingAnnouncement(prev => ({ ...prev, title: e.target.value }))}
+                />
+              </div>
+              <div>
+                <Label>公告内容</Label>
+                <Textarea
+                  value={editingAnnouncement.content}
+                  onChange={e => setEditingAnnouncement(prev => ({ ...prev, content: e.target.value }))}
+                  rows={4}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setEditingAnnouncement(null)}>取消</Button>
+              <Button onClick={handleUpdateAnnouncement}>保存修改</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
     </div>
   )
 }

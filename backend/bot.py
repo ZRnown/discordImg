@@ -135,7 +135,7 @@ logger = logging.getLogger(__name__)
 logging.getLogger('discord').setLevel(logging.INFO)
 
 class DiscordBotClient(discord.Client):
-    def __init__(self, account_id=None):
+    def __init__(self, account_id=None, user_id=None, user_shops=None):
         # discord.py-self 可能不需要 intents，或者使用不同的语法
         try:
             # 尝试使用标准的 intents
@@ -150,12 +150,74 @@ class DiscordBotClient(discord.Client):
         self.current_token = None
         self.running = False
         self.account_id = account_id
+        self.user_id = user_id  # 用户ID，用于获取个性化设置
+        self.user_shops = user_shops  # 用户管理的店铺列表
+
+    def _should_filter_message(self, message):
+        """检查消息是否应该被过滤"""
+        try:
+            from database import db
+            filters = db.get_message_filters()
+
+            message_content = message.content.lower()
+
+            for filter_rule in filters:
+                filter_value = filter_rule['filter_value'].lower()
+                filter_type = filter_rule['filter_type']
+
+                if filter_type == 'contains':
+                    if filter_value in message_content:
+                        logger.info(f'消息被过滤: 包含 "{filter_value}"')
+                        return True
+                elif filter_type == 'starts_with':
+                    if message_content.startswith(filter_value):
+                        logger.info(f'消息被过滤: 以 "{filter_value}" 开头')
+                        return True
+                elif filter_type == 'ends_with':
+                    if message_content.endswith(filter_value):
+                        logger.info(f'消息被过滤: 以 "{filter_value}" 结尾')
+                        return True
+                elif filter_type == 'regex':
+                    import re
+                    try:
+                        if re.search(filter_value, message_content, re.IGNORECASE):
+                            logger.info(f'消息被过滤: 匹配正则 "{filter_value}"')
+                            return True
+                    except re.error:
+                        logger.warning(f'无效的正则表达式: {filter_value}')
+        except Exception as e:
+            logger.error(f'检查消息过滤失败: {e}')
+
+        return False
+
+    def _get_custom_reply(self):
+        """获取自定义回复内容"""
+        try:
+            from database import db
+            replies = db.get_custom_replies()
+
+            if replies:
+                # 返回优先级最高的活跃回复
+                return replies[0]
+        except Exception as e:
+            logger.error(f'获取自定义回复失败: {e}')
+
+        return None
 
     async def on_ready(self):
         logger.info(f'Discord机器人已登录: {self.user} (ID: {self.user.id})')
         logger.info(f'机器人已就绪，开始监听消息')
         logger.info(f'监听频道: {config.DISCORD_CHANNEL_ID or "所有频道"}')
         self.running = True
+
+        # 更新数据库中的账号状态为在线
+        try:
+            from database import db
+            if hasattr(self, 'account_id'):
+                db.update_account_status(self.account_id, 'online')
+                logger.info(f'账号 {self.account_id} 状态已更新为在线')
+        except Exception as e:
+            logger.error(f'更新账号状态失败: {e}')
 
     async def on_message(self, message):
         if not self.running:
@@ -171,6 +233,10 @@ class DiscordBotClient(discord.Client):
 
         # 如果配置了频道ID，只处理特定频道的消息；否则处理所有频道
         if config.DISCORD_CHANNEL_ID and str(message.channel.id) != str(config.DISCORD_CHANNEL_ID):
+            return
+
+        # 检查消息过滤规则
+        if self._should_filter_message(message):
             return
 
         logger.info(f'收到消息: {message.author.name} 在 #{message.channel.name}: "{message.content[:100]}{"..." if len(message.content) > 100 else ""}"')
@@ -218,38 +284,83 @@ class DiscordBotClient(discord.Client):
                 logger.error("图片下载失败，已达到最大重试次数")
                 return  # 静默失败，不发送错误消息
 
-            # 调用 DINOv2 服务识别图片
-            result = await self.recognize_image(image_data)
+            # 调用 DINOv2 服务识别图片，根据用户权限过滤结果
+            result = await self.recognize_image(image_data, self.user_shops)
+
+            logger.info(f'图片识别结果: success={result.get("success") if result else False}, results_count={len(result.get("results", [])) if result else 0}')
 
             if result and result.get('success') and result.get('results'):
                 # 获取最佳匹配结果
                 best_match = result['results'][0]
                 similarity = best_match.get('similarity', 0)
 
-                # 检查相似度是否超过阈值
-                if similarity >= config.DISCORD_SIMILARITY_THRESHOLD:
+                # 获取用户个性化相似度阈值，如果没有则使用全局默认值
+                user_threshold = config.DISCORD_SIMILARITY_THRESHOLD  # 默认值
+                if self.user_id:
+                    try:
+                        from database import db
+                        user_settings = db.get_user_settings(self.user_id)
+                        if user_settings and 'discord_similarity_threshold' in user_settings:
+                            user_threshold = user_settings['discord_similarity_threshold']
+                    except Exception as e:
+                        logger.error(f'获取用户相似度设置失败: {e}')
+
+                logger.info(f'最佳匹配相似度: {similarity:.4f}, 用户阈值: {user_threshold:.4f}')
+
+                # 检查相似度是否超过用户设置的阈值，或者是否为高质量匹配（相似度>0.8）
+                if similarity >= user_threshold or similarity > 0.8:
                     product = best_match.get('product', {})
-                    # 根据频道决定发送哪个链接
-                    response = get_response_url_for_channel(product, message.channel.id)
+                    logger.info(f'✅ 匹配成功! 相似度: {similarity:.2f} | 商品: {product.get("id")} | 频道: {message.channel.name}')
 
                     # 模拟打字状态并延迟回复
                     async with message.channel.typing():
-                        # 检查是否设置了全局延迟（只要有一个值不为默认值3.0，就认为已设置）
-                        if abs(config.GLOBAL_REPLY_MIN_DELAY - 3.0) > 0.01 or abs(config.GLOBAL_REPLY_MAX_DELAY - 8.0) > 0.01:
-                            delay = random.uniform(config.GLOBAL_REPLY_MIN_DELAY, config.GLOBAL_REPLY_MAX_DELAY)
-                            logger.info(f"模拟打字并延迟回复 {delay:.2f} 秒...")
-                            await asyncio.sleep(delay)
-                        else:
-                            # 如果没有设置延迟，至少模拟1-3秒的打字时间
-                            delay = random.uniform(1.0, 3.0)
-                            logger.info(f"模拟打字 {delay:.2f} 秒...")
-                            await asyncio.sleep(delay)
+                        # === 修复延迟逻辑 ===
+                        # 直接读取配置，不设硬性下限，允许 0.1s
+                        min_d = max(0.1, float(config.GLOBAL_REPLY_MIN_DELAY))
+                        max_d = max(min_d, float(config.GLOBAL_REPLY_MAX_DELAY))
 
-                    await message.reply(response)
+                        delay = random.uniform(min_d, max_d)
+                        await asyncio.sleep(delay)
+
+                    # 获取自定义回复设置
+                    custom_reply = self._get_custom_reply()
+
+                    if custom_reply:
+                        reply_type = custom_reply.get('reply_type')
+
+                        if reply_type == 'custom_only':
+                            # 只发送自定义内容，不发送链接
+                            if custom_reply.get('content'):
+                                await message.reply(custom_reply['content'])
+                            if custom_reply.get('image_url'):
+                                # 这里可以实现发送图片的逻辑
+                                pass
+
+                        elif reply_type == 'text_and_link':
+                            # 发送文字 + 链接
+                            response = get_response_url_for_channel(product, message.channel.id)
+                            full_reply = f"{custom_reply.get('content', '')}\n{response}".strip()
+                            await message.reply(full_reply)
+
+                        elif reply_type == 'text':
+                            # 只发送文字
+                            if custom_reply.get('content'):
+                                await message.reply(custom_reply['content'])
+
+                        elif reply_type == 'image':
+                            # 发送图片（如果设置了的话）
+                            if custom_reply.get('image_url'):
+                                # 这里可以实现发送图片的逻辑
+                                pass
+                    else:
+                        # 默认行为：发送链接
+                        response = get_response_url_for_channel(product, message.channel.id)
+                        await message.reply(response)
+
                     logger.info(f'图片识别成功，相似度: {similarity:.4f}')
                 else:
                     # 相似度低于阈值，不回复任何消息
-                    logger.info(f'图片识别相似度 {similarity:.4f} 低于阈值 {config.DISCORD_SIMILARITY_THRESHOLD}，不回复')
+                    logger.info(f'图片识别相似度 {similarity:.4f} 低于用户阈值 {user_threshold:.4f}，不回复')
 
         except Exception as e:
             logger.error(f'Error handling image: {e}')
@@ -386,7 +497,7 @@ class DiscordBotClient(discord.Client):
             logger.error(f'Error searching products by keyword: {e}')
             return None
 
-    async def recognize_image(self, image_data):
+    async def recognize_image(self, image_data, user_shops=None):
         try:
             # 设置较短的超时时间，避免阻塞Discord网关
             timeout = aiohttp.ClientTimeout(total=15)  # 15秒超时
@@ -394,8 +505,24 @@ class DiscordBotClient(discord.Client):
                 # 准备图片数据
                 form_data = aiohttp.FormData()
                 form_data.add_field('image', image_data, filename='image.jpg', content_type='image/jpeg')
-                form_data.add_field('threshold', str(config.DISCORD_SIMILARITY_THRESHOLD))
+                # 使用配置的阈值
+                # 使用用户个性化阈值，如果没有则使用全局默认值
+                api_threshold = config.DISCORD_SIMILARITY_THRESHOLD
+                if self.user_id:
+                    try:
+                        from database import db
+                        user_settings = db.get_user_settings(self.user_id)
+                        if user_settings and 'discord_similarity_threshold' in user_settings:
+                            api_threshold = user_settings['discord_similarity_threshold']
+                    except Exception as e:
+                        logger.error(f'获取用户相似度设置失败: {e}')
+
+                form_data.add_field('threshold', str(api_threshold))
                 form_data.add_field('limit', '1')  # Discord只返回最相似的一个结果
+
+                # 如果指定了用户店铺权限，添加到请求中
+                if user_shops:
+                    form_data.add_field('user_shops', json.dumps(user_shops))
 
                 # 调用 DINOv2 + FAISS 服务（本地）
                 async with session.post('http://localhost:5001/search_similar', data=form_data) as resp:

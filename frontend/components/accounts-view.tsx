@@ -1,56 +1,167 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Badge } from "@/components/ui/badge"
-import { Switch } from "@/components/ui/switch"
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog"
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
-import { Plus, RefreshCw, Trash2, MessageCircle, Save, Play, Square, Shield, Users, Settings, Bot } from "lucide-react"
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
+import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit } from "lucide-react"
 
 export function AccountsView() {
   const [accounts, setAccounts] = useState<any[]>([])
-  const [isDialogOpen, setIsDialogOpen] = useState(false)
-  const [newToken, setNewToken] = useState("")
-  const [rotationEnabled, setRotationEnabled] = useState(false)
-  const [rotationInterval, setRotationInterval] = useState(10)
-  const [discordThreshold, setDiscordThreshold] = useState(0.6)  // 默认0.6
-  const [globalMinDelay, setGlobalMinDelay] = useState(3)
-  const [globalMaxDelay, setGlobalMaxDelay] = useState(8)
-  const [downloadThreads, setDownloadThreads] = useState(4)
-  const [featureExtractThreads, setFeatureExtractThreads] = useState(4)
-  const [discordChannelId, setDiscordChannelId] = useState('')
-  const [cnfansChannelId, setCnfansChannelId] = useState('')
-  const [acbuyChannelId, setAcbuyChannelId] = useState('')
+  const [users, setUsers] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [showAddDialog, setShowAddDialog] = useState(false)
+  const [newAccount, setNewAccount] = useState({
+    token: ""
+  })
+  const [settings, setSettings] = useState({
+    discord_similarity_threshold: 0.6,
+    global_reply_min_delay: 3.0,
+    global_reply_max_delay: 8.0,
+  })
+  const [settingsLoading, setSettingsLoading] = useState(false)
+
+  // 新增：当前用户信息状态
+  const [currentUser, setCurrentUser] = useState<any>(null)
+  const [deleteAccountConfirm, setDeleteAccountConfirm] = useState<any>(null)
+
+  // 网站配置相关状态
+  const [websites, setWebsites] = useState<any[]>([])
+  const [showAddWebsite, setShowAddWebsite] = useState(false)
+  const [editingWebsite, setEditingWebsite] = useState<any>(null)
+  const [newWebsite, setNewWebsite] = useState({
+    name: '',
+    display_name: '',
+    url_template: '',
+    id_pattern: '',
+    badge_color: 'blue'
+  })
+  const [websiteChannels, setWebsiteChannels] = useState<{[key: number]: string[]}>({})
+
+  // 消息过滤相关状态
+  const [messageFilters, setMessageFilters] = useState<any[]>([])
+  const [showAddFilter, setShowAddFilter] = useState(false)
+  const [editingFilter, setEditingFilter] = useState<any>(null)
+  const [newFilter, setNewFilter] = useState({
+    filter_type: 'contains',
+    filter_value: ''
+  })
+
+
+  const fetchWebsites = async () => {
+    try {
+      const res = await fetch('/api/websites', { credentials: 'include' })
+      if (res.ok) {
+        const data = await res.json()
+        setWebsites(data.websites || [])
+        // 获取每个网站的频道绑定
+        const channels: {[key: number]: string[]} = {}
+        for (const website of data.websites) {
+          const channelRes = await fetch(`/api/websites/${website.id}/channels`, { credentials: 'include' })
+          if (channelRes.ok) {
+            const channelData = await channelRes.json()
+            channels[website.id] = channelData.channels || []
+          }
+        }
+        setWebsiteChannels(channels)
+      }
+    } catch (e) {
+      console.error('获取网站配置失败:', e)
+    }
+  }
+
+  const fetchMessageFilters = async () => {
+    try {
+      const res = await fetch('/api/message-filters', { credentials: 'include' })
+      if (res.ok) {
+        const data = await res.json()
+        setMessageFilters(data.filters || [])
+      }
+    } catch (e) {
+      console.error('获取消息过滤规则失败:', e)
+    }
+  }
+
 
   useEffect(() => {
-    fetchAccounts()
-    fetchRotationConfig()
-    fetchGlobalDelay()
-    fetchDiscordThreshold()
-    fetchThreadConfig()
-    fetchDiscordChannel()
+    // 先获取当前用户，再决定是否获取用户列表
+    const init = async () => {
+        const userRes = await fetch('/api/auth/me', { credentials: 'include' });
+        if (userRes.ok) {
+            const userData = await userRes.json();
+            setCurrentUser(userData.user);
+
+            // 并行获取数据
+            fetchAccounts(); // 所有人都能获取账号(自己的)
+
+            // 只有管理员才获取用户列表
+            if (userData.user.role === 'admin') {
+                fetchUsers();
+            }
+        }
+    };
+    init();
+    fetchSettings();
+    fetchWebsites();
+    fetchMessageFilters();
   }, [])
+
+  const fetchSettings = async () => {
+    try {
+      const response = await fetch('/api/user/settings', {
+        credentials: 'include'
+      })
+      if (response.ok) {
+        const data = await response.json()
+        setSettings({
+          discord_similarity_threshold: data.discord_similarity_threshold || 0.6,
+          global_reply_min_delay: data.global_reply_min_delay || 3.0,
+          global_reply_max_delay: data.global_reply_max_delay || 8.0,
+        })
+      }
+    } catch (error) {
+      console.error('Failed to fetch settings:', error)
+    }
+  }
+
+  const handleSaveSettings = async () => {
+    setSettingsLoading(true)
+    try {
+      const response = await fetch('/api/user/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(settings)
+      })
+
+      if (response.ok) {
+        toast.success("设置已保存")
+      } else {
+        toast.error("保存设置失败")
+      }
+    } catch (error) {
+      toast.error("保存设置失败")
+    } finally {
+      setSettingsLoading(false)
+    }
+  }
 
   const fetchAccounts = async () => {
     try {
-      const response = await fetch('/api/accounts')
+      const response = await fetch('/api/accounts', {
+        credentials: 'include'
+      })
       if (response.ok) {
         const data = await response.json()
         setAccounts(data.accounts || [])
+      } else {
+        console.error('Failed to fetch accounts:', response.status)
+        setAccounts([])
       }
     } catch (error) {
       console.error('Failed to fetch accounts:', error)
@@ -59,74 +170,31 @@ export function AccountsView() {
     }
   }
 
-  const fetchRotationConfig = async () => {
+  const fetchUsers = async () => {
     try {
-      const response = await fetch('/api/accounts/rotation')
+      const response = await fetch('/api/users') // Next.js 会自动带上浏览器 Cookie
       if (response.ok) {
         const data = await response.json()
-        setRotationEnabled(data.enabled)
-        setRotationInterval(data.rotationInterval)
+        setUsers(data.users || [])
+      } else {
+        // 不再抛出 toast 错误，而是静默失败或仅记录日志
+        // 因为如果是权限不足，上面的逻辑应该已经拦截了，这里是兜底
+        console.log('User fetch skipped or failed', response.status)
+        setUsers([])
       }
     } catch (error) {
-      console.error('Failed to fetch rotation config:', error)
+      setUsers([])
     }
   }
 
-  const fetchGlobalDelay = async () => {
-    try {
-      const response = await fetch('/api/config/global-reply-delay')
-      if (response.ok) {
-        const data = await response.json()
-        setGlobalMinDelay(data.min_delay)
-        setGlobalMaxDelay(data.max_delay)
-      }
-    } catch (error) {
-      console.error('Failed to fetch global delay:', error)
-    }
-  }
-
-  const fetchDiscordThreshold = async () => {
-    try {
-      const response = await fetch('/api/config/discord-threshold')
-      if (response.ok) {
-        const data = await response.json()
-        setDiscordThreshold(data.threshold)
-      }
-    } catch (error) {
-      console.error('Failed to fetch Discord threshold:', error)
-    }
-  }
-
-  const fetchThreadConfig = async () => {
-    try {
-      const response = await fetch('/api/config/threads')
-      if (response.ok) {
-        const data = await response.json()
-        setDownloadThreads(data.download_threads)
-        setFeatureExtractThreads(data.feature_extract_threads)
-      }
-    } catch (error) {
-      console.error('Failed to fetch thread config:', error)
-    }
-  }
-
-  const fetchDiscordChannel = async () => {
-    try {
-      const response = await fetch('/api/config/discord-channel')
-      if (response.ok) {
-        const data = await response.json()
-        setDiscordChannelId(data.channel_id)
-        setCnfansChannelId(data.cnfans_channel_id || '')
-        setAcbuyChannelId(data.acbuy_channel_id || '')
-      }
-    } catch (error) {
-      console.error('Failed to fetch Discord channel config:', error)
-    }
+  const getUserDisplayName = (userId: number) => {
+    const user = users.find(u => u.id === userId)
+    return user ? user.username : `用户${userId}`
   }
 
   const handleAddAccount = async () => {
-    if (!newToken.trim()) {
-      toast.error("请输入有效的 Token")
+    if (!newAccount.token) {
+      toast.error("请输入 Discord Token")
       return
     }
 
@@ -134,15 +202,15 @@ export function AccountsView() {
       const response = await fetch('/api/accounts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: newToken.trim() })
+        credentials: 'include',
+        body: JSON.stringify({ token: newAccount.token })
       })
 
       if (response.ok) {
-        const newAccount = await response.json()
-        setAccounts([...accounts, newAccount])
         toast.success("账号添加成功")
-        setIsDialogOpen(false)
-        setNewToken("")
+        setNewAccount({ token: "" })
+        setShowAddDialog(false)
+        fetchAccounts()
       } else {
         const error = await response.json()
         toast.error(error.error || "添加账号失败")
@@ -152,512 +220,773 @@ export function AccountsView() {
     }
   }
 
-  const handleDeleteAccount = async (id: number) => {
+  const handleDeleteAccount = (account: any) => {
+    setDeleteAccountConfirm(account)
+  }
+
+  const confirmDeleteAccount = async () => {
+    if (!deleteAccountConfirm) return
+
     try {
-      const response = await fetch(`/api/accounts/${id}`, {
-        method: 'DELETE'
+      const response = await fetch(`/api/accounts/${deleteAccountConfirm.id}`, {
+        method: 'DELETE',
+        credentials: 'include'
       })
 
       if (response.ok) {
-        setAccounts(accounts.filter(a => a.id !== id))
-        toast.success("账号已移除")
+        toast.success("账号删除成功")
+        fetchAccounts()
+        setDeleteAccountConfirm(null)
       } else {
-        toast.error("删除账号失败")
+        const error = await response.json()
+        toast.error(error.error || "删除账号失败")
       }
     } catch (error) {
       toast.error("网络错误，请重试")
     }
   }
 
-  const toggleAccountStatus = async (id: number, currentStatus: string) => {
-    const newStatus = currentStatus === "online" ? "offline" : "online"
-
+  // 网站配置处理函数
+  const handleAddWebsite = async () => {
     try {
-      const response = await fetch(`/api/accounts/${id}/status`, {
+      const res = await fetch('/api/websites', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(newWebsite)
+      })
+      if (res.ok) {
+        toast.success('网站配置已添加')
+        setShowAddWebsite(false)
+        setNewWebsite({ name: '', display_name: '', url_template: '', id_pattern: '', badge_color: 'blue' })
+        fetchWebsites()
+      } else {
+        toast.error('添加失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
+  const handleUpdateWebsite = async () => {
+    if (!editingWebsite) return
+    try {
+      const res = await fetch(`/api/websites/${editingWebsite.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status: newStatus })
+        credentials: 'include',
+        body: JSON.stringify(editingWebsite)
       })
-
-      if (response.ok) {
-        setAccounts((prev) =>
-          prev.map((acc) => (acc.id === id ? { ...acc, status: newStatus } : acc)),
-        )
+      if (res.ok) {
+        toast.success('网站配置已更新')
+        setEditingWebsite(null)
+        fetchWebsites()
       } else {
-        toast.error("更新状态失败")
+        toast.error('更新失败')
       }
-    } catch (error) {
-      toast.error("网络错误，请重试")
+    } catch (e) {
+      toast.error('网络错误')
     }
   }
+
+  const handleDeleteWebsite = async (website: any) => {
+    if (!confirm(`确定要删除网站配置 "${website.display_name}" 吗？`)) return
+    try {
+      const res = await fetch(`/api/websites/${website.id}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      })
+      if (res.ok) {
+        toast.success('网站配置已删除')
+        fetchWebsites()
+      } else {
+        toast.error('删除失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
+  const handleAddChannel = async (websiteId: number, channelId: string) => {
+    if (!channelId.trim()) return
+    try {
+      const res = await fetch(`/api/websites/${websiteId}/channels`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ channel_id: channelId.trim() })
+      })
+      if (res.ok) {
+        toast.success('频道绑定已添加')
+        fetchWebsites()
+      } else {
+        toast.error('添加失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
+  const handleRemoveChannel = async (websiteId: number, channelId: string) => {
+    try {
+      const res = await fetch(`/api/websites/${websiteId}/channels/${channelId}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      })
+      if (res.ok) {
+        toast.success('频道绑定已移除')
+        fetchWebsites()
+      } else {
+        toast.error('移除失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
+  // 消息过滤处理函数
+  const handleAddMessageFilter = async () => {
+    try {
+      const res = await fetch('/api/message-filters', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(newFilter)
+      })
+      if (res.ok) {
+        toast.success('过滤规则添加成功')
+        setShowAddFilter(false)
+        setNewFilter({ filter_type: 'contains', filter_value: '' })
+        fetchMessageFilters()
+      } else {
+        toast.error('添加失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
+  const handleUpdateMessageFilter = async () => {
+    if (!editingFilter) return
+    try {
+      const res = await fetch(`/api/message-filters/${editingFilter.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          filter_type: editingFilter.filter_type,
+          filter_value: editingFilter.filter_value,
+          is_active: editingFilter.is_active
+        })
+      })
+      if (res.ok) {
+        toast.success('过滤规则更新成功')
+        setEditingFilter(null)
+        fetchMessageFilters()
+      } else {
+        toast.error('更新失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
+  const handleDeleteMessageFilter = async (filterId: number) => {
+    if (!confirm('确定要删除这个过滤规则吗？')) return
+    try {
+      const res = await fetch(`/api/message-filters/${filterId}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      })
+      if (res.ok) {
+        toast.success('过滤规则删除成功')
+        fetchMessageFilters()
+      } else {
+        toast.error('删除失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-4xl font-extrabold tracking-tight">账号与规则管理</h2>
-          <p className="text-sm text-muted-foreground mt-1">管理 Discord 机器人账号、轮换设置及自动回复规则</p>
-        </div>
-        <div className="flex gap-3">
-          <Button
-            variant="outline"
-            onClick={async () => {
-              try {
-                toast.info("正在验证所有账号...")
-                const response = await fetch('/api/accounts/verify-all', {
-                  method: 'POST'
-                })
+      <div>
+        <h2 className="text-4xl font-extrabold tracking-tight">账号管理</h2>
+        <p className="text-sm text-muted-foreground mt-1">管理 Discord 账号</p>
+      </div>
 
-                if (response.ok) {
-                  const data = await response.json()
-                  if (data.success) {
-                    toast.success(`验证完成！${data.verified}个有效，${data.invalid}个无效`)
-                    // 重新加载账号列表
-                    fetchAccounts()
-                  } else {
-                    toast.error("验证失败")
-                  }
-                } else {
-                  toast.error("验证请求失败")
-                }
-              } catch (error) {
-                toast.error("网络错误，请重试")
-              }
-            }}
-          >
-            <Shield className="mr-2 size-5" />
-            重新验证所有
-          </Button>
-
-          {accounts.length > 0 && (
-            <>
-              <Button
-                variant="default"
-                className="bg-green-600 hover:bg-green-700"
-                onClick={async () => {
-                  try {
-                    const response = await fetch('/api/accounts/bulk-status', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ status: 'online' })
-                    })
-
-                    if (response.ok) {
-                      const data = await response.json()
-                      toast.success(`已开启 ${data.updated_count} 个账号`)
-                      fetchAccounts()
-                    } else {
-                      toast.error("批量开启失败")
-                    }
-                  } catch (error) {
-                    toast.error("网络错误，请重试")
-                  }
-                }}
-              >
-                <Play className="mr-2 size-5" />
-                开启所有账号
-              </Button>
-
-              <Button
-                variant="destructive"
-                onClick={async () => {
-                  try {
-                    const response = await fetch('/api/accounts/bulk-status', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ status: 'offline' })
-                    })
-
-                    if (response.ok) {
-                      const data = await response.json()
-                      toast.success(`已停止 ${data.updated_count} 个账号`)
-                      fetchAccounts()
-                    } else {
-                      toast.error("批量停止失败")
-                    }
-                  } catch (error) {
-                    toast.error("网络错误，请重试")
-                  }
-                }}
-              >
-                <Square className="mr-2 size-5" />
-                停止所有账号
-              </Button>
-            </>
-          )}
-          <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+      <div className="bg-white rounded-lg shadow p-6">
+        <div className="flex justify-between items-center mb-4">
+          <div>
+            <h3 className="text-xl font-bold">账号列表</h3>
+            <p className="text-sm text-gray-600 mt-1">
+              共 {accounts.length} 个账号
+            </p>
+          </div>
+          <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
             <DialogTrigger asChild>
               <Button>
-                <Plus className="mr-2 size-5" />
+                <Plus className="w-4 h-4 mr-2" />
                 添加账号
               </Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle className="text-xl">添加新账号</DialogTitle>
-                <DialogDescription>输入 Discord 账号的 Token 以添加到系统</DialogDescription>
+                <DialogTitle>添加 Discord 账号</DialogTitle>
+                <DialogDescription>
+                  输入 Discord Token，系统将自动验证并获取用户名
+                </DialogDescription>
               </DialogHeader>
-              <div className="space-y-5 py-4">
-                <div className="space-y-2">
-                  <Label htmlFor="token" className="text-sm font-bold">Discord Token</Label>
+              <div className="space-y-4">
+                <div>
+                  <Label htmlFor="token">Discord Token</Label>
                   <Input
                     id="token"
-                    placeholder="MTIzNDU2Nzg5MDEyMzQ1Njc4OQ..."
-                    value={newToken}
-                    onChange={(e) => setNewToken(e.target.value)}
-                    className="h-10"
+                    type="password"
+                    value={newAccount.token}
+                    onChange={(e) => setNewAccount(prev => ({ ...prev, token: e.target.value }))}
+                    placeholder="输入 Discord Token"
                   />
-                  <p className="text-xs text-muted-foreground italic">支持使用 User Token 或 Bot Token</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Token 将被安全存储，系统会自动验证有效性
+                  </p>
                 </div>
               </div>
               <DialogFooter>
-                <Button variant="outline" onClick={() => setIsDialogOpen(false)}>
-                  取消
-                </Button>
-                <Button onClick={handleAddAccount}>确认添加</Button>
+                <Button onClick={handleAddAccount}>添加账号</Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>
         </div>
-      </div>
 
-      <div className="grid grid-cols-1 gap-8">
-        <Card className="shadow-sm">
-          <CardHeader className="py-5 border-b">
-            <CardTitle className="text-2xl font-bold">账号列表</CardTitle>
-            <CardDescription className="text-sm">
-              共 {accounts.length} 个账号，{accounts.filter((a) => a.status === "online").length} 个在线
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="p-0">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-muted/50 h-12">
-                  <TableHead className="text-sm font-bold text-foreground pl-6">用户名</TableHead>
-                  <TableHead className="text-sm font-bold text-foreground">状态</TableHead>
-                  <TableHead className="text-sm font-bold text-foreground">最后活跃</TableHead>
-                  <TableHead className="text-sm font-bold text-foreground text-right pr-6">操作</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {accounts.map((account) => (
-                  <TableRow key={account.id} className="h-16 hover:bg-muted/30 transition-colors">
-                    <TableCell className="font-medium py-3 pl-6">
-                      <div className="flex flex-col gap-1">
-                        <span className="text-base font-semibold">{account.username}</span>
-                        <span className="text-xs text-muted-foreground font-mono">
-                          {account.token && typeof account.token === 'string' ? `${account.token.substring(0, 20)}...` : 'Token 无效'}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell className="py-3">
-                      {account.status === "online" ? (
-                        <Badge className="bg-green-600 hover:bg-green-700 text-xs px-2 h-6">
-                          在线
-                        </Badge>
-                      ) : (
-                        <Badge variant="secondary" className="text-xs px-2 h-6">
-                          离线
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground py-3">{account.lastActive}</TableCell>
-                    <TableCell className="text-right pr-6 py-3">
-                      <div className="flex items-center justify-end gap-3">
-                        <Switch
-                          className="scale-90"
-                          checked={account.status === "online"}
-                          onCheckedChange={() => toggleAccountStatus(account.id, account.status)}
-                        />
-                        <Button variant="ghost" size="icon" className="h-9 w-9 hover:bg-red-50 hover:text-red-600 transition-colors" onClick={() => handleDeleteAccount(account.id)}>
-                          <Trash2 className="size-5" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-
-            {/* 综合设置 - 全局轮换 + 系统配置 */}
-            <div className="border-t">
-              <div className="p-6 space-y-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-lg font-bold">系统设置</h3>
-                    <p className="text-sm text-muted-foreground">账号轮换、多线程、Discord配置</p>
-                  </div>
-                  <Button
-                    variant="default"
-                    size="sm"
-                    onClick={async () => {
-                      try {
-                        // 保存账号轮换
-                        const rotationRes = await fetch('/api/accounts/rotation', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({
-                            enabled: rotationEnabled,
-                            rotationInterval: rotationInterval
-                          })
-                        })
-
-                        // 保存多线程配置
-                        const threadRes = await fetch('/api/config/threads', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({
-                            download_threads: downloadThreads,
-                            feature_extract_threads: featureExtractThreads
-                          })
-                        })
-
-                        // 保存Discord阈值
-                        const thresholdRes = await fetch('/api/config/discord-threshold', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({
-                            threshold: discordThreshold
-                          })
-                        })
-
-                        // 保存全局延迟
-                        const delayRes = await fetch('/api/config/global-reply-delay', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({
-                            min_delay: globalMinDelay,
-                            max_delay: globalMaxDelay
-                          })
-                        })
-
-                        // 保存Discord频道ID
-                        const channelRes = await fetch('/api/config/discord-channel', {
-                          method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
-                          body: JSON.stringify({
-                            channel_id: discordChannelId,
-                            cnfans_channel_id: cnfansChannelId,
-                            acbuy_channel_id: acbuyChannelId
-                          })
-                        })
-
-                        if (rotationRes.ok && threadRes.ok && thresholdRes.ok && delayRes.ok && channelRes.ok) {
-                          toast.success("所有配置已保存")
-                        } else {
-                          toast.error("保存失败")
-                        }
-                      } catch (error) {
-                        toast.error("网络错误，请重试")
-                      }
-                    }}
-                  >
-                    <Save className="mr-2 size-4" />
-                    保存设置
-                  </Button>
+        <div className="space-y-2">
+          {accounts.map((account) => (
+            <div key={account.id} className="flex justify-between items-center p-4 border rounded">
+              <div className="flex-1">
+                <div className="font-semibold">{account.username}</div>
+                <div className="text-sm text-gray-500">
+                  {account.user_id ? `所属用户: ${getUserDisplayName(account.user_id)}` : '未分配用户'}
                 </div>
-
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                  {/* 账号管理设置 */}
-                  <Card>
-                    <CardHeader className="pb-4">
-                      <CardTitle className="text-base flex items-center gap-2">
-                        <Users className="h-4 w-4" />
-                        账号管理
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      <div className="space-y-3">
-                        <div className="flex items-center justify-between">
-                          <Label className="text-sm font-medium">启用账号轮换</Label>
-                          <Switch
-                            checked={rotationEnabled}
-                            onCheckedChange={setRotationEnabled}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label className="text-xs text-muted-foreground">轮换间隔 (秒)</Label>
-                          <Input
-                            type="number"
-                            value={rotationInterval}
-                            onChange={(e) => setRotationInterval(parseInt(e.target.value) || 0)}
-                            disabled={!rotationEnabled}
-                            min={1}
-                            className="h-9"
-                          />
-                          <p className="text-xs text-muted-foreground">
-                            {rotationEnabled ? `每 ${rotationInterval} 秒轮换一个账号` : '账号轮换已禁用'}
-                          </p>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-
-                  {/* 系统性能设置 */}
-                  <Card>
-                    <CardHeader className="pb-4">
-                      <CardTitle className="text-base flex items-center gap-2">
-                        <Settings className="h-4 w-4" />
-                        系统性能
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                          <Label className="text-xs text-muted-foreground">下载线程数</Label>
-                          <Input
-                            type="number"
-                            min="1"
-                            max="8"
-                            value={downloadThreads}
-                            onChange={(e) => setDownloadThreads(parseInt(e.target.value) || 4)}
-                            className="h-9"
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label className="text-xs text-muted-foreground">特征提取线程数</Label>
-                          <Input
-                            type="number"
-                            min="1"
-                            max="8"
-                            value={featureExtractThreads}
-                            onChange={(e) => setFeatureExtractThreads(parseInt(e.target.value) || 4)}
-                            className="h-9"
-                          />
-                        </div>
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        推荐配置: 下载 4 线程，特征提取 4 线程
-                      </p>
-                    </CardContent>
-                  </Card>
-
-                  {/* Discord 频道配置 */}
-                  <Card className="lg:col-span-2">
-                    <CardHeader className="pb-4">
-                      <CardTitle className="text-base flex items-center gap-2">
-                        <Bot className="h-4 w-4" />
-                        Discord 配置
-                      </CardTitle>
-                      <CardDescription className="text-sm">
-                        配置机器人监听和回复行为
-                      </CardDescription>
-                    </CardHeader>
-                    <CardContent className="space-y-6">
-                      {/* 监听配置 */}
-                      <div className="space-y-4">
-                        <h4 className="text-sm font-medium">监听设置</h4>
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                          <div className="space-y-2">
-                            <Label className="text-xs text-muted-foreground">监听频道ID</Label>
-                            <Input
-                              type="text"
-                              value={discordChannelId}
-                              onChange={(e) => setDiscordChannelId(e.target.value)}
-                              placeholder="留空监听所有频道"
-                              className="h-9"
-                            />
-                            <p className="text-xs text-muted-foreground">
-                              {discordChannelId ? "只监听指定频道" : "监听所有频道"}
-                            </p>
-                          </div>
-                          <div className="space-y-2">
-                            <Label className="text-xs text-muted-foreground">相似度阈值</Label>
-                            <Input
-                              type="number"
-                              min="0"
-                              max="1"
-                              step="0.05"
-                              value={discordThreshold}
-                              onChange={(e) => setDiscordThreshold(parseFloat(e.target.value) || 0.4)}
-                              className="h-9"
-                            />
-                            <p className="text-xs text-muted-foreground">
-                              相似度高于 {discordThreshold * 100}% 时才回复
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* 回复设置 */}
-                      <div className="space-y-4">
-                        <h4 className="text-sm font-medium">回复设置</h4>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div className="space-y-2">
-                            <Label className="text-xs text-muted-foreground">回复延迟范围</Label>
-                            <div className="grid grid-cols-2 gap-2">
-                              <Input
-                                type="number"
-                                min="0"
-                                max="300"
-                                step="0.1"
-                                value={globalMinDelay}
-                                onChange={(e) => setGlobalMinDelay(parseFloat(e.target.value) || 0)}
-                                placeholder="最小延迟"
-                                className="h-9"
-                              />
-                              <Input
-                                type="number"
-                                min="0"
-                                max="300"
-                                step="0.1"
-                                value={globalMaxDelay}
-                                onChange={(e) => setGlobalMaxDelay(parseFloat(e.target.value) || 0)}
-                                placeholder="最大延迟"
-                                className="h-9"
-                              />
-                            </div>
-                            <p className="text-xs text-muted-foreground">
-                              回复前随机延迟 {globalMinDelay}-{globalMaxDelay} 秒
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* 频道设置 */}
-                      <div className="space-y-4">
-                        <h4 className="text-sm font-medium">频道设置</h4>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div className="space-y-2">
-                            <Label className="text-xs text-muted-foreground">CNFans 频道ID</Label>
-                            <Input
-                              type="text"
-                              value={cnfansChannelId}
-                              onChange={(e) => setCnfansChannelId(e.target.value)}
-                              placeholder="发送CNFans链接的频道ID"
-                              className="h-9"
-                            />
-                            <p className="text-xs text-muted-foreground">
-                              留空在所有频道发送CNFans链接
-                            </p>
-                          </div>
-                          <div className="space-y-2">
-                            <Label className="text-xs text-muted-foreground">AcBuy 频道ID</Label>
-                            <Input
-                              type="text"
-                              value={acbuyChannelId}
-                              onChange={(e) => setAcbuyChannelId(e.target.value)}
-                              placeholder="发送AcBuy链接的频道ID"
-                              className="h-9"
-                            />
-                            <p className="text-xs text-muted-foreground">
-                              留空在所有频道发送AcBuy链接
-                            </p>
-                          </div>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
+                <div className="text-xs text-gray-400 font-mono">
+                  {account.token && typeof account.token === 'string' ? `${account.token.substring(0, 20)}...` : 'Token 无效'}
                 </div>
               </div>
+              <div className="flex items-center gap-2">
+                <div className={`px-2 py-1 rounded text-sm ${
+                  account.status === 'online' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
+                }`}>
+                  {account.status === 'online' ? '在线' : '离线'}
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => handleDeleteAccount(account)}
+                  className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </Button>
+              </div>
             </div>
-          </CardContent>
-        </Card>
-
-
+          ))}
+        </div>
       </div>
 
+
+      {/* 设置区域 */}
+      <div className="bg-white rounded-lg shadow p-6">
+        <div className="flex justify-between items-center mb-6">
+          <div>
+            <h3 className="text-xl font-bold flex items-center">
+              <Settings className="w-5 h-5 mr-2" />
+              个人设置
+            </h3>
+            <p className="text-sm text-gray-600 mt-1">配置您的个性化运行参数</p>
+          </div>
+          <Button onClick={handleSaveSettings} disabled={settingsLoading}>
+            <Save className="w-4 h-4 mr-2" />
+            {settingsLoading ? "保存中..." : "保存设置"}
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+          {/* 相似度设置 */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">相似度设置</CardTitle>
+              <CardDescription>设置图片匹配的相似度阈值</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div>
+                <Label htmlFor="similarity-threshold">相似度阈值</Label>
+                <div className="flex items-center space-x-2">
+                  <Input
+                    id="similarity-threshold"
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    max="1.0"
+                    value={settings.discord_similarity_threshold}
+                    onChange={(e) => setSettings(prev => ({ ...prev, discord_similarity_threshold: parseFloat(e.target.value) }))}
+                  />
+                  <span className="text-sm text-muted-foreground">
+                    {(settings.discord_similarity_threshold * 100).toFixed(0)}%
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  阈值越低匹配越宽松，建议范围: 0.3-0.8
+                </p>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* 回复延迟设置 */}
+          <Card className="md:col-span-2">
+            <CardHeader>
+              <CardTitle className="text-lg">回复延迟设置</CardTitle>
+              <CardDescription>设置账号回复的时间间隔</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="min-delay">最小延迟(秒)</Label>
+                  <Input
+                    id="min-delay"
+                    type="number"
+                    step="0.5"
+                    min="0.5"
+                    max="30"
+                    value={settings.global_reply_min_delay}
+                    onChange={(e) => setSettings(prev => ({ ...prev, global_reply_min_delay: parseFloat(e.target.value) }))}
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="max-delay">最大延迟(秒)</Label>
+                  <Input
+                    id="max-delay"
+                    type="number"
+                    step="0.5"
+                    min="1"
+                    max="60"
+                    value={settings.global_reply_max_delay}
+                    onChange={(e) => setSettings(prev => ({ ...prev, global_reply_max_delay: parseFloat(e.target.value) }))}
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                每次回复将在 {settings.global_reply_min_delay}-{settings.global_reply_max_delay} 秒之间随机延迟
+              </p>
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* 网站配置区域 */}
+        {currentUser?.role === 'admin' && (
+          <Card className="mt-6">
+            <CardHeader>
+              <div className="flex justify-between items-center">
+                <div>
+                  <CardTitle className="text-lg flex items-center">
+                    <Globe className="w-5 h-5 mr-2" />
+                    网站配置
+                  </CardTitle>
+                  <CardDescription>管理支持的购物网站和频道绑定</CardDescription>
+                </div>
+                <Dialog open={showAddWebsite} onOpenChange={setShowAddWebsite}>
+                  <DialogTrigger asChild>
+                    <Button size="sm">
+                      <Plus className="w-4 h-4 mr-2" />
+                      添加网站
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>添加网站配置</DialogTitle>
+                      <DialogDescription>配置新的购物网站支持</DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4">
+                      <div>
+                        <Label>网站标识</Label>
+                        <Input
+                          value={newWebsite.name}
+                          onChange={e => setNewWebsite(prev => ({ ...prev, name: e.target.value }))}
+                          placeholder="例如: kakobuy"
+                        />
+                      </div>
+                      <div>
+                        <Label>显示名称</Label>
+                        <Input
+                          value={newWebsite.display_name}
+                          onChange={e => setNewWebsite(prev => ({ ...prev, display_name: e.target.value }))}
+                          placeholder="例如: Kakobuy"
+                        />
+                      </div>
+                      <div>
+                        <Label>URL模板</Label>
+                        <Input
+                          value={newWebsite.url_template}
+                          onChange={e => setNewWebsite(prev => ({ ...prev, url_template: e.target.value }))}
+                          placeholder="https://www.kakobuy.com/item/details?url=https%3A%2F%2Fweidian.com%2Fitem.html%3FitemID%3D{id}&id={id}&source=WD"
+                        />
+                      </div>
+                      <div>
+                        <Label>ID提取模式</Label>
+                        <Input
+                          value={newWebsite.id_pattern}
+                          onChange={e => setNewWebsite(prev => ({ ...prev, id_pattern: e.target.value }))}
+                          placeholder="{id}"
+                        />
+                      </div>
+                      <div>
+                        <Label>徽章颜色</Label>
+                        <Select value={newWebsite.badge_color} onValueChange={value => setNewWebsite(prev => ({ ...prev, badge_color: value }))}>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="blue">蓝色</SelectItem>
+                            <SelectItem value="green">绿色</SelectItem>
+                            <SelectItem value="orange">橙色</SelectItem>
+                            <SelectItem value="red">红色</SelectItem>
+                            <SelectItem value="purple">紫色</SelectItem>
+                            <SelectItem value="gray">灰色</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setShowAddWebsite(false)}>取消</Button>
+                      <Button onClick={handleAddWebsite}>添加</Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {websites.map((website: any) => (
+                  <div key={website.id} className="border rounded-lg p-4">
+                    <div className="flex justify-between items-start mb-3">
+                      <div className="flex items-center gap-2">
+                        <span className={`inline-flex items-center rounded-md border font-medium w-fit whitespace-nowrap text-[9px] px-1 py-0 h-4 border-none shrink-0 text-white ${
+                          website.badge_color === 'blue' ? 'bg-blue-600' :
+                          website.badge_color === 'green' ? 'bg-green-600' :
+                          website.badge_color === 'orange' ? 'bg-orange-600' :
+                          website.badge_color === 'red' ? 'bg-red-600' :
+                          website.badge_color === 'purple' ? 'bg-purple-600' :
+                          'bg-gray-600'
+                        }`}>
+                          {website.display_name}
+                        </span>
+                        <span className="text-sm font-medium">{website.name}</span>
+                      </div>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setEditingWebsite(website)}
+                        >
+                          <Edit className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleDeleteWebsite(website)}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    </div>
+
+                    <div className="text-xs text-muted-foreground mb-3">
+                      <div>URL模板: {website.url_template}</div>
+                      <div>ID模式: {website.id_pattern}</div>
+                    </div>
+
+                    {/* 频道绑定 */}
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Hash className="w-4 h-4" />
+                        <span className="text-sm font-medium">绑定频道</span>
+                        <Dialog>
+                          <DialogTrigger asChild>
+                            <Button variant="outline" size="sm">
+                              <Plus className="w-3 h-3 mr-1" />
+                              添加频道
+                            </Button>
+                          </DialogTrigger>
+                          <DialogContent>
+                            <DialogHeader>
+                              <DialogTitle>添加频道绑定</DialogTitle>
+                              <DialogDescription>输入Discord频道ID</DialogDescription>
+                            </DialogHeader>
+                            <div className="space-y-4">
+                              <div>
+                                <Label>频道ID</Label>
+                                <Input
+                                  placeholder="例如: 1234567890123456789"
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      handleAddChannel(website.id, (e.target as HTMLInputElement).value)
+                                      ;(e.target as HTMLInputElement).value = ''
+                                    }
+                                  }}
+                                />
+                              </div>
+                            </div>
+                            <DialogFooter>
+                              <Button variant="outline" onClick={() => {}}>取消</Button>
+                              <Button onClick={() => {
+                                const input = document.querySelector('input[placeholder*="频道ID"]') as HTMLInputElement
+                                if (input?.value) {
+                                  handleAddChannel(website.id, input.value)
+                                  input.value = ''
+                                }
+                              }}>添加</Button>
+                            </DialogFooter>
+                          </DialogContent>
+                        </Dialog>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        {(websiteChannels[website.id] || []).map((channelId: string) => (
+                          <div key={channelId} className="flex items-center gap-1 bg-muted rounded px-2 py-1">
+                            <Hash className="w-3 h-3" />
+                            <span className="text-xs font-mono">{channelId}</span>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-4 w-4 p-0"
+                              onClick={() => handleRemoveChannel(website.id, channelId)}
+                            >
+                              <X className="w-3 h-3" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* 编辑网站对话框 */}
+        {editingWebsite && (
+          <Dialog open={!!editingWebsite} onOpenChange={() => setEditingWebsite(null)}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>编辑网站配置</DialogTitle>
+                <DialogDescription>修改网站配置信息</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div>
+                  <Label>网站标识</Label>
+                  <Input
+                    value={editingWebsite.name}
+                    onChange={e => setEditingWebsite(prev => ({ ...prev, name: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <Label>显示名称</Label>
+                  <Input
+                    value={editingWebsite.display_name}
+                    onChange={e => setEditingWebsite(prev => ({ ...prev, display_name: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <Label>URL模板</Label>
+                  <Input
+                    value={editingWebsite.url_template}
+                    onChange={e => setEditingWebsite(prev => ({ ...prev, url_template: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <Label>ID提取模式</Label>
+                  <Input
+                    value={editingWebsite.id_pattern}
+                    onChange={e => setEditingWebsite(prev => ({ ...prev, id_pattern: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <Label>徽章颜色</Label>
+                  <Select value={editingWebsite.badge_color} onValueChange={value => setEditingWebsite(prev => ({ ...prev, badge_color: value }))}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="blue">蓝色</SelectItem>
+                      <SelectItem value="green">绿色</SelectItem>
+                      <SelectItem value="orange">橙色</SelectItem>
+                      <SelectItem value="red">红色</SelectItem>
+                      <SelectItem value="purple">紫色</SelectItem>
+                      <SelectItem value="gray">灰色</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setEditingWebsite(null)}>取消</Button>
+                <Button onClick={handleUpdateWebsite}>保存</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )}
+
+        {/* 消息过滤设置 */}
+        {currentUser?.role === 'admin' && (
+          <Card className="mt-6">
+            <CardHeader>
+              <div className="flex justify-between items-center">
+                <div>
+                  <CardTitle className="text-lg">消息过滤</CardTitle>
+                  <CardDescription>设置账号不回复的消息内容规则</CardDescription>
+                </div>
+                <Dialog open={showAddFilter} onOpenChange={setShowAddFilter}>
+                  <DialogTrigger asChild>
+                    <Button size="sm">
+                      <Plus className="w-4 h-4 mr-2" />
+                      添加过滤规则
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>添加消息过滤规则</DialogTitle>
+                      <DialogDescription>设置账号忽略的消息类型</DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4">
+                      <div>
+                        <Label>过滤类型</Label>
+                        <Select value={newFilter.filter_type} onValueChange={value => setNewFilter(prev => ({ ...prev, filter_type: value }))}>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="contains">包含文本</SelectItem>
+                            <SelectItem value="starts_with">开头是</SelectItem>
+                            <SelectItem value="ends_with">结尾是</SelectItem>
+                            <SelectItem value="regex">正则表达式</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label>过滤值</Label>
+                        <Input
+                          value={newFilter.filter_value}
+                          onChange={e => setNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
+                          placeholder="输入要过滤的内容"
+                        />
+                      </div>
+                    </div>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setShowAddFilter(false)}>取消</Button>
+                      <Button onClick={handleAddMessageFilter}>添加规则</Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {messageFilters.map((filter: any) => (
+                  <div key={filter.id} className="flex items-center justify-between p-3 border rounded">
+                    <div>
+                      <div className="font-medium">{filter.filter_type} "{filter.filter_value}"</div>
+                      <div className="text-sm text-muted-foreground">
+                        创建时间: {new Date(filter.created_at).toLocaleString('zh-CN')}
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setEditingFilter(filter)}
+                      >
+                        <Edit className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleDeleteMessageFilter(filter.id)}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+                {messageFilters.length === 0 && (
+                  <div className="text-center py-4 text-muted-foreground">
+                    暂无过滤规则
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
+
+        {/* 编辑消息过滤对话框 */}
+        {editingFilter && (
+          <Dialog open={!!editingFilter} onOpenChange={() => setEditingFilter(null)}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>编辑过滤规则</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div>
+                  <Label>过滤类型</Label>
+                  <Select value={editingFilter.filter_type} onValueChange={value => setEditingFilter(prev => ({ ...prev, filter_type: value }))}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="contains">包含文本</SelectItem>
+                      <SelectItem value="starts_with">开头是</SelectItem>
+                      <SelectItem value="ends_with">结尾是</SelectItem>
+                      <SelectItem value="regex">正则表达式</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>过滤值</Label>
+                  <Input
+                    value={editingFilter.filter_value}
+                    onChange={e => setEditingFilter(prev => ({ ...prev, filter_value: e.target.value }))}
+                  />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setEditingFilter(null)}>取消</Button>
+                <Button onClick={handleUpdateMessageFilter}>保存修改</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )}
+
+
+        {/* 删除账号确认对话框 */}
+        <Dialog open={!!deleteAccountConfirm} onOpenChange={() => setDeleteAccountConfirm(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>确认删除账号</DialogTitle>
+              <DialogDescription>
+                确定要删除Discord账号 "{deleteAccountConfirm?.username}" 吗？此操作不可恢复。
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setDeleteAccountConfirm(null)}>
+                取消
+              </Button>
+              <Button variant="destructive" onClick={confirmDeleteAccount}>
+                确认删除
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
     </div>
   )
 }
-

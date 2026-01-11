@@ -9,7 +9,7 @@ const _geistMono = Geist_Mono({ subsets: ["latin"] })
 
 export const metadata: Metadata = {
   title: "Discord 自动营销管理系统",
-  description: "智能 Discord 机器人营销管理平台，集成微店抓取、图像识别、CNFans 链接生成",
+  description: "智能 Discord 账号营销管理平台，集成微店抓取、图像识别、CNFans 链接生成",
   generator: "v0.app",
   icons: {
     icon: [

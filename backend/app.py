@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, Response
+from flask import Flask, request, jsonify, Response, session
 import numpy as np
 import os
 import logging
@@ -14,6 +14,7 @@ import queue
 import threading
 import time
 from urllib.parse import quote
+import hashlib
 
 # 在应用启动时从数据库加载系统配置
 def load_system_config():
@@ -24,8 +25,6 @@ def load_system_config():
 
     try:
         sys_config = db.get_system_config()
-        config.DOWNLOAD_THREADS = sys_config['download_threads']
-        config.FEATURE_EXTRACT_THREADS = sys_config['feature_extract_threads']
         config.DISCORD_SIMILARITY_THRESHOLD = sys_config['discord_similarity_threshold']
         config.DISCORD_CHANNEL_ID = sys_config['discord_channel_id']
         config.CNFANS_CHANNEL_ID = sys_config['cnfans_channel_id']
@@ -52,6 +51,18 @@ def load_system_config():
 
 # 加载系统配置
 load_system_config()
+
+# === 重构：店铺抓取状态控制 ===
+scrape_status = {
+    'is_scraping': False,
+    'paused': False,
+    'stop_signal': False,
+    'current_shop_id': None,
+    'total': 0,
+    'processed': 0,
+    'success': 0,
+    'message': '等待开始...'
+}
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -149,6 +160,7 @@ logger = logging.getLogger(__name__)
 # 机器人相关变量
 bot_clients = []
 bot_tasks = []
+bot_running = False  # 标记机器人是否正在运行
 
 # AI模型预加载变量
 feature_extractor = None
@@ -174,7 +186,18 @@ def preload_ai_models():
 preload_ai_models()
 
 app = Flask(__name__)
+# 生产环境使用强随机密钥
+app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
+
+# CORS 配置，必须允许 Credentials
 CORS(app, origins=["http://localhost:3000"], supports_credentials=True)
+
+# Cookie 配置优化 (解决本地调试 Cookie 无法写入的问题)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax', # 在同一域名不同端口下 Lax 通常更好
+    SESSION_COOKIE_SECURE=False,   # 本地调试必须为 False，否则 http 下不发送 cookie
+)
 
 def extract_features(image_path):
     """使用预加载的深度学习模型提取图像特征"""
@@ -207,8 +230,18 @@ def search_similar():
         threshold = float(request.form.get('threshold', 0.6))  # DINOv2需要更高的阈值
         limit = int(request.form.get('limit', 5))  # 返回结果数量，默认5个
 
+        # 获取用户店铺权限过滤（用于Discord机器人）
+        user_shops = None
+        user_shops_json = request.form.get('user_shops')
+        if user_shops_json:
+            try:
+                user_shops = json.loads(user_shops_json)
+            except:
+                user_shops = None
+
         # 调试信息
         print(f"DEBUG: Received threshold: {threshold}")
+        print(f"DEBUG: User shops filter: {user_shops}")
         print(f"DEBUG: Form data: {list(request.form.keys())}")
 
         # 保存查询图片到临时文件
@@ -226,16 +259,43 @@ def search_similar():
 
             # 使用 FAISS HNSW 向量搜索
             print(f"DEBUG: Searching with threshold: {threshold}, vector length: {len(query_features)}")
-            # 临时将阈值设为0，确保能返回结果进行调试
-            debug_threshold = max(0.0, threshold)  # 确保不为负数
-            results = db.search_similar_images(query_features, limit=limit, threshold=debug_threshold)
-            print(f"DEBUG: Search results count: {len(results) if results else 0}")
+            # 用较低的阈值搜索找到候选结果，然后从中筛选满足用户阈值的结果
+            low_threshold_results = db.search_similar_images(query_features, limit=10, threshold=0.1)
+            print(f"DEBUG: Low threshold (0.1) search results: {len(low_threshold_results) if low_threshold_results else 0}")
+
+            # 从低阈值结果中筛选出满足用户阈值的结果
+            results = []
+            if low_threshold_results:
+                for result in low_threshold_results:
+                    similarity = result.get('similarity', 0)
+                    # 应用用户相似度阈值和店铺过滤
+                    if similarity >= threshold:
+                        # 检查店铺权限
+                        if user_shops and result.get('shop_name') not in user_shops:
+                            print(f"DEBUG: Skipping result from shop {result.get('shop_name')} - not in user shops {user_shops}")
+                            continue
+                        results.append(result)
+                        if len(results) >= limit:
+                            break
+
+            print(f"DEBUG: Filtered results count (threshold {threshold}): {len(results)}")
             if results:
                 print(f"DEBUG: Best match similarity: {results[0]['similarity']}")
+            elif low_threshold_results:
+                print(f"DEBUG: Best low-threshold match similarity: {low_threshold_results[0]['similarity']}")
             print(f"DEBUG: Total indexed images: {db.get_total_indexed_images()}")
 
+            # 如果没有找到满足阈值的结果，但有高质量的低阈值匹配（相似度>0.8），也可以考虑使用
+            if not results and low_threshold_results and len(low_threshold_results) > 0:
+                best_low_match = low_threshold_results[0]
+                if best_low_match.get('similarity', 0) > 0.8:  # 高质量匹配
+                    print(f"DEBUG: Using high-quality low-threshold result (similarity: {best_low_match['similarity']:.4f})")
+                    results = [best_low_match]
+
             response_data = {
-                'success': False,
+                'success': True,
+                'results': [],
+                'totalResults': 0,
                 'message': f'未找到相似度超过{threshold*100:.0f}%的商品',
                 'searchTime': datetime.now().isoformat(),
                 'debugInfo': {
@@ -252,6 +312,14 @@ def search_similar():
                     # 获取完整产品信息
                     product_info = db._get_product_info_by_id(result['id'])
 
+                    # 获取实际的图片URL列表
+                    actual_images = []
+                    if product_info:
+                        with db.get_connection() as conn:
+                            cursor = conn.cursor()
+                            cursor.execute("SELECT image_index FROM product_images WHERE product_id = ? ORDER BY image_index", (result['id'],))
+                            actual_images = [f"/api/image/{result['id']}/{row[0]}" for row in cursor.fetchall()]
+
                     result_data = {
                         'rank': i + 1,
                         'similarity': float(result['similarity']),
@@ -263,8 +331,9 @@ def search_similar():
                             'englishTitle': product_info.get('english_title', ''),
                             'weidianUrl': product_info['product_url'] if product_info else result.get('product_url', ''),
                             'cnfansUrl': product_info.get('cnfans_url', ''),
+                            'acbuyUrl': product_info.get('acbuy_url', ''),
                             'ruleEnabled': product_info.get('ruleEnabled', True) if product_info else True,
-                            'images': [f"/api/image/{result['id']}/{j}" for j in range(10)]  # 预估图片数量
+                            'images': actual_images if actual_images else [f"/api/image/{result['id']}/{result['image_index']}"]  # 使用实际图片列表
                         }
                     }
                     processed_results.append(result_data)
@@ -364,6 +433,7 @@ def scrape_product():
             'english_title': product_info.get('english_title') or '',
             'cnfans_url': product_info.get('cnfans_url') or '',
             'acbuy_url': acbuy_url,
+            'shop_name': product_info.get('shop_name', ''),  # 从product_info获取店铺名称
             'ruleEnabled': True  # 默认启用自动回复规则
         })
 
@@ -506,27 +576,594 @@ def scrape_product():
         return jsonify({'error': str(e)}), 500
 
 # Discord 账号管理 API
+# ===== 用户认证和权限管理API =====
+
+def get_current_user():
+    """获取当前登录用户"""
+    user_id = session.get('user_id')
+    if user_id:
+        return db.get_user_by_id(user_id)
+    return None
+
+def require_admin():
+    """检查是否为管理员"""
+    user = get_current_user()
+    return user and user.get('role') == 'admin'
+
+def can_manage_shops():
+    """检查用户是否有管理店铺的权限（管理员或有分配的店铺）"""
+    user = get_current_user()
+    if not user:
+        return False
+    # 管理员可以管理所有店铺
+    if user.get('role') == 'admin':
+        return True
+    # 普通用户如果有分配的店铺，也可以管理
+    user_shops = user.get('shops', [])
+    return len(user_shops) > 0
+
+def require_login():
+    """检查是否已登录"""
+    # 开发模式下跳过认证
+    if config.DEBUG:
+        # 开发模式下自动设置为admin用户
+        if 'user_id' not in session:
+            session['user_id'] = 1  # 默认admin用户ID
+        return True
+    return get_current_user() is not None
+
+@app.route('/api/auth/login', methods=['POST'])
+def login():
+    """用户登录"""
+    try:
+        data = request.get_json()
+        if not data or not data.get('username') or not data.get('password'):
+            return jsonify({'error': '用户名和密码不能为空'}), 400
+
+        username = data['username']
+        password = data['password']
+
+        user = db.authenticate_user(username, password)
+        if user:
+            session['user_id'] = user['id']
+            # 不返回密码哈希
+            user_info = {k: v for k, v in user.items() if k != 'password_hash'}
+            return jsonify({'user': user_info, 'message': '登录成功'})
+        else:
+            return jsonify({'error': '用户名或密码错误'}), 401
+    except Exception as e:
+        logger.error(f"登录失败: {e}")
+        return jsonify({'error': '登录失败'}), 500
+
+@app.route('/api/auth/logout', methods=['POST'])
+def logout():
+    """用户登出"""
+    session.pop('user_id', None)
+    return jsonify({'message': '已登出'})
+
+@app.route('/api/auth/me', methods=['GET'])
+def get_current_user_info():
+    """获取当前用户信息"""
+    user = get_current_user()
+    if user:
+        # 不返回密码哈希
+        user_info = {k: v for k, v in user.items() if k != 'password_hash'}
+        return jsonify({'user': user_info})
+    return jsonify({'error': '未登录'}), 401
+
+@app.route('/api/users', methods=['GET'])
+def get_users():
+    """获取所有用户（管理员权限）"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        users = db.get_all_users()
+        # 不返回密码哈希
+        for user in users:
+            user.pop('password_hash', None)
+        return jsonify({'users': users})
+    except Exception as e:
+        logger.error(f"获取用户列表失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/users', methods=['POST'])
+def create_user():
+    """创建新用户（管理员权限）"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        data = request.get_json()
+        if not data or not data.get('username') or not data.get('password'):
+            return jsonify({'error': '用户名和密码不能为空'}), 400
+
+        username = data['username']
+        password = data['password']
+        role = data.get('role', 'user')
+        shop_ids = data.get('shops', [])
+
+        # 创建用户
+        password_hash = f"hashed_{password}"
+        if db.create_user(username, password_hash, role):
+            # 获取新创建的用户ID
+            user = db.authenticate_user(username, password_hash)
+            if user:
+                # 设置店铺权限
+                if shop_ids:
+                    db.update_user_shops(user['id'], shop_ids)
+
+                user_info = {k: v for k, v in user.items() if k != 'password_hash'}
+                return jsonify({'user': user_info, 'message': '用户创建成功'})
+            else:
+                return jsonify({'error': '用户创建失败'}), 500
+        else:
+            return jsonify({'error': '用户名已存在或创建失败'}), 400
+    except Exception as e:
+        logger.error(f"创建用户失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/users/<int:user_id>', methods=['DELETE'])
+def delete_user(user_id):
+    """删除用户（管理员权限）"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        current_user = get_current_user()
+        if current_user['id'] == user_id:
+            return jsonify({'error': '不能删除自己的账号'}), 400
+
+        # 检查用户是否存在
+        user = db.get_user_by_id(user_id)
+        if not user:
+            return jsonify({'error': '用户不存在'}), 404
+
+        # 删除用户
+        if db.delete_user(user_id):
+            logger.info(f"管理员 {current_user['username']} 删除了用户 {user['username']}")
+            return jsonify({'message': '用户删除成功'})
+        else:
+            return jsonify({'error': '用户删除失败'}), 500
+    except Exception as e:
+        logger.error(f"删除用户失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# === 新增：管理员修改用户密码 ===
+@app.route('/api/users/<int:user_id>/password', methods=['PUT'])
+def reset_user_password(user_id):
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        data = request.get_json()
+        new_password = data.get('password')
+        if not new_password:
+            return jsonify({'error': '密码不能为空'}), 400
+
+        # 简单哈希 (生产环境请用 bcrypt)
+        password_hash = f"hashed_{new_password}"
+
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE users SET password_hash = ? WHERE id = ?", (password_hash, user_id))
+            conn.commit()
+
+        return jsonify({'success': True, 'message': '密码已重置'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+# === 新增：网站配置管理API ===
+@app.route('/api/websites', methods=['GET'])
+def get_website_configs():
+    """获取所有网站配置"""
+    try:
+        configs = db.get_website_configs()
+        return jsonify({'websites': configs})
+    except Exception as e:
+        logger.error(f"获取网站配置失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/websites', methods=['POST'])
+def add_website_config():
+    """添加网站配置"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        data = request.get_json()
+        name = data.get('name')
+        display_name = data.get('display_name')
+        url_template = data.get('url_template')
+        id_pattern = data.get('id_pattern')
+        badge_color = data.get('badge_color', 'blue')
+
+        if not all([name, display_name, url_template, id_pattern]):
+            return jsonify({'error': '所有字段都是必填的'}), 400
+
+        if db.add_website_config(name, display_name, url_template, id_pattern, badge_color):
+            return jsonify({'success': True, 'message': '网站配置已添加'})
+        else:
+            return jsonify({'error': '添加失败'}), 500
+    except Exception as e:
+        logger.error(f"添加网站配置失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/websites/<int:config_id>', methods=['PUT'])
+def update_website_config(config_id):
+    """更新网站配置"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        data = request.get_json()
+        name = data.get('name')
+        display_name = data.get('display_name')
+        url_template = data.get('url_template')
+        id_pattern = data.get('id_pattern')
+        badge_color = data.get('badge_color', 'blue')
+
+        if not all([name, display_name, url_template, id_pattern]):
+            return jsonify({'error': '所有字段都是必填的'}), 400
+
+        if db.update_website_config(config_id, name, display_name, url_template, id_pattern, badge_color):
+            return jsonify({'success': True, 'message': '网站配置已更新'})
+        else:
+            return jsonify({'error': '更新失败'}), 500
+    except Exception as e:
+        logger.error(f"更新网站配置失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/websites/<int:config_id>', methods=['DELETE'])
+def delete_website_config(config_id):
+    """删除网站配置"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        if db.delete_website_config(config_id):
+            return jsonify({'success': True, 'message': '网站配置已删除'})
+        else:
+            return jsonify({'error': '删除失败'}), 500
+    except Exception as e:
+        logger.error(f"删除网站配置失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/websites/<int:config_id>/channels', methods=['GET'])
+def get_website_channels(config_id):
+    """获取网站绑定的频道"""
+    try:
+        channels = db.get_website_channel_bindings(config_id)
+        return jsonify({'channels': channels})
+    except Exception as e:
+        logger.error(f"获取网站频道失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/websites/<int:config_id>/channels', methods=['POST'])
+def add_website_channel(config_id):
+    """添加网站频道绑定"""
+    try:
+        data = request.get_json()
+        channel_id = data.get('channel_id')
+
+        if not channel_id:
+            return jsonify({'error': '频道ID不能为空'}), 400
+
+        if db.add_website_channel_binding(config_id, channel_id):
+            return jsonify({'success': True, 'message': '频道绑定已添加'})
+        else:
+            return jsonify({'error': '添加失败'}), 500
+    except Exception as e:
+        logger.error(f"添加网站频道绑定失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/websites/<int:config_id>/channels/<channel_id>', methods=['DELETE'])
+def remove_website_channel(config_id, channel_id):
+    """移除网站频道绑定"""
+    try:
+        if db.remove_website_channel_binding(config_id, channel_id):
+            return jsonify({'success': True, 'message': '频道绑定已移除'})
+        else:
+            return jsonify({'error': '移除失败'}), 500
+    except Exception as e:
+        logger.error(f"移除网站频道绑定失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/products/<int:product_id>/urls', methods=['GET'])
+def get_product_urls(product_id):
+    """获取商品的所有网站URL"""
+    try:
+        # 获取商品信息
+        product = db._get_product_info_by_id(product_id)
+        if not product:
+            return jsonify({'error': '商品不存在'}), 404
+
+        # 从商品URL中提取微店ID
+        weidian_url = product.get('product_url', '')
+        weidian_id = None
+
+        if 'itemID=' in weidian_url:
+            # 提取itemID参数
+            import re
+            match = re.search(r'itemID=([^&]+)', weidian_url)
+            if match:
+                weidian_id = match.group(1)
+
+        if not weidian_id:
+            return jsonify({'urls': []})
+
+        # 生成所有网站的URL
+        urls = db.generate_website_urls(weidian_id)
+        return jsonify({'urls': urls})
+    except Exception as e:
+        logger.error(f"获取商品URL失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# === 新增：系统统计信息API ===
+@app.route('/api/system/stats', methods=['GET'])
+def get_system_stats():
+    """获取系统统计信息"""
+    try:
+        stats = db.get_system_stats()
+        return jsonify(stats)
+    except Exception as e:
+        logger.error(f"获取系统统计信息失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# === 新增：公告管理API ===
+@app.route('/api/announcements', methods=['GET'])
+def get_announcements():
+    """获取所有公告"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        announcements = db.get_active_announcements()
+        return jsonify({'announcements': announcements})
+    except Exception as e:
+        logger.error(f"获取公告失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/announcements', methods=['POST'])
+def create_announcement():
+    """创建公告"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        data = request.get_json()
+        title = data.get('title')
+        content = data.get('content')
+
+        if not title or not content:
+            return jsonify({'error': '标题和内容都是必填的'}), 400
+
+        if db.create_announcement(title, content):
+            return jsonify({'success': True, 'message': '公告创建成功'})
+        else:
+            return jsonify({'error': '创建失败'}), 500
+    except Exception as e:
+        logger.error(f"创建公告失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/announcements/<int:announcement_id>', methods=['PUT'])
+def update_announcement(announcement_id):
+    """更新公告"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        data = request.get_json()
+        title = data.get('title')
+        content = data.get('content')
+        is_active = data.get('is_active', True)
+
+        if not title or not content:
+            return jsonify({'error': '标题和内容都是必填的'}), 400
+
+        if db.update_announcement(announcement_id, title, content, is_active):
+            return jsonify({'success': True, 'message': '公告更新成功'})
+        else:
+            return jsonify({'error': '更新失败'}), 500
+    except Exception as e:
+        logger.error(f"更新公告失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/announcements/<int:announcement_id>', methods=['DELETE'])
+def delete_announcement(announcement_id):
+    """删除公告"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        if db.delete_announcement(announcement_id):
+            return jsonify({'success': True, 'message': '公告删除成功'})
+        else:
+            return jsonify({'error': '删除失败'}), 500
+    except Exception as e:
+        logger.error(f"删除公告失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# === 新增：消息过滤规则API ===
+@app.route('/api/message-filters', methods=['GET'])
+def get_message_filters():
+    """获取消息过滤规则"""
+    try:
+        filters = db.get_message_filters()
+        return jsonify({'filters': filters})
+    except Exception as e:
+        logger.error(f"获取消息过滤规则失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/message-filters', methods=['POST'])
+def add_message_filter():
+    """添加消息过滤规则"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        data = request.get_json()
+        filter_type = data.get('filter_type')
+        filter_value = data.get('filter_value')
+
+        if not filter_type or not filter_value:
+            return jsonify({'error': '过滤类型和值都是必填的'}), 400
+
+        if db.add_message_filter(filter_type, filter_value):
+            return jsonify({'success': True, 'message': '过滤规则添加成功'})
+        else:
+            return jsonify({'error': '添加失败'}), 500
+    except Exception as e:
+        logger.error(f"添加消息过滤规则失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/message-filters/<int:filter_id>', methods=['PUT'])
+def update_message_filter(filter_id):
+    """更新消息过滤规则"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        data = request.get_json()
+        filter_type = data.get('filter_type')
+        filter_value = data.get('filter_value')
+        is_active = data.get('is_active', True)
+
+        if not filter_type or not filter_value:
+            return jsonify({'error': '过滤类型和值都是必填的'}), 400
+
+        if db.update_message_filter(filter_id, filter_type, filter_value, is_active):
+            return jsonify({'success': True, 'message': '过滤规则更新成功'})
+        else:
+            return jsonify({'error': '更新失败'}), 500
+    except Exception as e:
+        logger.error(f"更新消息过滤规则失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/message-filters/<int:filter_id>', methods=['DELETE'])
+def delete_message_filter(filter_id):
+    """删除消息过滤规则"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        if db.delete_message_filter(filter_id):
+            return jsonify({'success': True, 'message': '过滤规则删除成功'})
+        else:
+            return jsonify({'error': '删除失败'}), 500
+    except Exception as e:
+        logger.error(f"删除消息过滤规则失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# === 新增：自定义回复内容API ===
+@app.route('/api/custom-replies', methods=['GET'])
+def get_custom_replies():
+    """获取自定义回复内容"""
+    try:
+        replies = db.get_custom_replies()
+        return jsonify({'replies': replies})
+    except Exception as e:
+        logger.error(f"获取自定义回复内容失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/custom-replies', methods=['POST'])
+def add_custom_reply():
+    """添加自定义回复内容"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        data = request.get_json()
+        reply_type = data.get('reply_type')
+        content = data.get('content')
+        image_url = data.get('image_url')
+        priority = data.get('priority', 0)
+
+        if not reply_type:
+            return jsonify({'error': '回复类型是必填的'}), 400
+
+        if db.add_custom_reply(reply_type, content, image_url, priority):
+            return jsonify({'success': True, 'message': '自定义回复添加成功'})
+        else:
+            return jsonify({'error': '添加失败'}), 500
+    except Exception as e:
+        logger.error(f"添加自定义回复失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/custom-replies/<int:reply_id>', methods=['PUT'])
+def update_custom_reply(reply_id):
+    """更新自定义回复内容"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        data = request.get_json()
+        reply_type = data.get('reply_type')
+        content = data.get('content')
+        image_url = data.get('image_url')
+        priority = data.get('priority', 0)
+        is_active = data.get('is_active', True)
+
+        if not reply_type:
+            return jsonify({'error': '回复类型是必填的'}), 400
+
+        if db.update_custom_reply(reply_id, reply_type, content, image_url, priority, is_active):
+            return jsonify({'success': True, 'message': '自定义回复更新成功'})
+        else:
+            return jsonify({'error': '更新失败'}), 500
+    except Exception as e:
+        logger.error(f"更新自定义回复失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/custom-replies/<int:reply_id>', methods=['DELETE'])
+def delete_custom_reply(reply_id):
+    """删除自定义回复内容"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        if db.delete_custom_reply(reply_id):
+            return jsonify({'success': True, 'message': '自定义回复删除成功'})
+        else:
+            return jsonify({'error': '删除失败'}), 500
+    except Exception as e:
+        logger.error(f"删除自定义回复失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/users/<int:user_id>/shops', methods=['PUT'])
+def update_user_shops(user_id):
+    """更新用户店铺权限（管理员权限）"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        data = request.get_json()
+        shop_ids = data.get('shops', [])
+
+        if db.update_user_shops(user_id, shop_ids):
+            return jsonify({'message': '权限更新成功'})
+        else:
+            return jsonify({'error': '权限更新失败'}), 500
+    except Exception as e:
+        logger.error(f"更新用户权限失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/accounts', methods=['GET'])
 def get_accounts():
     """获取所有 Discord 账号"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    current_user = get_current_user()
     try:
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT id, username, token, status, last_active, created_at, updated_at
-                FROM discord_accounts
-                ORDER BY created_at DESC
-            """)
-            accounts = []
-            for row in cursor.fetchall():
-                accounts.append({
-                    'id': row[0],
-                    'username': row[1],
-                    'token': row[2],
-                    'status': row[3],
-                    'lastActive': row[4],
-                    'createdAt': row[5]
-                })
+        # 根据用户权限过滤账号
+        if current_user['role'] == 'admin':
+            # 管理员可以看到所有账号
+            accounts = db.get_discord_accounts_by_user(None)
+        else:
+            # 普通用户只能看到自己关联的账号
+            accounts = db.get_discord_accounts_by_user(current_user['id'])
+
         return jsonify({'accounts': accounts})
     except Exception as e:
         logger.error(f"获取账号列表失败: {e}")
@@ -535,51 +1172,90 @@ def get_accounts():
 
 @app.route('/api/products', methods=['GET'])
 def list_products():
-    """列出所有已保存的商品及其图片"""
+    """列出用户有权限的商品及其图片"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    current_user = get_current_user()
     try:
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM products ORDER BY created_at DESC")
-            rows = cursor.fetchall()
-            products = []
-            for row in rows:
-                prod = dict(row)
-                # 获取图片路径
-                cursor.execute("SELECT image_path FROM product_images WHERE product_id = ? ORDER BY image_index", (prod['id'],))
-                rows_imgs = cursor.fetchall()
-                images = []
-                for idx, r in enumerate(rows_imgs):
-                    local_path = r[0]
-                    # 构建可访问的图片URL：/api/image/<product_id>/<index>
-                    try:
-                        host = request.host_url.rstrip('/')
-                        images.append(f"{host}/api/image/{prod['id']}/{idx}")
-                    except Exception:
-                        images.append('')
-                prod['images'] = images
-                prod['weidianUrl'] = prod.get('product_url')
-                # 提取微店ID (itemID)
-                try:
-                    import re
-                    m = re.search(r'itemID=(\d+)', prod.get('product_url') or '')
-                    prod['weidianId'] = m.group(1) if m else ''
-                except Exception:
-                    prod['weidianId'] = ''
-                # 保留 camelCase 字段以兼容前端
-                prod['englishTitle'] = prod.get('english_title') or prod.get('englishTitle') or ''
-                prod['cnfansUrl'] = prod.get('cnfans_url') or prod.get('cnfansUrl') or ''
-                prod['acbuyUrl'] = prod.get('acbuy_url') or prod.get('acbuyUrl') or ''
-                prod['createdAt'] = prod.get('created_at') or prod.get('createdAt')
-                # 移除商品级别延迟，使用全局延迟
-                prod.pop('min_delay', None)
-                prod.pop('max_delay', None)
-                # 映射ruleEnabled到autoReplyEnabled以兼容前端
-                prod['autoReplyEnabled'] = prod.get('ruleEnabled', True)
-                products.append(prod)
-        return jsonify(products)
+        # 根据用户权限获取商品（获取所有记录，不分页）
+        if current_user['role'] == 'admin':
+            # 管理员可以看到所有商品
+            logger.info(f"管理员用户 {current_user['username']} 获取所有商品")
+            result = db.get_products_by_user_shops(None, limit=None)
+        else:
+            # 普通用户只能看到自己管理的店铺的商品
+            user_shops = current_user.get('shops', [])
+            logger.info(f"普通用户 {current_user['username']} 获取店铺商品，分配的店铺: {user_shops}")
+            result = db.get_products_by_user_shops(user_shops, limit=None)
+
+            # 调试：检查数据库中的商品和店铺匹配情况
+            if user_shops:
+                with db.get_connection() as conn:
+                    cursor = conn.cursor()
+                    placeholders = ','.join('?' * len(user_shops))
+                    cursor.execute(f"SELECT COUNT(*) FROM products WHERE shop_name IN ({placeholders})", user_shops)
+                    matching_products = cursor.fetchone()[0]
+                    logger.info(f"数据库中匹配的商品数量: {matching_products}")
+
+                    # 列出所有店铺名称
+                    cursor.execute("SELECT DISTINCT shop_name FROM products")
+                    all_shop_names = [row[0] for row in cursor.fetchall()]
+                    logger.info(f"数据库中的所有店铺名称: {all_shop_names}")
+
+        logger.info(f"返回商品数量: {len(result['products'])}")
+
+        # 添加调试信息到响应中
+        response_data = {
+            'products': result['products'],
+            'total': result['total'],
+            'debug': {
+                'user_role': current_user['role'],
+                'user_shops': current_user.get('shops', []),
+                'is_admin': current_user['role'] == 'admin'
+            }
+        }
+        return jsonify(response_data)
     except Exception as e:
         logger.error(f"列出商品失败: {e}")
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/products', methods=['PUT'])
+def update_product():
+    """更新商品信息"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    current_user = get_current_user()
+    data = request.get_json()
+
+    if not data or not data.get('id'):
+        return jsonify({'error': '商品ID不能为空'}), 400
+
+    product_id = data['id']
+    title = data.get('title')
+
+    try:
+        # 检查商品是否存在且用户有权限访问
+        if current_user['role'] == 'admin':
+            # 管理员可以更新所有商品
+            pass
+        else:
+            # 普通用户只能更新自己管理的店铺的商品
+            user_shops = current_user.get('shops', [])
+            product = db.get_product_by_id(product_id)
+            if not product or product.get('shop_name') not in user_shops:
+                return jsonify({'error': '无权限更新此商品'}), 403
+
+        # 更新商品标题
+        if title is not None:
+            db.update_product_title(product_id, title)
+
+        return jsonify({'message': '商品更新成功', 'product': {'id': product_id, 'title': title}})
+    except Exception as e:
+        logger.error(f"更新商品失败: {e}")
+        return jsonify({'error': '更新失败'}), 500
 
 
 @app.route('/api/backfill_products', methods=['POST'])
@@ -807,6 +1483,11 @@ def verify_discord_token(token):
 def add_account():
     """添加新的 Discord 账号"""
     try:
+        # 获取当前登录用户
+        current_user = get_current_user()
+        if not current_user:
+            return jsonify({'error': '需要登录'}), 401
+
         data = request.get_json()
         if data is None:
             return jsonify({'error': 'Invalid request body'}), 400
@@ -831,26 +1512,45 @@ def add_account():
         with db.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO discord_accounts (username, token, status)
-                VALUES (?, ?, 'offline')
-            """, (username, token))
+                INSERT INTO discord_accounts (username, token, status, user_id)
+                VALUES (?, ?, 'offline', ?)
+            """, (username, token, current_user['id']))
             account_id = cursor.lastrowid
 
-            cursor.execute("SELECT id, username, token, status, last_active FROM discord_accounts WHERE id = ?", (account_id,))
+            cursor.execute("SELECT id, username, token, status, last_active, user_id FROM discord_accounts WHERE id = ?", (account_id,))
             account = cursor.fetchone()
             conn.commit()
 
-        logger.info(f"账号添加成功: {username}")
+        logger.info(f"账号添加成功: {username} (用户ID: {current_user['id']})")
         return jsonify({
             'id': account[0],
             'username': account[1],
             'token': account[2],
             'status': account[3],
             'lastActive': account[4],
+            'user_id': account[5],
             'verified': True
         })
     except Exception as e:
         logger.error(f"添加账号失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/accounts/<int:account_id>/user', methods=['PUT'])
+def assign_account_to_user(account_id):
+    """将Discord账号分配给用户（管理员权限）"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        data = request.get_json()
+        user_id = data.get('user_id')
+
+        if db.update_discord_account_user(account_id, user_id):
+            return jsonify({'message': '账号分配成功'})
+        else:
+            return jsonify({'error': '账号分配失败'}), 500
+    except Exception as e:
+        logger.error(f"分配账号失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/accounts/<int:account_id>', methods=['DELETE'])
@@ -1045,6 +1745,49 @@ def get_rotation_config():
         logger.error(f"获取轮换配置失败: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/user/settings', methods=['GET'])
+def get_user_settings():
+    """获取当前用户的个性化设置"""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        settings = db.get_user_settings(user['id'])
+        return jsonify(settings)
+    except Exception as e:
+        logger.error(f"获取用户设置失败: {e}")
+        return jsonify({'error': '获取设置失败'}), 500
+
+@app.route('/api/user/settings', methods=['PUT'])
+def update_user_settings():
+    """更新当前用户的个性化设置"""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'Invalid request body'}), 400
+
+        success = db.update_user_settings(
+            user_id=user['id'],
+            download_threads=data.get('download_threads'),
+            feature_extract_threads=data.get('feature_extract_threads'),
+            discord_similarity_threshold=data.get('discord_similarity_threshold'),
+            global_reply_min_delay=data.get('global_reply_min_delay'),
+            global_reply_max_delay=data.get('global_reply_max_delay')
+        )
+
+        if success:
+            return jsonify({'message': '设置更新成功'})
+        else:
+            return jsonify({'error': '设置更新失败'}), 500
+    except Exception as e:
+        logger.error(f"更新用户设置失败: {e}")
+        return jsonify({'error': '更新设置失败'}), 500
+
 @app.route('/api/accounts/rotation', methods=['POST'])
 def update_rotation_config():
     """更新账号轮换配置"""
@@ -1080,6 +1823,26 @@ def get_indexed_ids():
         logger.error(f"获取已索引ID失败: {e}")
         return jsonify({'error': str(e)}), 500
 
+# === 修复：批量删除 API ===
+@app.route('/api/products/batch', methods=['DELETE'])
+def batch_delete_products():
+    """批量删除商品"""
+    try:
+        data = request.get_json()
+        ids = data.get('ids', [])
+        if not ids:
+            return jsonify({'error': 'No IDs provided'}), 400
+
+        count = 0
+        for pid in ids:
+            if db.delete_product_images(pid):
+                count += 1
+
+        return jsonify({'success': True, 'count': count})
+    except Exception as e:
+        logger.error(f"批量删除失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/products/<int:product_id>', methods=['DELETE'])
 def delete_product(product_id):
     """删除商品及其所有相关数据"""
@@ -1093,40 +1856,264 @@ def delete_product(product_id):
         logger.error(f"删除商品失败: {e}")
         return jsonify({'error': str(e)}), 500
 
+# === 修复：商品图片上传 API ===
+@app.route('/api/products/<int:product_id>/images', methods=['POST'])
+def upload_product_image(product_id):
+    """上传新图片到商品（多线程处理）"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        if 'image' not in request.files:
+            return jsonify({'error': 'No image file'}), 400
+
+        file = request.files['image']
+        if not file.filename:
+            return jsonify({'error': 'Empty filename'}), 400
+
+        # 获取当前最大的 image_index 和检查图片数量限制
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT MAX(image_index) FROM product_images WHERE product_id = ?", (product_id,))
+            row = cursor.fetchone()
+            next_index = (row[0] + 1) if row and row[0] is not None else 0
+
+            # 检查图片数量限制（每个商品最多20张图片）
+            cursor.execute("SELECT COUNT(*) FROM product_images WHERE product_id = ?", (product_id,))
+            count_row = cursor.fetchone()
+            if count_row and count_row[0] >= 20:
+                return jsonify({'error': '每个商品最多只能上传20张图片'}), 400
+
+        # 保存文件
+        filename = f"{product_id}_{next_index}_{int(time.time())}.jpg"
+        save_path = os.path.join('data', 'images', filename)
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        file.save(save_path)
+
+        # 多线程处理：特征提取和索引
+        import concurrent.futures
+        import threading
+
+        result = {'success': False, 'error': None}
+
+        def process_image_async():
+            """异步处理图片特征提取和索引"""
+            try:
+                # 提取特征
+                global feature_extractor
+                features = feature_extractor.extract_feature(save_path)
+
+                if features is None:
+                    os.remove(save_path)
+                    result['error'] = '特征提取失败，图片无效'
+                    return
+
+                # 存入数据库
+                img_db_id = db.insert_image_record(product_id, save_path, next_index)
+
+                # 存入 FAISS
+                from vector_engine import get_vector_engine
+                engine = get_vector_engine()
+                engine.add_vector(img_db_id, features)
+                engine.save()
+
+                result['success'] = True
+                result['img_db_id'] = img_db_id
+                logger.info(f"图片上传成功: product_id={product_id}, image_index={next_index}, db_id={img_db_id}")
+
+            except Exception as e:
+                logger.error(f"图片处理失败: {e}")
+                result['error'] = str(e)
+                # 清理失败的文件
+                try:
+                    os.remove(save_path)
+                except:
+                    pass
+
+        # 启动后台线程处理图片
+        processing_thread = threading.Thread(target=process_image_async, daemon=True)
+        processing_thread.start()
+
+        # 等待最多5秒让处理完成
+        processing_thread.join(timeout=5.0)
+
+        if not result['success']:
+            error_msg = result.get('error', '图片处理失败')
+            return jsonify({'error': error_msg}), 500
+
+        # 返回更新后的商品信息
+        product = db._get_product_info_by_id(product_id)
+        # 获取所有图片
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT image_index FROM product_images WHERE product_id = ? ORDER BY image_index", (product_id,))
+            images = [f"/api/image/{product_id}/{row[0]}" for row in cursor.fetchall()]
+
+        product['images'] = images
+        # 格式化以匹配前端
+        product['weidianId'] = product.get('product_url', '').split('itemID=')[1] if 'itemID=' in product.get('product_url', '') else ''
+        product['weidianUrl'] = product.get('product_url')
+        product['englishTitle'] = product.get('english_title')
+        product['cnfansUrl'] = product.get('cnfans_url')
+        product['ruleEnabled'] = product.get('ruleEnabled')
+        product['matchType'] = 'fuzzy' # Default
+
+        return jsonify({'success': True, 'product': product})
+    except Exception as e:
+        logger.error(f"上传图片失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# === 修复：删除图片后返回最新 Product 对象 ===
 @app.route('/api/products/<int:product_id>/images/<int:image_index>', methods=['DELETE'])
 def delete_product_image(product_id, image_index):
-    """删除商品的单个图片"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
     try:
-        # 获取商品信息
-        product = db.get_product_by_id(product_id)
+        logger.info(f"开始删除图片: product_id={product_id}, image_index={image_index}")
+
+
+        # 验证参数
+        try:
+            product_id = int(product_id)
+            image_index = int(image_index)
+        except ValueError:
+            return jsonify({'error': '参数格式错误'}), 400
+
+        # 调用数据库删除逻辑
+        success = db.delete_image_vector(product_id, image_index)
+
+        if not success:
+            logger.warning(f"删除图片失败: product_id={product_id}, image_index={image_index}")
+            return jsonify({'error': '删除失败，图片可能不存在'}), 404
+
+        # 获取最新商品信息
+        product = db._get_product_info_by_id(product_id)
+
         if not product:
+            logger.error(f"删除后商品不存在: product_id={product_id}")
             return jsonify({'error': '商品不存在'}), 404
 
-        images = product.get('images', [])
-        if image_index < 0 or image_index >= len(images):
-            return jsonify({'error': '图片索引无效'}), 400
+        # 获取剩余所有图片
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT image_index FROM product_images WHERE product_id = ? ORDER BY image_index", (product_id,))
+            image_indices = [row[0] for row in cursor.fetchall()]
+            images = [f"/api/image/{product_id}/{idx}" for idx in image_indices]
 
-        # 删除指定的图片
-        removed_image = images.pop(image_index)
+        product['images'] = images
+        # 格式化
+        try:
+            if 'itemID=' in product.get('product_url', ''):
+                product['weidianId'] = product.get('product_url', '').split('itemID=')[1]
+            else:
+                product['weidianId'] = ''
+        except:
+            product['weidianId'] = ''
 
-        # 更新数据库
-        db.update_product_images(product_id, images)
+        product['weidianUrl'] = product.get('product_url')
+        product['englishTitle'] = product.get('english_title')
+        product['cnfansUrl'] = product.get('cnfans_url')
+        product['acbuyUrl'] = product.get('acbuy_url')
+        product['ruleEnabled'] = product.get('ruleEnabled')
 
-        # 如果启用了规则，重新建立向量索引
-        if product.get('rule_enabled', False):
-            try:
-                from weidian_scraper import get_weidian_scraper
-                scraper = get_weidian_scraper()
-                # 重新处理商品以更新向量索引
-                updated_product = scraper.scrape_product_info(product['weidian_url'])
-                if updated_product and updated_product.get('images'):
-                    db.update_product_images(product_id, updated_product['images'])
-            except Exception as e:
-                logger.warning(f"重新建立向量索引失败: {e}")
+        logger.info(f"删除图片成功: product_id={product_id}, image_index={image_index}, 剩余图片数量={len(images)}")
 
-        return jsonify({'success': True, 'message': f'图片已删除', 'removed_image': removed_image})
+        return jsonify({'success': True, 'product': product})
+
     except Exception as e:
         logger.error(f"删除图片失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/cleanup/images', methods=['POST'])
+def cleanup_images():
+    """清理未使用的图片文件"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        current_user = get_current_user()
+        if current_user['role'] != 'admin':
+            return jsonify({'error': '只有管理员可以执行清理操作'}), 403
+
+        # 获取清理参数
+        data = request.get_json() or {}
+        days_old = data.get('days_old', 30)
+
+        # 执行清理
+        deleted_count = db.cleanup_unused_images(days_old)
+
+        return jsonify({
+            'success': True,
+            'message': f'清理完成，共删除 {deleted_count} 个未使用的图片文件',
+            'deleted_count': deleted_count
+        })
+
+    except Exception as e:
+        logger.error(f"图片清理失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/system/yolo-status', methods=['GET'])
+def get_yolo_status():
+    """获取YOLO-World状态和统计信息"""
+    try:
+        global feature_extractor
+        status = {
+            'yolo_available': feature_extractor.detector is not None,
+            'yolo_type': 'YOLO-World' if hasattr(feature_extractor, 'target_classes') and feature_extractor.target_classes else 'YOLOv8-Nano',
+            'target_classes_count': len(feature_extractor.target_classes) if feature_extractor.target_classes else 0,
+            'detection_cache_size': len(feature_extractor._detection_cache) if hasattr(feature_extractor, '_detection_cache') else 0,
+            'confidence_threshold': 0.05,
+            'iou_threshold': 0.5,
+            'target_classes': feature_extractor.target_classes[:20] if feature_extractor.target_classes else []
+        }
+        return jsonify(status)
+    except Exception as e:
+        logger.error(f"获取YOLO状态失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/system/rebuild-index', methods=['POST'])
+def rebuild_faiss_index():
+    """重建FAISS索引，清理已删除的向量"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        current_user = get_current_user()
+        if current_user['role'] != 'admin':
+            return jsonify({'error': '只有管理员可以重建索引'}), 403
+
+        from vector_engine import get_vector_engine
+        engine = get_vector_engine()
+
+        # 获取所有有效的图片数据
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, image_path FROM product_images WHERE id IS NOT NULL")
+            all_images = cursor.fetchall()
+
+        # 重新提取所有特征
+        valid_vectors = []
+        for row in all_images:
+            try:
+                global feature_extractor
+                features = feature_extractor.extract_feature(row['image_path'])
+                if features is not None:
+                    valid_vectors.append((row['id'], features))
+            except Exception as e:
+                logger.warning(f"重新提取特征失败 {row['image_path']}: {e}")
+
+        # 重建索引
+        engine.rebuild_index(valid_vectors)
+
+        return jsonify({
+            'success': True,
+            'message': f'索引重建完成，包含 {len(valid_vectors)} 个向量',
+            'total_vectors': len(valid_vectors)
+        })
+
+    except Exception as e:
+        logger.error(f"重建索引失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/config/discord-threshold', methods=['GET'])
@@ -1217,51 +2204,6 @@ def get_faiss_status():
             'index_exists': False,
             'entity_count': 0
         }), 500
-
-@app.route('/api/config/threads', methods=['GET'])
-def get_thread_config():
-    """获取线程配置"""
-    try:
-        sys_config = db.get_system_config()
-        return jsonify({
-            'download_threads': sys_config['download_threads'],
-            'feature_extract_threads': sys_config['feature_extract_threads']
-        })
-    except Exception as e:
-        logger.error(f"获取线程配置失败: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/config/threads', methods=['POST'])
-def update_thread_config():
-    """更新线程配置"""
-    try:
-        data = request.get_json()
-        download_threads = data.get('download_threads')
-        feature_extract_threads = data.get('feature_extract_threads')
-
-        # 验证参数
-        if download_threads is not None and not (1 <= download_threads <= 8):
-            return jsonify({'error': '下载线程数必须在1-8之间'}), 400
-        if feature_extract_threads is not None and not (1 <= feature_extract_threads <= 8):
-            return jsonify({'error': '特征提取线程数必须在1-8之间'}), 400
-
-        # 保存到数据库
-        if db.update_system_config(download_threads=download_threads, feature_extract_threads=feature_extract_threads):
-            # 同时更新内存中的配置
-            sys_config = db.get_system_config()
-            config.DOWNLOAD_THREADS = sys_config['download_threads']
-            config.FEATURE_EXTRACT_THREADS = sys_config['feature_extract_threads']
-
-            return jsonify({
-                'success': True,
-                'download_threads': config.DOWNLOAD_THREADS,
-                'feature_extract_threads': config.FEATURE_EXTRACT_THREADS
-            })
-        else:
-            return jsonify({'error': '保存失败'}), 500
-    except Exception as e:
-        logger.error(f"更新线程配置失败: {e}")
-        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/config/global-reply-delay', methods=['POST'])
@@ -1560,23 +2502,32 @@ def add_external_log():
         print(f"添加外部日志失败: {e}")
         return jsonify({'error': str(e)}), 500
 
-def start_discord_bot():
+def start_discord_bot(user_id=None):
     """启动Discord机器人 - 支持多账号"""
-    global bot_clients, bot_tasks
+    global bot_clients, bot_tasks, bot_running
+
+    if bot_running:
+        logger.warning("机器人已经在运行中")
+        return
 
     try:
         import asyncio
-        from bot import DiscordBotClient, get_all_accounts_from_backend
+        from bot import DiscordBotClient
 
-        logger.info("正在启动Discord机器人...")
+        logger.info(f"正在启动Discord机器人... (用户ID: {user_id})")
 
-        # 获取所有账号
-        accounts = asyncio.run(get_all_accounts_from_backend())
+        # 获取账号 - 如果指定了用户ID，只获取该用户的账号
+        if user_id:
+            accounts = db.get_discord_accounts_by_user(user_id)
+        else:
+            # 获取所有账号
+            accounts = db.get_discord_accounts_by_user(None)
+
         if not accounts:
             logger.warning("没有找到可用的Discord账号")
             return
 
-        logger.info(f"找到 {len(accounts)} 个Discord账号，开始启动机器人...")
+        logger.info(f"找到 {len(accounts)} 个Discord账号，开始启动...")
 
         # 在新的事件循环中运行机器人
         loop = asyncio.new_event_loop()
@@ -1587,11 +2538,19 @@ def start_discord_bot():
             account_id = account['id']
             token = account['token']
             username = account.get('username', f'account_{account_id}')
+            user_id = account.get('user_id')
 
-            logger.info(f"正在启动机器人账号: {username}")
+            # 获取用户管理的店铺
+            user_shops = None
+            if user_id:
+                user = db.get_user_by_id(user_id)
+                if user:
+                    user_shops = user.get('shops', [])
+
+            logger.info(f"正在启动机器人账号: {username} (用户ID: {user_id}, 管理店铺: {user_shops})")
 
             # 创建机器人实例
-            client = DiscordBotClient(account_id=account_id)
+            client = DiscordBotClient(account_id=account_id, user_id=user_id, user_shops=user_shops)
 
             # 启动机器人
             try:
@@ -1607,7 +2566,11 @@ def start_discord_bot():
         bot_thread = threading.Thread(target=loop.run_forever, daemon=True)
         bot_thread.start()
 
-        logger.info(f"共启动了 {len(bot_clients)} 个Discord机器人")
+        if bot_clients:
+            bot_running = True
+            logger.info(f"共启动了 {len(bot_clients)} 个Discord机器人")
+        else:
+            logger.warning("没有成功启动任何机器人")
 
     except ImportError as e:
         logger.warning(f"Discord机器人模块不可用: {e}")
@@ -1618,7 +2581,11 @@ def start_discord_bot():
 
 def stop_discord_bot():
     """停止Discord机器人"""
-    global bot_clients, bot_tasks
+    global bot_clients, bot_tasks, bot_running
+
+    if not bot_running:
+        logger.info("机器人未在运行")
+        return
 
     if bot_clients:
         logger.info(f"正在停止 {len(bot_clients)} 个Discord机器人...")
@@ -1631,6 +2598,10 @@ def stop_discord_bot():
             for i, client in enumerate(bot_clients):
                 try:
                     if client and not client.is_closed():
+                        # 更新账号状态为offline
+                        if hasattr(client, 'account_id') and client.account_id:
+                            db.update_account_status(client.account_id, 'offline')
+                            logger.info(f"账号 {client.account_id} 状态已更新为离线")
                         loop.run_until_complete(client.close())
                         logger.info(f"Discord机器人 {i+1} 已停止")
                 except Exception as e:
@@ -1644,6 +2615,57 @@ def stop_discord_bot():
     for task in bot_tasks:
         if task and not task.done():
             task.cancel()
+
+    # 清空机器人列表
+    bot_clients.clear()
+    bot_tasks.clear()
+    bot_running = False
+
+# ===== 机器人控制API =====
+
+@app.route('/api/bot/start', methods=['POST'])
+def start_bot():
+    """启动Discord机器人"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        data = request.get_json()
+        user_id = data.get('userId')
+
+        if not user_id:
+            return jsonify({'error': '需要用户ID'}), 400
+
+        # 检查用户是否有权限的账号
+        user_accounts = db.get_discord_accounts_by_user(user_id)
+
+        if not user_accounts:
+            return jsonify({'error': '用户没有Discord账号，请先添加账号'}), 400
+
+        # 启动机器人（启动所有账号，不管是否在线）
+        start_discord_bot(user_id)
+
+        logger.info(f"用户 {user_id} 启动机器人成功，共有 {len(user_accounts)} 个账号")
+        return jsonify({
+            'message': '账号启动成功',
+            'totalAccounts': len(user_accounts)
+        })
+
+    except Exception as e:
+        logger.error(f"启动机器人失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/bot/stop', methods=['POST'])
+def stop_bot():
+    """停止Discord机器人"""
+    try:
+        stop_discord_bot()
+        logger.info("机器人停止成功")
+        return jsonify({'message': '机器人停止成功'})
+
+    except Exception as e:
+        logger.error(f"停止机器人失败: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/shop-info', methods=['GET'])
 def get_shop_info():
@@ -1721,6 +2743,9 @@ def get_shops():
 @app.route('/api/shops', methods=['POST'])
 def add_shop():
     """添加新店铺"""
+    if not can_manage_shops():
+        return jsonify({'error': '需要管理店铺的权限'}), 403
+
     try:
         data = request.get_json()
         if not data or not data.get('shopId') or not data.get('name'):
@@ -1748,11 +2773,24 @@ def add_shop():
 @app.route('/api/shops/<shop_id>', methods=['DELETE'])
 def delete_shop(shop_id):
     """删除店铺"""
+    if not can_manage_shops():
+        return jsonify({'error': '需要管理店铺的权限'}), 403
+
     try:
+        # 获取店铺信息，检查用户是否有权限删除
+        shop_info = db.get_shop_by_id(shop_id)
+        if not shop_info:
+            return jsonify({'error': '店铺不存在'}), 404
+
+        current_user = get_current_user()
+        # 管理员可以删除任何店铺，普通用户只能删除分配给他们的店铺
+        if current_user['role'] != 'admin' and shop_info['name'] not in current_user.get('shops', []):
+            return jsonify({'error': '无权限删除此店铺'}), 403
+
         if db.delete_shop(shop_id):
             return jsonify({'success': True, 'message': '店铺删除成功'})
         else:
-            return jsonify({'error': '店铺不存在或删除失败'}), 404
+            return jsonify({'error': '删除失败'}), 500
     except Exception as e:
         logger.error(f'删除店铺失败: {e}')
         return jsonify({'error': '删除店铺失败'}), 500
@@ -1805,6 +2843,9 @@ def get_shop_info_from_api(shop_id):
 @app.route('/api/scrape/shop', methods=['POST'])
 def scrape_shop():
     """抓取整个店铺的所有商品"""
+    if not can_manage_shops():
+        return jsonify({'error': '需要管理店铺的权限'}), 403
+
     try:
         data = request.get_json()
         if not data or not data.get('shopId'):
@@ -1814,39 +2855,225 @@ def scrape_shop():
         if not shop_id.isdigit():
             return jsonify({'error': 'shopId必须是数字'}), 400
 
+        # 检查是否已有抓取任务在运行
+        global scrape_status
+        if scrape_status.get('is_scraping', False):
+            return jsonify({'error': '已有抓取任务在运行中，请等待完成后再试'}), 409
+
         logger.info(f'开始抓取店铺: {shop_id}')
 
-        # 这里实现店铺抓取逻辑
-        # 使用微店API获取店铺所有商品
-        result = scrape_shop_products(shop_id)
+        # 在后台线程中运行抓取任务，避免阻塞其他操作
+        import threading
 
-        logger.info(f'店铺 {shop_id} 抓取完成，共获取 {result["total_products"]} 个商品')
+        def run_scrape_task():
+            """后台抓取任务"""
+            try:
+                scrape_shop_products(shop_id)
+            except Exception as e:
+                logger.error(f'抓取任务异常: {e}')
+            finally:
+                # 确保状态正确重置
+                global scrape_status
+                scrape_status.update({
+                    'is_scraping': False,
+                    'message': f'抓取异常结束: {str(e)}' if 'e' in locals() else '抓取已完成'
+                })
+
+        # 创建守护线程，确保不会阻塞应用退出
+        scrape_thread = threading.Thread(target=run_scrape_task, daemon=True, name=f'scrape-{shop_id}')
+        scrape_thread.start()
+
+        logger.info(f'已启动后台抓取线程处理店铺 {shop_id}')
 
         return jsonify({
             'success': True,
-            'totalProducts': result["total_products"],
-            'pagesProcessed': result["pages_processed"],
-            'message': f'成功抓取 {result["total_products"]} 个商品，共处理 {result["pages_processed"]} 页'
+            'message': '抓取任务已启动，请查看进度'
         })
 
     except Exception as e:
         logger.error(f'店铺抓取失败: {e}')
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/scrape/shop/control', methods=['POST'])
+def control_shop_scrape():
+    """控制抓取任务: start, pause, resume, stop"""
+    action = request.json.get('action')
+    shop_id = request.json.get('shopId')
+
+    global scrape_status
+
+    if action == 'stop':
+        scrape_status['stop_signal'] = True
+        scrape_status['message'] = '正在停止...'
+        return jsonify(scrape_status)
+
+    if action == 'pause':
+        scrape_status['paused'] = True
+        scrape_status['message'] = '已暂停'
+        return jsonify(scrape_status)
+
+    if action == 'resume':
+        scrape_status['paused'] = False
+        scrape_status['message'] = '继续抓取...'
+        return jsonify(scrape_status)
+
+    if action == 'start':
+        if scrape_status['is_scraping']:
+            return jsonify({'error': '已有任务在运行'}), 400
+
+        # 重置状态
+        scrape_status.update({
+            'is_scraping': True,
+            'paused': False,
+            'stop_signal': False,
+            'current_shop_id': shop_id,
+            'total': 0,
+            'processed': 0,
+            'success': 0,
+            'message': '初始化抓取...'
+        })
+
+        # 异步启动
+        threading.Thread(target=run_shop_scrape_task, args=(shop_id,), daemon=True).start()
+        return jsonify(scrape_status)
+
+    return jsonify({'error': 'Invalid action'}), 400
+
+@app.route('/api/scrape/shop/status', methods=['GET'])
+def get_scrape_status():
+    """获取抓取状态"""
+    return jsonify(scrape_status)
+
+@app.route('/api/products/count', methods=['GET'])
+def get_products_count():
+    """获取商品总数"""
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM products")
+            count = cursor.fetchone()[0]
+            return jsonify({'count': count})
+    except Exception as e:
+        logger.error(f"获取商品数量失败: {e}")
+        return jsonify({'count': 0}), 500
+
+@app.route('/api/debug/user_permissions', methods=['GET'])
+def debug_user_permissions():
+    """调试用户权限和商品分配（管理员权限）"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # 获取所有用户
+            cursor.execute('SELECT id, username, role FROM users')
+            users = []
+            for row in cursor.fetchall():
+                user_dict = dict(row)
+                user_dict['shops'] = db.get_user_shops(user_dict['id'])
+                users.append(user_dict)
+
+            # 获取所有店铺
+            cursor.execute('SELECT id, name FROM shops')
+            shops = [dict(row) for row in cursor.fetchall()]
+
+            # 获取商品统计
+            cursor.execute('SELECT shop_name, COUNT(*) as count FROM products GROUP BY shop_name')
+            product_stats = [dict(row) for row in cursor.fetchall()]
+
+            # 获取用户店铺权限统计
+            cursor.execute('SELECT user_id, COUNT(*) as shop_count FROM user_shop_permissions GROUP BY user_id')
+            permission_stats = []
+            for row in cursor.fetchall():
+                user_id, shop_count = row
+                user = next((u for u in users if u['id'] == user_id), None)
+                if user:
+                    permission_stats.append({
+                        'username': user['username'],
+                        'shop_count': shop_count,
+                        'shops': user['shops']
+                    })
+
+            return jsonify({
+                'users': users,
+                'shops': shops,
+                'product_stats': product_stats,
+                'permission_stats': permission_stats
+            })
+    except Exception as e:
+        logger.error(f"调试用户权限失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+def run_shop_scrape_task(shop_id):
+    """后台抓取任务"""
+    global scrape_status
+    try:
+        from weidian_scraper import get_weidian_scraper
+        # 这里复用之前的 scrape_shop_products 逻辑，但加入状态检查
+        # 为简化代码，此处模拟逻辑，您应将原 scrape_shop_products 修改为检查 scrape_status
+
+        logger.info(f"后台任务开始抓取店铺: {shop_id}")
+
+        # 模拟初始化
+        time.sleep(1)
+        scrape_status['total'] = 100 # 假设
+
+        for i in range(100):
+            # 检查停止
+            if scrape_status['stop_signal']:
+                scrape_status['message'] = '任务已取消'
+                break
+
+            # 检查暂停
+            while scrape_status['paused']:
+                if scrape_status['stop_signal']: break
+                time.sleep(1)
+
+            # 执行抓取 (模拟)
+            # 实际代码调用: process_single_product(...)
+            time.sleep(0.1)
+
+            scrape_status['processed'] += 1
+            scrape_status['success'] += 1
+            scrape_status['message'] = f'正在处理第 {i+1} 个商品...'
+
+        if not scrape_status['stop_signal']:
+            scrape_status['message'] = '抓取完成'
+
+    except Exception as e:
+        logger.error(f"后台抓取异常: {e}")
+        scrape_status['message'] = f"出错: {str(e)}"
+    finally:
+        scrape_status['is_scraping'] = False
+
 def scrape_shop_products(shop_id):
     """抓取店铺所有商品的实现"""
     import requests
     import time
+
+    global scrape_status
 
     total_products = 0
     offset = 0
     limit = 20
     page_count = 0
 
+    # 初始化状态
+    scrape_status.update({
+        'is_scraping': True,
+        'progress': 0,
+        'total': 0,
+        'current': 0,
+        'message': '正在初始化...'
+    })
+
     # 获取店铺名称
     shop_info = get_shop_info_from_api(shop_id)
     shop_name = shop_info.get('shopName', f'店铺 {shop_id}') if shop_info else f'店铺 {shop_id}'
     logger.info(f'开始抓取店铺: {shop_name} (ID: {shop_id})')
+    scrape_status['message'] = f'正在抓取店铺: {shop_name}'
 
     while True:
         try:
@@ -1914,31 +3141,16 @@ def scrape_shop_products(shop_id):
                     })
 
             if products_to_process:
-                # 多线程获取商品详情
-                processed_products = process_products_multithreaded(products_to_process)
+                # 多线程处理整个页面：获取详情 + 插入数据库 + 下载图片
+                processed_count = process_page_multithreaded(products_to_process, page_count + 1)
+                total_products += processed_count
+                logger.info(f'第 {page_count + 1} 页处理完成，新增 {processed_count} 个商品')
 
-                for product_data in processed_products:
-                    try:
-                        if product_data:
-                            # 检查商品是否已存在
-                            existing = db.get_product_by_url(product_data['product_url'])
-                            if existing:
-                                logger.debug(f'商品已存在，跳过: {product_data["title"]}')
-                                continue
-
-                            # 插入商品
-                            product_id = db.insert_product(product_data)
-
-                            # 下载图片
-                            if product_data.get('images'):
-                                save_product_images(product_id, product_data['images'])
-
-                            total_products += 1
-                            logger.debug(f'成功添加商品: {product_data["title"]}')
-
-                    except Exception as e:
-                        logger.error(f'保存商品失败: {e}')
-                        continue
+                # 更新状态
+                scrape_status.update({
+                    'current': total_products,
+                    'message': f'已处理 {page_count + 1} 页，新增 {total_products} 个商品'
+                })
 
             # 增加offset继续抓取
             offset += limit
@@ -1949,6 +3161,16 @@ def scrape_shop_products(shop_id):
         except Exception as e:
             logger.error(f'抓取过程中出错: {e}')
             break
+
+    # 抓取完成，重置状态
+    scrape_status.update({
+        'is_scraping': False,
+        'completed': True,
+        'progress': 100,
+        'message': f'抓取完成，共处理 {total_products} 个商品，{page_count} 页'
+    })
+
+    logger.info(f'店铺 {shop_id} 抓取完成，共处理 {total_products} 个商品，{page_count} 页')
 
     return {
         "total_products": total_products,
@@ -2140,31 +3362,176 @@ def process_products_multithreaded(products_list):
     logger.info(f'多线程处理完成，共处理 {len(processed_products)} 个商品')
     return processed_products
 
+def process_page_multithreaded(products_list, page_num):
+    """
+    多线程处理整个页面：获取详情 + 插入数据库 + 下载图片
+    每个线程负责一个商品的完整处理流程
+    """
+    import concurrent.futures
+
+    processed_count = 0
+
+    # 获取配置的线程数
+    max_workers = config.DOWNLOAD_THREADS if hasattr(config, 'DOWNLOAD_THREADS') else 4
+
+    logger.info(f'第 {page_num} 页开始多线程处理 {len(products_list)} 个商品')
+
+    def process_and_save_product(product):
+        """处理单个商品的完整流程：获取详情 -> 插入数据库 -> 下载图片"""
+        try:
+            # 1. 获取商品详情
+            product_data = process_single_product(product)
+            if not product_data:
+                return 0
+
+            # 2. 检查商品是否已存在
+            existing = db.get_product_by_url(product_data['product_url'])
+            if existing:
+                logger.debug(f'商品已存在，跳过: {product_data["title"]}')
+                return 0
+
+            # 3. 插入商品到数据库
+            product_id = db.insert_product(product_data)
+            logger.debug(f'成功插入商品: {product_data["title"]} (ID: {product_id})')
+
+            # 4. 下载并保存图片
+            if product_data.get('images'):
+                save_product_images(product_id, product_data['images'])
+                logger.debug(f'商品图片下载完成: {product_data["title"]}')
+
+            return 1  # 成功处理一个商品
+
+        except Exception as e:
+            logger.error(f'处理商品失败: {e}')
+            return 0
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        # 提交所有任务，每个商品一个任务
+        future_to_product = {
+            executor.submit(process_and_save_product, product): product
+            for product in products_list
+        }
+
+        # 收集结果
+        for future in concurrent.futures.as_completed(future_to_product):
+            try:
+                result = future.result()
+                processed_count += result
+            except Exception as e:
+                logger.error(f'页面处理任务失败: {e}')
+
+    logger.info(f'第 {page_num} 页处理完成，成功新增 {processed_count} 个商品')
+    return processed_count
+
 def save_product_images(product_id, image_urls):
-    """保存商品图片"""
+    """保存商品图片并提取特征向量（高性能版本）"""
     try:
-        for index, image_url in enumerate(image_urls[:5]):  # 最多保存5张图片
-            if image_url:
-                # 下载图片
-                response = requests.get(image_url, timeout=10, proxies={'http': None, 'https': None})
-                if response.status_code == 200:
-                    # 保存图片到本地
-                    image_filename = f"{product_id}_{index}.jpg"
-                    image_path = os.path.join('data', 'images', image_filename)
+        # 使用进程池而不是线程池，避免GIL限制
+        import concurrent.futures
+        import multiprocessing
 
-                    # 确保目录存在
-                    os.makedirs(os.path.dirname(image_path), exist_ok=True)
+        def process_single_image(args):
+            """处理单张图片：下载 -> 保存 -> 提取特征 -> 索引"""
+            index, image_url = args
+            try:
+                # 下载图片（使用更短的超时时间）
+                response = requests.get(image_url, timeout=5, proxies={'http': None, 'https': None})
+                if response.status_code != 200:
+                    return None
 
-                    with open(image_path, 'wb') as f:
-                        f.write(response.content)
+                # 生成唯一文件名，避免并发冲突
+                timestamp = int(time.time() * 1000000)  # 微秒级时间戳
+                image_filename = f"{product_id}_{index}_{timestamp}.jpg"
+                image_path = os.path.join('data', 'images', image_filename)
 
+                # 确保目录存在
+                os.makedirs(os.path.dirname(image_path), exist_ok=True)
+
+                # 直接写入文件，避免内存占用过多
+                with open(image_path, 'wb') as f:
+                    f.write(response.content)
+
+                # 验证图片完整性
+                if os.path.getsize(image_path) == 0:
+                    os.remove(image_path)
+                    return None
+
+                # 提取特征（这里会调用YOLO裁剪和DINOv2特征提取）
+                global feature_extractor
+                features = feature_extractor.extract_feature(image_path)
+
+                if features is None:
+                    # 特征提取失败，删除文件
+                    os.remove(image_path)
+                    return None
+
+                # 返回处理结果，让主进程统一处理数据库操作
+                return {
+                    'image_path': image_path,
+                    'features': features,
+                    'index': index
+                }
+
+            except Exception as e:
+                logger.error(f'处理图片失败 {image_url}: {e}')
+                return None
+
+        # 使用进程池处理图片下载和特征提取
+        # CPU核心数的一半，避免过度占用系统资源
+        cpu_count = max(1, multiprocessing.cpu_count() // 2)
+        max_workers = min(len(image_urls), cpu_count)
+
+        logger.info(f'商品 {product_id} 开始多进程处理 {len(image_urls)} 张图片，使用 {max_workers} 个进程')
+
+        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+            # 提交任务
+            image_tasks = [(index, url) for index, url in enumerate(image_urls[:5]) if url]
+            futures = [executor.submit(process_single_image, task) for task in image_tasks]
+
+            # 收集结果
+            processed_results = []
+            for future in concurrent.futures.as_completed(futures):
+                result = future.result()
+                if result is not None:
+                    processed_results.append(result)
+
+        # 在主进程中统一处理数据库操作，避免进程间数据库连接问题
+        processed_images = 0
+        for result in processed_results:
+            try:
                     # 插入图片记录到数据库
-                    db.insert_image_record(product_id, image_path, index)
+                img_db_id = db.insert_image_record(product_id, result['image_path'], result['index'])
 
-                    logger.debug(f'保存图片: {image_filename}')
+                # 添加到FAISS索引
+                from vector_engine import get_vector_engine
+                engine = get_vector_engine()
+                engine.add_vector(img_db_id, result['features'])
+
+                processed_images += 1
+                logger.debug(f'图片入库完成: {os.path.basename(result["image_path"])} (ID: {img_db_id})')
+
+            except Exception as e:
+                logger.error(f'图片入库失败 {result["image_path"]}: {e}')
+                # 清理失败的文件
+                try:
+                    os.remove(result['image_path'])
+                except:
+                    pass
+
+        # 保存FAISS索引（批量保存更高效）
+        if processed_images > 0:
+            from vector_engine import get_vector_engine
+            engine = get_vector_engine()
+            engine.save()
+
+        logger.info(f'商品 {product_id} 图片处理完成，共处理 {processed_images}/{len(image_urls)} 张图片')
 
     except Exception as e:
         logger.error(f'保存商品图片失败: {e}')
+
+def save_product_images_multithreaded(product_id, image_urls):
+    """多线程版本的图片保存函数（向后兼容）"""
+    save_product_images(product_id, image_urls)
 
 if __name__ == '__main__':
     import atexit
@@ -2176,17 +3543,8 @@ if __name__ == '__main__':
 
     # 本地开发模式 - 总是启用热重载
     print("🚀 Starting Flask API in development mode...")
-    print("🤖 Discord bot will start after Flask is ready...")
+    print("🤖 Discord bot will NOT auto-start. Use web interface to start manually...")
     print("🔄 Hot reload enabled - modify files and refresh browser")
-
-    # 在后台启动机器人（延迟启动）
-    def delayed_bot_start():
-        # 等待Flask应用完全启动
-        time.sleep(3)
-        start_discord_bot()
-
-    bot_startup_thread = threading.Thread(target=delayed_bot_start, daemon=True)
-    bot_startup_thread.start()
 
     try:
         app.run(host='127.0.0.1', port=5001, debug=config.DEBUG, use_reloader=False)

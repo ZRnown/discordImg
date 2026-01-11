@@ -9,9 +9,15 @@ export async function PUT(
   try {
     const resolvedParams = await params;
     const body = await request.json()
+    const cookies = request.headers.get('cookie') || '';
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (cookies) {
+      headers['Cookie'] = cookies;
+    }
+
     const response = await fetch(`${BACKEND_URL}/api/accounts/${resolvedParams.id}/status`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: headers,
       body: JSON.stringify(body)
     })
 

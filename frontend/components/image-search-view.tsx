@@ -7,7 +7,8 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Upload, Search, ExternalLink, Settings, X, Clock, Trash2 } from "lucide-react"
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
+import { Upload, Search, ExternalLink, Settings, X, Clock, Trash2, Copy } from "lucide-react"
 import { toast } from "sonner"
 
 export function ImageSearchView() {
@@ -22,6 +23,7 @@ export function ImageSearchView() {
   const [currentPage, setCurrentPage] = useState(1)
   const [totalHistory, setTotalHistory] = useState(0)
   const [hasMoreHistory, setHasMoreHistory] = useState(false)
+  const [showClearConfirm, setShowClearConfirm] = useState(false)
 
   // 加载搜索历史
   useEffect(() => {
@@ -65,9 +67,12 @@ export function ImageSearchView() {
   }
 
   // 清空所有搜索历史
-  const handleClearAllHistory = async () => {
-    if (!confirm('确定要清空所有搜索记录吗？此操作不可撤销。')) return
+  const handleClearAllHistory = () => {
+    setShowClearConfirm(true)
+  }
 
+  const confirmClearAllHistory = async () => {
+    setShowClearConfirm(false)
     try {
       const response = await fetch('/api/search_history', {
         method: 'DELETE',
@@ -284,8 +289,10 @@ export function ImageSearchView() {
             <CardContent className="pt-0">
               <div className="space-y-4">
                 {searchResults.map((result, index) => (
-                  <div key={index} className="border rounded-lg p-4 hover:bg-muted/50 transition-colors">
-                    <div className="flex items-start gap-4">
+                  <div key={index} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3">
+                    {/* 匹配图片和基本信息 */}
+                    <div className="flex gap-3 items-center flex-1">
+                      {/* 匹配的商品图片 */}
                       <div className="flex-shrink-0">
                         <div className="w-16 h-16 bg-muted rounded-lg overflow-hidden">
                           <img
@@ -298,43 +305,81 @@ export function ImageSearchView() {
                           />
                         </div>
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-2">
-                          <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-primary/10 text-primary">
-                            #{result.rank}
-                          </span>
-                          <span className="text-sm font-medium text-green-600">
-                            相似度 {(result.similarity * 100).toFixed(1)}%
-                          </span>
-                        </div>
-                        <h3 className="font-medium text-sm mb-1 line-clamp-2">
-                          {result.product.title}
-                        </h3>
-                        {result.product.englishTitle && (
-                          <p className="text-xs text-muted-foreground mb-2 line-clamp-1">
-                            {result.product.englishTitle}
-                          </p>
-                        )}
-                        <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                          <a
-                            href={result.product.weidianUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="hover:text-primary underline"
+
+                      <div className="space-y-0.5 min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <h4 className="font-bold text-base truncate">{result.product.title}</h4>
+                          <Badge
+                            className={
+                              result.similarity >= 0.95
+                                ? "bg-green-600 hover:bg-green-700"
+                                : result.similarity >= 0.85
+                                ? "bg-blue-600 hover:bg-blue-700"
+                                : "bg-yellow-600 hover:bg-yellow-700"
+                            }
                           >
-                            查看商品
-                          </a>
-                          {result.product.cnfansUrl && (
-                            <a
-                              href={result.product.cnfansUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="hover:text-primary underline"
-                            >
-                              CNFans链接
-                            </a>
-                          )}
+                            {(result.similarity * 100).toFixed(1)}% 相似度
+                          </Badge>
                         </div>
+                        <div className="flex items-center gap-2 mt-1">
+                          <p className="text-sm font-bold text-blue-600 truncate">{result.product.englishTitle || "No English Title"}</p>
+                        </div>
+                        <div className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground">
+                          <span className="font-mono">ID: {result.product.weidianUrl?.split('itemID=')?.[1] || 'N/A'}</span>
+                          <span>|</span>
+                          <span>排名: #{result.rank}</span>
+                          <span>|</span>
+                          <span>搜索时间: {new Date().toLocaleString('zh-CN')}</span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 链接显示区域 */}
+                    <div className="flex items-center gap-4">
+                      <div className="flex flex-col gap-1 min-w-[300px]">
+                        <div className="flex items-center gap-1.5">
+                          <Badge className="text-[9px] px-1 py-0 h-4 border-none w-12 justify-center shrink-0 text-white bg-gray-600">
+                            微店
+                          </Badge>
+                          <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
+                            <a href={result.product.weidianUrl} target="_blank" className="font-mono truncate hover:underline text-muted-foreground">
+                              {result.product.weidianUrl}
+                            </a>
+                            <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(result.product.weidianUrl); toast.success("Copied")}}>
+                              <Copy className="h-2.5 w-2.5"/>
+                            </Button>
+                          </div>
+                        </div>
+                        {result.product.cnfansUrl && (
+                          <div className="flex items-center gap-1.5">
+                            <Badge className="text-[9px] px-1 py-0 h-4 border-none w-12 justify-center shrink-0 text-white bg-blue-600">
+                              CNFans
+                            </Badge>
+                            <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
+                              <a href={result.product.cnfansUrl} target="_blank" className="font-mono truncate hover:underline text-blue-500">
+                                {result.product.cnfansUrl}
+                              </a>
+                              <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(result.product.cnfansUrl); toast.success("Copied")}}>
+                                <Copy className="h-2.5 w-2.5"/>
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                        {result.product.acbuyUrl && (
+                          <div className="flex items-center gap-1.5">
+                            <Badge className="text-[9px] px-1 py-0 h-4 border-none w-12 justify-center shrink-0 text-white bg-purple-600">
+                              ACBuy
+                            </Badge>
+                            <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
+                              <a href={result.product.acbuyUrl} target="_blank" className="font-mono truncate hover:underline text-purple-500">
+                                {result.product.acbuyUrl}
+                              </a>
+                              <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(result.product.acbuyUrl); toast.success("Copied")}}>
+                                <Copy className="h-2.5 w-2.5"/>
+                              </Button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -346,8 +391,8 @@ export function ImageSearchView() {
 
         {/* 搜索历史 - 列表形式 */}
         <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
+          <CardHeader className="pb-4">
+            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4">
               <div>
                 <CardTitle className="text-lg">搜索记录</CardTitle>
                 <CardDescription>历史搜索结果，按时间倒序排列</CardDescription>
@@ -357,6 +402,7 @@ export function ImageSearchView() {
                   variant="outline"
                   size="sm"
                   onClick={handleClearAllHistory}
+                  className="shrink-0"
                 >
                   <Trash2 className="w-4 h-4 mr-1" />
                   清空历史
@@ -374,126 +420,141 @@ export function ImageSearchView() {
             ) : (
               <div className="space-y-3">
                 {searchHistory.map((history) => (
-                  <div key={history.id} className="border rounded-lg p-4 hover:bg-muted/30 transition-colors">
-                    <div className="flex items-start justify-between gap-4">
-                      {/* 查询图片和商品信息 */}
-                      <div className="flex gap-4 flex-1">
-                        {/* 查询图片 */}
+                  <div key={history.id} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3">
+                    {/* 匹配图片和基本信息 */}
+                    <div className="flex gap-3 items-center flex-1">
+                      {/* 匹配的商品图片 */}
+                      {history.matched_product_id && (
                         <div className="flex-shrink-0">
-                          <div className="w-16 h-16 bg-muted rounded-lg flex items-center justify-center">
-                            <Search className="w-6 h-6 text-muted-foreground" />
+                          <div className="w-16 h-16 bg-muted rounded-lg overflow-hidden">
+                            <img
+                              src={`/api/image/${history.matched_product_id}/${history.matched_image_index}`}
+                              alt="匹配的商品图片"
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                e.currentTarget.src = '/placeholder.jpg'
+                              }}
+                            />
                           </div>
                         </div>
+                      )}
 
-                        {/* 商品信息 */}
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-start justify-between mb-2">
-                            <div className="flex-1 min-w-0">
-                              <h4 className="font-medium text-base truncate">{history.title}</h4>
-                              {history.english_title && (
-                                <p className="text-sm text-blue-600 mt-1">英文关键词: {history.english_title}</p>
-                              )}
-                            </div>
-                            <Badge
-                              className={
-                                history.similarity >= 0.95
-                                  ? "bg-green-600 hover:bg-green-700"
-                                  : history.similarity >= 0.85
-                                  ? "bg-blue-600 hover:bg-blue-700"
-                                  : "bg-yellow-600 hover:bg-yellow-700"
-                              }
-                            >
-                              {(history.similarity * 100).toFixed(1)}% 相似度
-                            </Badge>
-                          </div>
-
-                          {/* 匹配图片显示 */}
-                          {history.matched_image_path && (
-                            <div className="flex items-center gap-3 p-3 bg-muted/30 rounded-lg mb-3">
-                              <img
-                                src={`/api/image/${history.matched_product_id}/${history.matched_image_index}`}
-                                alt="匹配的商品图片"
-                                className="w-12 h-12 object-cover rounded border"
-                              />
-                              <div className="text-sm">
-                                <p className="font-medium">匹配的商品图片 #{history.matched_image_index}</p>
-                                <p className="text-muted-foreground">这是数据库中最相似的图片</p>
-                              </div>
-                            </div>
-                          )}
-
-                          {/* 商品详情 */}
-                          <div className="flex flex-wrap items-center gap-2 text-sm text-muted-foreground mb-3">
-                            <span>微店 ID: {history.weidian_url?.split('itemID=')?.[1] || 'N/A'}</span>
-                            <span>•</span>
-                            <span>匹配图片: #{history.matched_image_index}</span>
-                            <span>•</span>
-                            <span>阈值: {history.threshold * 100}%</span>
-                          </div>
-
-                          {/* 操作按钮 */}
-                          <div className="flex gap-2">
-                            <Button variant="outline" size="sm" asChild>
-                              <a href={history.weidian_url} target="_blank" rel="noopener noreferrer">
-                                <ExternalLink className="w-3 h-3 mr-1" />
-                                微店链接
-                              </a>
-                            </Button>
-                            <Button variant="default" size="sm" asChild>
-                              <a href={history.cnfans_url} target="_blank" rel="noopener noreferrer">
-                                <ExternalLink className="w-3 h-3 mr-1" />
-                                CNFans链接
-                              </a>
-                            </Button>
-                          </div>
+                      <div className="space-y-0.5 min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <h4 className="font-bold text-base truncate">{history.title}</h4>
+                          <Badge
+                            className={
+                              history.similarity >= 0.95
+                                ? "bg-green-600 hover:bg-green-700"
+                                : history.similarity >= 0.85
+                                ? "bg-blue-600 hover:bg-blue-700"
+                                : "bg-yellow-600 hover:bg-yellow-700"
+                            }
+                          >
+                            {(history.similarity * 100).toFixed(1)}% 相似度
+                          </Badge>
                         </div>
-                      </div>
-
-                      {/* 时间和删除按钮 */}
-                      <div className="flex flex-col items-end gap-2">
-                        <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                          <Clock className="w-3 h-3" />
-                          {new Date(history.search_time).toLocaleString()}
+                        <div className="flex items-center gap-2 mt-1">
+                          <p className="text-sm font-bold text-blue-600 truncate">{history.english_title || "No English Title"}</p>
                         </div>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="w-8 h-8 hover:bg-red-50 hover:text-red-600"
-                          onClick={() => handleDeleteHistory(history.id)}
-                        >
-                          <X className="w-4 h-4" />
-                        </Button>
+                        <div className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground">
+                          <span className="font-mono">ID: {history.weidian_url?.split('itemID=')?.[1] || 'N/A'}</span>
+                          <span>|</span>
+                          <span>匹配图片: #{history.matched_image_index}</span>
+                          <span>|</span>
+                          <span>阈值: {history.threshold * 100}%</span>
+                          <span>|</span>
+                          <span>搜索时间: {new Date(history.search_time).toLocaleString('zh-CN')}</span>
+                        </div>
                       </div>
                     </div>
 
-                    {/* 进度条 */}
-                    <Progress value={history.similarity * 100} className="h-2 mt-3" />
+                    {/* 链接显示区域 */}
+                    <div className="flex items-center gap-4">
+                      <div className="flex flex-col gap-1 min-w-[300px]">
+                        <div className="flex items-center gap-1.5">
+                          <Badge className="text-[9px] px-1 py-0 h-4 border-none w-12 justify-center shrink-0 text-white bg-gray-600">
+                            微店
+                          </Badge>
+                          <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
+                            <a href={history.weidian_url} target="_blank" className="font-mono truncate hover:underline text-muted-foreground">
+                              {history.weidian_url}
+                            </a>
+                            <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(history.weidian_url); toast.success("Copied")}}>
+                              <Copy className="h-2.5 w-2.5"/>
+                            </Button>
+                          </div>
+                        </div>
+                        {history.cnfans_url && (
+                          <div className="flex items-center gap-1.5">
+                            <Badge className="text-[9px] px-1 py-0 h-4 border-none w-12 justify-center shrink-0 text-white bg-blue-600">
+                              CNFans
+                            </Badge>
+                            <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
+                              <a href={history.cnfans_url} target="_blank" className="font-mono truncate hover:underline text-blue-500">
+                                {history.cnfans_url}
+                              </a>
+                              <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(history.cnfans_url); toast.success("Copied")}}>
+                                <Copy className="h-2.5 w-2.5"/>
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                        {history.acbuy_url && (
+                          <div className="flex items-center gap-1.5">
+                            <Badge className="text-[9px] px-1 py-0 h-4 border-none w-12 justify-center shrink-0 text-white bg-purple-600">
+                              ACBuy
+                            </Badge>
+                            <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
+                              <a href={history.acbuy_url} target="_blank" className="font-mono truncate hover:underline text-purple-500">
+                                {history.acbuy_url}
+                              </a>
+                              <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(history.acbuy_url); toast.success("Copied")}}>
+                                <Copy className="h-2.5 w-2.5"/>
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* 删除按钮 */}
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="h-8 w-8 hover:bg-red-50 hover:text-red-600"
+                        onClick={() => handleDeleteHistory(history.id)}
+                      >
+                        <X className="size-3.5" />
+                      </Button>
+                    </div>
                   </div>
                 ))}
 
                 {/* 分页控件 */}
-                {totalHistory > 10 && (
-                  <div className="flex items-center justify-between pt-4 border-t">
-                    <div className="text-sm text-muted-foreground">
-                      显示 {((currentPage - 1) * 10) + 1} - {Math.min(currentPage * 10, totalHistory)} 条，共 {totalHistory} 条记录
+                {searchHistory.length > 0 && (
+                  <div className="flex flex-col sm:flex-row justify-between items-center gap-4 pt-4 border-t mt-4">
+                    <div className="text-sm text-muted-foreground font-medium">
+                      显示第 {((currentPage - 1) * 10) + 1} - {Math.min(currentPage * 10, totalHistory)} 条，共 {totalHistory} 条记录
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex items-center gap-2">
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => fetchSearchHistory(currentPage - 1)}
                         disabled={currentPage <= 1}
+                        className="h-8 px-3"
                       >
                         上一页
                       </Button>
-                      <span className="px-3 py-1 text-sm">
+                      <div className="text-sm font-medium bg-primary text-primary-foreground px-3 py-1 rounded">
                         {currentPage}
-                      </span>
+                      </div>
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => fetchSearchHistory(currentPage + 1)}
                         disabled={!hasMoreHistory || searchHistory.length === 0}
+                        className="h-8 px-3"
                       >
                         下一页
                       </Button>
@@ -504,6 +565,26 @@ export function ImageSearchView() {
             )}
           </CardContent>
         </Card>
+
+        {/* 清空历史确认对话框 */}
+        <Dialog open={showClearConfirm} onOpenChange={setShowClearConfirm}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>确认清空历史</DialogTitle>
+              <DialogDescription>
+                确定要清空所有搜索记录吗？此操作不可撤销。
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowClearConfirm(false)}>
+                取消
+              </Button>
+              <Button variant="destructive" onClick={confirmClearAllHistory}>
+                确认清空
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   )

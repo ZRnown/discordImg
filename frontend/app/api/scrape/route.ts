@@ -7,6 +7,7 @@ export async function POST(request: Request) {
   try {
     const data = await request.json();
     const { url, weidianId } = data;
+    const cookieHeader = request.headers.get('cookie') || '';
 
     // 支持两种输入方式：完整URL或商品ID
     if (!url && !weidianId) {
@@ -19,12 +20,21 @@ export async function POST(request: Request) {
     // 调用后端 API
     const backendResponse = await fetch(`${BACKEND_URL}/scrape`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Cookie': cookieHeader
+      },
       body: JSON.stringify({ url: finalUrl })
     });
 
+    // 修复：处理 409 Conflict，不要抛出通用错误，而是传递给前端处理
+    if (backendResponse.status === 409) {
+        const errorData = await backendResponse.json();
+        return NextResponse.json(errorData, { status: 409 });
+    }
+
     if (!backendResponse.ok) {
-      const errorData = await backendResponse.json();
+      const errorData = await backendResponse.json().catch(() => ({ error: 'Backend scrape failed' }));
       return NextResponse.json(errorData, { status: backendResponse.status });
     }
 
@@ -51,12 +61,23 @@ export async function GET(request: Request) {
       return NextResponse.json({ indexedIds: [] });
     }
 
+    // 获取前端的session cookie并传递给后端
+    const cookies = request.headers.get('cookie') || '';
+    const headers: Record<string, string> = {};
+    if (cookies) {
+      headers['Cookie'] = cookies;
+    }
+
     // 调用后端 API 获取商品列表
-    const response = await fetch(`${BACKEND_URL}/api/products`);
+    const response = await fetch(`${BACKEND_URL}/api/products`, { headers });
+
     if (response.ok) {
       const data = await response.json();
       return NextResponse.json(data);
+    } else if (response.status === 401) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+
     return NextResponse.json([]);
   } catch (error: any) {
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -66,14 +87,16 @@ export async function GET(request: Request) {
 export async function DELETE(request: Request) {
   try {
     const { id } = await request.json();
-    // 代理到后端服务以彻底删除（包括FAISS向量）
+    const cookieHeader = request.headers.get('cookie') || '';
+
     const response = await fetch(`${BACKEND_URL}/api/products/${id}`, {
-      method: 'DELETE'
+      method: 'DELETE',
+      headers: { 'Cookie': cookieHeader }
     });
     if (response.ok) {
       return NextResponse.json({ success: true });
     } else {
-      const err = await response.json();
+      const err = await response.json().catch(() => ({ error: 'Delete failed' }));
       return NextResponse.json(err, { status: response.status });
     }
   } catch (error: any) {
@@ -85,9 +108,14 @@ export async function DELETE(request: Request) {
 export async function PUT(request: Request) {
   try {
     const body = await request.json();
-    const response = await fetch(`${BACKEND_URL}/api/products/${body.id}`, {
+    const cookieHeader = request.headers.get('cookie') || '';
+
+    const response = await fetch(`${BACKEND_URL}/api/products`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Cookie': cookieHeader
+      },
       body: JSON.stringify(body)
     });
 
@@ -105,8 +133,11 @@ export async function PUT(request: Request) {
 export async function PATCH(request: Request) {
   try {
     const { productId, imageIndex } = await request.json();
+    const cookieHeader = request.headers.get('cookie') || '';
+
     const response = await fetch(`${BACKEND_URL}/api/products/${productId}/images/${imageIndex}`, {
-      method: 'DELETE'
+      method: 'DELETE',
+      headers: { 'Cookie': cookieHeader }
     });
 
     if (response.ok) {

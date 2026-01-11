@@ -561,36 +561,57 @@ class WeidianScraper:
             response = self.session.get(url, timeout=10, proxies={'http': None, 'https': None})
             response.raise_for_status()
 
-            # 首先尝试匹配新的格式
-            shop_name_pattern1 = r'<em[^>]*class="[^"]*shop-name-str[^"]*"[^>]*>([^<]+)</em>'
-            match = re.search(shop_name_pattern1, response.text, re.DOTALL | re.IGNORECASE)
+            # 解码HTML实体（&#34; -> " 等）
+            html_content = response.text
+            html_content = html_content.replace('&#34;', '"').replace('&#39;', "'").replace('&quot;', '"')
+
+            # 首先尝试最精确的匹配：em标签中的shop-name-str类（根据用户提供的HTML结构）
+            shop_name_pattern1 = r'<em[^>]*class="[^"]*\bshop-name-str\b[^"]*"[^>]*>([^<]+)</em>'
+            match = re.search(shop_name_pattern1, html_content, re.DOTALL | re.IGNORECASE)
             if match:
                 shop_name = match.group(1).strip()
-                logger.info(f"✅ 获取到店铺名称: {shop_name}")
+                logger.info(f"✅ 获取到店铺名称 (em shop-name-str): {shop_name}")
                 return shop_name
 
-            # 如果没找到，尝试匹配用户提供的格式：class="shop-name"的div包含em元素
-            shop_name_pattern2 = r'<div[^>]*class="[^"]*shop-name[^"]*"[^>]*>.*?<em[^>]*class="[^"]*shop-name-str[^"]*"[^>]*>([^<]+)</em>'
-            match = re.search(shop_name_pattern2, response.text, re.DOTALL | re.IGNORECASE)
+            # 然后尝试更宽泛的匹配，查找包含shop-name-str类的任何元素
+            shop_name_pattern2 = r'<[^>]*class="[^"]*\bshop-name-str\b[^"]*"[^>]*>([^<]+)</[^>]*>'
+            match = re.search(shop_name_pattern2, html_content, re.DOTALL | re.IGNORECASE)
             if match:
                 shop_name = match.group(1).strip()
-                logger.info(f"✅ 获取到店铺名称 (用户格式): {shop_name}")
+                logger.info(f"✅ 获取到店铺名称 (通用shop-name-str): {shop_name}")
                 return shop_name
 
-            # 最后尝试旧的格式
-            shop_name_pattern3 = r'<div[^>]*class="[^"]*shop-info-head[^"]*"[^>]*>.*?<div[^>]*class="[^"]*shop-name[^"]*"[^>]*>.*?<em[^>]*class="[^"]*shop-name-str[^"]*"[^>]*>([^<]+)</em>'
-            match = re.search(shop_name_pattern3, response.text, re.DOTALL | re.IGNORECASE)
+            # 尝试匹配class="shop-name-str"的元素（不限定标签类型）
+            shop_name_pattern3 = r'class="shop-name-str"[^>]*>([^<]+)</'
+            match = re.search(shop_name_pattern3, html_content, re.DOTALL | re.IGNORECASE)
             if match:
                 shop_name = match.group(1).strip()
-                logger.info(f"✅ 获取到店铺名称 (旧格式): {shop_name}")
+                logger.info(f"✅ 获取到店铺名称 (shop-name-str): {shop_name}")
                 return shop_name
 
-            # 最后尝试从JavaScript数据中提取店铺名称
-            shop_name_pattern4 = r'\"shopName\"\s*:\s*\"([^\"]+)\"'
-            match = re.search(shop_name_pattern4, response.text, re.DOTALL | re.IGNORECASE)
+            # 尝试从JavaScript数据中提取店铺名称（多种格式）
+            # 格式1: "shopName":"Aiseo"
+            shop_name_pattern4 = r'"shopName"\s*:\s*"([^"]+)"'
+            match = re.search(shop_name_pattern4, html_content, re.DOTALL | re.IGNORECASE)
             if match:
                 shop_name = match.group(1).strip()
                 logger.info(f"✅ 获取到店铺名称 (JavaScript): {shop_name}")
+                return shop_name
+
+            # 格式2: \"shopName\":\"Aiseo\" (在HTML中被转义)
+            shop_name_pattern5 = r'\\"shopName\\"\s*:\s*\\"([^\\"]+)\\"'
+            match = re.search(shop_name_pattern5, html_content, re.DOTALL | re.IGNORECASE)
+            if match:
+                shop_name = match.group(1).strip()
+                logger.info(f"✅ 获取到店铺名称 (JavaScript转义): {shop_name}")
+                return shop_name
+
+            # 格式3: shopName:"Aiseo" (无引号)
+            shop_name_pattern6 = r'shopName\s*:\s*"([^"]+)"'
+            match = re.search(shop_name_pattern6, html_content, re.DOTALL | re.IGNORECASE)
+            if match:
+                shop_name = match.group(1).strip()
+                logger.info(f"✅ 获取到店铺名称 (JavaScript无引号): {shop_name}")
                 return shop_name
 
             logger.warning("未找到店铺名称，使用默认名称")

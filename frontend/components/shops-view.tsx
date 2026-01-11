@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
-import { Plus, Trash2, Store, Loader2, RefreshCw } from "lucide-react"
+import { Plus, Trash2, Store, Loader2, RefreshCw, Search, CheckSquare, Square } from "lucide-react"
 import { toast } from "sonner"
 import {
   Dialog,
@@ -18,13 +18,16 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 
-export function ShopsView() {
+export function ShopsView({ currentUser }: { currentUser: any }) {
   const [shops, setShops] = useState<any[]>([])
   const [newShopId, setNewShopId] = useState('')
   const [isAddingShop, setIsAddingShop] = useState(false)
   const [selectedShopIds, setSelectedShopIds] = useState<string[]>([])
   const [isShopScraping, setIsShopScraping] = useState(false)
   const [shopScrapeProgress, setShopScrapeProgress] = useState(0)
+  const [searchKeyword, setSearchKeyword] = useState('')
+  const [isBatchDeleting, setIsBatchDeleting] = useState(false)
+  const [showBatchDeleteConfirm, setShowBatchDeleteConfirm] = useState(false)
 
   useEffect(() => {
     fetchShops()
@@ -34,7 +37,15 @@ export function ShopsView() {
     try {
       const res = await fetch('/api/shops')
       const data = await res.json()
-      setShops(data.shops || [])
+      let allShops = data.shops || []
+
+      // 根据用户权限过滤店铺
+      if (currentUser?.role !== 'admin' && currentUser?.shops) {
+        // 普通用户只看到分配给他们的店铺
+        allShops = allShops.filter(shop => currentUser.shops.includes(shop.name))
+      }
+
+      setShops(allShops)
     } catch (e) {
       toast.error("加载店铺列表失败")
     }
@@ -79,7 +90,19 @@ export function ShopsView() {
       const data = await res.json()
 
       if (res.ok) {
-        toast.success("店铺添加成功")
+        toast.success("店铺添加成功，正在开始抓取商品...")
+
+        // 添加成功后自动开始抓取该店铺的商品
+        const shopId = newShopId.trim()
+        try {
+          await fetch(`/api/scrape/shop?shopId=${shopId}`, {
+            method: 'POST'
+          })
+          toast.success("商品抓取已启动，请查看实时日志")
+        } catch (scrapeError) {
+          toast.warning("店铺添加成功，但商品抓取启动失败")
+        }
+
         setNewShopId('')
         fetchShops()
       } else {
@@ -161,12 +184,61 @@ export function ShopsView() {
   }
 
   const handleSelectAllShops = () => {
-    if (selectedShopIds.length === shops.length) {
+    if (selectedShopIds.length === filteredShops.length) {
       setSelectedShopIds([])
     } else {
-      setSelectedShopIds(shops.map(shop => shop.shop_id))
+      setSelectedShopIds(filteredShops.map(shop => shop.shop_id))
     }
   }
+
+  const handleBatchDeleteShops = () => {
+    if (selectedShopIds.length === 0) return
+    setShowBatchDeleteConfirm(true)
+  }
+
+  const confirmBatchDeleteShops = async () => {
+    setShowBatchDeleteConfirm(false)
+    setIsBatchDeleting(true)
+
+    let successCount = 0
+    let failCount = 0
+
+    try {
+      for (const shopId of selectedShopIds) {
+        try {
+          const res = await fetch(`/api/shops/${shopId}`, {
+            method: 'DELETE'
+          })
+
+          if (res.ok) {
+            successCount++
+          } else {
+            failCount++
+          }
+        } catch (e) {
+          failCount++
+        }
+      }
+
+      if (successCount > 0) {
+        toast.success(`批量删除完成：成功 ${successCount} 个${failCount > 0 ? `，失败 ${failCount} 个` : ''}`)
+        setSelectedShopIds([])
+        fetchShops()
+      } else {
+        toast.error("批量删除失败")
+      }
+    } catch (e) {
+      toast.error("批量删除过程中发生错误")
+    } finally {
+      setIsBatchDeleting(false)
+    }
+  }
+
+  // 过滤店铺列表
+  const filteredShops = shops.filter(shop =>
+    shop.name?.toLowerCase().includes(searchKeyword.toLowerCase()) ||
+    shop.shop_id?.includes(searchKeyword)
+  )
 
   return (
     <div className="space-y-6">
@@ -175,8 +247,9 @@ export function ShopsView() {
         <p className="text-muted-foreground">管理微店店铺，添加新店铺并进行全量抓取</p>
       </div>
 
-      {/* 添加新店铺 */}
-      <Card>
+      {/* 添加新店铺 - 仅管理员可见 */}
+      {currentUser?.role === 'admin' && (
+        <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Plus className="h-5 w-5" />
@@ -216,10 +289,11 @@ export function ShopsView() {
           </div>
         </CardContent>
       </Card>
+      )}
 
       {/* 店铺列表 */}
       <Card>
-        <CardHeader>
+        <CardHeader className="pb-4">
           <div className="flex items-center justify-between">
             <div>
               <CardTitle className="flex items-center gap-2">
@@ -227,31 +301,87 @@ export function ShopsView() {
                 店铺列表 ({shops.length})
               </CardTitle>
               <CardDescription>
-                已添加的店铺，支持批量全量抓取
+                已添加的店铺，支持批量全量抓取和删除
               </CardDescription>
             </div>
-            {shops.length > 0 && (
+            {selectedShopIds.length > 0 && currentUser?.role === 'admin' && (
               <Button
-                variant="outline"
+                variant="destructive"
                 size="sm"
-                onClick={handleSelectAllShops}
-                disabled={isShopScraping}
+                onClick={handleBatchDeleteShops}
+                disabled={isBatchDeleting}
               >
-                {selectedShopIds.length === shops.length ? "取消全选" : "全选"}
+                <Trash2 className="mr-2 h-4 w-4" />
+                删除选中 ({selectedShopIds.length})
               </Button>
             )}
           </div>
         </CardHeader>
+
+        {/* 搜索和操作工具栏 */}
+        {shops.length > 0 && (
+          <div className="px-6 pb-4 border-b bg-muted/10">
+            <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+              <div className="flex-1">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    placeholder="搜索店铺名称或ID..."
+                    value={searchKeyword}
+                    onChange={(e) => setSearchKeyword(e.target.value)}
+                    className="pl-10 h-9 w-full sm:w-[300px]"
+                    disabled={isShopScraping}
+                  />
+                </div>
+              </div>
+              <div className="flex items-center gap-3">
+                <Button
+                  variant={selectedShopIds.length > 0 && selectedShopIds.length === filteredShops.length ? "secondary" : "outline"}
+                  size="sm"
+                  onClick={handleSelectAllShops}
+                  disabled={isShopScraping || filteredShops.length === 0}
+                >
+                  {selectedShopIds.length > 0 && selectedShopIds.length === filteredShops.length
+                    ? <CheckSquare className="mr-2 h-4 w-4" />
+                    : <Square className="mr-2 h-4 w-4" />
+                  }
+                  {selectedShopIds.length > 0 && selectedShopIds.length === filteredShops.length ? "取消全选" : "全选"}
+                </Button>
+              </div>
+            </div>
+
+            {/* 搜索结果状态 */}
+            {searchKeyword && (
+              <div className="mt-3 text-sm text-muted-foreground">
+                搜索结果: <span className="font-medium">{filteredShops.length}</span> 个店铺
+                <span className="ml-2">关键词: <span className="font-medium">"{searchKeyword}"</span></span>
+              </div>
+            )}
+
+            {/* 选中状态 */}
+            {selectedShopIds.length > 0 && (
+              <div className="mt-2 text-sm text-blue-700 bg-blue-50 px-3 py-2 rounded-md border border-blue-200">
+                已选择 <span className="font-medium">{selectedShopIds.length}</span> 个店铺
+              </div>
+            )}
+          </div>
+        )}
         <CardContent>
           {shops.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
+            <div className="text-center py-12 text-muted-foreground">
               <Store className="h-12 w-12 mx-auto mb-4 opacity-50" />
               <p className="text-lg font-medium">暂无店铺</p>
               <p className="text-sm">请先添加店铺ID</p>
             </div>
+          ) : filteredShops.length === 0 ? (
+            <div className="text-center py-12 text-muted-foreground">
+              <Search className="h-12 w-12 mx-auto mb-4 opacity-50" />
+              <p className="text-lg font-medium">未找到匹配的店铺</p>
+              <p className="text-sm">尝试调整搜索关键词</p>
+            </div>
           ) : (
             <div className="space-y-3">
-              {shops.map((shop) => (
+              {filteredShops.map((shop) => (
                 <div
                   key={shop.shop_id}
                   className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 transition-colors"
@@ -281,14 +411,16 @@ export function ShopsView() {
                       </div>
                     </div>
                   </div>
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    onClick={() => handleDeleteShop(shop.shop_id)}
-                    disabled={isShopScraping}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                  {(currentUser?.role === 'admin' || currentUser?.shops?.includes(shop.name)) && (
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={() => handleDeleteShop(shop.shop_id)}
+                      disabled={isShopScraping}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  )}
                 </div>
               ))}
             </div>
@@ -297,44 +429,27 @@ export function ShopsView() {
       </Card>
 
       {/* 批量操作 */}
-      {selectedShopIds.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>批量操作</CardTitle>
-            <CardDescription>
-              已选择 {selectedShopIds.length} 个店铺
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex gap-3">
-              <Button
-                onClick={handleScrapeSelectedShops}
-                disabled={isShopScraping}
-                className="flex-1"
-              >
-                {isShopScraping ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    抓取中... ({Math.round(shopScrapeProgress)}%)
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                    全量抓取选中店铺 ({selectedShopIds.length}个)
-                  </>
-                )}
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => setSelectedShopIds([])}
-                disabled={isShopScraping}
-              >
-                取消选择
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+
+
+      {/* 批量删除确认对话框 */}
+      <Dialog open={showBatchDeleteConfirm} onOpenChange={setShowBatchDeleteConfirm}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>确认批量删除</DialogTitle>
+            <DialogDescription>
+              确定要删除选中的 {selectedShopIds.length} 个店铺吗？此操作不可恢复。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowBatchDeleteConfirm(false)}>
+              取消
+            </Button>
+            <Button variant="destructive" onClick={confirmBatchDeleteShops} disabled={isBatchDeleting}>
+              {isBatchDeleting ? "删除中..." : "确认删除"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
