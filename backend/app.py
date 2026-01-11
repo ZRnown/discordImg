@@ -2784,7 +2784,7 @@ def delete_shop(shop_id):
 
         current_user = get_current_user()
         # 管理员可以删除任何店铺，普通用户只能删除分配给他们的店铺
-        if current_user['role'] != 'admin' and shop_info['name'] not in current_user.get('shops', []):
+        if current_user['role'] != 'admin' and shop_info['shop_id'] not in current_user.get('shops', []):
             return jsonify({'error': '无权限删除此店铺'}), 403
 
         if db.delete_shop(shop_id):

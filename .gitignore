@@ -1,9 +1,12 @@
-# Python
+# ============== Python ==============
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 .Python
+
+# Distribution / packaging
 build/
 develop-eggs/
 dist/
@@ -29,105 +32,267 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.conda/
 
-# IDE
+# ============== Backend Data (CRITICAL) ==============
+# 数据库文件
+backend/data/*.db
+backend/data/*.db-*
+backend/data/*.db-shm
+backend/data/*.db-wal
+backend/data/*.lock
+backend/data/.milvus*
+
+# FAISS 向量索引
+backend/data/faiss_index.bin
+backend/data/faiss_id_map.pkl
+
+# 图片文件 (scraped_images 和 images 目录)
+backend/data/scraped_images/
+backend/data/images/
+backend/data/*.jpg
+backend/data/*.jpeg
+backend/data/*.png
+backend/data/*.webp
+backend/data/*.gif
+backend/data/*.bmp
+
+# AI模型文件
+backend/data/*.pt
+backend/data/*.pth
+backend/data/*.onnx
+backend/data/yolov8*.pt
+
+# 临时文件
+backend/data/*.tmp
+backend/data/*.temp
+
+# ============== Frontend / Next.js ==============
+# Next.js build output
+.next/
+out/
+build/
+
+# Production
+.vercel/
+.netlify/
+
+# ============== Node.js ==============
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+pnpm-debug.log*
+.pnpm-store/
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# ============== Environment Variables ==============
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+.env.*.local
+
+# ============== Secrets & Credentials ==============
+secrets/
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.jks
+config.json
+credentials.json
+service-account.json
+auth.json
+
+# ============== IDE ==============
+# VS Code
 .vscode/
+*.code-workspace
+.history/
+
+# JetBrains (PyCharm, IntelliJ, WebStorm)
 .idea/
+*.iml
+*.iws
+*.ipr
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+# Vim
 *.swp
 *.swo
 *~
+.netrwhist
 
-# OS
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+auto-save-list
+tramp
+
+# ============== OS ==============
+# macOS
 .DS_Store
 .DS_Store?
 ._*
 .Spotlight-V100
 .Trashes
 ehthumbs.db
-Thumbs.db
-
-# Logs
-*.log
-logs/
-
-# Database
-backend/data/*.db
-backend/data/*.db-*
-
-# Images and media
-backend/data/scraped_images/
-frontend/public/scraped_images/
-
-# Node.js
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-lerna-debug.log*
-
-# Next.js
-.next/
-out/
-
-# Production
-build/
-dist/
-
-# Environment variables
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# Temporary files
-*.tmp
-*.temp
-.tmp/
-.temp/
-
-# Coverage
-coverage/
-.nyc_output/
-
-# Dependency directories
-jspm_packages/
-
-# Optional npm cache directory
-.npm
-
-# Optional REPL history
-.node_repl_history
-
-# Output of 'npm pack'
-*.tgz
-
-# Yarn Integrity file
-.yarn-integrity
-
-# dotenv environment variables file
-.env
-
-# macOS
-.DS_Store
 .AppleDouble
 .LSOverride
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
 
 # Windows
 Thumbs.db
 ehthumbs.db
 Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+*.url
 
 # Linux
 *~
+.directory
+.Trash-*
 
-# JetBrains IDEs
-.idea/
+# ============== Logs ==============
+*.log
+logs/
+*.log.*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# VS Code
-.vscode/
+# Application specific logs
+backend/logs/
+frontend/logs/
+*.out
+*.err
 
-# Temporary files
-*.bak
-*.backup
+# ============== Testing ==============
+coverage/
+.nyc_output/
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+.hypothesis/
+
+# ============== Temporary / Cache ==============
+*.tmp
+*.temp
+.tmp/
+.temp/
+.cache/
+*.cache
+
+# ============== Docker ==============
+.dockerignore
+docker-compose.override.yml
+
+# ============== Documentation / Misc ==============
+README.md.backup
 *.orig
 *.rej
+*.bak
+*.backup
+*.swp
+*~.nib
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+*.sqlite
+
+# ============== AI / ML Specific ==============
+# Hugging Face cache
+.cache/huggingface/
+.huggingface/
+
+# PyTorch checkpoints
+*.ckpt
+*.pth
+*.pt
+checkpoints/
+
+# TensorFlow
+*.pb
+*.h5
+*.tf
+
+# Transformers cache
+transformers_cache/
+model_cache/
+
+# ============== Large Binary Files ==============
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+*.iso
+*.dmg
+*.exe
+*.bin
+
+# ============== Backup Files ==============
+*.bak
+*.backup
+*.old
+*.orig
+*.tmp
+*.swp
+*.swo
+*~
+
+# ============== Compiled Files ==============
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.so
+*.dll
+*.dylib
+
+# ============== System Files ==============
+.DS_Store
+Thumbs.db
+desktop.ini
+*.lnk
+
+# ============== Project Specific ==============
+# Discord bot tokens and configs
+discord_token.txt
+bot_config.json
+webhook_urls.txt
+
+# Test files and data
+test_*.py
+*_test.py
+tests/
+test_data/
+
+# Development notes and planning
+*.plan.md
+planning/
+notes/

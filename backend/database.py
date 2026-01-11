@@ -1468,8 +1468,20 @@ class Database:
                 if not isinstance(user_shops, list):
                     user_shops = []
 
+                # 根据shop_id找到对应的shop_name
+                shop_names = []
+                for shop_id in user_shops:
+                    cursor.execute("SELECT name FROM shops WHERE shop_id = ?", (shop_id,))
+                    shop_row = cursor.fetchone()
+                    if shop_row:
+                        shop_names.append(shop_row[0])
+
+                if not shop_names:
+                    # 如果没有找到对应的店铺名称，返回空结果
+                    return {'products': [], 'total': 0}
+
                 # 构建IN查询
-                placeholders = ','.join('?' * len(user_shops))
+                placeholders = ','.join('?' * len(shop_names))
                 if limit is None or limit <= 0:
                     query = f'''
                         SELECT p.*, GROUP_CONCAT(pi.image_path) as image_paths,
@@ -1480,7 +1492,7 @@ class Database:
                         GROUP BY p.id
                         ORDER BY p.created_at DESC
                     '''
-                    cursor.execute(query, user_shops)
+                    cursor.execute(query, shop_names)
                 else:
                     query = f'''
                         SELECT p.*, GROUP_CONCAT(pi.image_path) as image_paths,
@@ -1492,12 +1504,12 @@ class Database:
                         ORDER BY p.created_at DESC
                         LIMIT ? OFFSET ?
                     '''
-                    cursor.execute(query, user_shops + [limit, offset])
+                    cursor.execute(query, shop_names + [limit, offset])
                 rows = cursor.fetchall()
 
                 # 获取总数
                 count_query = f'SELECT COUNT(*) FROM products WHERE shop_name IN ({placeholders})'
-                cursor.execute(count_query, user_shops)
+                cursor.execute(count_query, shop_names)
                 total = cursor.fetchone()[0]
 
                 products = []

@@ -42,7 +42,7 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
       // 根据用户权限过滤店铺
       if (currentUser?.role !== 'admin' && currentUser?.shops) {
         // 普通用户只看到分配给他们的店铺
-        allShops = allShops.filter(shop => currentUser.shops.includes(shop.name))
+        allShops = allShops.filter(shop => currentUser.shops.includes(shop.shop_id))
       }
 
       setShops(allShops)
@@ -411,7 +411,7 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
                       </div>
                     </div>
                   </div>
-                  {(currentUser?.role === 'admin' || currentUser?.shops?.includes(shop.name)) && (
+                  {(currentUser?.role === 'admin' || currentUser?.shops?.includes(shop.shop_id)) && (
                     <Button
                       variant="destructive"
                       size="sm"
