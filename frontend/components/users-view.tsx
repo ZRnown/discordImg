@@ -75,7 +75,9 @@ export function UsersView() {
 
   const fetchShops = async () => {
     try {
-      const response = await fetch('/api/shops')
+      const response = await fetch('/api/shops', {
+        credentials: 'include'
+      })
       if (response.ok) {
         const data = await response.json()
         setShops(data.shops || [])
@@ -161,6 +163,7 @@ export function UsersView() {
       const response = await fetch(`/api/users/${userId}/shops`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ shops: shopIds })
       })
 

@@ -35,7 +35,9 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
 
   const fetchShops = async () => {
     try {
-      const res = await fetch('/api/shops')
+      const res = await fetch('/api/shops', {
+        credentials: 'include'
+      })
       const data = await res.json()
       let allShops = data.shops || []
 
@@ -81,6 +83,7 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
       const res = await fetch('/api/shops', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           shopId: newShopId.trim(),
           name: shopName
@@ -118,7 +121,8 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
   const handleDeleteShop = async (shopId: string) => {
     try {
       const res = await fetch(`/api/shops/${shopId}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        credentials: 'include'
       })
 
       if (res.ok) {
@@ -167,7 +171,8 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
       for (const shopId of selectedShopIds) {
         try {
           const res = await fetch(`/api/shops/${shopId}`, {
-            method: 'DELETE'
+            method: 'DELETE',
+            credentials: 'include'
           })
 
           if (res.ok) {
