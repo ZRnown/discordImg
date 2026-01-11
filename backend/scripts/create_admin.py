@@ -13,7 +13,10 @@ python3 create_admin.py --username admin --password admin123
 import sys
 import getpass
 import argparse
-from database import Database
+try:
+    from database import Database
+except ImportError:
+    from ..database import Database
 from werkzeug.security import generate_password_hash
 
 def create_admin_user(username=None, password=None):

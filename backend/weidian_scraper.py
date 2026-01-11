@@ -531,7 +531,10 @@ class WeidianScraper:
                 return None
 
         # 使用线程池并发下载图片
-        from config import config
+        try:
+            from config import config
+        except ImportError:
+            from .config import config
         max_workers = min(config.DOWNLOAD_THREADS, len(image_urls))  # 使用配置的下载线程数
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:

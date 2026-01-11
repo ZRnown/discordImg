@@ -4,7 +4,10 @@ import os
 import pickle
 import logging
 from typing import List, Dict, Tuple
-from .config import config
+try:
+    from .config import config
+except ImportError:
+    from config import config
 
 logger = logging.getLogger(__name__)
 
@@ -209,7 +212,10 @@ class VectorEngine:
         """删除向量后重建索引"""
         try:
             # 获取所有未删除的向量数据
-            from database import db
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
             valid_vectors = []
 
             with db.get_connection() as conn:
@@ -224,7 +230,10 @@ class VectorEngine:
                         # 在生产环境中，应该缓存特征或定期重建
                         try:
                             # 这里需要导入特征提取器
-                            from feature_extractor import get_feature_extractor
+                            try:
+                                from feature_extractor import get_feature_extractor
+                            except ImportError:
+                                from .feature_extractor import get_feature_extractor
                             extractor = get_feature_extractor()
                             features = extractor.extract_feature(row['image_path'])
                             if features is not None:

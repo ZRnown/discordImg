@@ -7,7 +7,10 @@ from pathlib import Path
 from PIL import Image
 from transformers import AutoImageProcessor, AutoModel
 from ultralytics import YOLO
-from .config import config
+try:
+    from .config import config
+except ImportError:
+    from config import config
 from functools import lru_cache
 import hashlib
 

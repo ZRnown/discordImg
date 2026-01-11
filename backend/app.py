@@ -4,9 +4,16 @@ import os
 import logging
 import sys
 from datetime import datetime
-from feature_extractor import get_feature_extractor, DINOv2FeatureExtractor
-from database import db
-from config import config
+try:
+    from feature_extractor import get_feature_extractor, DINOv2FeatureExtractor
+except ImportError:
+    from .feature_extractor import get_feature_extractor, DINOv2FeatureExtractor
+try:
+    from database import db
+    from config import config
+except ImportError:
+    from .database import db
+    from .config import config
 import requests
 import json
 from flask_cors import CORS
@@ -176,7 +183,10 @@ def preload_ai_models():
         print("✅ AI模型预加载完成")
 
         print("🚀 开始预加载FAISS向量引擎...")
-        from vector_engine import get_vector_engine
+        try:
+            from vector_engine import get_vector_engine
+        except ImportError:
+            from .vector_engine import get_vector_engine
         vector_engine = get_vector_engine()
         print("✅ FAISS向量引擎预加载完成")
     except Exception as e:
@@ -458,7 +468,10 @@ def scrape_product():
             global feature_extractor
             if feature_extractor is None:
                 logger.error("AI模型未预加载，使用单例模式")
-                from feature_extractor import get_feature_extractor
+                try:
+                    from feature_extractor import get_feature_extractor
+                except ImportError:
+                    from .feature_extractor import get_feature_extractor
                 extractor = get_feature_extractor()
             else:
                 logger.info("使用预加载的AI模型")
@@ -467,7 +480,10 @@ def scrape_product():
             # 串行建立向量索引 (SQLite不支持多线程写入)
             # 但先使用多线程进行特征提取，然后串行插入数据库
             import concurrent.futures
-            from vector_engine import get_vector_engine
+            try:
+                from vector_engine import get_vector_engine
+            except ImportError:
+                from .vector_engine import get_vector_engine
             engine = get_vector_engine()
 
             def extract_features_only(img_path):
@@ -1305,7 +1321,10 @@ def backfill_products():
 def rebuild_index():
     """重建FAISS索引，清理被删除的向量"""
     try:
-        from vector_engine import get_vector_engine
+        try:
+            from vector_engine import get_vector_engine
+        except ImportError:
+            from .vector_engine import get_vector_engine
         from feature_extractor import get_feature_extractor
 
         logger.info("开始重建FAISS索引...")
@@ -1912,7 +1931,10 @@ def upload_product_image(product_id):
                 img_db_id = db.insert_image_record(product_id, save_path, next_index)
 
                 # 存入 FAISS
-                from vector_engine import get_vector_engine
+                try:
+                    from vector_engine import get_vector_engine
+                except ImportError:
+                    from .vector_engine import get_vector_engine
                 engine = get_vector_engine()
                 engine.add_vector(img_db_id, features)
                 engine.save()
@@ -2061,7 +2083,10 @@ def get_ai_status():
         ai_status = feature_extractor.get_status()
 
         # 获取FAISS状态
-        from vector_engine import get_vector_engine
+        try:
+            from vector_engine import get_vector_engine
+        except ImportError:
+            from .vector_engine import get_vector_engine
         faiss_engine = get_vector_engine()
         faiss_status = faiss_engine.get_stats()
 
@@ -2104,7 +2129,10 @@ def rebuild_faiss_index():
         if current_user['role'] != 'admin':
             return jsonify({'error': '只有管理员可以重建索引'}), 403
 
-        from vector_engine import get_vector_engine
+        try:
+            from vector_engine import get_vector_engine
+        except ImportError:
+            from .vector_engine import get_vector_engine
         engine = get_vector_engine()
 
         # 获取所有有效的图片数据
@@ -2199,7 +2227,10 @@ def get_global_reply_delay():
 def get_faiss_status():
     """获取FAISS向量数据库状态"""
     try:
-        from vector_engine import get_vector_engine
+        try:
+            from vector_engine import get_vector_engine
+        except ImportError:
+            from .vector_engine import get_vector_engine
         engine = get_vector_engine()
         stats = engine.get_stats()
 
@@ -3524,7 +3555,10 @@ def save_product_images(product_id, image_urls):
                 img_db_id = db.insert_image_record(product_id, result['image_path'], result['index'])
 
                 # 添加到FAISS索引
-                from vector_engine import get_vector_engine
+                try:
+                    from vector_engine import get_vector_engine
+                except ImportError:
+                    from .vector_engine import get_vector_engine
                 engine = get_vector_engine()
                 engine.add_vector(img_db_id, result['features'])
 
@@ -3541,7 +3575,10 @@ def save_product_images(product_id, image_urls):
 
         # 保存FAISS索引（批量保存更高效）
         if processed_images > 0:
-            from vector_engine import get_vector_engine
+            try:
+                from vector_engine import get_vector_engine
+            except ImportError:
+                from .vector_engine import get_vector_engine
             engine = get_vector_engine()
             engine.save()
 

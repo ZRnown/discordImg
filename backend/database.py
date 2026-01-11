@@ -4,7 +4,10 @@ import os
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 from contextlib import contextmanager
-from config import config
+try:
+    from config import config
+except ImportError:
+    from .config import config
 
 logger = logging.getLogger(__name__)
 
@@ -397,7 +400,10 @@ class Database:
                              threshold: float = 0.6, user_shops: Optional[List[str]] = None) -> List[Dict]:
         """使用FAISS搜索相似图像"""
         try:
-            from vector_engine import get_vector_engine
+            try:
+                from vector_engine import get_vector_engine
+            except ImportError:
+                from .vector_engine import get_vector_engine
             engine = get_vector_engine()
 
             print(f"DEBUG DB: Starting FAISS search, threshold: {threshold}, limit: {limit}")
@@ -518,7 +524,10 @@ class Database:
 
             if image_records:
                 # 从FAISS中删除向量
-                from vector_engine import get_vector_engine
+                try:
+                    from vector_engine import get_vector_engine
+                except ImportError:
+                    from .vector_engine import get_vector_engine
                 engine = get_vector_engine()
                 for record in image_records:
                     engine.remove_vector_by_db_id(record['id'])
@@ -568,7 +577,10 @@ class Database:
                 return False
 
             # 从FAISS中删除向量并重建索引
-            from vector_engine import get_vector_engine
+            try:
+                from vector_engine import get_vector_engine
+            except ImportError:
+                from .vector_engine import get_vector_engine
             engine = get_vector_engine()
             success = engine.remove_vector_by_db_id(image_id)
             if not success:
@@ -688,7 +700,10 @@ class Database:
     def get_total_indexed_images(self) -> int:
         """获取已索引的总图片数量"""
         try:
-            from vector_engine import get_vector_engine
+            try:
+                from vector_engine import get_vector_engine
+            except ImportError:
+                from .vector_engine import get_vector_engine
             engine = get_vector_engine()
             return engine.count()
         except Exception as e:

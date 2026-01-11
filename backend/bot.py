@@ -7,7 +7,10 @@ import random
 import os
 import json
 from datetime import datetime
-from config import config
+try:
+    from config import config
+except ImportError:
+    from .config import config
 
 # 全局变量用于多账号机器人管理
 bot_clients = []
@@ -156,7 +159,10 @@ class DiscordBotClient(discord.Client):
     def _should_filter_message(self, message):
         """检查消息是否应该被过滤"""
         try:
-            from database import db
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
             filters = db.get_message_filters()
 
             message_content = message.content.lower()
@@ -193,7 +199,10 @@ class DiscordBotClient(discord.Client):
     def _get_custom_reply(self):
         """获取自定义回复内容"""
         try:
-            from database import db
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
             replies = db.get_custom_replies()
 
             if replies:
@@ -212,7 +221,10 @@ class DiscordBotClient(discord.Client):
 
         # 更新数据库中的账号状态为在线
         try:
-            from database import db
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
             if hasattr(self, 'account_id'):
                 db.update_account_status(self.account_id, 'online')
                 logger.info(f'账号 {self.account_id} 状态已更新为在线')
@@ -298,7 +310,10 @@ class DiscordBotClient(discord.Client):
                 user_threshold = config.DISCORD_SIMILARITY_THRESHOLD  # 默认值
                 if self.user_id:
                     try:
-                        from database import db
+                        try:
+                from database import db
+            except ImportError:
+                from .database import db
                         user_settings = db.get_user_settings(self.user_id)
                         if user_settings and 'discord_similarity_threshold' in user_settings:
                             user_threshold = user_settings['discord_similarity_threshold']
@@ -510,7 +525,10 @@ class DiscordBotClient(discord.Client):
                 api_threshold = config.DISCORD_SIMILARITY_THRESHOLD
                 if self.user_id:
                     try:
-                        from database import db
+                        try:
+                from database import db
+            except ImportError:
+                from .database import db
                         user_settings = db.get_user_settings(self.user_id)
                         if user_settings and 'discord_similarity_threshold' in user_settings:
                             api_threshold = user_settings['discord_similarity_threshold']
