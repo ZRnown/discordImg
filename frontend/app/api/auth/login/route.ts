@@ -38,9 +38,7 @@ export async function POST(request: NextRequest) {
             httpOnly: true, // 保持 HttpOnly 增强安全性
             path: '/',
             sameSite: 'lax',
-            // ❌ 原代码: secure: process.env.NODE_ENV === 'production',
-            // ✅ 修改为: 强制 false，因为你使用的是 http://IP
-            secure: false,
+            secure: process.env.NODE_ENV === 'production',
             maxAge: 60 * 60 * 24 * 7 // 设置为 7 天或与后端一致
           });
         }
@@ -53,9 +51,7 @@ export async function POST(request: NextRequest) {
         timestamp: Date.now()
       }), {
         httpOnly: false, // 允许前端 JS 读取
-        // ❌ 原代码: secure: process.env.NODE_ENV === 'production',
-        // ✅ 修改为: 强制 false
-        secure: false,
+        secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
         path: '/',
         maxAge: 60 * 60 * 24 // 24小时

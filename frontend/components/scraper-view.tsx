@@ -75,9 +75,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
   const fetchProducts = async () => {
     try {
-      const res = await fetch('/api/products', {
-        credentials: 'include'
-      })
+      const res = await fetch('/api/products')
       const data = await res.json()
 
       // 调试信息
@@ -121,9 +119,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
   const fetchAvailableShops = async () => {
     try {
-      const res = await fetch('/api/shops', {
-        credentials: 'include'
-      })
+      const res = await fetch('/api/shops')
       if (res.ok) {
         const data = await res.json()
         setAvailableShops(data.shops || [])
@@ -133,9 +129,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
   const fetchProductsCount = async () => {
     try {
-      const res = await fetch('/api/products/count', {
-        credentials: 'include'
-      })
+      const res = await fetch('/api/products/count')
       if (res.ok) {
         const data = await res.json()
         setTotalProductsCount(data.count || 0)
@@ -222,7 +216,6 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     try {
       const res = await fetch(`/api/products/${productId}/images`, {
         method: 'POST',
-        credentials: 'include',
         body: formData
       })
       if (res.ok) {
@@ -251,15 +244,12 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         formData.append('image', file)
           const res = await fetch(`/api/products/${productId}/images`, {
             method: 'POST',
-            credentials: 'include',
-            body: formData
+          body: formData
           })
         if (res.ok) successCount++
       }
       if (successCount > 0) {
-        const productRes = await fetch(`/api/products/${productId}`, {
-          credentials: 'include'
-        }) // Fix: fetch specific product if endpoint exists, else refresh all or return from API
+        const productRes = await fetch(`/api/products/${productId}`) // Fix: fetch specific product if endpoint exists, else refresh all or return from API
         // Refresh products for simplicity
         fetchProducts();
       }
@@ -358,7 +348,6 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
       const response = await fetch('/api/scrape/shop', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
         body: JSON.stringify({ shopId: selectedShopId })
       })
 
@@ -391,9 +380,8 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
             const res = await fetch('/api/scrape', {
             method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                credentials: 'include',
             body: JSON.stringify({ weidianId: id })
-            })
+          })
             if(res.ok) successCount++
             else if(res.status === 409) skipCount++
             setBatchProgress(((i+1)/ids.length)*100)
@@ -665,8 +653,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                                                     }
 
                                                                     const res = await fetch(`/api/products/${product.id}/images/${imageIndex}`, {
-                                                                        method: 'DELETE',
-                                                                        credentials: 'include'
+                                                                        method: 'DELETE'
                                   })
                                   if (res.ok) {
                                     const data = await res.json()

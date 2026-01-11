@@ -204,12 +204,7 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 
 # CORS 配置，必须允许 Credentials
-allowed_origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://69.30.204.184:3000",  # <--- 确保这行存在
-]
-CORS(app, origins=allowed_origins, supports_credentials=True)
+CORS(app, origins=["http://localhost:3000"], supports_credentials=True)
 
 # Cookie 配置优化 (解决本地调试 Cookie 无法写入的问题)
 app.config.update(
