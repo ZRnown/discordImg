@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 
 // 后端 API URL
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
 
 export async function POST(request: Request) {
   try {

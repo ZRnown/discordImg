@@ -204,20 +204,18 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 
 # CORS 配置，必须允许 Credentials
-# 支持多种前端域名（本地开发和生产环境）
 allowed_origins = [
-    "http://localhost:3000",      # 本地开发
-    "http://127.0.0.1:3000",     # 本地开发
-    "http://69.30.204.184:3000",  # 生产服务器
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://69.30.204.184:3000",  # <--- 确保这行存在
 ]
 CORS(app, origins=allowed_origins, supports_credentials=True)
 
-# Cookie 配置优化 (支持本地和生产环境)
-is_production = os.environ.get('FLASK_ENV') == 'production' or '69.30.204.184' in os.environ.get('FRONTEND_URL', '')
+# Cookie 配置优化 (解决本地调试 Cookie 无法写入的问题)
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE='Lax',  # 生产环境建议使用 'None' + Secure
-    SESSION_COOKIE_SECURE=is_production,  # 生产环境必须为 True (HTTPS)
+    SESSION_COOKIE_SAMESITE='Lax', # 在同一域名不同端口下 Lax 通常更好
+    SESSION_COOKIE_SECURE=False,   # 本地调试必须为 False，否则 http 下不发送 cookie
 )
 
 def extract_features(image_path):

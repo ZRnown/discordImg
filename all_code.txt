@@ -69,7 +69,7 @@ export async function GET() {
 }
 
 --- File: ./frontend/app/api/products/route.ts ---
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:5001'
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001'
 
 export async function GET(request: Request) {
   try {
@@ -425,7 +425,7 @@ export async function DELETE(
 --- File: ./frontend/app/api/config/discord-threshold/route.ts ---
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001';
 
 export async function GET() {
   try {
@@ -465,60 +465,10 @@ export async function POST(request: NextRequest) {
   }
 }
 
---- File: ./frontend/app/api/config/threads/route.ts ---
-import { NextRequest, NextResponse } from 'next/server'
-
-const BACKEND_URL = 'http://localhost:5001'
-
-export async function GET() {
-  try {
-    const response = await fetch(`${BACKEND_URL}/api/config/threads`, {
-      method: 'GET',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    })
-
-    if (!response.ok) {
-      throw new Error(`Backend API error: ${response.status}`)
-    }
-
-    const data = await response.json()
-    return NextResponse.json(data)
-  } catch (error) {
-    console.error('Threads config API error:', error)
-    return NextResponse.json({ error: 'Failed to fetch threads config' }, { status: 500 })
-  }
-}
-
-export async function POST(request: NextRequest) {
-  try {
-    const body = await request.json()
-
-    const response = await fetch(`${BACKEND_URL}/api/config/threads`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(body),
-    })
-
-    if (!response.ok) {
-      throw new Error(`Backend API error: ${response.status}`)
-    }
-
-    const data = await response.json()
-    return NextResponse.json(data)
-  } catch (error) {
-    console.error('Threads config API error:', error)
-    return NextResponse.json({ error: 'Failed to update threads config' }, { status: 500 })
-  }
-}
-
 --- File: ./frontend/app/api/config/global-reply-delay/route.ts ---
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001';
 
 export async function GET() {
   try {
@@ -611,7 +561,7 @@ export async function POST(request: NextRequest) {
 --- File: ./frontend/app/api/auth/logout/route.ts ---
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001';
 
 export async function POST(request: NextRequest) {
   try {
@@ -644,7 +594,7 @@ export async function POST(request: NextRequest) {
 --- File: ./frontend/app/api/auth/me/route.ts ---
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001';
 
 export async function GET(request: NextRequest) {
   try {
@@ -680,7 +630,7 @@ export async function GET(request: NextRequest) {
 --- File: ./frontend/app/api/auth/login/route.ts ---
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001';
 
 export async function POST(request: NextRequest) {
   try {
@@ -864,7 +814,7 @@ export async function DELETE(
 --- File: ./frontend/app/api/test-similarity/route.ts ---
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001';
 
 export async function POST(request: NextRequest) {
   try {
@@ -892,7 +842,7 @@ export async function POST(request: NextRequest) {
 --- File: ./frontend/app/api/search_history/route.ts ---
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001';
 
 export async function GET(request: NextRequest) {
   try {
@@ -934,7 +884,7 @@ export async function DELETE(request: NextRequest) {
 --- File: ./frontend/app/api/search_history/[id]/route.ts ---
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001';
 
 export async function DELETE(
   request: NextRequest,
@@ -1081,7 +1031,7 @@ export async function DELETE(
 --- File: ./frontend/app/api/user/settings/route.ts ---
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001';
 
 export async function GET(request: NextRequest) {
   try {
@@ -1138,7 +1088,7 @@ export async function PUT(request: NextRequest) {
 import { NextResponse } from 'next/server';
 
 // 后端 API URL
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:5001';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001';
 
 export async function GET(request: Request) {
   try {
@@ -1355,7 +1305,7 @@ export async function PATCH(request: Request) {
 --- File: ./frontend/app/api/image/[productId]/[imageIndex]/route.ts ---
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001';
 
 export async function GET(
   request: NextRequest,
@@ -1392,9 +1342,18 @@ import { NextRequest, NextResponse } from 'next/server'
 
 const BACKEND_URL = 'http://localhost:5001'
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const response = await fetch(`${BACKEND_URL}/api/shops`)
+    const cookies = request.headers.get('cookie') || '';
+    const headers: Record<string, string> = {};
+    if (cookies) {
+      headers['Cookie'] = cookies;
+    }
+
+    const response = await fetch(`${BACKEND_URL}/api/shops`, {
+      headers: headers
+    })
+
     if (response.ok) {
       const data = await response.json()
       return NextResponse.json(data)
@@ -1409,9 +1368,15 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
+    const cookies = request.headers.get('cookie') || '';
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (cookies) {
+      headers['Cookie'] = cookies;
+    }
+
     const response = await fetch(`${BACKEND_URL}/api/shops`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: headers,
       body: JSON.stringify(body)
     })
 
@@ -1438,15 +1403,23 @@ export async function DELETE(
 ) {
   try {
     const resolvedParams = await params;
+    const cookies = request.headers.get('cookie') || '';
+    const headers: Record<string, string> = {};
+    if (cookies) {
+      headers['Cookie'] = cookies;
+    }
+
     const response = await fetch(`${BACKEND_URL}/api/shops/${resolvedParams.id}`, {
-      method: 'DELETE'
+      method: 'DELETE',
+      headers: headers
     })
 
     if (response.ok) {
       const data = await response.json()
       return NextResponse.json(data)
     } else {
-      return NextResponse.json({ error: 'Failed to delete shop' }, { status: response.status })
+      const error = await response.json()
+      return NextResponse.json(error, { status: response.status })
     }
   } catch (error) {
     return NextResponse.json({ error: 'Backend connection failed' }, { status: 500 })
@@ -1458,7 +1431,7 @@ import { NextRequest, NextResponse } from 'next/server'
 
 // 获取后端 URL
 const getBackendUrl = () => {
-  return process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001'
+  return process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001'
 }
 
 export async function POST(request: NextRequest) {
@@ -1542,7 +1515,7 @@ export async function POST(request: NextRequest) {
 --- File: ./frontend/app/api/system/stats/route.ts ---
 import { NextRequest, NextResponse } from 'next/server'
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001'
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001'
 
 export async function GET() {
   try {
@@ -1573,7 +1546,7 @@ export async function GET(request: NextRequest) {
     }
 
     // 代理请求到后端，使用127.0.0.1避免代理问题
-    const backendUrl = `http://127.0.0.1:5001/api/shop-info?shopId=${shopId}`
+    const backendUrl = `http://69.30.204.184:5001/api/shop-info?shopId=${shopId}`
 
     const response = await fetch(backendUrl, {
       method: 'GET',
@@ -1723,7 +1696,7 @@ export async function GET(request: NextRequest) {
 --- File: ./frontend/app/api/accounts/route.ts ---
 import { NextRequest, NextResponse } from 'next/server'
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001'
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001'
 
 export async function GET(request: NextRequest) {
   try {
@@ -1775,7 +1748,7 @@ export async function POST(request: NextRequest) {
 --- File: ./frontend/app/api/accounts/rotation/route.ts ---
 import { NextRequest, NextResponse } from 'next/server'
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001'
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001'
 
 export async function GET() {
   try {
@@ -1814,7 +1787,7 @@ export async function POST(request: NextRequest) {
 --- File: ./frontend/app/api/accounts/[id]/user/route.ts ---
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001';
 
 // 分配Discord账号给用户
 export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -1850,7 +1823,7 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
 --- File: ./frontend/app/api/accounts/[id]/status/route.ts ---
 import { NextRequest, NextResponse } from 'next/server'
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001'
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001'
 
 export async function PUT(
   request: NextRequest,
@@ -1885,7 +1858,7 @@ export async function PUT(
 --- File: ./frontend/app/api/accounts/[id]/route.ts ---
 import { NextRequest, NextResponse } from 'next/server'
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001'
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001'
 
 export async function DELETE(
   request: NextRequest,
@@ -1910,7 +1883,7 @@ export async function DELETE(
 --- File: ./frontend/app/api/search_similar/route.ts ---
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001';
 
 export async function POST(request: NextRequest) {
   try {
@@ -1938,7 +1911,7 @@ export async function POST(request: NextRequest) {
 --- File: ./frontend/app/api/users/route.ts ---
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001';
 
 // 获取用户列表（管理员权限）
 export async function GET(request: NextRequest) {
@@ -2052,7 +2025,7 @@ export async function PUT(
 --- File: ./frontend/app/api/users/[id]/shops/route.ts ---
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001';
 
 // 更新用户店铺权限
 export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -2133,7 +2106,7 @@ export async function DELETE(
 --- File: ./frontend/app/api/bot/start/route.ts ---
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001';
 
 export async function POST(request: NextRequest) {
   try {
@@ -2174,7 +2147,7 @@ export async function POST(request: NextRequest) {
 --- File: ./frontend/app/api/bot/stop/route.ts ---
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001';
 
 export async function POST(request: NextRequest) {
   try {
@@ -2616,7 +2589,7 @@ export default function Page() {
         <main className="flex-1 overflow-auto p-6">
           {currentView === "dashboard" && <DashboardView currentUser={currentUser} />}
           {currentView === "accounts" && <AccountsView />}
-          {currentView === "shops" && currentUser.role === 'admin' && <ShopsView />}
+          {currentView === "shops" && (currentUser.role === 'admin' || (currentUser.shops && currentUser.shops.length > 0)) && <ShopsView currentUser={currentUser} />}
           {currentView === "scraper" && <ScraperView currentUser={currentUser} />}
           {currentView === "image-search" && <ImageSearchView />}
           {currentView === "users" && currentUser.role === 'admin' && <UsersView />}
@@ -2630,7 +2603,7 @@ export default function Page() {
 --- File: ./frontend/next-env.d.ts ---
 /// <reference types="next" />
 /// <reference types="next/image-types/global" />
-import "./.next/dev/types/routes.d.ts";
+import "./.next/types/routes.d.ts";
 
 // NOTE: This file should not be edited
 // see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
@@ -2671,8 +2644,6 @@ export function AccountsView() {
     token: ""
   })
   const [settings, setSettings] = useState({
-    download_threads: 4,
-    feature_extract_threads: 4,
     discord_similarity_threshold: 0.6,
     global_reply_min_delay: 3.0,
     global_reply_max_delay: 8.0,
@@ -2772,8 +2743,6 @@ export function AccountsView() {
       if (response.ok) {
         const data = await response.json()
         setSettings({
-          download_threads: data.download_threads || 4,
-          feature_extract_threads: data.feature_extract_threads || 4,
           discord_similarity_threshold: data.discord_similarity_threshold || 0.6,
           global_reply_min_delay: data.global_reply_min_delay || 3.0,
           global_reply_max_delay: data.global_reply_max_delay || 8.0,
@@ -3166,50 +3135,6 @@ export function AccountsView() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* 线程设置 */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">线程设置</CardTitle>
-              <CardDescription>配置图片下载和特征提取的并发线程数</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <Label htmlFor="download-threads">下载线程数</Label>
-                <Select
-                  value={settings.download_threads.toString()}
-                  onValueChange={(value) => setSettings(prev => ({ ...prev, download_threads: parseInt(value) }))}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="2">2</SelectItem>
-                    <SelectItem value="4">4</SelectItem>
-                    <SelectItem value="6">6</SelectItem>
-                    <SelectItem value="8">8</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div>
-                <Label htmlFor="feature-threads">特征提取线程数</Label>
-                <Select
-                  value={settings.feature_extract_threads.toString()}
-                  onValueChange={(value) => setSettings(prev => ({ ...prev, feature_extract_threads: parseInt(value) }))}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="2">2</SelectItem>
-                    <SelectItem value="4">4</SelectItem>
-                    <SelectItem value="6">6</SelectItem>
-                    <SelectItem value="8">8</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </CardContent>
-          </Card>
 
           {/* 相似度设置 */}
           <Card>
@@ -4326,6 +4251,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   const [keywordSearch, setKeywordSearch] = useState('')
   const [isDeleting, setIsDeleting] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deletingProductId, setDeletingProductId] = useState<number | null>(null)
   // 图片上传 ref
   const uploadInputRef = useRef<HTMLInputElement>(null)
   const [isUploadingImg, setIsUploadingImg] = useState(false)
@@ -4360,8 +4286,23 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
   const fetchProducts = async () => {
     try {
-      const res = await fetch('/api/products')
+      const res = await fetch('/api/products', {
+        credentials: 'include'
+      })
       const data = await res.json()
+
+      // 调试信息
+      console.log('商品列表API响应:', {
+        total: data.total,
+        productsCount: data.products?.length || 0,
+        debug: data.debug,
+        firstProduct: data.products?.[0] ? {
+          id: data.products[0].id,
+          shopName: data.products[0].shopName || data.products[0].shop_name,
+          title: data.products[0].title
+        } : null
+      })
+
       const processedProducts = (Array.isArray(data.products) ? data.products : []).map((product: any) => ({
         ...product,
         id: product.id,
@@ -4391,7 +4332,9 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
   const fetchAvailableShops = async () => {
     try {
-      const res = await fetch('/api/shops')
+      const res = await fetch('/api/shops', {
+        credentials: 'include'
+      })
       if (res.ok) {
         const data = await res.json()
         setAvailableShops(data.shops || [])
@@ -4401,7 +4344,9 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
   const fetchProductsCount = async () => {
     try {
-      const res = await fetch('/api/products/count')
+      const res = await fetch('/api/products/count', {
+        credentials: 'include'
+      })
       if (res.ok) {
         const data = await res.json()
         setTotalProductsCount(data.count || 0)
@@ -4415,16 +4360,20 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     try {
       const res = await fetch('/api/scrape/shop/status')
       if (res.ok) {
-        const status = await res.json()
-        setIsShopScraping(status.is_scraping)
-        setShopScrapeProgress(status.progress || 0)
-        // 如果抓取完成，刷新商品列表
-        if (!status.is_scraping && status.completed) {
-          fetchProducts()
-          fetchProductsCount()
-    }
-  }
+        const text = await res.text()
+        if (text.trim()) {
+          const status = JSON.parse(text)
+          setIsShopScraping(status.is_scraping)
+          setShopScrapeProgress(status.progress || 0)
+          // 如果抓取完成，刷新商品列表
+          if (!status.is_scraping && status.completed) {
+            fetchProducts()
+            fetchProductsCount()
+          }
+        }
+      }
     } catch (e) {
+      console.error('获取抓取状态失败:', e)
       // 静默失败
     }
   }
@@ -4484,6 +4433,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     try {
       const res = await fetch(`/api/products/${productId}/images`, {
         method: 'POST',
+        credentials: 'include',
         body: formData
       })
       if (res.ok) {
@@ -4512,12 +4462,15 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         formData.append('image', file)
           const res = await fetch(`/api/products/${productId}/images`, {
             method: 'POST',
-          body: formData
+            credentials: 'include',
+            body: formData
           })
         if (res.ok) successCount++
       }
       if (successCount > 0) {
-        const productRes = await fetch(`/api/products/${productId}`) // Fix: fetch specific product if endpoint exists, else refresh all or return from API
+        const productRes = await fetch(`/api/products/${productId}`, {
+          credentials: 'include'
+        }) // Fix: fetch specific product if endpoint exists, else refresh all or return from API
         // Refresh products for simplicity
         fetchProducts();
       }
@@ -4548,30 +4501,36 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   }
 
   const handleDeleteProduct = async (id: number) => {
-    // 显示确认提示
-    if (!confirm(`确定要删除商品 ${id} 吗？此操作不可恢复。`)) {
-      return
-    }
+    setDeletingProductId(id)
+    setShowDeleteConfirm(true)
+  }
+
+  const confirmDeleteProduct = async () => {
+    if (!deletingProductId) return
+
+    setShowDeleteConfirm(false)
 
     // 显示删除进度提示
-    toast.loading("正在删除商品...", { id: `delete-${id}` })
+    toast.loading("正在删除商品...", { id: `delete-${deletingProductId}` })
 
     try {
-      const response = await fetch(`/api/products/${id}`, {
+      const response = await fetch(`/api/products/${deletingProductId}`, {
         method: 'DELETE',
         credentials: 'include'
       })
 
       if (response.ok) {
-      setProducts(products.filter(p => p.id !== id))
+        setProducts(products.filter(p => p.id !== deletingProductId))
         setTotalProducts(totalProducts - 1)
-        setSelectedProducts(selectedProducts.filter(pid => pid !== id))
-        toast.success("删除成功", { id: `delete-${id}` })
+        setSelectedProducts(selectedProducts.filter(pid => pid !== deletingProductId))
+        toast.success("删除成功", { id: `delete-${deletingProductId}` })
       } else {
-        toast.error("删除失败", { id: `delete-${id}` })
+        toast.error("删除失败", { id: `delete-${deletingProductId}` })
       }
     } catch (e) {
-      toast.error("删除失败", { id: `delete-${id}` })
+      toast.error("删除失败", { id: `delete-${deletingProductId}` })
+    } finally {
+      setDeletingProductId(null)
     }
   }
 
@@ -4610,6 +4569,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
       const response = await fetch('/api/scrape/shop', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ shopId: selectedShopId })
       })
 
@@ -4642,8 +4602,9 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
             const res = await fetch('/api/scrape', {
             method: 'POST',
                 headers: {'Content-Type': 'application/json'},
+                credentials: 'include',
             body: JSON.stringify({ weidianId: id })
-          })
+            })
             if(res.ok) successCount++
             else if(res.status === 409) skipCount++
             setBatchProgress(((i+1)/ids.length)*100)
@@ -4689,7 +4650,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         <p className="text-muted-foreground">商品管理与抓取</p>
       </div>
 
-      {currentUser?.role === 'admin' ? (
+      {(currentUser?.role === 'admin' || (currentUser?.shops && currentUser.shops.length > 0)) ? (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
              {/* Shop Scrape Card */}
         <Card className="border-2 border-dashed border-purple-300/50 hover:border-purple-400 transition-colors">
@@ -4741,7 +4702,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         </Card>
         </div>
       ) : (
-          /* User View */
+          /* User View - 普通用户只能看到批量上传 */
         <div className="max-w-2xl mx-auto">
              <Card className="border-2 border-dashed border-green-300/50">
             <CardContent className="p-8">
@@ -4915,7 +4876,8 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                                                     }
 
                                                                     const res = await fetch(`/api/products/${product.id}/images/${imageIndex}`, {
-                                                                        method: 'DELETE'
+                                                                        method: 'DELETE',
+                                                                        credentials: 'include'
                                   })
                                   if (res.ok) {
                                     const data = await res.json()
@@ -5088,8 +5050,39 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         </CardContent>
       </Card>
 
+        {/* 单个商品删除确认对话框 */}
+        <Dialog open={showDeleteConfirm && deletingProductId !== null} onOpenChange={(open) => {
+          if (!open) {
+            setShowDeleteConfirm(false)
+            setDeletingProductId(null)
+          }
+        }}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>确认删除商品</DialogTitle>
+              <DialogDescription>
+                确定要删除商品 {deletingProductId} 吗？此操作不可恢复。
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => {
+                setShowDeleteConfirm(false)
+                setDeletingProductId(null)
+              }}>
+                取消
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={confirmDeleteProduct}
+              >
+                确认删除
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
       {/* 批量删除确认对话框 */}
-      <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+        <Dialog open={showDeleteConfirm && deletingProductId === null} onOpenChange={setShowDeleteConfirm}>
         <DialogContent>
           <DialogHeader>
               <DialogTitle>确认批量删除</DialogTitle>
@@ -5957,8 +5950,6 @@ interface User {
 }
 
 interface UserSettings {
-  download_threads: number
-  feature_extract_threads: number
   discord_similarity_threshold: number
   global_reply_min_delay: number
   global_reply_max_delay: number
@@ -5966,8 +5957,6 @@ interface UserSettings {
 
 export function SettingsView() {
   const [settings, setSettings] = useState<UserSettings>({
-    download_threads: 4,
-    feature_extract_threads: 4,
     discord_similarity_threshold: 0.6,
     global_reply_min_delay: 3.0,
     global_reply_max_delay: 8.0,
@@ -5992,8 +5981,6 @@ export function SettingsView() {
       if (response.ok) {
         const data = await response.json()
         setSettings({
-          download_threads: data.download_threads ?? 4,
-          feature_extract_threads: data.feature_extract_threads ?? 4,
           discord_similarity_threshold: data.discord_similarity_threshold ?? 0.6,
           global_reply_min_delay: data.global_reply_min_delay ?? 3.0,
           global_reply_max_delay: data.global_reply_max_delay ?? 8.0,
@@ -6161,62 +6148,24 @@ export function SettingsView() {
         </CardContent>
       </Card>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* 线程设置 */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">线程设置</CardTitle>
-            <CardDescription>配置图片下载和特征提取的并发线程数</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <Label htmlFor="download-threads">下载线程数</Label>
-              <Select
-                value={settings.download_threads.toString()}
-                onValueChange={(value) => setSettings(prev => ({ ...prev, download_threads: parseInt(value) }))}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="2">2</SelectItem>
-                  <SelectItem value="4">4</SelectItem>
-                  <SelectItem value="6">6</SelectItem>
-                  <SelectItem value="8">8</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div>
-              <Label htmlFor="feature-threads">特征提取线程数</Label>
-              <Select
-                value={settings.feature_extract_threads.toString()}
-                onValueChange={(value) => setSettings(prev => ({ ...prev, feature_extract_threads: parseInt(value) }))}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="2">2</SelectItem>
-                  <SelectItem value="4">4</SelectItem>
-                  <SelectItem value="6">6</SelectItem>
-                  <SelectItem value="8">8</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* 相似度设置 */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">相似度设置</CardTitle>
-            <CardDescription>设置图片匹配的相似度阈值</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div>
-              <Label htmlFor="similarity-threshold">相似度阈值</Label>
-              <div className="flex items-center space-x-2">
+      {/* 系统参数设置 */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg">系统参数</CardTitle>
+          <CardDescription>配置图片匹配和回复延迟参数</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {/* 相似度和延迟设置 - 紧凑布局 */}
+          <div className="flex flex-col sm:flex-row gap-6">
+            {/* 相似度设置 */}
+            <div className="flex-1 space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="similarity-threshold" className="text-sm font-medium">相似度阈值</Label>
+                <span className="text-sm font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                  {(settings.discord_similarity_threshold * 100).toFixed(0)}%
+                </span>
+              </div>
+              <div className="space-y-1">
                 <Input
                   id="similarity-threshold"
                   type="number"
@@ -6225,56 +6174,52 @@ export function SettingsView() {
                   max="1.0"
                   value={settings.discord_similarity_threshold}
                   onChange={(e) => setSettings(prev => ({ ...prev, discord_similarity_threshold: parseFloat(e.target.value) }))}
+                  className="h-9"
                 />
-                <span className="text-sm text-muted-foreground">
-                  {(settings.discord_similarity_threshold * 100).toFixed(0)}%
-                </span>
+                <p className="text-xs text-muted-foreground">
+                  阈值越低匹配越宽松，建议范围 0.3-0.8
+                </p>
               </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                阈值越低匹配越宽松，建议范围: 0.3-0.8
-              </p>
             </div>
-          </CardContent>
-        </Card>
 
-        {/* 回复延迟设置 */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">回复延迟设置</CardTitle>
-            <CardDescription>设置账号回复的时间间隔</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <Label htmlFor="min-delay">最小延迟(秒)</Label>
-                <Input
-                  id="min-delay"
-                  type="number"
-                  step="0.1"
-                  min="0.1"
-                  max="30"
-                  value={settings.global_reply_min_delay}
-                  onChange={(e) => setSettings(prev => ({ ...prev, global_reply_min_delay: parseFloat(e.target.value) }))}
-                />
-              </div>
-              <div>
-                <Label htmlFor="max-delay">最大延迟(秒)</Label>
-                <Input
-                  id="max-delay"
-                  type="number"
-                  step="0.5"
-                  min="1"
-                  max="60"
-                  value={settings.global_reply_max_delay}
-                  onChange={(e) => setSettings(prev => ({ ...prev, global_reply_max_delay: parseFloat(e.target.value) }))}
-                />
+            {/* 回复延迟设置 */}
+            <div className="flex-1 space-y-2">
+              <Label className="text-sm font-medium">回复延迟</Label>
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1">
+                    <Input
+                      id="min-delay"
+                      type="number"
+                      step="0.1"
+                      min="0.1"
+                      max="30"
+                      value={settings.global_reply_min_delay}
+                      onChange={(e) => setSettings(prev => ({ ...prev, global_reply_min_delay: parseFloat(e.target.value) }))}
+                      className="w-16 h-9 text-center"
+                    />
+                    <span className="text-sm text-muted-foreground">-</span>
+                    <Input
+                      id="max-delay"
+                      type="number"
+                      step="0.5"
+                      min="1"
+                      max="60"
+                      value={settings.global_reply_max_delay}
+                      onChange={(e) => setSettings(prev => ({ ...prev, global_reply_max_delay: parseFloat(e.target.value) }))}
+                      className="w-16 h-9 text-center"
+                    />
+                  </div>
+                  <span className="text-xs text-muted-foreground">秒</span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  每次回复随机延迟 {settings.global_reply_min_delay}-{settings.global_reply_max_delay} 秒
+                </p>
               </div>
             </div>
-            <p className="text-xs text-muted-foreground">
-              每次回复将在 {settings.global_reply_min_delay}-{settings.global_reply_max_delay} 秒之间随机延迟
-            </p>
-          </CardContent>
-        </Card>
+          </div>
+        </CardContent>
+      </Card>
 
         {/* 系统信息 */}
         <Card>
@@ -6329,10 +6274,11 @@ const baseMenuItems = [
   { id: "accounts", icon: Users, label: "账号与规则" },
   { id: "scraper", icon: Search, label: "微店抓取" },
   { id: "image-search", icon: ImageIcon, label: "以图搜图" },
+  { id: "shops", icon: Store, label: "店铺管理" },
 ]
 
-const adminMenuItems = [
-  { id: "shops", icon: Store, label: "店铺管理" },
+// 只有管理员才能访问的功能
+const adminOnlyMenuItems = [
   { id: "users", icon: Shield, label: "用户管理" },
   { id: "logs", icon: ScrollText, label: "实时日志" },
 ]
@@ -6362,7 +6308,9 @@ export function AppSidebar({
           <SidebarGroupLabel>主要功能</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {baseMenuItems.map((item) => (
+              {baseMenuItems
+                .filter(item => item.id !== 'shops' || currentUser?.role === 'admin' || (currentUser?.shops && currentUser.shops.length > 0))
+                .map((item) => (
                 <SidebarMenuItem key={item.id}>
                   <SidebarMenuButton onClick={() => setCurrentView(item.id)} isActive={currentView === item.id}>
                     <item.icon />
@@ -6374,12 +6322,13 @@ export function AppSidebar({
           </SidebarGroupContent>
         </SidebarGroup>
 
+
         {currentUser?.role === 'admin' && (
           <SidebarGroup>
             <SidebarGroupLabel>管理员功能</SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
-                {adminMenuItems.map((item) => (
+                {adminOnlyMenuItems.map((item) => (
                   <SidebarMenuItem key={item.id}>
                     <SidebarMenuButton onClick={() => setCurrentView(item.id)} isActive={currentView === item.id}>
                       <item.icon />
@@ -6849,9 +6798,6 @@ export function LoginView({ onLogin }: { onLogin: (user: User) => void }) {
             )}
           </Button>
 
-          <div className="text-center text-sm text-muted-foreground">
-            <p>默认管理员账号: admin / admin123</p>
-          </div>
         </CardContent>
       </Card>
     </div>
@@ -7237,13 +7183,13 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog"
 
-export function ShopsView() {
+export function ShopsView({ currentUser }: { currentUser: any }) {
+
   const [shops, setShops] = useState<any[]>([])
   const [newShopId, setNewShopId] = useState('')
   const [isAddingShop, setIsAddingShop] = useState(false)
   const [selectedShopIds, setSelectedShopIds] = useState<string[]>([])
   const [isShopScraping, setIsShopScraping] = useState(false)
-  const [shopScrapeProgress, setShopScrapeProgress] = useState(0)
   const [searchKeyword, setSearchKeyword] = useState('')
   const [isBatchDeleting, setIsBatchDeleting] = useState(false)
   const [showBatchDeleteConfirm, setShowBatchDeleteConfirm] = useState(false)
@@ -7254,9 +7200,19 @@ export function ShopsView() {
 
   const fetchShops = async () => {
     try {
-      const res = await fetch('/api/shops')
+      const res = await fetch('/api/shops', {
+        credentials: 'include'
+      })
       const data = await res.json()
-      setShops(data.shops || [])
+      let allShops = data.shops || []
+
+      // 根据用户权限过滤店铺
+      if (currentUser?.role !== 'admin' && currentUser?.shops) {
+        // 普通用户只看到分配给他们的店铺
+        allShops = allShops.filter((shop: any) => currentUser.shops.includes(shop.shop_id))
+      }
+
+      setShops(allShops)
     } catch (e) {
       toast.error("加载店铺列表失败")
     }
@@ -7292,6 +7248,7 @@ export function ShopsView() {
       const res = await fetch('/api/shops', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           shopId: newShopId.trim(),
           name: shopName
@@ -7329,7 +7286,8 @@ export function ShopsView() {
   const handleDeleteShop = async (shopId: string) => {
     try {
       const res = await fetch(`/api/shops/${shopId}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        credentials: 'include'
       })
 
       if (res.ok) {
@@ -7345,46 +7303,6 @@ export function ShopsView() {
     }
   }
 
-  const handleScrapeSelectedShops = async () => {
-    if (selectedShopIds.length === 0) {
-      toast.error("请先选择要抓取的店铺")
-      return
-    }
-
-    setIsShopScraping(true)
-    setShopScrapeProgress(0)
-
-    try {
-      for (let i = 0; i < selectedShopIds.length; i++) {
-        const shopId = selectedShopIds[i]
-        const progress = ((i + 1) / selectedShopIds.length) * 100
-        setShopScrapeProgress(progress)
-
-        toast.info(`正在抓取店铺: ${shops.find(s => s.shop_id === shopId)?.name || shopId}`)
-
-        const res = await fetch('/api/scrape/shop', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ shopId })
-        })
-
-        const data = await res.json()
-
-        if (res.ok) {
-          toast.success(`店铺 ${shops.find(s => s.shop_id === shopId)?.name || shopId} 抓取完成，共获取 ${data.total_products} 个商品`)
-        } else {
-          toast.error(`店铺 ${shopId} 抓取失败: ${data.error || '未知错误'}`)
-        }
-      }
-
-      toast.success("批量抓取完成")
-    } catch (e) {
-      toast.error("抓取过程中出错")
-    } finally {
-      setIsShopScraping(false)
-      setShopScrapeProgress(0)
-    }
-  }
 
   const handleSelectShop = (shopId: string) => {
     setSelectedShopIds(prev =>
@@ -7418,7 +7336,8 @@ export function ShopsView() {
       for (const shopId of selectedShopIds) {
         try {
           const res = await fetch(`/api/shops/${shopId}`, {
-            method: 'DELETE'
+            method: 'DELETE',
+            credentials: 'include'
           })
 
           if (res.ok) {
@@ -7456,49 +7375,63 @@ export function ShopsView() {
       <div>
         <h2 className="text-3xl font-bold tracking-tight">店铺管理</h2>
         <p className="text-muted-foreground">管理微店店铺，添加新店铺并进行全量抓取</p>
+        <div className="flex items-center gap-2 mt-2">
+          <span className="text-sm text-muted-foreground">当前用户:</span>
+          <span className="font-medium">{currentUser?.username}</span>
+          <span className={`text-xs px-2 py-1 rounded ${
+            currentUser?.role === 'admin'
+              ? 'bg-blue-100 text-blue-700'
+              : 'bg-gray-100 text-gray-700'
+          }`}>
+            {currentUser?.role === 'admin' ? '管理员' : '普通用户'}
+          </span>
+        </div>
       </div>
 
-      {/* 添加新店铺 */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Plus className="h-5 w-5" />
-            添加新店铺
-          </CardTitle>
-          <CardDescription>
-            输入微店店铺ID，系统会自动获取店铺名称
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex gap-3">
-            <div className="flex-1">
-              <Input
-                placeholder="输入店铺ID (例如: 1713062461)"
-                value={newShopId}
-                onChange={(e) => setNewShopId(e.target.value)}
-                disabled={isAddingShop}
-                onKeyPress={(e) => e.key === 'Enter' && handleAddShop()}
-              />
+      {/* 添加新店铺 - 仅管理员可见 */}
+      {currentUser?.role === 'admin' && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Plus className="h-5 w-5" />
+              添加新店铺
+            </CardTitle>
+            <CardDescription>
+              输入微店店铺ID，系统会自动获取店铺名称
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex gap-3">
+              <div className="flex-1">
+                <Input
+                  placeholder="输入店铺ID (例如: 1713062461)"
+                  value={newShopId}
+                  onChange={(e) => setNewShopId(e.target.value)}
+                  disabled={isAddingShop}
+                  onKeyPress={(e) => e.key === 'Enter' && handleAddShop()}
+                />
+              </div>
+              <Button
+                onClick={handleAddShop}
+                disabled={!newShopId.trim() || isAddingShop}
+              >
+                {isAddingShop ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    添加中...
+                  </>
+                ) : (
+                  <>
+                    <Plus className="mr-2 h-4 w-4" />
+                    添加店铺
+                  </>
+                )}
+              </Button>
             </div>
-            <Button
-              onClick={handleAddShop}
-              disabled={!newShopId.trim() || isAddingShop}
-            >
-              {isAddingShop ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  添加中...
-                </>
-              ) : (
-                <>
-                  <Plus className="mr-2 h-4 w-4" />
-                  添加店铺
-                </>
-              )}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+      )}
+
 
       {/* 店铺列表 */}
       <Card>
@@ -7513,7 +7446,7 @@ export function ShopsView() {
                 已添加的店铺，支持批量全量抓取和删除
               </CardDescription>
             </div>
-            {selectedShopIds.length > 0 && (
+            {selectedShopIds.length > 0 && currentUser?.role === 'admin' && (
               <Button
                 variant="destructive"
                 size="sm"
@@ -7620,23 +7553,22 @@ export function ShopsView() {
                       </div>
                     </div>
                   </div>
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    onClick={() => handleDeleteShop(shop.shop_id)}
-                    disabled={isShopScraping}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
+                  {(currentUser?.role === 'admin' || currentUser?.shops?.includes(shop.shop_id)) && (
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={() => handleDeleteShop(shop.shop_id)}
+                      disabled={isShopScraping}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  )}
                 </div>
               ))}
             </div>
           )}
         </CardContent>
       </Card>
-
-      {/* 批量操作 */}
-
 
       {/* 批量删除确认对话框 */}
       <Dialog open={showBatchDeleteConfirm} onOpenChange={setShowBatchDeleteConfirm}>
@@ -7738,7 +7670,9 @@ export function UsersView() {
 
   const fetchShops = async () => {
     try {
-      const response = await fetch('/api/shops')
+      const response = await fetch('/api/shops', {
+        credentials: 'include'
+      })
       if (response.ok) {
         const data = await response.json()
         setShops(data.shops || [])
@@ -7824,6 +7758,7 @@ export function UsersView() {
       const response = await fetch(`/api/users/${userId}/shops`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({ shops: shopIds })
       })
 
@@ -8444,7 +8379,10 @@ import os
 import logging
 from typing import List, Dict, Any, Optional, Tuple
 from contextlib import contextmanager
-from config import config
+try:
+    from config import config
+except ImportError:
+    from .config import config
 
 logger = logging.getLogger(__name__)
 
@@ -8837,7 +8775,10 @@ class Database:
                              threshold: float = 0.6, user_shops: Optional[List[str]] = None) -> List[Dict]:
         """使用FAISS搜索相似图像"""
         try:
-            from vector_engine import get_vector_engine
+            try:
+                from vector_engine import get_vector_engine
+            except ImportError:
+                from .vector_engine import get_vector_engine
             engine = get_vector_engine()
 
             print(f"DEBUG DB: Starting FAISS search, threshold: {threshold}, limit: {limit}")
@@ -8958,7 +8899,10 @@ class Database:
 
             if image_records:
                 # 从FAISS中删除向量
-                from vector_engine import get_vector_engine
+                try:
+                    from vector_engine import get_vector_engine
+                except ImportError:
+                    from .vector_engine import get_vector_engine
                 engine = get_vector_engine()
                 for record in image_records:
                     engine.remove_vector_by_db_id(record['id'])
@@ -9008,7 +8952,10 @@ class Database:
                 return False
 
             # 从FAISS中删除向量并重建索引
-            from vector_engine import get_vector_engine
+            try:
+                from vector_engine import get_vector_engine
+            except ImportError:
+                from .vector_engine import get_vector_engine
             engine = get_vector_engine()
             success = engine.remove_vector_by_db_id(image_id)
             if not success:
@@ -9029,16 +8976,18 @@ class Database:
                 cursor.execute("DELETE FROM product_images WHERE product_id = ? AND image_index = ?",
                              (product_id, image_index))
 
-                # 重新排序剩余图片的索引
-                cursor.execute("SELECT id, image_index FROM product_images WHERE product_id = ? ORDER BY image_index",
-                             (product_id,))
-                remaining_images = cursor.fetchall()
-
-                # 更新索引，从0开始重新编号
-                for new_index, (img_id, old_index) in enumerate(remaining_images):
-                    if new_index != old_index:
-                        cursor.execute("UPDATE product_images SET image_index = ? WHERE id = ?",
-                                     (new_index, img_id))
+                # --- 删除重新排序的代码 ---
+                # 重新排序会导致前端 React key 冲突和浏览器缓存问题
+                # 让图片索引保持固定，删除中间图片后索引不变
+                # cursor.execute("SELECT id, image_index FROM product_images WHERE product_id = ? ORDER BY image_index",
+                #              (product_id,))
+                # remaining_images = cursor.fetchall()
+                #
+                # # 更新索引，从0开始重新编号
+                # for new_index, (img_id, old_index) in enumerate(remaining_images):
+                #     if new_index != old_index:
+                #         cursor.execute("UPDATE product_images SET image_index = ? WHERE id = ?",
+                #                      (new_index, img_id))
 
                 conn.commit()
 
@@ -9126,7 +9075,10 @@ class Database:
     def get_total_indexed_images(self) -> int:
         """获取已索引的总图片数量"""
         try:
-            from vector_engine import get_vector_engine
+            try:
+                from vector_engine import get_vector_engine
+            except ImportError:
+                from .vector_engine import get_vector_engine
             engine = get_vector_engine()
             return engine.count()
         except Exception as e:
@@ -9213,6 +9165,7 @@ class Database:
                         'english_title': row['english_title'],
                         'weidian_url': row['weidian_url'],
                         'cnfans_url': row['cnfans_url'],
+                        'acbuy_url': row['acbuy_url'],
                         'ruleEnabled': row['ruleEnabled'],
                         'matched_image_path': row['matched_image_path']
                     })
@@ -9624,8 +9577,8 @@ class Database:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
 
-                # 获取店铺数量
-                cursor.execute("SELECT COUNT(DISTINCT shop_name) FROM products WHERE shop_name IS NOT NULL AND shop_name != ''")
+                # 获取店铺数量（从shops表统计）
+                cursor.execute("SELECT COUNT(*) FROM shops")
                 shop_count = cursor.fetchone()[0] or 0
 
                 # 获取商品数量
@@ -9905,8 +9858,20 @@ class Database:
                 if not isinstance(user_shops, list):
                     user_shops = []
 
+                # 根据shop_id找到对应的shop_name
+                shop_names = []
+                for shop_id in user_shops:
+                    cursor.execute("SELECT name FROM shops WHERE shop_id = ?", (shop_id,))
+                    shop_row = cursor.fetchone()
+                    if shop_row:
+                        shop_names.append(shop_row[0])
+
+                if not shop_names:
+                    # 如果没有找到对应的店铺名称，返回空结果
+                    return {'products': [], 'total': 0}
+
                 # 构建IN查询
-                placeholders = ','.join('?' * len(user_shops))
+                placeholders = ','.join('?' * len(shop_names))
                 if limit is None or limit <= 0:
                     query = f'''
                         SELECT p.*, GROUP_CONCAT(pi.image_path) as image_paths,
@@ -9917,7 +9882,7 @@ class Database:
                         GROUP BY p.id
                         ORDER BY p.created_at DESC
                     '''
-                    cursor.execute(query, user_shops)
+                    cursor.execute(query, shop_names)
                 else:
                     query = f'''
                         SELECT p.*, GROUP_CONCAT(pi.image_path) as image_paths,
@@ -9929,12 +9894,12 @@ class Database:
                         ORDER BY p.created_at DESC
                         LIMIT ? OFFSET ?
                     '''
-                    cursor.execute(query, user_shops + [limit, offset])
+                    cursor.execute(query, shop_names + [limit, offset])
                 rows = cursor.fetchall()
 
                 # 获取总数
                 count_query = f'SELECT COUNT(*) FROM products WHERE shop_name IN ({placeholders})'
-                cursor.execute(count_query, user_shops)
+                cursor.execute(count_query, shop_names)
                 total = cursor.fetchone()[0]
 
                 products = []
@@ -10012,35 +9977,29 @@ class Database:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute('SELECT discord_channel_id, download_threads, feature_extract_threads, discord_similarity_threshold, cnfans_channel_id, acbuy_channel_id FROM system_config WHERE id = 1')
+                cursor.execute('SELECT discord_channel_id, discord_similarity_threshold, cnfans_channel_id, acbuy_channel_id FROM system_config WHERE id = 1')
                 row = cursor.fetchone()
                 if row:
                     return {
                         'discord_channel_id': row[0] or '',
-                        'download_threads': row[1] or 4,
-                        'feature_extract_threads': row[2] or 4,
-                        'discord_similarity_threshold': row[3] or 0.6,
-                        'cnfans_channel_id': row[4] or '',
-                        'acbuy_channel_id': row[5] or ''
+                        'discord_similarity_threshold': row[1] or 0.6,
+                        'cnfans_channel_id': row[2] or '',
+                        'acbuy_channel_id': row[3] or ''
                     }
                 # 如果没有配置记录，创建默认配置
                 cursor.execute('''
-                    INSERT OR IGNORE INTO system_config (id, discord_channel_id, download_threads, feature_extract_threads, discord_similarity_threshold, cnfans_channel_id, acbuy_channel_id)
-                    VALUES (1, '', 4, 4, 0.6, '', '')
+                    INSERT OR IGNORE INTO system_config (id, discord_channel_id, discord_similarity_threshold, cnfans_channel_id, acbuy_channel_id)
+                    VALUES (1, '', 0.6, '', '')
                 ''')
                 conn.commit()
                 return {
                     'discord_channel_id': '',
-                    'download_threads': 4,
-                    'feature_extract_threads': 4,
                     'discord_similarity_threshold': 0.6
                 }
         except Exception as e:
             logger.error(f"获取系统配置失败: {e}")
             return {
                 'discord_channel_id': '',
-                'download_threads': 4,
-                'feature_extract_threads': 4,
                 'discord_similarity_threshold': 0.6
             }
 
@@ -10050,23 +10009,18 @@ class Database:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT download_threads, feature_extract_threads, discord_similarity_threshold,
-                           global_reply_min_delay, global_reply_max_delay
+                    SELECT discord_similarity_threshold, global_reply_min_delay, global_reply_max_delay
                     FROM user_settings WHERE user_id = ?
                 ''', (user_id,))
                 row = cursor.fetchone()
                 if row:
                     return {
-                        'download_threads': row[0] or 4,
-                        'feature_extract_threads': row[1] or 4,
-                        'discord_similarity_threshold': row[2] or 0.6,
-                        'global_reply_min_delay': row[3] or 3.0,
-                        'global_reply_max_delay': row[4] or 8.0,
+                        'discord_similarity_threshold': row[0] or 0.6,
+                        'global_reply_min_delay': row[1] or 3.0,
+                        'global_reply_max_delay': row[2] or 8.0,
                     }
                 # 如果用户没有设置，返回默认值
                 return {
-                    'download_threads': 4,
-                    'feature_extract_threads': 4,
                     'discord_similarity_threshold': 0.6,
                     'global_reply_min_delay': 3.0,
                     'global_reply_max_delay': 8.0,
@@ -10081,8 +10035,7 @@ class Database:
                 'global_reply_max_delay': 8.0,
             }
 
-    def update_user_settings(self, user_id: int, download_threads: int = None,
-                           feature_extract_threads: int = None, discord_similarity_threshold: float = None,
+    def update_user_settings(self, user_id: int, discord_similarity_threshold: float = None,
                            global_reply_min_delay: float = None, global_reply_max_delay: float = None) -> bool:
         """更新用户个性化设置"""
         try:
@@ -10098,13 +10051,6 @@ class Database:
                     update_fields = []
                     params = []
 
-                    if download_threads is not None:
-                        update_fields.append('download_threads = ?')
-                        params.append(download_threads)
-
-                    if feature_extract_threads is not None:
-                        update_fields.append('feature_extract_threads = ?')
-                        params.append(feature_extract_threads)
 
                     if discord_similarity_threshold is not None:
                         update_fields.append('discord_similarity_threshold = ?')
@@ -10127,13 +10073,10 @@ class Database:
                     # 插入新设置
                     cursor.execute('''
                         INSERT INTO user_settings
-                        (user_id, download_threads, feature_extract_threads, discord_similarity_threshold,
-                         global_reply_min_delay, global_reply_max_delay)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        (user_id, discord_similarity_threshold, global_reply_min_delay, global_reply_max_delay)
+                        VALUES (?, ?, ?, ?)
                     ''', (
                         user_id,
-                        download_threads or 4,
-                        feature_extract_threads or 4,
                         discord_similarity_threshold or 0.6,
                         global_reply_min_delay or 3.0,
                         global_reply_max_delay or 8.0
@@ -10145,8 +10088,7 @@ class Database:
             logger.error(f"更新用户设置失败: {e}")
             return False
 
-    def update_system_config(self, discord_channel_id: str = None, download_threads: int = None,
-                           feature_extract_threads: int = None, discord_similarity_threshold: float = None,
+    def update_system_config(self, discord_channel_id: str = None, discord_similarity_threshold: float = None,
                            cnfans_channel_id: str = None, acbuy_channel_id: str = None) -> bool:
         """更新系统配置"""
         try:
@@ -10155,8 +10097,8 @@ class Database:
 
                 # 首先确保配置记录存在
                 cursor.execute('''
-                    INSERT OR IGNORE INTO system_config (id, discord_channel_id, download_threads, feature_extract_threads, discord_similarity_threshold, cnfans_channel_id, acbuy_channel_id)
-                    VALUES (1, '', 4, 4, 0.6, '', '')
+                    INSERT OR IGNORE INTO system_config (id, discord_channel_id, discord_similarity_threshold, cnfans_channel_id, acbuy_channel_id)
+                    VALUES (1, '', 0.6, '', '')
                 ''')
 
                 # 构建更新语句
@@ -10166,14 +10108,6 @@ class Database:
                 if discord_channel_id is not None:
                     update_fields.append('discord_channel_id = ?')
                     params.append(discord_channel_id)
-
-                if download_threads is not None:
-                    update_fields.append('download_threads = ?')
-                    params.append(download_threads)
-
-                if feature_extract_threads is not None:
-                    update_fields.append('feature_extract_threads = ?')
-                    params.append(feature_extract_threads)
 
                 if discord_similarity_threshold is not None:
                     update_fields.append('discord_similarity_threshold = ?')
@@ -10832,7 +10766,10 @@ class WeidianScraper:
                 return None
 
         # 使用线程池并发下载图片
-        from config import config
+        try:
+            from config import config
+        except ImportError:
+            from .config import config
         max_workers = min(config.DOWNLOAD_THREADS, len(image_urls))  # 使用配置的下载线程数
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -10973,7 +10910,10 @@ import random
 import os
 import json
 from datetime import datetime
-from config import config
+try:
+    from config import config
+except ImportError:
+    from .config import config
 
 # 全局变量用于多账号机器人管理
 bot_clients = []
@@ -11122,7 +11062,10 @@ class DiscordBotClient(discord.Client):
     def _should_filter_message(self, message):
         """检查消息是否应该被过滤"""
         try:
-            from database import db
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
             filters = db.get_message_filters()
 
             message_content = message.content.lower()
@@ -11159,7 +11102,10 @@ class DiscordBotClient(discord.Client):
     def _get_custom_reply(self):
         """获取自定义回复内容"""
         try:
-            from database import db
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
             replies = db.get_custom_replies()
 
             if replies:
@@ -11178,7 +11124,10 @@ class DiscordBotClient(discord.Client):
 
         # 更新数据库中的账号状态为在线
         try:
-            from database import db
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
             if hasattr(self, 'account_id'):
                 db.update_account_status(self.account_id, 'online')
                 logger.info(f'账号 {self.account_id} 状态已更新为在线')
@@ -11264,7 +11213,10 @@ class DiscordBotClient(discord.Client):
                 user_threshold = config.DISCORD_SIMILARITY_THRESHOLD  # 默认值
                 if self.user_id:
                     try:
-                        from database import db
+                        try:
+                from database import db
+            except ImportError:
+                from .database import db
                         user_settings = db.get_user_settings(self.user_id)
                         if user_settings and 'discord_similarity_threshold' in user_settings:
                             user_threshold = user_settings['discord_similarity_threshold']
@@ -11476,7 +11428,10 @@ class DiscordBotClient(discord.Client):
                 api_threshold = config.DISCORD_SIMILARITY_THRESHOLD
                 if self.user_id:
                     try:
-                        from database import db
+                        try:
+                from database import db
+            except ImportError:
+                from .database import db
                         user_settings = db.get_user_settings(self.user_id)
                         if user_settings and 'discord_similarity_threshold' in user_settings:
                             api_threshold = user_settings['discord_similarity_threshold']
@@ -11636,17 +11591,40 @@ if __name__ == '__main__':
 import os
 import torch
 import numpy as np
-from typing import List, Optional, Union
+import threading
+from typing import List, Optional, Union, Dict
 import logging
 from pathlib import Path
 from PIL import Image
 from transformers import AutoImageProcessor, AutoModel
 from ultralytics import YOLO
-from config import config
+try:
+    from .config import config
+except ImportError:
+    from config import config
 from functools import lru_cache
 import hashlib
 
 logger = logging.getLogger(__name__)
+
+# 使用类级单例模式
+class FeatureExtractorSingleton:
+    """特征提取器单例管理器"""
+    _instance = None
+    _lock = threading.Lock()
+
+    @classmethod
+    def get_instance(cls):
+        with cls._lock:
+            if cls._instance is None:
+                logger.info("🚀 创建特征提取器单例实例...")
+                cls._instance = DINOv2FeatureExtractor()
+                logger.info("✅ 特征提取器单例实例创建完成")
+        return cls._instance
+
+def get_feature_extractor():
+    """获取特征提取器单例实例"""
+    return FeatureExtractorSingleton.get_instance()
 
 class DINOv2FeatureExtractor:
     """
@@ -11680,10 +11658,11 @@ class DINOv2FeatureExtractor:
             return hashlib.md5(f"{image_path}:{stat.st_mtime}".encode()).hexdigest()
 
     def _load_yolo_detector(self):
-        """加载YOLO-World用于全自动通用电商商品检测"""
+        """强制加载YOLO-World模型用于商品识别"""
         try:
-            logger.info("加载全自动通用电商识别模型 (YOLO-World)...")
-            # 使用YOLO-World模型，首次运行会自动下载yolov8s-world.pt
+            logger.info("🔥 强制加载YOLO-World模型...")
+
+            # 强制使用YOLO-World，不允许降级
             self.detector = YOLO('yolov8s-world.pt')
 
             # [核心配置] 定义全自动识别的范围
@@ -11707,20 +11686,56 @@ class DINOv2FeatureExtractor:
             # 将这些类别注入模型
             self.detector.set_classes(self.target_classes)
 
-            logger.info(f"✅ YOLO-World模型加载成功，支持自动识别 {len(self.target_classes)} 种商品类别")
-            logger.info(f"YOLO-World目标类别: {', '.join(self.target_classes[:10])}...")
-            logger.info("YOLO-World优化说明: 使用多维度评分(面积×置信度×位置×类别权重)，显著提升裁剪准确率")
-        except Exception as e:
-            logger.warning(f"YOLO-World模型加载失败: {e}，降级使用YOLOv8-Nano")
+            logger.info("🎉 YOLO-World模型加载成功！")
+            logger.info(f"🎯 支持自动识别 {len(self.target_classes)} 种商品类别")
+            logger.info(f"📋 YOLO-World目标类别: {', '.join(self.target_classes[:10])}...")
+            logger.info("⚡ YOLO-World优化说明: 使用多维度评分(面积×置信度×位置×类别权重)，显著提升裁剪准确率")
+
+            # 验证CLIP库是否正确安装
             try:
-                # 降级到YOLOv8-Nano
-                self.detector = YOLO('yolov8n.pt')
-                self.target_classes = None  # Nano版本不支持自定义类别
-                logger.info("✅ YOLOv8-Nano模型加载成功")
-            except Exception as e2:
-                logger.error(f"YOLOv8-Nano模型也加载失败: {e2}，将禁用YOLO裁剪")
-                self.detector = None
-                self.target_classes = None
+                import clip
+                logger.info(f"✅ CLIP库版本验证: {getattr(clip, '__version__', '未知')}")
+                if hasattr(clip, 'load'):
+                    logger.info("✅ CLIP.load方法可用")
+                else:
+                    logger.warning("⚠️ CLIP.load方法不可用，可能影响YOLO-World性能")
+            except ImportError as e:
+                logger.warning(f"⚠️ 无法导入CLIP库: {e}")
+
+        except Exception as e:
+            logger.error(f"💥 YOLO-World模型加载失败: {e}")
+
+            # 检查是否是CLIP相关的问题，如果是则尝试备用方案
+            if "clip" in str(e).lower():
+                logger.warning("🔍 检测到CLIP库问题，尝试备用加载方式...")
+
+                try:
+                    # 尝试不依赖CLIP的加载方式
+                    import ultralytics
+                    logger.info(f"Ultralytics版本: {ultralytics.__version__}")
+
+                    # 直接创建YOLO-World实例，不设置类别
+                    self.detector = YOLO('yolov8s-world.pt')
+                    self.target_classes = None  # 不设置自定义类别
+
+                    logger.warning("⚠️ YOLO-World以基础模式加载 (无自定义类别)")
+                    logger.warning("📊 影响: 将使用YOLO-World的内置80类进行检测")
+                    logger.info("✅ YOLO-World基础模式加载成功")
+
+                except Exception as backup_error:
+                    logger.error(f"💥 备用加载方式也失败: {backup_error}")
+                    logger.error("🔥 用户要求强制使用YOLO-World，但所有加载方式都失败！")
+                    logger.error("💡 最终解决方案:")
+                    logger.error("   1. pip uninstall clip torch torchvision ultralytics")
+                    logger.error("   2. pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu")
+                    logger.error("   3. pip install ultralytics")
+                    logger.error("   4. pip install git+https://github.com/openai/CLIP.git")
+                    raise RuntimeError("YOLO-World加载失败，所有备用方案均无效") from e
+            else:
+                # 不是CLIP问题，直接报错
+                logger.error("🔥 YOLO-World加载失败，错误不相关CLIP库")
+                logger.error("💡 建议检查网络连接和ultralytics版本")
+                raise RuntimeError("YOLO-World加载失败") from e
 
     def _load_dino_model(self):
         """加载DINOv2模型用于特征提取"""
@@ -11729,9 +11744,29 @@ class DINOv2FeatureExtractor:
             logger.info(f"加载DINOv2特征模型: {model_name}...")
 
             self.processor = AutoImageProcessor.from_pretrained(model_name)
-            self.model = AutoModel.from_pretrained(model_name).to(self.device)
-            self.model.eval()
+            self.model = AutoModel.from_pretrained(model_name)
 
+            # 安全地将模型移动到设备，避免meta tensor错误
+            try:
+                if hasattr(self.model, 'to'):
+                    self.model = self.model.to(self.device)
+                else:
+                    logger.warning("模型没有to()方法，使用原模型")
+            except Exception as device_error:
+                logger.warning(f"模型移动到设备失败: {device_error}，尝试其他方法...")
+                try:
+                    # 尝试使用to_empty方法
+                    if hasattr(self.model, 'to_empty'):
+                        self.model = self.model.to_empty(device=self.device)
+                    else:
+                        logger.error("模型不支持to_empty方法，使用CPU")
+                        self.device = torch.device('cpu')
+                        self.model = self.model.to(self.device)
+                except Exception as fallback_error:
+                    logger.error(f"所有设备移动方法都失败: {fallback_error}")
+                    raise
+
+            self.model.eval()
             logger.info("✅ DINOv2模型加载成功")
         except Exception as e:
             logger.error(f"❌ DINOv2模型加载失败: {e}")
@@ -12010,6 +12045,41 @@ class DINOv2FeatureExtractor:
             results.append(feature)
         return results
 
+    def get_status(self) -> Dict:
+        """获取AI模型状态和性能信息"""
+        status = {
+            'device': str(self.device),
+            'yolo_available': self.detector is not None,
+            'yolo_type': 'None'
+        }
+
+        if self.detector is not None:
+            if self.target_classes and len(self.target_classes) > 20:
+                status['yolo_type'] = 'YOLO-World'
+                status['target_classes_count'] = len(self.target_classes)
+                status['target_classes'] = self.target_classes[:10]  # 只显示前10个
+            else:
+                status['yolo_type'] = 'YOLOv8-Nano'
+                status['target_classes_count'] = len(self.target_classes) if self.target_classes else 0
+
+        status['detection_cache_size'] = len(self._detection_cache)
+        status['confidence_threshold'] = 0.05
+        status['iou_threshold'] = 0.5
+
+        # 性能提示
+        tips = []
+        if self.detector is None:
+            tips.append("YOLO裁剪已禁用，建议修复YOLO加载问题以提升准确性")
+        elif status['yolo_type'] == 'YOLOv8-Nano':
+            tips.append("当前使用YOLOv8-Nano，建议升级依赖以启用YOLO-World获得更好效果")
+
+        if status['detection_cache_size'] > 1000:
+            tips.append("检测缓存较大，考虑定期清理缓存")
+
+        status['performance_tips'] = tips if tips else ["AI模型运行正常"]
+
+        return status
+
 # 向后兼容的别名
 class FeatureExtractor(DINOv2FeatureExtractor):
     """向后兼容的别名"""
@@ -12031,7 +12101,10 @@ import os
 import pickle
 import logging
 from typing import List, Dict, Tuple
-from config import config
+try:
+    from .config import config
+except ImportError:
+    from config import config
 
 logger = logging.getLogger(__name__)
 
@@ -12072,7 +12145,9 @@ class VectorEngine:
             self._create_new_index()
 
     def _create_new_index(self):
-        """创建新的FAISS HNSW索引"""
+        """创建新的FAISS HNSW索引，优化参数设置"""
+        logger.info("创建新的FAISS HNSW索引...")
+
         # HNSW64: 图结构，查询极快，准确率高
         # InnerProduct (IP) 在归一化向量上等同于余弦相似度
         self.index = faiss.IndexHNSWFlat(
@@ -12081,14 +12156,46 @@ class VectorEngine:
             faiss.METRIC_INNER_PRODUCT
         )
 
-        # 设置构建参数
-        self.index.efConstruction = config.FAISS_EF_CONSTRUCTION  # 构建时的深度，越高越准但构建越慢
-        self.index.efSearch = config.FAISS_EF_SEARCH             # 搜索时的深度
+        # 设置构建参数 (兼容不同版本的FAISS)
+        ef_construction_set = False
+        ef_search_set = False
+
+        try:
+            # 尝试设置HNSW参数 (新版本FAISS >= 1.7.0)
+            if hasattr(self.index, 'efConstruction'):
+                self.index.efConstruction = config.FAISS_EF_CONSTRUCTION  # 构建时的深度，越高越准但构建越慢
+                ef_construction_set = True
+                logger.info(f"设置efConstruction = {config.FAISS_EF_CONSTRUCTION}")
+
+            if hasattr(self.index, 'efSearch'):
+                self.index.efSearch = config.FAISS_EF_SEARCH  # 搜索时的深度，越高越准但搜索越慢
+                ef_search_set = True
+                logger.info(f"设置efSearch = {config.FAISS_EF_SEARCH}")
+
+        except AttributeError:
+            logger.warning("FAISS版本不支持efConstruction/efSearch参数，将使用默认值")
+
+        # 如果无法设置参数，提供性能优化建议
+        if not ef_construction_set or not ef_search_set:
+            logger.info("💡 FAISS性能优化建议:")
+            logger.info(f"   - 当前FAISS版本: {faiss.__version__}")
+            logger.info("   - 建议升级到FAISS >= 1.7.0以获得最佳性能")
+            logger.info("   - 或者使用: pip install faiss-cpu --upgrade")
+
+        # 设置其他兼容性参数
+        try:
+            # 设置HNSW的M参数 (如果支持)
+            if hasattr(self.index, 'hnsw'):
+                logger.info(f"HNSW M参数 = {config.FAISS_HNSW_M}")
+        except:
+            pass
 
         self.id_map = []
 
         # 确保目录存在
         os.makedirs(os.path.dirname(self.index_file), exist_ok=True)
+
+        logger.info("✅ FAISS HNSW索引创建完成")
 
     def save(self):
         """保存索引到磁盘 (百万级数据保存大约需要几秒)"""
@@ -12202,7 +12309,10 @@ class VectorEngine:
         """删除向量后重建索引"""
         try:
             # 获取所有未删除的向量数据
-            from database import db
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
             valid_vectors = []
 
             with db.get_connection() as conn:
@@ -12217,7 +12327,10 @@ class VectorEngine:
                         # 在生产环境中，应该缓存特征或定期重建
                         try:
                             # 这里需要导入特征提取器
-                            from feature_extractor import get_feature_extractor
+                            try:
+                                from feature_extractor import get_feature_extractor
+                            except ImportError:
+                                from .feature_extractor import get_feature_extractor
                             extractor = get_feature_extractor()
                             features = extractor.extract_feature(row['image_path'])
                             if features is not None:
@@ -12282,15 +12395,53 @@ class VectorEngine:
 
     def get_stats(self) -> Dict:
         """获取索引统计信息"""
+        ef_construction = getattr(self.index, 'efConstruction', '不支持')
+        ef_search = getattr(self.index, 'efSearch', '不支持')
+
         return {
             'total_vectors': self.index.ntotal,
             'dimension': self.dimension,
             'index_type': 'HNSW',
             'metric_type': 'InnerProduct (Cosine)',
-            'ef_construction': getattr(self.index, 'efConstruction', 80),
-            'ef_search': getattr(self.index, 'efSearch', 64),
-            'memory_usage_mb': self._estimate_memory_usage()
+            'ef_construction': ef_construction,
+            'ef_search': ef_search,
+            'memory_usage_mb': self._estimate_memory_usage(),
+            'faiss_version': faiss.__version__,
+            'performance_tips': self._get_performance_tips()
         }
+
+    def _get_performance_tips(self) -> List[str]:
+        """获取性能优化建议"""
+        tips = []
+
+        # 检查FAISS版本
+        try:
+            version_parts = faiss.__version__.split('.')
+            major = int(version_parts[0])
+            minor = int(version_parts[1])
+
+            if major < 1 or (major == 1 and minor < 7):
+                tips.append("建议升级FAISS到1.7.0+版本以获得efConstruction/efSearch参数支持")
+        except:
+            tips.append("无法检测FAISS版本，建议升级到最新版本")
+
+        # 检查ef参数
+        if not hasattr(self.index, 'efConstruction'):
+            tips.append("当前FAISS版本不支持efConstruction参数，搜索性能可能受限")
+
+        if not hasattr(self.index, 'efSearch'):
+            tips.append("当前FAISS版本不支持efSearch参数，建议手动设置搜索参数")
+
+        # 检查向量数量
+        if self.index.ntotal < 1000:
+            tips.append("向量数量较少，考虑增加更多商品数据以提高搜索准确性")
+
+        # 检查内存使用
+        memory_mb = self._estimate_memory_usage()
+        if memory_mb > 1000:  # 超过1GB
+            tips.append(f"内存使用量较大 ({memory_mb:.1f}MB)，建议监控内存使用情况")
+
+        return tips if tips else ["系统运行正常，无性能优化建议"]
 
     def _estimate_memory_usage(self) -> float:
         """估算内存使用量 (MB)"""
@@ -12465,7 +12616,10 @@ python3 create_admin.py --username admin --password admin123
 import sys
 import getpass
 import argparse
-from database import Database
+try:
+    from database import Database
+except ImportError:
+    from ..database import Database
 from werkzeug.security import generate_password_hash
 
 def create_admin_user(username=None, password=None):
@@ -12541,9 +12695,16 @@ import os
 import logging
 import sys
 from datetime import datetime
-from feature_extractor import get_feature_extractor, DINOv2FeatureExtractor
-from database import db
-from config import config
+try:
+    from feature_extractor import get_feature_extractor, DINOv2FeatureExtractor
+except ImportError:
+    from .feature_extractor import get_feature_extractor, DINOv2FeatureExtractor
+try:
+    from database import db
+    from config import config
+except ImportError:
+    from .database import db
+    from .config import config
 import requests
 import json
 from flask_cors import CORS
@@ -12562,8 +12723,6 @@ def load_system_config():
 
     try:
         sys_config = db.get_system_config()
-        config.DOWNLOAD_THREADS = sys_config['download_threads']
-        config.FEATURE_EXTRACT_THREADS = sys_config['feature_extract_threads']
         config.DISCORD_SIMILARITY_THRESHOLD = sys_config['discord_similarity_threshold']
         config.DISCORD_CHANNEL_ID = sys_config['discord_channel_id']
         config.CNFANS_CHANNEL_ID = sys_config['cnfans_channel_id']
@@ -12602,6 +12761,9 @@ scrape_status = {
     'success': 0,
     'message': '等待开始...'
 }
+
+# 全局关闭事件，用于优雅关闭
+shutdown_event = None
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -12701,52 +12863,62 @@ bot_clients = []
 bot_tasks = []
 bot_running = False  # 标记机器人是否正在运行
 
-# AI模型预加载变量
-feature_extractor = None
+# 全局特征提取器实例（在应用启动时创建）
+feature_extractor_instance = None
 
-# 预加载AI模型和向量引擎
-def preload_ai_models():
-    """在应用启动时预加载AI模型和向量引擎，避免每次操作都重新初始化"""
-    global feature_extractor
-    # 在这个阶段logger可能还没初始化，使用print
-    try:
-        print("🚀 开始预加载AI模型...")
-        feature_extractor = DINOv2FeatureExtractor()
-        print("✅ AI模型预加载完成")
+def initialize_feature_extractor():
+    """在应用启动时初始化特征提取器，确保单例模式"""
+    global feature_extractor_instance
+    if feature_extractor_instance is None:
+        print("🚀 初始化全局特征提取器实例...")
+        try:
+            from feature_extractor import DINOv2FeatureExtractor
+            feature_extractor_instance = DINOv2FeatureExtractor()
+            print("✅ 全局特征提取器实例初始化完成")
+        except Exception as e:
+            print(f"❌ 特征提取器初始化失败: {e}")
+            feature_extractor_instance = None
+    return feature_extractor_instance
 
-        print("🚀 开始预加载FAISS向量引擎...")
-        from vector_engine import get_vector_engine
-        vector_engine = get_vector_engine()
-        print("✅ FAISS向量引擎预加载完成")
-    except Exception as e:
-        print(f"❌ 预加载失败: {e}")
-        feature_extractor = None
+def get_global_feature_extractor():
+    """获取全局特征提取器实例"""
+    global feature_extractor_instance
+    if feature_extractor_instance is None:
+        return initialize_feature_extractor()
+    return feature_extractor_instance
 
-preload_ai_models()
+# 在应用启动时初始化
+initialize_feature_extractor()
 
 app = Flask(__name__)
 # 生产环境使用强随机密钥
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 
 # CORS 配置，必须允许 Credentials
-CORS(app, origins=["http://localhost:3000"], supports_credentials=True)
+# 支持多种前端域名（本地开发和生产环境）
+allowed_origins = [
+    "http://localhost:3000",      # 本地开发
+    "http://127.0.0.1:3000",     # 本地开发
+    "http://69.30.204.184:3000",  # 生产服务器
+]
+CORS(app, origins=allowed_origins, supports_credentials=True)
 
-# Cookie 配置优化 (解决本地调试 Cookie 无法写入的问题)
+# Cookie 配置优化 (支持本地和生产环境)
+is_production = os.environ.get('FLASK_ENV') == 'production' or '69.30.204.184' in os.environ.get('FRONTEND_URL', '')
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE='Lax', # 在同一域名不同端口下 Lax 通常更好
-    SESSION_COOKIE_SECURE=False,   # 本地调试必须为 False，否则 http 下不发送 cookie
+    SESSION_COOKIE_SAMESITE='Lax',  # 生产环境建议使用 'None' + Secure
+    SESSION_COOKIE_SECURE=is_production,  # 生产环境必须为 True (HTTPS)
 )
 
 def extract_features(image_path):
-    """使用预加载的深度学习模型提取图像特征"""
-    global feature_extractor
+    """使用深度学习模型提取图像特征"""
     try:
-        if feature_extractor is None:
-            logger.error("AI模型未预加载，无法提取特征")
+        extractor = get_global_feature_extractor()
+        if extractor is None:
+            logger.error("特征提取器未初始化")
             return None
-
-        features = feature_extractor.extract_feature(image_path)
+        features = extractor.extract_feature(image_path)
         # 如果特征提取失败，返回 None（上层将处理并返回错误）
         if features is None:
             logger.warning(f"特征提取失败: {image_path}")
@@ -12870,6 +13042,7 @@ def search_similar():
                             'englishTitle': product_info.get('english_title', ''),
                             'weidianUrl': product_info['product_url'] if product_info else result.get('product_url', ''),
                             'cnfansUrl': product_info.get('cnfans_url', ''),
+                            'acbuyUrl': product_info.get('acbuy_url', ''),
                             'ruleEnabled': product_info.get('ruleEnabled', True) if product_info else True,
                             'images': actual_images if actual_images else [f"/api/image/{result['id']}/{result['image_index']}"]  # 使用实际图片列表
                         }
@@ -12992,20 +13165,19 @@ def scrape_product():
             )
             # 为每张图片建立向量索引
             # 注意：YOLO裁剪已集成在DINOv2特征提取过程中，无需额外步骤
-            # 使用预加载的全局特征提取器
-            global feature_extractor
-            if feature_extractor is None:
-                logger.error("AI模型未预加载，使用单例模式")
-                from feature_extractor import get_feature_extractor
-                extractor = get_feature_extractor()
-            else:
-                logger.info("使用预加载的AI模型")
-                extractor = feature_extractor
+            # 使用全局特征提取器
+            extractor = get_global_feature_extractor()
+            if extractor is None:
+                logger.error("特征提取器未初始化")
+                return
 
             # 串行建立向量索引 (SQLite不支持多线程写入)
             # 但先使用多线程进行特征提取，然后串行插入数据库
             import concurrent.futures
-            from vector_engine import get_vector_engine
+            try:
+                from vector_engine import get_vector_engine
+            except ImportError:
+                from .vector_engine import get_vector_engine
             engine = get_vector_engine()
 
             def extract_features_only(img_path):
@@ -13127,6 +13299,18 @@ def require_admin():
     """检查是否为管理员"""
     user = get_current_user()
     return user and user.get('role') == 'admin'
+
+def can_manage_shops():
+    """检查用户是否有管理店铺的权限（管理员或有分配的店铺）"""
+    user = get_current_user()
+    if not user:
+        return False
+    # 管理员可以管理所有店铺
+    if user.get('role') == 'admin':
+        return True
+    # 普通用户如果有分配的店铺，也可以管理
+    user_shops = user.get('shops', [])
+    return len(user_shops) > 0
 
 def require_login():
     """检查是否已登录"""
@@ -13707,15 +13891,41 @@ def list_products():
         # 根据用户权限获取商品（获取所有记录，不分页）
         if current_user['role'] == 'admin':
             # 管理员可以看到所有商品
+            logger.info(f"管理员用户 {current_user['username']} 获取所有商品")
             result = db.get_products_by_user_shops(None, limit=None)
         else:
             # 普通用户只能看到自己管理的店铺的商品
             user_shops = current_user.get('shops', [])
+            logger.info(f"普通用户 {current_user['username']} 获取店铺商品，分配的店铺: {user_shops}")
             result = db.get_products_by_user_shops(user_shops, limit=None)
-        return jsonify({
+
+            # 调试：检查数据库中的商品和店铺匹配情况
+            if user_shops:
+                with db.get_connection() as conn:
+                    cursor = conn.cursor()
+                    placeholders = ','.join('?' * len(user_shops))
+                    cursor.execute(f"SELECT COUNT(*) FROM products WHERE shop_name IN ({placeholders})", user_shops)
+                    matching_products = cursor.fetchone()[0]
+                    logger.info(f"数据库中匹配的商品数量: {matching_products}")
+
+                    # 列出所有店铺名称
+                    cursor.execute("SELECT DISTINCT shop_name FROM products")
+                    all_shop_names = [row[0] for row in cursor.fetchall()]
+                    logger.info(f"数据库中的所有店铺名称: {all_shop_names}")
+
+        logger.info(f"返回商品数量: {len(result['products'])}")
+
+        # 添加调试信息到响应中
+        response_data = {
             'products': result['products'],
-            'total': result['total']
-        })
+            'total': result['total'],
+            'debug': {
+                'user_role': current_user['role'],
+                'user_shops': current_user.get('shops', []),
+                'is_admin': current_user['role'] == 'admin'
+            }
+        }
+        return jsonify(response_data)
     except Exception as e:
         logger.error(f"列出商品失败: {e}")
         return jsonify({'error': str(e)}), 500
@@ -13805,7 +14015,10 @@ def backfill_products():
 def rebuild_index():
     """重建FAISS索引，清理被删除的向量"""
     try:
-        from vector_engine import get_vector_engine
+        try:
+            from vector_engine import get_vector_engine
+        except ImportError:
+            from .vector_engine import get_vector_engine
         from feature_extractor import get_feature_extractor
 
         logger.info("开始重建FAISS索引...")
@@ -14371,18 +14584,18 @@ def upload_product_image(product_id):
         if not file.filename:
             return jsonify({'error': 'Empty filename'}), 400
 
-        # 获取当前最大的 image_index
+        # 获取当前最大的 image_index 和检查图片数量限制
         with db.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT MAX(image_index) FROM product_images WHERE product_id = ?", (product_id,))
             row = cursor.fetchone()
             next_index = (row[0] + 1) if row and row[0] is not None else 0
 
-        # 检查图片数量限制（每个商品最多20张图片）
-        cursor.execute("SELECT COUNT(*) FROM product_images WHERE product_id = ?", (product_id,))
-        count_row = cursor.fetchone()
-        if count_row and count_row[0] >= 20:
-            return jsonify({'error': '每个商品最多只能上传20张图片'}), 400
+            # 检查图片数量限制（每个商品最多20张图片）
+            cursor.execute("SELECT COUNT(*) FROM product_images WHERE product_id = ?", (product_id,))
+            count_row = cursor.fetchone()
+            if count_row and count_row[0] >= 20:
+                return jsonify({'error': '每个商品最多只能上传20张图片'}), 400
 
         # 保存文件
         filename = f"{product_id}_{next_index}_{int(time.time())}.jpg"
@@ -14400,8 +14613,11 @@ def upload_product_image(product_id):
             """异步处理图片特征提取和索引"""
             try:
                 # 提取特征
-                global feature_extractor
-                features = feature_extractor.extract_feature(save_path)
+                extractor = get_global_feature_extractor()
+                if extractor is None:
+                    logger.error("特征提取器未初始化")
+                    return None
+                features = extractor.extract_feature(save_path)
 
                 if features is None:
                     os.remove(save_path)
@@ -14412,7 +14628,10 @@ def upload_product_image(product_id):
                 img_db_id = db.insert_image_record(product_id, save_path, next_index)
 
                 # 存入 FAISS
-                from vector_engine import get_vector_engine
+                try:
+                    from vector_engine import get_vector_engine
+                except ImportError:
+                    from .vector_engine import get_vector_engine
                 engine = get_vector_engine()
                 engine.add_vector(img_db_id, features)
                 engine.save()
@@ -14502,7 +14721,8 @@ def delete_product_image(product_id, image_index):
             images = [f"/api/image/{product_id}/{idx}" for idx in image_indices]
 
         product['images'] = images
-        # 格式化
+
+        # 格式化商品信息
         try:
             if 'itemID=' in product.get('product_url', ''):
                 product['weidianId'] = product.get('product_url', '').split('itemID=')[1]
@@ -14553,23 +14773,49 @@ def cleanup_images():
         logger.error(f"图片清理失败: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/system/yolo-status', methods=['GET'])
-def get_yolo_status():
-    """获取YOLO-World状态和统计信息"""
+@app.route('/api/system/ai-status', methods=['GET'])
+def get_ai_status():
+    """获取AI系统完整状态和诊断信息"""
     try:
-        global feature_extractor
-        status = {
-            'yolo_available': feature_extractor.detector is not None,
-            'yolo_type': 'YOLO-World' if hasattr(feature_extractor, 'target_classes') and feature_extractor.target_classes else 'YOLOv8-Nano',
-            'target_classes_count': len(feature_extractor.target_classes) if feature_extractor.target_classes else 0,
-            'detection_cache_size': len(feature_extractor._detection_cache) if hasattr(feature_extractor, '_detection_cache') else 0,
-            'confidence_threshold': 0.05,
-            'iou_threshold': 0.5,
-            'target_classes': feature_extractor.target_classes[:20] if feature_extractor.target_classes else []
+        extractor = get_global_feature_extractor()
+        if extractor is None:
+            return {'error': '特征提取器未初始化'}
+        ai_status = extractor.get_status()
+
+        # 获取FAISS状态
+        try:
+            from vector_engine import get_vector_engine
+        except ImportError:
+            from .vector_engine import get_vector_engine
+        faiss_engine = get_vector_engine()
+        faiss_status = faiss_engine.get_stats()
+
+        # 综合状态
+        overall_status = {
+            'ai_model_status': ai_status,
+            'vector_engine_status': faiss_status,
+            'system_health': '良好' if ai_status['yolo_available'] and faiss_status['total_vectors'] >= 0 else '需要优化',
+            'recommendations': []
         }
-        return jsonify(status)
+
+        # 生成建议
+        recommendations = []
+        recommendations.extend(ai_status.get('performance_tips', []))
+        recommendations.extend(faiss_status.get('performance_tips', []))
+
+        # 额外的系统级建议
+        if not ai_status['yolo_available']:
+            recommendations.append("YOLO裁剪功能已禁用，图像识别准确率会降低")
+        if faiss_status['total_vectors'] == 0:
+            recommendations.append("向量数据库为空，建议添加商品数据")
+        if faiss_status['ef_construction'] == '不支持' or faiss_status['ef_search'] == '不支持':
+            recommendations.append("FAISS版本较旧，建议升级以获得最佳搜索性能")
+
+        overall_status['recommendations'] = recommendations[:5]  # 最多显示5条建议
+
+        return jsonify(overall_status)
     except Exception as e:
-        logger.error(f"获取YOLO状态失败: {e}")
+        logger.error(f"获取AI状态失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/system/rebuild-index', methods=['POST'])
@@ -14583,7 +14829,10 @@ def rebuild_faiss_index():
         if current_user['role'] != 'admin':
             return jsonify({'error': '只有管理员可以重建索引'}), 403
 
-        from vector_engine import get_vector_engine
+        try:
+            from vector_engine import get_vector_engine
+        except ImportError:
+            from .vector_engine import get_vector_engine
         engine = get_vector_engine()
 
         # 获取所有有效的图片数据
@@ -14596,8 +14845,11 @@ def rebuild_faiss_index():
         valid_vectors = []
         for row in all_images:
             try:
-                global feature_extractor
-                features = feature_extractor.extract_feature(row['image_path'])
+                extractor = get_global_feature_extractor()
+                if extractor is None:
+                    logger.error("特征提取器未初始化")
+                    continue
+                features = extractor.extract_feature(row['image_path'])
                 if features is not None:
                     valid_vectors.append((row['id'], features))
             except Exception as e:
@@ -14678,7 +14930,10 @@ def get_global_reply_delay():
 def get_faiss_status():
     """获取FAISS向量数据库状态"""
     try:
-        from vector_engine import get_vector_engine
+        try:
+            from vector_engine import get_vector_engine
+        except ImportError:
+            from .vector_engine import get_vector_engine
         engine = get_vector_engine()
         stats = engine.get_stats()
 
@@ -14704,51 +14959,6 @@ def get_faiss_status():
             'index_exists': False,
             'entity_count': 0
         }), 500
-
-@app.route('/api/config/threads', methods=['GET'])
-def get_thread_config():
-    """获取线程配置"""
-    try:
-        sys_config = db.get_system_config()
-        return jsonify({
-            'download_threads': sys_config['download_threads'],
-            'feature_extract_threads': sys_config['feature_extract_threads']
-        })
-    except Exception as e:
-        logger.error(f"获取线程配置失败: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/config/threads', methods=['POST'])
-def update_thread_config():
-    """更新线程配置"""
-    try:
-        data = request.get_json()
-        download_threads = data.get('download_threads')
-        feature_extract_threads = data.get('feature_extract_threads')
-
-        # 验证参数
-        if download_threads is not None and not (1 <= download_threads <= 8):
-            return jsonify({'error': '下载线程数必须在1-8之间'}), 400
-        if feature_extract_threads is not None and not (1 <= feature_extract_threads <= 8):
-            return jsonify({'error': '特征提取线程数必须在1-8之间'}), 400
-
-        # 保存到数据库
-        if db.update_system_config(download_threads=download_threads, feature_extract_threads=feature_extract_threads):
-            # 同时更新内存中的配置
-            sys_config = db.get_system_config()
-            config.DOWNLOAD_THREADS = sys_config['download_threads']
-            config.FEATURE_EXTRACT_THREADS = sys_config['feature_extract_threads']
-
-            return jsonify({
-                'success': True,
-                'download_threads': config.DOWNLOAD_THREADS,
-                'feature_extract_threads': config.FEATURE_EXTRACT_THREADS
-            })
-        else:
-            return jsonify({'error': '保存失败'}), 500
-    except Exception as e:
-        logger.error(f"更新线程配置失败: {e}")
-        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/config/global-reply-delay', methods=['POST'])
@@ -15288,6 +15498,9 @@ def get_shops():
 @app.route('/api/shops', methods=['POST'])
 def add_shop():
     """添加新店铺"""
+    if not can_manage_shops():
+        return jsonify({'error': '需要管理店铺的权限'}), 403
+
     try:
         data = request.get_json()
         if not data or not data.get('shopId') or not data.get('name'):
@@ -15315,11 +15528,24 @@ def add_shop():
 @app.route('/api/shops/<shop_id>', methods=['DELETE'])
 def delete_shop(shop_id):
     """删除店铺"""
+    if not can_manage_shops():
+        return jsonify({'error': '需要管理店铺的权限'}), 403
+
     try:
+        # 获取店铺信息，检查用户是否有权限删除
+        shop_info = db.get_shop_by_id(shop_id)
+        if not shop_info:
+            return jsonify({'error': '店铺不存在'}), 404
+
+        current_user = get_current_user()
+        # 管理员可以删除任何店铺，普通用户只能删除分配给他们的店铺
+        if current_user['role'] != 'admin' and shop_info['shop_id'] not in current_user.get('shops', []):
+            return jsonify({'error': '无权限删除此店铺'}), 403
+
         if db.delete_shop(shop_id):
             return jsonify({'success': True, 'message': '店铺删除成功'})
         else:
-            return jsonify({'error': '店铺不存在或删除失败'}), 404
+            return jsonify({'error': '删除失败'}), 500
     except Exception as e:
         logger.error(f'删除店铺失败: {e}')
         return jsonify({'error': '删除店铺失败'}), 500
@@ -15372,6 +15598,9 @@ def get_shop_info_from_api(shop_id):
 @app.route('/api/scrape/shop', methods=['POST'])
 def scrape_shop():
     """抓取整个店铺的所有商品"""
+    if not can_manage_shops():
+        return jsonify({'error': '需要管理店铺的权限'}), 403
+
     try:
         data = request.get_json()
         if not data or not data.get('shopId'):
@@ -15468,7 +15697,27 @@ def control_shop_scrape():
 @app.route('/api/scrape/shop/status', methods=['GET'])
 def get_scrape_status():
     """获取抓取状态"""
-    return jsonify(scrape_status)
+    try:
+        # 确保返回有效的状态数据
+        status = dict(scrape_status)  # 创建副本避免并发问题
+        # 确保必要字段存在
+        status.setdefault('is_scraping', False)
+        status.setdefault('progress', 0)
+        status.setdefault('total', 0)
+        status.setdefault('current', 0)
+        status.setdefault('message', '')
+        status.setdefault('completed', False)
+        return jsonify(status)
+    except Exception as e:
+        logger.error(f'获取抓取状态失败: {e}')
+        return jsonify({
+            'is_scraping': False,
+            'progress': 0,
+            'total': 0,
+            'current': 0,
+            'message': '获取状态失败',
+            'completed': False
+        })
 
 @app.route('/api/products/count', methods=['GET'])
 def get_products_count():
@@ -15482,6 +15731,55 @@ def get_products_count():
     except Exception as e:
         logger.error(f"获取商品数量失败: {e}")
         return jsonify({'count': 0}), 500
+
+@app.route('/api/debug/user_permissions', methods=['GET'])
+def debug_user_permissions():
+    """调试用户权限和商品分配（管理员权限）"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # 获取所有用户
+            cursor.execute('SELECT id, username, role FROM users')
+            users = []
+            for row in cursor.fetchall():
+                user_dict = dict(row)
+                user_dict['shops'] = db.get_user_shops(user_dict['id'])
+                users.append(user_dict)
+
+            # 获取所有店铺
+            cursor.execute('SELECT id, name FROM shops')
+            shops = [dict(row) for row in cursor.fetchall()]
+
+            # 获取商品统计
+            cursor.execute('SELECT shop_name, COUNT(*) as count FROM products GROUP BY shop_name')
+            product_stats = [dict(row) for row in cursor.fetchall()]
+
+            # 获取用户店铺权限统计
+            cursor.execute('SELECT user_id, COUNT(*) as shop_count FROM user_shop_permissions GROUP BY user_id')
+            permission_stats = []
+            for row in cursor.fetchall():
+                user_id, shop_count = row
+                user = next((u for u in users if u['id'] == user_id), None)
+                if user:
+                    permission_stats.append({
+                        'username': user['username'],
+                        'shop_count': shop_count,
+                        'shops': user['shops']
+                    })
+
+            return jsonify({
+                'users': users,
+                'shops': shops,
+                'product_stats': product_stats,
+                'permission_stats': permission_stats
+            })
+    except Exception as e:
+        logger.error(f"调试用户权限失败: {e}")
+        return jsonify({'error': str(e)}), 500
 
 def run_shop_scrape_task(shop_id):
     """后台抓取任务"""
@@ -15628,6 +15926,9 @@ def scrape_shop_products(shop_id):
                     'current': total_products,
                     'message': f'已处理 {page_count + 1} 页，新增 {total_products} 个商品'
                 })
+
+                # 增加页数计数
+                page_count += 1
 
             # 增加offset继续抓取
             offset += limit
@@ -15859,22 +16160,23 @@ def process_page_multithreaded(products_list, page_num):
             # 1. 获取商品详情
             product_data = process_single_product(product)
             if not product_data:
+                logger.warning(f'商品详情获取失败: {product}')
                 return 0
 
             # 2. 检查商品是否已存在
             existing = db.get_product_by_url(product_data['product_url'])
             if existing:
-                logger.debug(f'商品已存在，跳过: {product_data["title"]}')
+                logger.info(f'商品已存在，跳过: {product_data["title"]} (URL: {product_data["product_url"]})')
                 return 0
 
             # 3. 插入商品到数据库
             product_id = db.insert_product(product_data)
-            logger.debug(f'成功插入商品: {product_data["title"]} (ID: {product_id})')
+            logger.info(f'✅ 成功插入新商品: {product_data["title"]} (ID: {product_id})')
 
             # 4. 下载并保存图片
             if product_data.get('images'):
                 save_product_images(product_id, product_data['images'])
-                logger.debug(f'商品图片下载完成: {product_data["title"]}')
+                logger.info(f'📸 商品图片下载完成: {product_data["title"]} ({len(product_data["images"])}张)')
 
             return 1  # 成功处理一个商品
 
@@ -15882,7 +16184,11 @@ def process_page_multithreaded(products_list, page_num):
             logger.error(f'处理商品失败: {e}')
             return 0
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+    # 降低并发数避免内存爆炸，YOLO模型现在是单例模式
+    max_workers_page = min(2, len(products_list))  # 最多2个并发
+    logger.info(f"页面处理使用 {max_workers_page} 个线程")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers_page) as executor:
         # 提交所有任务，每个商品一个任务
         future_to_product = {
             executor.submit(process_and_save_product, product): product
@@ -15901,11 +16207,14 @@ def process_page_multithreaded(products_list, page_num):
     return processed_count
 
 def save_product_images(product_id, image_urls):
-    """保存商品图片并提取特征向量（高性能版本）"""
+    """保存商品图片并提取特征向量（优化版本 - 减少并发避免内存爆炸）"""
     try:
-        # 使用进程池而不是线程池，避免GIL限制
+        # 使用线程池而不是进程池，避免YOLO模型重复加载
+        # 降低并发数，从4个减少到2个，避免内存爆炸
         import concurrent.futures
-        import multiprocessing
+
+        max_workers = min(2, len(image_urls))  # 最多2个并发线程
+        logger.info(f"开始处理 {len(image_urls)} 张图片，使用 {max_workers} 个线程")
 
         def process_single_image(args):
             """处理单张图片：下载 -> 保存 -> 提取特征 -> 索引"""
@@ -15934,8 +16243,11 @@ def save_product_images(product_id, image_urls):
                     return None
 
                 # 提取特征（这里会调用YOLO裁剪和DINOv2特征提取）
-                global feature_extractor
-                features = feature_extractor.extract_feature(image_path)
+                extractor = get_global_feature_extractor()
+                if extractor is None:
+                    logger.error("特征提取器未初始化")
+                    return None
+                features = extractor.extract_feature(image_path)
 
                 if features is None:
                     # 特征提取失败，删除文件
@@ -15953,34 +16265,49 @@ def save_product_images(product_id, image_urls):
                 logger.error(f'处理图片失败 {image_url}: {e}')
                 return None
 
-        # 使用进程池处理图片下载和特征提取
-        # CPU核心数的一半，避免过度占用系统资源
-        cpu_count = max(1, multiprocessing.cpu_count() // 2)
-        max_workers = min(len(image_urls), cpu_count)
+        # 使用线程池处理图片下载和特征提取（单例YOLO避免重复加载）
+        # 降低并发数避免内存爆炸
+        max_workers = min(2, len(image_urls))  # 最多2个并发线程
 
-        logger.info(f'商品 {product_id} 开始多进程处理 {len(image_urls)} 张图片，使用 {max_workers} 个进程')
+        logger.info(f'商品 {product_id} 开始多线程处理 {len(image_urls)} 张图片，使用 {max_workers} 个线程')
 
-        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             # 提交任务
             image_tasks = [(index, url) for index, url in enumerate(image_urls[:5]) if url]
             futures = [executor.submit(process_single_image, task) for task in image_tasks]
 
-            # 收集结果
+            # 收集结果，支持优雅关闭
             processed_results = []
-            for future in concurrent.futures.as_completed(futures):
+        try:
+            for future in concurrent.futures.as_completed(futures, timeout=30):  # 30秒超时
+                # 检查是否收到关闭信号
+                if shutdown_event and shutdown_event.is_set():
+                    logger.info("检测到关闭信号，停止图片处理...")
+                    executor.shutdown(wait=False)
+                    break
+
                 result = future.result()
                 if result is not None:
                     processed_results.append(result)
+        except concurrent.futures.TimeoutError:
+            logger.warning("图片处理超时，强制关闭线程池")
+            executor.shutdown(wait=False)
+        except Exception as e:
+            logger.error(f"图片处理过程中出错: {e}")
+            executor.shutdown(wait=False)
 
         # 在主进程中统一处理数据库操作，避免进程间数据库连接问题
         processed_images = 0
         for result in processed_results:
             try:
-                    # 插入图片记录到数据库
+                # 插入图片记录到数据库
                 img_db_id = db.insert_image_record(product_id, result['image_path'], result['index'])
 
                 # 添加到FAISS索引
-                from vector_engine import get_vector_engine
+                try:
+                    from vector_engine import get_vector_engine
+                except ImportError:
+                    from .vector_engine import get_vector_engine
                 engine = get_vector_engine()
                 engine.add_vector(img_db_id, result['features'])
 
@@ -15997,7 +16324,10 @@ def save_product_images(product_id, image_urls):
 
         # 保存FAISS索引（批量保存更高效）
         if processed_images > 0:
-            from vector_engine import get_vector_engine
+            try:
+                from vector_engine import get_vector_engine
+            except ImportError:
+                from .vector_engine import get_vector_engine
             engine = get_vector_engine()
             engine.save()
 
@@ -16013,7 +16343,32 @@ def save_product_images_multithreaded(product_id, image_urls):
 if __name__ == '__main__':
     import atexit
     import threading
+    import signal
     import time
+
+    # 全局变量用于控制优雅关闭
+    shutdown_event = threading.Event()
+
+    def signal_handler(signum, frame):
+        """处理中断信号，优雅关闭"""
+        print(f"\n🛑 Received signal {signum}, initiating graceful shutdown...")
+        shutdown_event.set()
+
+        # 设置抓取状态为停止
+        global scrape_status
+        if scrape_status.get('is_scraping', False):
+            scrape_status.update({
+                'stop_signal': True,
+                'message': '系统正在关闭，已停止抓取任务'
+            })
+            print("⏹️  已停止所有抓取任务")
+
+        # 等待一段时间让线程完成
+        time.sleep(2)
+
+    # 注册信号处理器
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
     # 注册退出时停止机器人的函数
     atexit.register(stop_discord_bot)
@@ -16027,6 +16382,9 @@ if __name__ == '__main__':
         app.run(host='127.0.0.1', port=5001, debug=config.DEBUG, use_reloader=False)
     except KeyboardInterrupt:
         print("\n🛑 Received interrupt signal, shutting down...")
+    except Exception as e:
+        print(f"\n💥 Unexpected error: {e}")
     finally:
         stop_discord_bot()
+        print("👋 Flask API shutdown complete")
 
