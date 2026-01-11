@@ -199,7 +199,7 @@ export default function Page() {
         <main className="flex-1 overflow-auto p-6">
           {currentView === "dashboard" && <DashboardView currentUser={currentUser} />}
           {currentView === "accounts" && <AccountsView />}
-          {currentView === "shops" && (currentUser.role === 'admin' || (currentUser.shops && currentUser.shops.length > 0)) && <ShopsView />}
+          {currentView === "shops" && (currentUser.role === 'admin' || (currentUser.shops && currentUser.shops.length > 0)) && <ShopsView currentUser={currentUser} />}
           {currentView === "scraper" && <ScraperView currentUser={currentUser} />}
           {currentView === "image-search" && <ImageSearchView />}
           {currentView === "users" && currentUser.role === 'admin' && <UsersView />}

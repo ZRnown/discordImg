@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/dialog"
 
 export function ShopsView({ currentUser }: { currentUser: any }) {
+
   const [shops, setShops] = useState<any[]>([])
   const [newShopId, setNewShopId] = useState('')
   const [isAddingShop, setIsAddingShop] = useState(false)
@@ -245,6 +246,17 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
       <div>
         <h2 className="text-3xl font-bold tracking-tight">店铺管理</h2>
         <p className="text-muted-foreground">管理微店店铺，添加新店铺并进行全量抓取</p>
+        <div className="flex items-center gap-2 mt-2">
+          <span className="text-sm text-muted-foreground">当前用户:</span>
+          <span className="font-medium">{currentUser?.username}</span>
+          <span className={`text-xs px-2 py-1 rounded ${
+            currentUser?.role === 'admin'
+              ? 'bg-blue-100 text-blue-700'
+              : 'bg-gray-100 text-gray-700'
+          }`}>
+            {currentUser?.role === 'admin' ? '管理员' : '普通用户'}
+          </span>
+        </div>
       </div>
 
       {/* 添加新店铺 - 仅管理员可见 */}
