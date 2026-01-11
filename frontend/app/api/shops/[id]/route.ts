@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-const BACKEND_URL = 'http://localhost:5001'
+const BACKEND_URL = 'http://69.30.204.184:5001'
 
 export async function DELETE(
   request: NextRequest,
