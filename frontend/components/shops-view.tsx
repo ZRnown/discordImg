@@ -42,7 +42,7 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
       // 根据用户权限过滤店铺
       if (currentUser?.role !== 'admin' && currentUser?.shops) {
         // 普通用户只看到分配给他们的店铺
-        allShops = allShops.filter(shop => currentUser.shops.includes(shop.shop_id))
+        allShops = allShops.filter((shop: any) => currentUser.shops.includes(shop.shop_id))
       }
 
       setShops(allShops)
@@ -250,45 +250,116 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
       {/* 添加新店铺 - 仅管理员可见 */}
       {currentUser?.role === 'admin' && (
         <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Plus className="h-5 w-5" />
-            添加新店铺
-          </CardTitle>
-          <CardDescription>
-            输入微店店铺ID，系统会自动获取店铺名称
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex gap-3">
-            <div className="flex-1">
-              <Input
-                placeholder="输入店铺ID (例如: 1713062461)"
-                value={newShopId}
-                onChange={(e) => setNewShopId(e.target.value)}
-                disabled={isAddingShop}
-                onKeyPress={(e) => e.key === 'Enter' && handleAddShop()}
-              />
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Plus className="h-5 w-5" />
+              添加新店铺
+            </CardTitle>
+            <CardDescription>
+              输入微店店铺ID，系统会自动获取店铺名称
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex gap-3">
+              <div className="flex-1">
+                <Input
+                  placeholder="输入店铺ID (例如: 1713062461)"
+                  value={newShopId}
+                  onChange={(e) => setNewShopId(e.target.value)}
+                  disabled={isAddingShop}
+                  onKeyPress={(e) => e.key === 'Enter' && handleAddShop()}
+                />
+              </div>
+              <Button
+                onClick={handleAddShop}
+                disabled={!newShopId.trim() || isAddingShop}
+              >
+                {isAddingShop ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    添加中...
+                  </>
+                ) : (
+                  <>
+                    <Plus className="mr-2 h-4 w-4" />
+                    添加店铺
+                  </>
+                )}
+              </Button>
             </div>
-            <Button
-              onClick={handleAddShop}
-              disabled={!newShopId.trim() || isAddingShop}
-            >
-              {isAddingShop ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  添加中...
-                </>
-              ) : (
-                <>
-                  <Plus className="mr-2 h-4 w-4" />
-                  添加店铺
-                </>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* 抓取店铺信息 - 管理员和有店铺权限的用户可见 */}
+      {(currentUser?.role === 'admin' || (currentUser?.shops && currentUser.shops.length > 0)) && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <RefreshCw className="h-5 w-5" />
+              抓取店铺商品
+            </CardTitle>
+            <CardDescription>
+              选择店铺进行商品信息抓取，支持全量更新
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-4">
+              <div>
+                <Label className="text-sm font-medium">选择要抓取的店铺</Label>
+                <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {shops.filter(shop =>
+                    currentUser?.role === 'admin' ||
+                    currentUser?.shops?.includes(shop.shop_id)
+                  ).map((shop) => (
+                    <div key={shop.shop_id} className="flex items-center gap-3 p-3 border rounded-lg hover:bg-muted/50">
+                      <input
+                        type="checkbox"
+                        id={`scrape-${shop.shop_id}`}
+                        checked={selectedShopIds.includes(shop.shop_id)}
+                        onChange={() => handleSelectShop(shop.shop_id)}
+                        disabled={isShopScraping}
+                        className="rounded border-gray-300"
+                      />
+                      <label htmlFor={`scrape-${shop.shop_id}`} className="flex-1 cursor-pointer">
+                        <div className="font-medium">{shop.name}</div>
+                        <div className="text-sm text-muted-foreground">
+                          ID: {shop.shop_id}
+                          {shop.product_count > 0 && ` • ${shop.product_count} 个商品`}
+                        </div>
+                      </label>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {selectedShopIds.length > 0 && (
+                <div className="flex items-center gap-3 pt-2 border-t">
+                  <div className="text-sm text-muted-foreground">
+                    已选择 {selectedShopIds.length} 个店铺
+                  </div>
+                  <Button
+                    onClick={handleScrapeSelectedShops}
+                    disabled={isShopScraping}
+                    className="ml-auto"
+                  >
+                    {isShopScraping ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        抓取中... ({shopScrapeProgress.toFixed(0)}%)
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw className="mr-2 h-4 w-4" />
+                        开始全量抓取
+                      </>
+                    )}
+                  </Button>
+                </div>
               )}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
+            </div>
+          </CardContent>
+        </Card>
       )}
 
       {/* 店铺列表 */}
@@ -427,9 +498,6 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
           )}
         </CardContent>
       </Card>
-
-      {/* 批量操作 */}
-
 
       {/* 批量删除确认对话框 */}
       <Dialog open={showBatchDeleteConfirm} onOpenChange={setShowBatchDeleteConfirm}>

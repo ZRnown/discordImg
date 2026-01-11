@@ -81,17 +81,51 @@ class DINOv2FeatureExtractor:
             logger.info(f"📋 YOLO-World目标类别: {', '.join(self.target_classes[:10])}...")
             logger.info("⚡ YOLO-World优化说明: 使用多维度评分(面积×置信度×位置×类别权重)，显著提升裁剪准确率")
 
+            # 验证CLIP库是否正确安装
+            try:
+                import clip
+                logger.info(f"✅ CLIP库版本验证: {getattr(clip, '__version__', '未知')}")
+                if hasattr(clip, 'load'):
+                    logger.info("✅ CLIP.load方法可用")
+                else:
+                    logger.warning("⚠️ CLIP.load方法不可用，可能影响YOLO-World性能")
+            except ImportError as e:
+                logger.warning(f"⚠️ 无法导入CLIP库: {e}")
+
         except Exception as e:
             logger.error(f"💥 YOLO-World模型加载失败: {e}")
-            logger.error("🔥 用户要求强制使用YOLO-World，但加载失败！")
-            logger.error("💡 建议解决方案:")
-            logger.error("   1. 检查网络连接，确保能下载yolov8s-world.pt模型")
-            logger.error("   2. 升级ultralytics: pip install ultralytics --upgrade")
-            logger.error("   3. 检查CLIP库: pip install git+https://github.com/openai/CLIP.git")
-            logger.error("   4. 如果问题持续，暂时注释掉强制要求")
 
-            # 既然用户要求强制使用，不提供降级选项
-            raise RuntimeError("YOLO-World加载失败，用户要求强制使用该模型") from e
+            # 检查是否是CLIP相关的问题，如果是则尝试备用方案
+            if "clip" in str(e).lower():
+                logger.warning("🔍 检测到CLIP库问题，尝试备用加载方式...")
+
+                try:
+                    # 尝试不依赖CLIP的加载方式
+                    import ultralytics
+                    logger.info(f"Ultralytics版本: {ultralytics.__version__}")
+
+                    # 直接创建YOLO-World实例，不设置类别
+                    self.detector = YOLO('yolov8s-world.pt')
+                    self.target_classes = None  # 不设置自定义类别
+
+                    logger.warning("⚠️ YOLO-World以基础模式加载 (无自定义类别)")
+                    logger.warning("📊 影响: 将使用YOLO-World的内置80类进行检测")
+                    logger.info("✅ YOLO-World基础模式加载成功")
+
+                except Exception as backup_error:
+                    logger.error(f"💥 备用加载方式也失败: {backup_error}")
+                    logger.error("🔥 用户要求强制使用YOLO-World，但所有加载方式都失败！")
+                    logger.error("💡 最终解决方案:")
+                    logger.error("   1. pip uninstall clip torch torchvision ultralytics")
+                    logger.error("   2. pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu")
+                    logger.error("   3. pip install ultralytics")
+                    logger.error("   4. pip install git+https://github.com/openai/CLIP.git")
+                    raise RuntimeError("YOLO-World加载失败，所有备用方案均无效") from e
+            else:
+                # 不是CLIP问题，直接报错
+                logger.error("🔥 YOLO-World加载失败，错误不相关CLIP库")
+                logger.error("💡 建议检查网络连接和ultralytics版本")
+                raise RuntimeError("YOLO-World加载失败") from e
 
     def _load_dino_model(self):
         """加载DINOv2模型用于特征提取"""

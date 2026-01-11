@@ -123,9 +123,6 @@ export function LoginView({ onLogin }: { onLogin: (user: User) => void }) {
             )}
           </Button>
 
-          <div className="text-center text-sm text-muted-foreground">
-            <p>默认管理员账号: admin / admin123</p>
-          </div>
         </CardContent>
       </Card>
     </div>
