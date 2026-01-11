@@ -1900,22 +1900,22 @@ def upload_product_image(product_id):
             """异步处理图片特征提取和索引"""
             try:
                 # 提取特征
-                global feature_extractor
-                features = feature_extractor.extract_feature(save_path)
+        global feature_extractor
+        features = feature_extractor.extract_feature(save_path)
 
-                if features is None:
-                    os.remove(save_path)
+        if features is None:
+            os.remove(save_path)
                     result['error'] = '特征提取失败，图片无效'
                     return
 
-                # 存入数据库
-                img_db_id = db.insert_image_record(product_id, save_path, next_index)
+        # 存入数据库
+        img_db_id = db.insert_image_record(product_id, save_path, next_index)
 
-                # 存入 FAISS
-                from vector_engine import get_vector_engine
-                engine = get_vector_engine()
-                engine.add_vector(img_db_id, features)
-                engine.save()
+        # 存入 FAISS
+        from vector_engine import get_vector_engine
+        engine = get_vector_engine()
+        engine.add_vector(img_db_id, features)
+        engine.save()
 
                 result['success'] = True
                 result['img_db_id'] = img_db_id
@@ -1988,21 +1988,21 @@ def delete_product_image(product_id, image_index):
             return jsonify({'error': '删除失败，图片可能不存在'}), 404
 
         # 获取最新商品信息
-        product = db._get_product_info_by_id(product_id)
+            product = db._get_product_info_by_id(product_id)
 
         if not product:
             logger.error(f"删除后商品不存在: product_id={product_id}")
             return jsonify({'error': '商品不存在'}), 404
 
-        # 获取剩余所有图片
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT image_index FROM product_images WHERE product_id = ? ORDER BY image_index", (product_id,))
+            # 获取剩余所有图片
+            with db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT image_index FROM product_images WHERE product_id = ? ORDER BY image_index", (product_id,))
             image_indices = [row[0] for row in cursor.fetchall()]
             images = [f"/api/image/{product_id}/{idx}" for idx in image_indices]
 
-        product['images'] = images
-        # 格式化
+            product['images'] = images
+            # 格式化
         try:
             if 'itemID=' in product.get('product_url', ''):
                 product['weidianId'] = product.get('product_url', '').split('itemID=')[1]
@@ -2011,15 +2011,15 @@ def delete_product_image(product_id, image_index):
         except:
             product['weidianId'] = ''
 
-        product['weidianUrl'] = product.get('product_url')
-        product['englishTitle'] = product.get('english_title')
-        product['cnfansUrl'] = product.get('cnfans_url')
+            product['weidianUrl'] = product.get('product_url')
+            product['englishTitle'] = product.get('english_title')
+            product['cnfansUrl'] = product.get('cnfans_url')
         product['acbuyUrl'] = product.get('acbuy_url')
-        product['ruleEnabled'] = product.get('ruleEnabled')
+            product['ruleEnabled'] = product.get('ruleEnabled')
 
         logger.info(f"删除图片成功: product_id={product_id}, image_index={image_index}, 剩余图片数量={len(images)}")
 
-        return jsonify({'success': True, 'product': product})
+            return jsonify({'success': True, 'product': product})
 
     except Exception as e:
         logger.error(f"删除图片失败: {e}")
@@ -3442,14 +3442,14 @@ def save_product_images(product_id, image_urls):
                 # 生成唯一文件名，避免并发冲突
                 timestamp = int(time.time() * 1000000)  # 微秒级时间戳
                 image_filename = f"{product_id}_{index}_{timestamp}.jpg"
-                image_path = os.path.join('data', 'images', image_filename)
+                    image_path = os.path.join('data', 'images', image_filename)
 
-                # 确保目录存在
-                os.makedirs(os.path.dirname(image_path), exist_ok=True)
+                    # 确保目录存在
+                    os.makedirs(os.path.dirname(image_path), exist_ok=True)
 
                 # 直接写入文件，避免内存占用过多
-                with open(image_path, 'wb') as f:
-                    f.write(response.content)
+                    with open(image_path, 'wb') as f:
+                        f.write(response.content)
 
                 # 验证图片完整性
                 if os.path.getsize(image_path) == 0:

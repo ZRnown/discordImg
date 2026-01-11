@@ -853,29 +853,29 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
           </DialogContent>
         </Dialog>
 
-        {/* 批量删除确认对话框 */}
+      {/* 批量删除确认对话框 */}
         <Dialog open={showDeleteConfirm && deletingProductId === null} onOpenChange={setShowDeleteConfirm}>
-          <DialogContent>
-            <DialogHeader>
+        <DialogContent>
+          <DialogHeader>
               <DialogTitle>确认批量删除</DialogTitle>
-              <DialogDescription>
-                确定要删除选中的 {selectedProducts.length} 个商品吗？此操作不可恢复。
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setShowDeleteConfirm(false)}>
-                取消
-              </Button>
+            <DialogDescription>
+              确定要删除选中的 {selectedProducts.length} 个商品吗？此操作不可恢复。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowDeleteConfirm(false)}>
+              取消
+            </Button>
               <Button
                 variant="destructive"
                 onClick={confirmBatchDelete}
                 disabled={isDeleting}
               >
-                {isDeleting ? "删除中..." : "确认删除"}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+              {isDeleting ? "删除中..." : "确认删除"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       </div>
     </div>
   )

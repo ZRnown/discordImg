@@ -54,9 +54,14 @@ class VectorEngine:
             faiss.METRIC_INNER_PRODUCT
         )
 
-        # 设置构建参数
-        self.index.efConstruction = config.FAISS_EF_CONSTRUCTION  # 构建时的深度，越高越准但构建越慢
-        self.index.efSearch = config.FAISS_EF_SEARCH             # 搜索时的深度
+        # 设置构建参数 (兼容不同版本的FAISS)
+        try:
+            # 尝试设置HNSW参数 (新版本FAISS)
+            self.index.efConstruction = config.FAISS_EF_CONSTRUCTION  # 构建时的深度，越高越准但构建越慢
+            self.index.efSearch = config.FAISS_EF_SEARCH             # 搜索时的深度
+        except AttributeError:
+            # 如果不支持这些属性，记录警告但不中断 (旧版本FAISS)
+            logger.warning("FAISS版本不支持efConstruction/efSearch参数，将使用默认值")
 
         self.id_map = []
 
