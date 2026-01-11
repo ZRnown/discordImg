@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 
 // 获取后端 URL
 const getBackendUrl = () => {
-  return process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001'
+  return process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001'
 }
 
 export async function POST(request: NextRequest) {
