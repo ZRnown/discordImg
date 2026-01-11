@@ -8,15 +8,23 @@ export async function DELETE(
 ) {
   try {
     const resolvedParams = await params;
+    const cookies = request.headers.get('cookie') || '';
+    const headers: Record<string, string> = {};
+    if (cookies) {
+      headers['Cookie'] = cookies;
+    }
+
     const response = await fetch(`${BACKEND_URL}/api/shops/${resolvedParams.id}`, {
-      method: 'DELETE'
+      method: 'DELETE',
+      headers: headers
     })
 
     if (response.ok) {
       const data = await response.json()
       return NextResponse.json(data)
     } else {
-      return NextResponse.json({ error: 'Failed to delete shop' }, { status: response.status })
+      const error = await response.json()
+      return NextResponse.json(error, { status: response.status })
     }
   } catch (error) {
     return NextResponse.json({ error: 'Backend connection failed' }, { status: 500 })

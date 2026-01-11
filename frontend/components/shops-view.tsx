@@ -25,7 +25,6 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
   const [isAddingShop, setIsAddingShop] = useState(false)
   const [selectedShopIds, setSelectedShopIds] = useState<string[]>([])
   const [isShopScraping, setIsShopScraping] = useState(false)
-  const [shopScrapeProgress, setShopScrapeProgress] = useState(0)
   const [searchKeyword, setSearchKeyword] = useState('')
   const [isBatchDeleting, setIsBatchDeleting] = useState(false)
   const [showBatchDeleteConfirm, setShowBatchDeleteConfirm] = useState(false)
@@ -135,46 +134,6 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
     }
   }
 
-  const handleScrapeSelectedShops = async () => {
-    if (selectedShopIds.length === 0) {
-      toast.error("请先选择要抓取的店铺")
-      return
-    }
-
-    setIsShopScraping(true)
-    setShopScrapeProgress(0)
-
-    try {
-      for (let i = 0; i < selectedShopIds.length; i++) {
-        const shopId = selectedShopIds[i]
-        const progress = ((i + 1) / selectedShopIds.length) * 100
-        setShopScrapeProgress(progress)
-
-        toast.info(`正在抓取店铺: ${shops.find(s => s.shop_id === shopId)?.name || shopId}`)
-
-        const res = await fetch('/api/scrape/shop', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ shopId })
-        })
-
-        const data = await res.json()
-
-        if (res.ok) {
-          toast.success(`店铺 ${shops.find(s => s.shop_id === shopId)?.name || shopId} 抓取完成，共获取 ${data.total_products} 个商品`)
-        } else {
-          toast.error(`店铺 ${shopId} 抓取失败: ${data.error || '未知错误'}`)
-        }
-      }
-
-      toast.success("批量抓取完成")
-    } catch (e) {
-      toast.error("抓取过程中出错")
-    } finally {
-      setIsShopScraping(false)
-      setShopScrapeProgress(0)
-    }
-  }
 
   const handleSelectShop = (shopId: string) => {
     setSelectedShopIds(prev =>
@@ -303,76 +262,6 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
         </Card>
       )}
 
-      {/* 抓取店铺信息 - 管理员和有店铺权限的用户可见 */}
-      {(currentUser?.role === 'admin' || (currentUser?.shops && currentUser.shops.length > 0)) && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <RefreshCw className="h-5 w-5" />
-              抓取店铺商品
-            </CardTitle>
-            <CardDescription>
-              选择店铺进行商品信息抓取，支持全量更新
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              <div>
-                <Label className="text-sm font-medium">选择要抓取的店铺</Label>
-                <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {shops.filter(shop =>
-                    currentUser?.role === 'admin' ||
-                    currentUser?.shops?.includes(shop.shop_id)
-                  ).map((shop) => (
-                    <div key={shop.shop_id} className="flex items-center gap-3 p-3 border rounded-lg hover:bg-muted/50">
-                      <input
-                        type="checkbox"
-                        id={`scrape-${shop.shop_id}`}
-                        checked={selectedShopIds.includes(shop.shop_id)}
-                        onChange={() => handleSelectShop(shop.shop_id)}
-                        disabled={isShopScraping}
-                        className="rounded border-gray-300"
-                      />
-                      <label htmlFor={`scrape-${shop.shop_id}`} className="flex-1 cursor-pointer">
-                        <div className="font-medium">{shop.name}</div>
-                        <div className="text-sm text-muted-foreground">
-                          ID: {shop.shop_id}
-                          {shop.product_count > 0 && ` • ${shop.product_count} 个商品`}
-                        </div>
-                      </label>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {selectedShopIds.length > 0 && (
-                <div className="flex items-center gap-3 pt-2 border-t">
-                  <div className="text-sm text-muted-foreground">
-                    已选择 {selectedShopIds.length} 个店铺
-                  </div>
-                  <Button
-                    onClick={handleScrapeSelectedShops}
-                    disabled={isShopScraping}
-                    className="ml-auto"
-                  >
-                    {isShopScraping ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        抓取中... ({shopScrapeProgress.toFixed(0)}%)
-                      </>
-                    ) : (
-                      <>
-                        <RefreshCw className="mr-2 h-4 w-4" />
-                        开始全量抓取
-                      </>
-                    )}
-                  </Button>
-                </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
-      )}
 
       {/* 店铺列表 */}
       <Card>

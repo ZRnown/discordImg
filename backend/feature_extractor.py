@@ -1,6 +1,7 @@
 import os
 import torch
 import numpy as np
+import threading
 from typing import List, Optional, Union, Dict
 import logging
 from pathlib import Path
@@ -15,6 +16,25 @@ from functools import lru_cache
 import hashlib
 
 logger = logging.getLogger(__name__)
+
+# 使用类级单例模式
+class FeatureExtractorSingleton:
+    """特征提取器单例管理器"""
+    _instance = None
+    _lock = threading.Lock()
+
+    @classmethod
+    def get_instance(cls):
+        with cls._lock:
+            if cls._instance is None:
+                logger.info("🚀 创建特征提取器单例实例...")
+                cls._instance = DINOv2FeatureExtractor()
+                logger.info("✅ 特征提取器单例实例创建完成")
+        return cls._instance
+
+def get_feature_extractor():
+    """获取特征提取器单例实例"""
+    return FeatureExtractorSingleton.get_instance()
 
 class DINOv2FeatureExtractor:
     """
@@ -134,9 +154,29 @@ class DINOv2FeatureExtractor:
             logger.info(f"加载DINOv2特征模型: {model_name}...")
 
             self.processor = AutoImageProcessor.from_pretrained(model_name)
-            self.model = AutoModel.from_pretrained(model_name).to(self.device)
-            self.model.eval()
+            self.model = AutoModel.from_pretrained(model_name)
 
+            # 安全地将模型移动到设备，避免meta tensor错误
+            try:
+                if hasattr(self.model, 'to'):
+                    self.model = self.model.to(self.device)
+                else:
+                    logger.warning("模型没有to()方法，使用原模型")
+            except Exception as device_error:
+                logger.warning(f"模型移动到设备失败: {device_error}，尝试其他方法...")
+                try:
+                    # 尝试使用to_empty方法
+                    if hasattr(self.model, 'to_empty'):
+                        self.model = self.model.to_empty(device=self.device)
+                    else:
+                        logger.error("模型不支持to_empty方法，使用CPU")
+                        self.device = torch.device('cpu')
+                        self.model = self.model.to(self.device)
+                except Exception as fallback_error:
+                    logger.error(f"所有设备移动方法都失败: {fallback_error}")
+                    raise
+
+            self.model.eval()
             logger.info("✅ DINOv2模型加载成功")
         except Exception as e:
             logger.error(f"❌ DINOv2模型加载失败: {e}")

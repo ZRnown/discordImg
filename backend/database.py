@@ -1202,8 +1202,8 @@ class Database:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
 
-                # 获取店铺数量
-                cursor.execute("SELECT COUNT(DISTINCT shop_name) FROM products WHERE shop_name IS NOT NULL AND shop_name != ''")
+                # 获取店铺数量（从shops表统计）
+                cursor.execute("SELECT COUNT(*) FROM shops")
                 shop_count = cursor.fetchone()[0] or 0
 
                 # 获取商品数量

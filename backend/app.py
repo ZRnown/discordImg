@@ -71,6 +71,9 @@ scrape_status = {
     'message': '等待开始...'
 }
 
+# 全局关闭事件，用于优雅关闭
+shutdown_event = None
+
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 
@@ -169,31 +172,32 @@ bot_clients = []
 bot_tasks = []
 bot_running = False  # 标记机器人是否正在运行
 
-# AI模型预加载变量
-feature_extractor = None
+# 全局特征提取器实例（在应用启动时创建）
+feature_extractor_instance = None
 
-# 预加载AI模型和向量引擎
-def preload_ai_models():
-    """在应用启动时预加载AI模型和向量引擎，避免每次操作都重新初始化"""
-    global feature_extractor
-    # 在这个阶段logger可能还没初始化，使用print
-    try:
-        print("🚀 开始预加载AI模型...")
-        feature_extractor = DINOv2FeatureExtractor()
-        print("✅ AI模型预加载完成")
-
-        print("🚀 开始预加载FAISS向量引擎...")
+def initialize_feature_extractor():
+    """在应用启动时初始化特征提取器，确保单例模式"""
+    global feature_extractor_instance
+    if feature_extractor_instance is None:
+        print("🚀 初始化全局特征提取器实例...")
         try:
-            from vector_engine import get_vector_engine
-        except ImportError:
-            from .vector_engine import get_vector_engine
-        vector_engine = get_vector_engine()
-        print("✅ FAISS向量引擎预加载完成")
-    except Exception as e:
-        print(f"❌ 预加载失败: {e}")
-        feature_extractor = None
+            from feature_extractor import DINOv2FeatureExtractor
+            feature_extractor_instance = DINOv2FeatureExtractor()
+            print("✅ 全局特征提取器实例初始化完成")
+        except Exception as e:
+            print(f"❌ 特征提取器初始化失败: {e}")
+            feature_extractor_instance = None
+    return feature_extractor_instance
 
-preload_ai_models()
+def get_global_feature_extractor():
+    """获取全局特征提取器实例"""
+    global feature_extractor_instance
+    if feature_extractor_instance is None:
+        return initialize_feature_extractor()
+    return feature_extractor_instance
+
+# 在应用启动时初始化
+initialize_feature_extractor()
 
 app = Flask(__name__)
 # 生产环境使用强随机密钥
@@ -210,14 +214,13 @@ app.config.update(
 )
 
 def extract_features(image_path):
-    """使用预加载的深度学习模型提取图像特征"""
-    global feature_extractor
+    """使用深度学习模型提取图像特征"""
     try:
-        if feature_extractor is None:
-            logger.error("AI模型未预加载，无法提取特征")
+        extractor = get_global_feature_extractor()
+        if extractor is None:
+            logger.error("特征提取器未初始化")
             return None
-
-        features = feature_extractor.extract_feature(image_path)
+        features = extractor.extract_feature(image_path)
         # 如果特征提取失败，返回 None（上层将处理并返回错误）
         if features is None:
             logger.warning(f"特征提取失败: {image_path}")
@@ -464,18 +467,11 @@ def scrape_product():
             )
             # 为每张图片建立向量索引
             # 注意：YOLO裁剪已集成在DINOv2特征提取过程中，无需额外步骤
-            # 使用预加载的全局特征提取器
-            global feature_extractor
-            if feature_extractor is None:
-                logger.error("AI模型未预加载，使用单例模式")
-                try:
-                    from feature_extractor import get_feature_extractor
-                except ImportError:
-                    from .feature_extractor import get_feature_extractor
-                extractor = get_feature_extractor()
-            else:
-                logger.info("使用预加载的AI模型")
-                extractor = feature_extractor
+            # 使用全局特征提取器
+            extractor = get_global_feature_extractor()
+            if extractor is None:
+                logger.error("特征提取器未初始化")
+                return
 
             # 串行建立向量索引 (SQLite不支持多线程写入)
             # 但先使用多线程进行特征提取，然后串行插入数据库
@@ -1919,8 +1915,11 @@ def upload_product_image(product_id):
             """异步处理图片特征提取和索引"""
             try:
                 # 提取特征
-                global feature_extractor
-                features = feature_extractor.extract_feature(save_path)
+                extractor = get_global_feature_extractor()
+                if extractor is None:
+                    logger.error("特征提取器未初始化")
+                    return None
+                features = extractor.extract_feature(save_path)
 
                 if features is None:
                     os.remove(save_path)
@@ -2010,21 +2009,22 @@ def delete_product_image(product_id, image_index):
             return jsonify({'error': '删除失败，图片可能不存在'}), 404
 
         # 获取最新商品信息
-            product = db._get_product_info_by_id(product_id)
+        product = db._get_product_info_by_id(product_id)
 
         if not product:
             logger.error(f"删除后商品不存在: product_id={product_id}")
             return jsonify({'error': '商品不存在'}), 404
 
-            # 获取剩余所有图片
-            with db.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT image_index FROM product_images WHERE product_id = ? ORDER BY image_index", (product_id,))
+        # 获取剩余所有图片
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT image_index FROM product_images WHERE product_id = ? ORDER BY image_index", (product_id,))
             image_indices = [row[0] for row in cursor.fetchall()]
             images = [f"/api/image/{product_id}/{idx}" for idx in image_indices]
 
-            product['images'] = images
-            # 格式化
+        product['images'] = images
+
+        # 格式化商品信息
         try:
             if 'itemID=' in product.get('product_url', ''):
                 product['weidianId'] = product.get('product_url', '').split('itemID=')[1]
@@ -2033,11 +2033,11 @@ def delete_product_image(product_id, image_index):
         except:
             product['weidianId'] = ''
 
-            product['weidianUrl'] = product.get('product_url')
-            product['englishTitle'] = product.get('english_title')
-            product['cnfansUrl'] = product.get('cnfans_url')
-            product['acbuyUrl'] = product.get('acbuy_url')
-            product['ruleEnabled'] = product.get('ruleEnabled')
+        product['weidianUrl'] = product.get('product_url')
+        product['englishTitle'] = product.get('english_title')
+        product['cnfansUrl'] = product.get('cnfans_url')
+        product['acbuyUrl'] = product.get('acbuy_url')
+        product['ruleEnabled'] = product.get('ruleEnabled')
 
         logger.info(f"删除图片成功: product_id={product_id}, image_index={image_index}, 剩余图片数量={len(images)}")
 
@@ -2079,8 +2079,10 @@ def cleanup_images():
 def get_ai_status():
     """获取AI系统完整状态和诊断信息"""
     try:
-        global feature_extractor
-        ai_status = feature_extractor.get_status()
+        extractor = get_global_feature_extractor()
+        if extractor is None:
+            return {'error': '特征提取器未初始化'}
+        ai_status = extractor.get_status()
 
         # 获取FAISS状态
         try:
@@ -2145,8 +2147,11 @@ def rebuild_faiss_index():
         valid_vectors = []
         for row in all_images:
             try:
-                global feature_extractor
-                features = feature_extractor.extract_feature(row['image_path'])
+                extractor = get_global_feature_extractor()
+                if extractor is None:
+                    logger.error("特征提取器未初始化")
+                    continue
+                features = extractor.extract_feature(row['image_path'])
                 if features is not None:
                     valid_vectors.append((row['id'], features))
             except Exception as e:
@@ -2994,7 +2999,27 @@ def control_shop_scrape():
 @app.route('/api/scrape/shop/status', methods=['GET'])
 def get_scrape_status():
     """获取抓取状态"""
-    return jsonify(scrape_status)
+    try:
+        # 确保返回有效的状态数据
+        status = dict(scrape_status)  # 创建副本避免并发问题
+        # 确保必要字段存在
+        status.setdefault('is_scraping', False)
+        status.setdefault('progress', 0)
+        status.setdefault('total', 0)
+        status.setdefault('current', 0)
+        status.setdefault('message', '')
+        status.setdefault('completed', False)
+        return jsonify(status)
+    except Exception as e:
+        logger.error(f'获取抓取状态失败: {e}')
+        return jsonify({
+            'is_scraping': False,
+            'progress': 0,
+            'total': 0,
+            'current': 0,
+            'message': '获取状态失败',
+            'completed': False
+        })
 
 @app.route('/api/products/count', methods=['GET'])
 def get_products_count():
@@ -3203,6 +3228,9 @@ def scrape_shop_products(shop_id):
                     'current': total_products,
                     'message': f'已处理 {page_count + 1} 页，新增 {total_products} 个商品'
                 })
+
+                # 增加页数计数
+                page_count += 1
 
             # 增加offset继续抓取
             offset += limit
@@ -3434,22 +3462,23 @@ def process_page_multithreaded(products_list, page_num):
             # 1. 获取商品详情
             product_data = process_single_product(product)
             if not product_data:
+                logger.warning(f'商品详情获取失败: {product}')
                 return 0
 
             # 2. 检查商品是否已存在
             existing = db.get_product_by_url(product_data['product_url'])
             if existing:
-                logger.debug(f'商品已存在，跳过: {product_data["title"]}')
+                logger.info(f'商品已存在，跳过: {product_data["title"]} (URL: {product_data["product_url"]})')
                 return 0
 
             # 3. 插入商品到数据库
             product_id = db.insert_product(product_data)
-            logger.debug(f'成功插入商品: {product_data["title"]} (ID: {product_id})')
+            logger.info(f'✅ 成功插入新商品: {product_data["title"]} (ID: {product_id})')
 
             # 4. 下载并保存图片
             if product_data.get('images'):
                 save_product_images(product_id, product_data['images'])
-                logger.debug(f'商品图片下载完成: {product_data["title"]}')
+                logger.info(f'📸 商品图片下载完成: {product_data["title"]} ({len(product_data["images"])}张)')
 
             return 1  # 成功处理一个商品
 
@@ -3457,7 +3486,11 @@ def process_page_multithreaded(products_list, page_num):
             logger.error(f'处理商品失败: {e}')
             return 0
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+    # 降低并发数避免内存爆炸，YOLO模型现在是单例模式
+    max_workers_page = min(2, len(products_list))  # 最多2个并发
+    logger.info(f"页面处理使用 {max_workers_page} 个线程")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers_page) as executor:
         # 提交所有任务，每个商品一个任务
         future_to_product = {
             executor.submit(process_and_save_product, product): product
@@ -3476,11 +3509,14 @@ def process_page_multithreaded(products_list, page_num):
     return processed_count
 
 def save_product_images(product_id, image_urls):
-    """保存商品图片并提取特征向量（高性能版本）"""
+    """保存商品图片并提取特征向量（优化版本 - 减少并发避免内存爆炸）"""
     try:
-        # 使用进程池而不是线程池，避免GIL限制
+        # 使用线程池而不是进程池，避免YOLO模型重复加载
+        # 降低并发数，从4个减少到2个，避免内存爆炸
         import concurrent.futures
-        import multiprocessing
+
+        max_workers = min(2, len(image_urls))  # 最多2个并发线程
+        logger.info(f"开始处理 {len(image_urls)} 张图片，使用 {max_workers} 个线程")
 
         def process_single_image(args):
             """处理单张图片：下载 -> 保存 -> 提取特征 -> 索引"""
@@ -3509,8 +3545,11 @@ def save_product_images(product_id, image_urls):
                     return None
 
                 # 提取特征（这里会调用YOLO裁剪和DINOv2特征提取）
-                global feature_extractor
-                features = feature_extractor.extract_feature(image_path)
+                extractor = get_global_feature_extractor()
+                if extractor is None:
+                    logger.error("特征提取器未初始化")
+                    return None
+                features = extractor.extract_feature(image_path)
 
                 if features is None:
                     # 特征提取失败，删除文件
@@ -3528,24 +3567,36 @@ def save_product_images(product_id, image_urls):
                 logger.error(f'处理图片失败 {image_url}: {e}')
                 return None
 
-        # 使用进程池处理图片下载和特征提取
-        # CPU核心数的一半，避免过度占用系统资源
-        cpu_count = max(1, multiprocessing.cpu_count() // 2)
-        max_workers = min(len(image_urls), cpu_count)
+        # 使用线程池处理图片下载和特征提取（单例YOLO避免重复加载）
+        # 降低并发数避免内存爆炸
+        max_workers = min(2, len(image_urls))  # 最多2个并发线程
 
-        logger.info(f'商品 {product_id} 开始多进程处理 {len(image_urls)} 张图片，使用 {max_workers} 个进程')
+        logger.info(f'商品 {product_id} 开始多线程处理 {len(image_urls)} 张图片，使用 {max_workers} 个线程')
 
-        with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             # 提交任务
             image_tasks = [(index, url) for index, url in enumerate(image_urls[:5]) if url]
             futures = [executor.submit(process_single_image, task) for task in image_tasks]
 
-            # 收集结果
+            # 收集结果，支持优雅关闭
             processed_results = []
-            for future in concurrent.futures.as_completed(futures):
+        try:
+            for future in concurrent.futures.as_completed(futures, timeout=30):  # 30秒超时
+                # 检查是否收到关闭信号
+                if shutdown_event and shutdown_event.is_set():
+                    logger.info("检测到关闭信号，停止图片处理...")
+                    executor.shutdown(wait=False)
+                    break
+
                 result = future.result()
                 if result is not None:
                     processed_results.append(result)
+        except concurrent.futures.TimeoutError:
+            logger.warning("图片处理超时，强制关闭线程池")
+            executor.shutdown(wait=False)
+        except Exception as e:
+            logger.error(f"图片处理过程中出错: {e}")
+            executor.shutdown(wait=False)
 
         # 在主进程中统一处理数据库操作，避免进程间数据库连接问题
         processed_images = 0
@@ -3594,7 +3645,32 @@ def save_product_images_multithreaded(product_id, image_urls):
 if __name__ == '__main__':
     import atexit
     import threading
+    import signal
     import time
+
+    # 全局变量用于控制优雅关闭
+    shutdown_event = threading.Event()
+
+    def signal_handler(signum, frame):
+        """处理中断信号，优雅关闭"""
+        print(f"\n🛑 Received signal {signum}, initiating graceful shutdown...")
+        shutdown_event.set()
+
+        # 设置抓取状态为停止
+        global scrape_status
+        if scrape_status.get('is_scraping', False):
+            scrape_status.update({
+                'stop_signal': True,
+                'message': '系统正在关闭，已停止抓取任务'
+            })
+            print("⏹️  已停止所有抓取任务")
+
+        # 等待一段时间让线程完成
+        time.sleep(2)
+
+    # 注册信号处理器
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
     # 注册退出时停止机器人的函数
     atexit.register(stop_discord_bot)
@@ -3608,5 +3684,8 @@ if __name__ == '__main__':
         app.run(host='127.0.0.1', port=5001, debug=config.DEBUG, use_reloader=False)
     except KeyboardInterrupt:
         print("\n🛑 Received interrupt signal, shutting down...")
+    except Exception as e:
+        print(f"\n💥 Unexpected error: {e}")
     finally:
         stop_discord_bot()
+        print("👋 Flask API shutdown complete")

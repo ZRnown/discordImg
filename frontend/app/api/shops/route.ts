@@ -2,9 +2,18 @@ import { NextRequest, NextResponse } from 'next/server'
 
 const BACKEND_URL = 'http://localhost:5001'
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const response = await fetch(`${BACKEND_URL}/api/shops`)
+    const cookies = request.headers.get('cookie') || '';
+    const headers: Record<string, string> = {};
+    if (cookies) {
+      headers['Cookie'] = cookies;
+    }
+
+    const response = await fetch(`${BACKEND_URL}/api/shops`, {
+      headers: headers
+    })
+
     if (response.ok) {
       const data = await response.json()
       return NextResponse.json(data)
@@ -19,9 +28,15 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
+    const cookies = request.headers.get('cookie') || '';
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (cookies) {
+      headers['Cookie'] = cookies;
+    }
+
     const response = await fetch(`${BACKEND_URL}/api/shops`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: headers,
       body: JSON.stringify(body)
     })
 

@@ -143,16 +143,20 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     try {
       const res = await fetch('/api/scrape/shop/status')
       if (res.ok) {
-        const status = await res.json()
-        setIsShopScraping(status.is_scraping)
-        setShopScrapeProgress(status.progress || 0)
-        // 如果抓取完成，刷新商品列表
-        if (!status.is_scraping && status.completed) {
-          fetchProducts()
-          fetchProductsCount()
-    }
-  }
+        const text = await res.text()
+        if (text.trim()) {
+          const status = JSON.parse(text)
+          setIsShopScraping(status.is_scraping)
+          setShopScrapeProgress(status.progress || 0)
+          // 如果抓取完成，刷新商品列表
+          if (!status.is_scraping && status.completed) {
+            fetchProducts()
+            fetchProductsCount()
+          }
+        }
+      }
     } catch (e) {
+      console.error('获取抓取状态失败:', e)
       // 静默失败
     }
   }
