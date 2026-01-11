@@ -1,13 +1,13 @@
 import os
 import torch
 import numpy as np
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Dict
 import logging
 from pathlib import Path
 from PIL import Image
 from transformers import AutoImageProcessor, AutoModel
 from ultralytics import YOLO
-from config import config
+from .config import config
 from functools import lru_cache
 import hashlib
 
@@ -45,47 +45,69 @@ class DINOv2FeatureExtractor:
             return hashlib.md5(f"{image_path}:{stat.st_mtime}".encode()).hexdigest()
 
     def _load_yolo_detector(self):
-        """加载YOLO-World用于全自动通用电商商品检测"""
+        """加载YOLO检测器，优先使用YOLO-World，否则降级到YOLOv8-Nano"""
         try:
-            logger.info("加载全自动通用电商识别模型 (YOLO-World)...")
-            # 使用YOLO-World模型，首次运行会自动下载yolov8s-world.pt
-            self.detector = YOLO('yolov8s-world.pt')
+            logger.info("尝试加载YOLO-World模型...")
 
-            # [核心配置] 定义全自动识别的范围
-            # 优化后的商品类别，覆盖微店/代购场景95%的商品
-            # YOLO-World 会自动忽略人脸、手、家具、背景
-            self.target_classes = [
-                # 鞋类 (高优先级)
-                "shoe", "sneaker", "boot", "sandal", "slipper", "heel",
-                # 服装 (高优先级)
-                "shirt", "t-shirt", "jacket", "coat", "pants", "jeans",
-                "dress", "skirt", "shorts", "hoodie", "sweater", "suit",
-                # 包袋配饰 (中优先级)
-                "bag", "handbag", "backpack", "wallet", "belt", "hat", "cap",
-                "watch", "jewelry", "necklace", "ring", "glasses",
-                # 电子产品 (中优先级)
-                "phone", "laptop", "headphone", "camera", "watch",
-                # 家居用品 (低优先级)
-                "toy", "box", "bottle", "cup", "lamp"
-            ]
-
-            # 将这些类别注入模型
-            self.detector.set_classes(self.target_classes)
-
-            logger.info(f"✅ YOLO-World模型加载成功，支持自动识别 {len(self.target_classes)} 种商品类别")
-            logger.info(f"YOLO-World目标类别: {', '.join(self.target_classes[:10])}...")
-            logger.info("YOLO-World优化说明: 使用多维度评分(面积×置信度×位置×类别权重)，显著提升裁剪准确率")
-        except Exception as e:
-            logger.warning(f"YOLO-World模型加载失败: {e}，降级使用YOLOv8-Nano")
+            # 首先尝试YOLO-World (最佳选择)
             try:
-                # 降级到YOLOv8-Nano
+                self.detector = YOLO('yolov8s-world.pt')
+
+                # [核心配置] 定义全自动识别的范围
+                # 优化后的商品类别，覆盖微店/代购场景95%的商品
+                # YOLO-World 会自动忽略人脸、手、家具、背景
+                self.target_classes = [
+                    # 鞋类 (高优先级)
+                    "shoe", "sneaker", "boot", "sandal", "slipper", "heel",
+                    # 服装 (高优先级)
+                    "shirt", "t-shirt", "jacket", "coat", "pants", "jeans",
+                    "dress", "skirt", "shorts", "hoodie", "sweater", "suit",
+                    # 包袋配饰 (中优先级)
+                    "bag", "handbag", "backpack", "wallet", "belt", "hat", "cap",
+                    "watch", "jewelry", "necklace", "ring", "glasses",
+                    # 电子产品 (中优先级)
+                    "phone", "laptop", "headphone", "camera", "watch",
+                    # 家居用品 (低优先级)
+                    "toy", "box", "bottle", "cup", "lamp"
+                ]
+
+                # 将这些类别注入模型
+                self.detector.set_classes(self.target_classes)
+
+                logger.info(f"✅ YOLO-World模型加载成功，支持自动识别 {len(self.target_classes)} 种商品类别")
+                logger.info(f"YOLO-World目标类别: {', '.join(self.target_classes[:10])}...")
+                logger.info("YOLO-World优化说明: 使用多维度评分(面积×置信度×位置×类别权重)，显著提升裁剪准确率")
+                return
+
+            except Exception as yolo_world_error:
+                logger.warning(f"YOLO-World模型加载失败: {yolo_world_error}")
+                logger.info("正在降级到YOLOv8-Nano...")
+
+            # 如果YOLO-World失败，降级到YOLOv8-Nano
+            try:
                 self.detector = YOLO('yolov8n.pt')
-                self.target_classes = None  # Nano版本不支持自定义类别
+                self.target_classes = [
+                    # 通用商品类别 (YOLOv8-Nano内置类别中的商品相关)
+                    "person", "bicycle", "car", "motorcycle", "bus", "truck",
+                    "backpack", "handbag", "suitcase", "bottle", "cup", "fork", "knife",
+                    "spoon", "bowl", "banana", "apple", "orange", "cake", "chair",
+                    "dining table", "laptop", "mouse", "keyboard", "cell phone", "book"
+                ]
                 logger.info("✅ YOLOv8-Nano模型加载成功")
-            except Exception as e2:
-                logger.error(f"YOLOv8-Nano模型也加载失败: {e2}，将禁用YOLO裁剪")
-                self.detector = None
-                self.target_classes = None
+                logger.info("Nano版本说明: 使用内置类别，支持基本的商品识别")
+                return
+
+            except Exception as nano_error:
+                logger.warning(f"YOLOv8-Nano模型也加载失败: {nano_error}")
+
+        except Exception as e:
+            logger.error(f"所有YOLO模型加载失败: {e}")
+
+        # 最后的降级策略：禁用YOLO裁剪
+        logger.warning("⚠️  YOLO裁剪功能已禁用，将使用原图进行特征提取")
+        logger.info("影响: 特征提取准确率可能下降，但系统仍可正常工作")
+        self.detector = None
+        self.target_classes = None
 
     def _load_dino_model(self):
         """加载DINOv2模型用于特征提取"""
@@ -374,6 +396,41 @@ class DINOv2FeatureExtractor:
             feature = self.extract_feature(image_path)
             results.append(feature)
         return results
+
+    def get_status(self) -> Dict:
+        """获取AI模型状态和性能信息"""
+        status = {
+            'device': str(self.device),
+            'yolo_available': self.detector is not None,
+            'yolo_type': 'None'
+        }
+
+        if self.detector is not None:
+            if self.target_classes and len(self.target_classes) > 20:
+                status['yolo_type'] = 'YOLO-World'
+                status['target_classes_count'] = len(self.target_classes)
+                status['target_classes'] = self.target_classes[:10]  # 只显示前10个
+            else:
+                status['yolo_type'] = 'YOLOv8-Nano'
+                status['target_classes_count'] = len(self.target_classes) if self.target_classes else 0
+
+        status['detection_cache_size'] = len(self._detection_cache)
+        status['confidence_threshold'] = 0.05
+        status['iou_threshold'] = 0.5
+
+        # 性能提示
+        tips = []
+        if self.detector is None:
+            tips.append("YOLO裁剪已禁用，建议修复YOLO加载问题以提升准确性")
+        elif status['yolo_type'] == 'YOLOv8-Nano':
+            tips.append("当前使用YOLOv8-Nano，建议升级依赖以启用YOLO-World获得更好效果")
+
+        if status['detection_cache_size'] > 1000:
+            tips.append("检测缓存较大，考虑定期清理缓存")
+
+        status['performance_tips'] = tips if tips else ["AI模型运行正常"]
+
+        return status
 
 # 向后兼容的别名
 class FeatureExtractor(DINOv2FeatureExtractor):

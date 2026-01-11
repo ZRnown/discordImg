@@ -4,7 +4,7 @@ import os
 import pickle
 import logging
 from typing import List, Dict, Tuple
-from config import config
+from .config import config
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,9 @@ class VectorEngine:
             self._create_new_index()
 
     def _create_new_index(self):
-        """创建新的FAISS HNSW索引"""
+        """创建新的FAISS HNSW索引，优化参数设置"""
+        logger.info("创建新的FAISS HNSW索引...")
+
         # HNSW64: 图结构，查询极快，准确率高
         # InnerProduct (IP) 在归一化向量上等同于余弦相似度
         self.index = faiss.IndexHNSWFlat(
@@ -55,18 +57,45 @@ class VectorEngine:
         )
 
         # 设置构建参数 (兼容不同版本的FAISS)
+        ef_construction_set = False
+        ef_search_set = False
+
         try:
-            # 尝试设置HNSW参数 (新版本FAISS)
-            self.index.efConstruction = config.FAISS_EF_CONSTRUCTION  # 构建时的深度，越高越准但构建越慢
-            self.index.efSearch = config.FAISS_EF_SEARCH             # 搜索时的深度
+            # 尝试设置HNSW参数 (新版本FAISS >= 1.7.0)
+            if hasattr(self.index, 'efConstruction'):
+                self.index.efConstruction = config.FAISS_EF_CONSTRUCTION  # 构建时的深度，越高越准但构建越慢
+                ef_construction_set = True
+                logger.info(f"设置efConstruction = {config.FAISS_EF_CONSTRUCTION}")
+
+            if hasattr(self.index, 'efSearch'):
+                self.index.efSearch = config.FAISS_EF_SEARCH  # 搜索时的深度，越高越准但搜索越慢
+                ef_search_set = True
+                logger.info(f"设置efSearch = {config.FAISS_EF_SEARCH}")
+
         except AttributeError:
-            # 如果不支持这些属性，记录警告但不中断 (旧版本FAISS)
             logger.warning("FAISS版本不支持efConstruction/efSearch参数，将使用默认值")
+
+        # 如果无法设置参数，提供性能优化建议
+        if not ef_construction_set or not ef_search_set:
+            logger.info("💡 FAISS性能优化建议:")
+            logger.info(f"   - 当前FAISS版本: {faiss.__version__}")
+            logger.info("   - 建议升级到FAISS >= 1.7.0以获得最佳性能")
+            logger.info("   - 或者使用: pip install faiss-cpu --upgrade")
+
+        # 设置其他兼容性参数
+        try:
+            # 设置HNSW的M参数 (如果支持)
+            if hasattr(self.index, 'hnsw'):
+                logger.info(f"HNSW M参数 = {config.FAISS_HNSW_M}")
+        except:
+            pass
 
         self.id_map = []
 
         # 确保目录存在
         os.makedirs(os.path.dirname(self.index_file), exist_ok=True)
+
+        logger.info("✅ FAISS HNSW索引创建完成")
 
     def save(self):
         """保存索引到磁盘 (百万级数据保存大约需要几秒)"""
@@ -260,15 +289,53 @@ class VectorEngine:
 
     def get_stats(self) -> Dict:
         """获取索引统计信息"""
+        ef_construction = getattr(self.index, 'efConstruction', '不支持')
+        ef_search = getattr(self.index, 'efSearch', '不支持')
+
         return {
             'total_vectors': self.index.ntotal,
             'dimension': self.dimension,
             'index_type': 'HNSW',
             'metric_type': 'InnerProduct (Cosine)',
-            'ef_construction': getattr(self.index, 'efConstruction', 80),
-            'ef_search': getattr(self.index, 'efSearch', 64),
-            'memory_usage_mb': self._estimate_memory_usage()
+            'ef_construction': ef_construction,
+            'ef_search': ef_search,
+            'memory_usage_mb': self._estimate_memory_usage(),
+            'faiss_version': faiss.__version__,
+            'performance_tips': self._get_performance_tips()
         }
+
+    def _get_performance_tips(self) -> List[str]:
+        """获取性能优化建议"""
+        tips = []
+
+        # 检查FAISS版本
+        try:
+            version_parts = faiss.__version__.split('.')
+            major = int(version_parts[0])
+            minor = int(version_parts[1])
+
+            if major < 1 or (major == 1 and minor < 7):
+                tips.append("建议升级FAISS到1.7.0+版本以获得efConstruction/efSearch参数支持")
+        except:
+            tips.append("无法检测FAISS版本，建议升级到最新版本")
+
+        # 检查ef参数
+        if not hasattr(self.index, 'efConstruction'):
+            tips.append("当前FAISS版本不支持efConstruction参数，搜索性能可能受限")
+
+        if not hasattr(self.index, 'efSearch'):
+            tips.append("当前FAISS版本不支持efSearch参数，建议手动设置搜索参数")
+
+        # 检查向量数量
+        if self.index.ntotal < 1000:
+            tips.append("向量数量较少，考虑增加更多商品数据以提高搜索准确性")
+
+        # 检查内存使用
+        memory_mb = self._estimate_memory_usage()
+        if memory_mb > 1000:  # 超过1GB
+            tips.append(f"内存使用量较大 ({memory_mb:.1f}MB)，建议监控内存使用情况")
+
+        return tips if tips else ["系统运行正常，无性能优化建议"]
 
     def _estimate_memory_usage(self) -> float:
         """估算内存使用量 (MB)"""

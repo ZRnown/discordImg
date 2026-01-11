@@ -2053,23 +2053,44 @@ def cleanup_images():
         logger.error(f"图片清理失败: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/system/yolo-status', methods=['GET'])
-def get_yolo_status():
-    """获取YOLO-World状态和统计信息"""
+@app.route('/api/system/ai-status', methods=['GET'])
+def get_ai_status():
+    """获取AI系统完整状态和诊断信息"""
     try:
         global feature_extractor
-        status = {
-            'yolo_available': feature_extractor.detector is not None,
-            'yolo_type': 'YOLO-World' if hasattr(feature_extractor, 'target_classes') and feature_extractor.target_classes else 'YOLOv8-Nano',
-            'target_classes_count': len(feature_extractor.target_classes) if feature_extractor.target_classes else 0,
-            'detection_cache_size': len(feature_extractor._detection_cache) if hasattr(feature_extractor, '_detection_cache') else 0,
-            'confidence_threshold': 0.05,
-            'iou_threshold': 0.5,
-            'target_classes': feature_extractor.target_classes[:20] if feature_extractor.target_classes else []
+        ai_status = feature_extractor.get_status()
+
+        # 获取FAISS状态
+        from vector_engine import get_vector_engine
+        faiss_engine = get_vector_engine()
+        faiss_status = faiss_engine.get_stats()
+
+        # 综合状态
+        overall_status = {
+            'ai_model_status': ai_status,
+            'vector_engine_status': faiss_status,
+            'system_health': '良好' if ai_status['yolo_available'] and faiss_status['total_vectors'] >= 0 else '需要优化',
+            'recommendations': []
         }
-        return jsonify(status)
+
+        # 生成建议
+        recommendations = []
+        recommendations.extend(ai_status.get('performance_tips', []))
+        recommendations.extend(faiss_status.get('performance_tips', []))
+
+        # 额外的系统级建议
+        if not ai_status['yolo_available']:
+            recommendations.append("YOLO裁剪功能已禁用，图像识别准确率会降低")
+        if faiss_status['total_vectors'] == 0:
+            recommendations.append("向量数据库为空，建议添加商品数据")
+        if faiss_status['ef_construction'] == '不支持' or faiss_status['ef_search'] == '不支持':
+            recommendations.append("FAISS版本较旧，建议升级以获得最佳搜索性能")
+
+        overall_status['recommendations'] = recommendations[:5]  # 最多显示5条建议
+
+        return jsonify(overall_status)
     except Exception as e:
-        logger.error(f"获取YOLO状态失败: {e}")
+        logger.error(f"获取AI状态失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/system/rebuild-index', methods=['POST'])
