@@ -51,10 +51,11 @@ class Config:
     YOLO_MODEL_PATH = 'yolov8s-world.pt'
     USE_YOLO_CROP = True
 
-    # === 多线程 ===
-    SCRAPE_THREADS = 10  # 提高并发数
-    DOWNLOAD_THREADS = 8  # 图片下载线程
-    FEATURE_EXTRACT_THREADS = 4  # AI 线程 (不要太大，否则 CPU 爆满)
+    # === 多线程配置 (修改这里) ===
+    # 既然你要求起码10线程，这里直接设为10
+    SCRAPE_THREADS = int(os.getenv('SCRAPE_THREADS', '10'))
+    DOWNLOAD_THREADS = int(os.getenv('DOWNLOAD_THREADS', '8'))
+    FEATURE_EXTRACT_THREADS = int(os.getenv('FEATURE_EXTRACT_THREADS', '4'))
 
     # === FAISS ===
     FAISS_HNSW_M = 64

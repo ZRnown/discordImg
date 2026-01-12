@@ -1,38 +1,35 @@
 #!/usr/bin/env python3
 """
-创建管理员账号脚本
+创建管理员账号脚本 - 项目根目录版本
 
 使用方法:
-# 推荐：在项目根目录运行
-cd /path/to/project
 python3 create_admin.py
 
-# 或者在backend目录下运行
-cd backend
-python3 scripts/create_admin.py
-
-# 指定用户名和密码
+或者指定用户名和密码:
 python3 create_admin.py --username admin --password admin123
 """
 
 import sys
+import os
 import getpass
 import argparse
-import os
 
 # 确保在正确的目录下运行
-if not os.path.exists('database.py'):
-    print("❌ 请在 backend 目录下运行此脚本")
-    print("正确用法:")
-    print("  cd backend")
-    print("  python3 scripts/create_admin.py")
+script_dir = os.path.dirname(os.path.abspath(__file__))
+backend_dir = os.path.join(script_dir, 'backend')
+
+if not os.path.exists(backend_dir):
+    print("❌ 未找到 backend 目录，请确保在项目根目录运行此脚本")
     sys.exit(1)
+
+# 添加 backend 目录到 Python 路径
+sys.path.insert(0, backend_dir)
 
 try:
     from database import Database
 except ImportError as e:
     print(f"❌ 导入数据库模块失败: {e}")
-    print("请确保在 backend 目录下运行此脚本")
+    print("请确保项目结构完整")
     sys.exit(1)
 
 from werkzeug.security import generate_password_hash
@@ -87,6 +84,7 @@ def create_admin_user(username=None, password=None):
             print(f"   角色: 管理员")
             print(f"   用户ID: {user_id}")
             print("\n🔐 请妥善保管账号信息")
+            print("\n🚀 现在可以使用此账号登录系统了")
 
     except Exception as e:
         print(f"❌ 创建管理员账号失败: {e}")
@@ -97,6 +95,9 @@ if __name__ == '__main__':
     parser.add_argument('--password', help='管理员密码')
 
     args = parser.parse_args()
+
+    print("🔧 Discord 商品营销系统 - 管理员账号创建工具")
+    print("=" * 50)
 
     if args.username and args.password:
         create_admin_user(args.username, args.password)

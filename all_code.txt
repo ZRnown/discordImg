@@ -9456,10 +9456,10 @@ class Config:
     YOLO_MODEL_PATH = 'yolov8s-world.pt'
     USE_YOLO_CROP = True
 
-    # === 多线程 (调小一点避免卡死) ===
-    SCRAPE_THREADS = 2
-    DOWNLOAD_THREADS = 4
-    FEATURE_EXTRACT_THREADS = 2
+    # === 多线程 ===
+    SCRAPE_THREADS = 10  # 提高并发数
+    DOWNLOAD_THREADS = 8  # 图片下载线程
+    FEATURE_EXTRACT_THREADS = 4  # AI 线程 (不要太大，否则 CPU 爆满)
 
     # === FAISS ===
     FAISS_HNSW_M = 64
@@ -10124,12 +10124,28 @@ class Database:
             if image_records:
                 # 从FAISS中删除向量
                 try:
+                    # 优先尝试绝对导入
                     from vector_engine import get_vector_engine
                 except ImportError:
-                    from .vector_engine import get_vector_engine
-                engine = get_vector_engine()
-                for record in image_records:
-                    engine.remove_vector_by_db_id(record['id'])
+                    try:
+                        # 尝试相对导入
+                        from .vector_engine import get_vector_engine
+                    except ImportError:
+                        # 如果都失败，跳过FAISS操作
+                        logger.warning("无法导入vector_engine，跳过FAISS向量删除")
+                        engine = None
+                    else:
+                        engine = get_vector_engine()
+                else:
+                    engine = get_vector_engine()
+
+                # 如果成功获取到引擎，删除向量
+                if engine:
+                    for record in image_records:
+                        try:
+                            engine.remove_vector_by_db_id(record['id'])
+                        except Exception as e:
+                            logger.warning(f"删除FAISS向量失败 {record['id']}: {e}")
 
             # 删除物理文件
             for record in image_records:
@@ -10148,8 +10164,12 @@ class Database:
                 conn.commit()
 
             # 保存FAISS索引
-            if image_records:
-                engine.save()
+            if image_records and engine:
+                try:
+                    engine.save()
+                    logger.info("FAISS索引已保存")
+                except Exception as e:
+                    logger.warning(f"保存FAISS索引失败: {e}")
 
             return True
         except Exception as e:
@@ -10240,6 +10260,14 @@ class Database:
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM products WHERE product_url = ?", (product_url,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def get_product_by_item_id(self, item_id: str) -> Optional[Dict]:
+        """根据微店商品ID获取商品信息"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM products WHERE item_id = ?", (item_id,))
             row = cursor.fetchone()
             return dict(row) if row else None
 
@@ -14251,20 +14279,38 @@ if __name__ == '__main__':
 创建管理员账号脚本
 
 使用方法:
-cd backend
+# 推荐：在项目根目录运行
+cd /path/to/project
 python3 create_admin.py
 
-或者指定用户名和密码:
+# 或者在backend目录下运行
+cd backend
+python3 scripts/create_admin.py
+
+# 指定用户名和密码
 python3 create_admin.py --username admin --password admin123
 """
 
 import sys
 import getpass
 import argparse
+import os
+
+# 确保在正确的目录下运行
+if not os.path.exists('database.py'):
+    print("❌ 请在 backend 目录下运行此脚本")
+    print("正确用法:")
+    print("  cd backend")
+    print("  python3 scripts/create_admin.py")
+    sys.exit(1)
+
 try:
     from database import Database
-except ImportError:
-    from ..database import Database
+except ImportError as e:
+    print(f"❌ 导入数据库模块失败: {e}")
+    print("请确保在 backend 目录下运行此脚本")
+    sys.exit(1)
+
 from werkzeug.security import generate_password_hash
 
 def create_admin_user(username=None, password=None):
@@ -16537,21 +16583,119 @@ def get_indexed_ids():
 # === 修复：批量删除 API ===
 @app.route('/api/products/batch', methods=['DELETE'])
 def batch_delete_products():
-    """批量删除商品"""
+    """批量删除商品（多线程高性能版）"""
     try:
         data = request.get_json()
         ids = data.get('ids', [])
         if not ids:
             return jsonify({'error': 'No IDs provided'}), 400
 
-        count = 0
-        for pid in ids:
-            if db.delete_product_images(pid):
-                count += 1
+        logger.info(f"开始批量删除 {len(ids)} 个商品")
 
-        return jsonify({'success': True, 'count': count})
+        # 使用多线程删除
+        import concurrent.futures
+        max_threads = min(5, len(ids))  # 删除用较少的线程，避免IO冲突
+
+        deleted_count = 0
+        failed_ids = []
+
+        def delete_single_product(product_id):
+            """删除单个商品"""
+            try:
+                # 创建新的数据库实例避免多线程冲突
+                from database import Database
+                temp_db = Database()
+                if temp_db.delete_product_images(product_id):
+                    return {'success': True, 'id': product_id}
+                else:
+                    return {'success': False, 'id': product_id}
+            except Exception as e:
+                logger.error(f"删除商品 {product_id} 失败: {e}")
+                return {'success': False, 'id': product_id}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
+            futures = [executor.submit(delete_single_product, pid) for pid in ids]
+
+            for future in concurrent.futures.as_completed(futures):
+                result = future.result()
+                if result['success']:
+                    deleted_count += 1
+                else:
+                    failed_ids.append(result['id'])
+
+        logger.info(f"批量删除完成: {deleted_count}/{len(ids)} 个商品成功删除")
+
+        response = {'success': True, 'count': deleted_count, 'total': len(ids)}
+        if failed_ids:
+            response['failed_ids'] = failed_ids
+            response['warning'] = f'{len(failed_ids)} 个商品删除失败'
+
+        return jsonify(response)
     except Exception as e:
         logger.error(f"批量删除失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/products/batch-delete-all', methods=['DELETE'])
+def batch_delete_all_products():
+    """删除所有商品（全选删除）"""
+    try:
+        # 获取所有商品ID
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM products")
+            all_ids = [row['id'] for row in cursor.fetchall()]
+
+        if not all_ids:
+            return jsonify({'success': True, 'count': 0, 'message': '没有商品需要删除'})
+
+        logger.info(f"开始删除所有 {len(all_ids)} 个商品")
+
+        # 使用多线程删除所有商品
+        import concurrent.futures
+        max_threads = min(5, len(all_ids))
+
+        deleted_count = 0
+        failed_ids = []
+
+        def delete_single_product(product_id):
+            try:
+                # 创建新的数据库实例避免多线程冲突
+                from database import Database
+                temp_db = Database()
+                if temp_db.delete_product_images(product_id):
+                    return {'success': True, 'id': product_id}
+                else:
+                    return {'success': False, 'id': product_id}
+            except Exception as e:
+                logger.error(f"删除商品 {product_id} 失败: {e}")
+                return {'success': False, 'id': product_id}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
+            futures = [executor.submit(delete_single_product, pid) for pid in all_ids]
+
+            for future in concurrent.futures.as_completed(futures):
+                result = future.result()
+                if result['success']:
+                    deleted_count += 1
+                else:
+                    failed_ids.append(result['id'])
+
+        logger.info(f"全选删除完成: {deleted_count}/{len(all_ids)} 个商品成功删除")
+
+        response = {
+            'success': True,
+            'count': deleted_count,
+            'total': len(all_ids),
+            'message': f'成功删除 {deleted_count} 个商品'
+        }
+
+        if failed_ids:
+            response['failed_ids'] = failed_ids
+            response['warning'] = f'{len(failed_ids)} 个商品删除失败'
+
+        return jsonify(response)
+    except Exception as e:
+        logger.error(f"全选删除失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/products/<int:product_id>', methods=['DELETE'])
@@ -16811,6 +16955,29 @@ def rebuild_faiss_index():
 
     except Exception as e:
         logger.error(f"重建索引失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/config', methods=['GET'])
+def get_config():
+    """获取系统配置信息"""
+    try:
+        from config import config
+        return jsonify({
+            'version': '1.0.0',
+            'features': {
+                'multithread_scraping': True,
+                'ai_image_processing': True,
+                'discord_bot': True,
+                'real_time_monitoring': True
+            },
+            'limits': {
+                'max_scrape_threads': config.SCRAPE_THREADS,
+                'max_download_threads': config.DOWNLOAD_THREADS,
+                'max_feature_threads': config.FEATURE_EXTRACT_THREADS
+            }
+        })
+    except Exception as e:
+        logger.error(f"获取配置信息失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/config/discord-threshold', methods=['GET'])
@@ -17723,13 +17890,21 @@ def batch_scrape_products():
             return jsonify({'error': 'productIds必须是非空数组'}), 400
 
         # 使用环境变量配置的线程数
-        max_threads = SCRAPE_THREADS
+        try:
+            from config import config
+            max_threads = config.SCRAPE_THREADS
+        except:
+            max_threads = 2
+
+        # 创建停止事件用于优雅关闭
+        shutdown_event = threading.Event()
 
         logger.info(f"开始批量抓取 {len(product_ids)} 个商品，使用 {max_threads} 个线程")
 
         # 创建批量处理任务
         import concurrent.futures
         import time
+        import threading
 
         results = {
             'total': len(product_ids),
@@ -17886,6 +18061,8 @@ def batch_scrape_products():
 
     except Exception as e:
         logger.error(f"批量抓取失败: {e}")
+        import traceback
+        logger.error(f"详细错误信息: {traceback.format_exc()}")
         return jsonify({'error': f'批量抓取失败: {str(e)}'}), 500
 
 @app.route('/api/scrape/shop/status', methods=['GET'])
@@ -18009,18 +18186,26 @@ def run_shop_scrape_task(shop_id):
         logger.info("🧵 后台抓取线程结束")
 
 def scrape_shop_products(shop_id):
-    """抓取店铺所有商品的实现 (支持暂停/停止)"""
+    """抓取店铺所有商品的实现 (全局线程池高性能版 - 每个商品一个线程)"""
     import requests
     import time
     from weidian_scraper import get_weidian_scraper
+    import concurrent.futures
 
-    scraper = get_weidian_scraper()  # 实例化爬虫
-    total_products = 0
+    # 获取配置的线程数
+    try:
+        from config import config
+        max_threads = config.SCRAPE_THREADS
+    except:
+        max_threads = 2
+
+    scraper = get_weidian_scraper()
+    all_product_tasks = []  # 收集所有商品任务
     offset = 0
     limit = 20
     page_count = 0
 
-    # 初始化状态到数据库
+    # 初始化状态
     db.update_scrape_status(
         is_scraping=True,
         paused=False,
@@ -18037,122 +18222,150 @@ def scrape_shop_products(shop_id):
     shop_name = shop_info.get('shopName', f'店铺 {shop_id}') if shop_info else f'店铺 {shop_id}'
 
     db.update_scrape_status(message=f'正在抓取店铺: {shop_name}')
-    logger.info(f"开始抓取循环，店铺: {shop_name}")
+    logger.info(f"开始收集商品列表，店铺: {shop_name}")
 
+    # 第一阶段：收集所有商品信息（单线程，避免API压力）
     while True:
-        # === 1. 检查停止信号 ===
+        # 检查停止信号
         current_status = db.get_scrape_status()
         if current_status.get('stop_signal', False):
-            logger.info(f"🔴 检测到停止信号，退出抓取循环。当前状态: {current_status}")
-            db.update_scrape_status(message='抓取已手动停止')
+            logger.info("🔴 停止信号触发，退出收集")
             break
 
         try:
-            # 构建API URL
+            # API 请求商品列表
             url = f"https://thor.weidian.com/decorate/shopDetail.tab.getItemList/1.0"
             param_encoded = quote(f'{{"shopId":"{shop_id}","tabId":0,"sortOrder":"desc","offset":{offset},"limit":{limit},"from":"h5","showItemTag":true}}')
             full_url = f"{url}?param={param_encoded}&wdtoken=8ea9315c&_={int(time.time()*1000)}"
 
-            # 复用scraper的session，确保headers和cookies一致
             response = scraper.session.get(full_url, timeout=10)
-
             if response.status_code != 200:
                 logger.warning(f'API请求失败: {response.status_code}')
                 break
 
             data = response.json()
-
             if data.get('status', {}).get('code') != 0:
                 logger.warning('API响应状态码不为0')
                 break
 
             result = data.get('result', {})
             if not result.get('hasData', False):
-                logger.info('没有更多数据，抓取完成')
+                logger.info('没有更多数据，收集完成')
                 break
 
             items = result.get('itemList', [])
             if not items:
-                logger.info('商品列表为空，抓取完成')
+                logger.info('商品列表为空，收集完成')
                 break
 
-            # 逐个处理商品，支持更细粒度的暂停/停止控制
-            page_processed = 0
-            page_success = 0
-
+            # 收集当前页的商品任务
+            page_tasks = []
             for item in items:
-                # === 检查停止信号 ===
-                item_status = db.get_scrape_status()
-                if item_status.get('stop_signal', False):
-                    logger.info("处理商品期间收到停止信号，退出")
-                    break
-
                 item_id = item.get('itemId', '')
                 if item_id:
-                    try:
-                        # 处理单个商品
-                        product_info = {
-                            'item_id': item_id,
-                            'item_url': item.get('itemUrl', ''),
-                            'shop_name': shop_name
-                        }
+                    product_info = {
+                        'item_id': item_id,
+                        'item_url': item.get('itemUrl', ''),
+                        'shop_name': shop_name
+                    }
+                    page_tasks.append(product_info)
 
-                        success = process_and_save_single_product_sync(product_info)
-                        page_processed += 1
-                        total_products += 1
+            all_product_tasks.extend(page_tasks)
+            logger.info(f'第 {page_count + 1} 页收集了 {len(page_tasks)} 个商品，总计 {len(all_product_tasks)} 个')
 
-                        if success:
-                            page_success += 1
-
-                        # 更新进度到数据库
-                        current_status = db.get_scrape_status()
-                        db.update_scrape_status(
-                            processed=total_products,
-                            success=current_status.get('success', 0) + (1 if success else 0),
-                            message=f'正在抓取... (成功: {current_status.get("success", 0) + (1 if success else 0)}/{total_products})'
-                        )
-
-                    except Exception as e:
-                        logger.error(f'处理商品 {item_id} 失败: {e}')
-                        page_processed += 1
-                        total_products += 1
-
-            if page_processed > 0:
-                logger.info(f'第 {page_count + 1} 页处理完成，处理 {page_processed} 个商品，成功 {page_success} 个')
-                page_count += 1
-
-            # 增加offset继续抓取
+            page_count += 1
             offset += limit
-
-            # 避免请求过于频繁
-            time.sleep(0.5)
+            time.sleep(0.5)  # 稍微歇一下防止封IP
 
         except Exception as e:
-            logger.error(f'抓取过程中出错: {e}')
+            logger.error(f'收集商品列表出错: {e}')
             break
 
-    # 更新最终状态到数据库
+    total_products = len(all_product_tasks)
+    logger.info(f"✅ 商品收集完成，总计 {total_products} 个商品，准备使用 {max_threads} 个线程并发处理")
+
+    # 更新状态：开始处理
+    db.update_scrape_status(
+        total=total_products,
+        message=f'开始处理 {total_products} 个商品...'
+    )
+
+    # 第二阶段：使用全局线程池并发处理所有商品
+    processed_count = 0
+    success_count = 0
+
+    if all_product_tasks:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
+            # 提交所有商品任务到线程池
+            future_to_product = {
+                executor.submit(process_and_save_single_product_sync, product_info): product_info
+                for product_info in all_product_tasks
+            }
+
+            # 处理完成的任务
+            for future in concurrent.futures.as_completed(future_to_product):
+                # 检查停止信号
+                if db.get_scrape_status().get('stop_signal', False):
+                    logger.info("🔴 检测到停止信号，正在取消剩余任务...")
+                    # 取消所有待处理的任务
+                    for f in future_to_product:
+                        if not f.done():
+                            f.cancel()
+                    break
+
+                try:
+                    product_info = future_to_product[future]
+                    success = future.result()
+                    processed_count += 1
+
+                    if success:
+                        success_count += 1
+
+                    # 每处理10个商品或最后一批更新一次状态
+                    if processed_count % 10 == 0 or processed_count == total_products:
+                        progress = int((processed_count / total_products) * 100)
+                        db.update_scrape_status(
+                            processed=processed_count,
+                            success=success_count,
+                            progress=progress,
+                            message=f'正在处理商品... ({processed_count}/{total_products})'
+                        )
+                        logger.info(f'已处理 {processed_count}/{total_products} 个商品，成功 {success_count} 个')
+
+                except Exception as e:
+                    logger.error(f"商品处理异常: {e}")
+                    processed_count += 1
+
+    # 结束
     db.update_scrape_status(
         is_scraping=False,
         completed=True,
         progress=100,
-        message=f'抓取结束，共处理 {total_products} 个商品'
+        message=f'抓取完成，共处理 {processed_count} 个商品，成功 {success_count} 个'
     )
-    logger.info(f"店铺 {shop_id} 抓取任务结束")
+    logger.info(f"✅ 店铺 {shop_id} 抓取任务完成: {success_count}/{processed_count} 商品成功处理")
 
     return {
-        "total_products": total_products,
+        "total_products": processed_count,
+        "success_count": success_count,
         "pages_processed": page_count
     }
 
 def process_and_save_single_product_sync(product_info):
-    """同步处理单个商品"""
+    """同步处理单个商品，避免重复处理"""
     try:
+        item_id = product_info.get('item_id', '')
+
         # === 检查停止信号 ===
         current_status = db.get_scrape_status()
         if current_status.get('stop_signal', False):
-            logger.info(f"🔴 处理商品前检测到停止信号，取消处理商品 {product_info.get('item_id')}")
+            logger.info(f"🔴 处理商品前检测到停止信号，取消处理商品 {item_id}")
             return False
+
+        # === 0. 基于item_id的强力去重 ===
+        if db.get_product_by_item_id(item_id):
+            logger.info(f"⏭️ 商品 {item_id} 已存在，跳过重复处理")
+            return True  # 已存在算处理成功
 
         # 1. 抓取详情
         from app import process_single_product  # 引用 app.py 中的逻辑
@@ -18164,30 +18377,35 @@ def process_and_save_single_product_sync(product_info):
         # === 再次检查停止状态 ===
         current_status = db.get_scrape_status()
         if current_status.get('stop_signal', False):
-            logger.info(f"🔴 抓取详情后检测到停止信号，取消处理商品 {product_info.get('item_id')}")
+            logger.info(f"🔴 抓取详情后检测到停止信号，取消处理商品 {item_id}")
             return False
 
-        # 2. 查重
+        # 2. 再次查重 (双重保险)
         if db.get_product_by_url(product_data['product_url']):
+            logger.info(f"⏭️ 商品URL已存在: {product_data['product_url']}")
             return True  # 已存在算处理成功
 
-        # 3. 入库
+        # 3. 入库 (添加item_id字段)
+        product_data['item_id'] = item_id  # 确保item_id被保存
         product_id = db.insert_product(product_data)
+
+        logger.info(f"✅ 商品 {item_id} 成功入库，数据库ID: {product_id}")
 
         # === 再次检查停止状态 ===
         current_status = db.get_scrape_status()
         if current_status.get('stop_signal', False):
-            logger.info(f"🔴 入库后检测到停止信号，商品 {product_info.get('item_id')} 已入库但跳过图片处理")
+            logger.info(f"🔴 入库后检测到停止信号，商品 {item_id} 已入库但跳过图片处理")
             return True  # 商品已入库，算成功
 
-        # 4. 图片处理
+        # 4. 图片处理 (使用多线程版本)
         if product_data.get('images'):
-            from app import save_product_images
-            save_product_images(product_id, product_data['images'])
+            from app import save_product_images_unified
+            processed_count = save_product_images_unified(product_id, product_data['images'])
+            logger.info(f"🖼️ 商品 {item_id} 图片处理完成，共处理 {processed_count} 张图片")
 
         return True
     except Exception as e:
-        logger.error(f"处理商品出错 {product_info.get('item_id')}: {e}")
+        logger.error(f"❌ 处理商品出错 {product_info.get('item_id')}: {e}")
         return False
 
 def scrape_product_info(product_url):
@@ -18822,162 +19040,110 @@ if __name__ == '__main__':
     finally:
         print("👋 Flask API shutdown complete")
 
---- File: ./backend/diagnose_403.py ---
+--- File: ./create_admin.py ---
 #!/usr/bin/env python3
 """
-403 Forbidden 错误诊断脚本
+创建管理员账号脚本 - 项目根目录版本
 
 使用方法:
-python diagnose_403.py
+python3 create_admin.py
 
-此脚本会检查常见的403 Forbidden错误原因：
-1. CORS配置
-2. Cookie设置
-3. 防火墙规则
-4. Nginx配置
+或者指定用户名和密码:
+python3 create_admin.py --username admin --password admin123
 """
 
+import sys
 import os
-import requests
-import socket
-from urllib.parse import urlparse
+import getpass
+import argparse
 
-def check_cors_configuration():
-    """检查CORS配置"""
-    print("🔍 检查CORS配置...")
+# 确保在正确的目录下运行
+script_dir = os.path.dirname(os.path.abspath(__file__))
+backend_dir = os.path.join(script_dir, 'backend')
+
+if not os.path.exists(backend_dir):
+    print("❌ 未找到 backend 目录，请确保在项目根目录运行此脚本")
+    sys.exit(1)
+
+# 添加 backend 目录到 Python 路径
+sys.path.insert(0, backend_dir)
+
+try:
+    from database import Database
+except ImportError as e:
+    print(f"❌ 导入数据库模块失败: {e}")
+    print("请确保项目结构完整")
+    sys.exit(1)
+
+from werkzeug.security import generate_password_hash
+
+def create_admin_user(username=None, password=None):
+    """创建管理员用户"""
+    db = Database()
+
+    # 如果没有提供参数，交互式输入
+    if not username:
+        username = input("请输入管理员用户名: ").strip()
+        if not username:
+            print("❌ 用户名不能为空")
+            return
+
+    if not password:
+        password = getpass.getpass("请输入管理员密码: ").strip()
+        if not password:
+            print("❌ 密码不能为空")
+            return
+
+        # 确认密码
+        confirm_password = getpass.getpass("请再次输入密码确认: ").strip()
+        if password != confirm_password:
+            print("❌ 两次输入的密码不一致")
+            return
+
     try:
-        from config import config
-        print("✅ CORS允许的源:")
-        for origin in config.CORS_ORIGINS:
-            print(f"   - {origin.strip()}")
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # 检查用户名是否已存在
+            cursor.execute("SELECT id FROM users WHERE username = ?", (username,))
+            existing_user = cursor.fetchone()
+
+            if existing_user:
+                print(f"❌ 用户名 '{username}' 已存在")
+                return
+
+            # 创建管理员用户
+            hashed_password = generate_password_hash(password)
+            cursor.execute("""
+                INSERT INTO users (username, password_hash, role, created_at, updated_at)
+                VALUES (?, ?, 'admin', datetime('now'), datetime('now'))
+            """, (username, hashed_password))
+
+            user_id = cursor.lastrowid
+            conn.commit()
+
+            print("✅ 管理员账号创建成功！")
+            print(f"   用户名: {username}")
+            print(f"   角色: 管理员")
+            print(f"   用户ID: {user_id}")
+            print("\n🔐 请妥善保管账号信息")
+            print("\n🚀 现在可以使用此账号登录系统了")
+
     except Exception as e:
-        print(f"❌ CORS配置检查失败: {e}")
+        print(f"❌ 创建管理员账号失败: {e}")
 
-def check_network_connectivity():
-    """检查网络连通性"""
-    print("\n🔍 检查网络连通性...")
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='创建管理员账号')
+    parser.add_argument('--username', help='管理员用户名')
+    parser.add_argument('--password', help='管理员密码')
 
-    # 检查本地端口
-    def check_port(host, port):
-        try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5)
-            result = sock.connect_ex((host, port))
-            sock.close()
-            return result == 0
-        except:
-            return False
+    args = parser.parse_args()
 
-    # 检查本地服务
-    if check_port('127.0.0.1', 5001):
-        print("✅ 本地后端服务 (127.0.0.1:5001) 正在运行")
-    else:
-        print("❌ 本地后端服务 (127.0.0.1:5001) 未运行")
-
-    if check_port('127.0.0.1', 3000):
-        print("✅ 本地前端服务 (127.0.0.1:3000) 正在运行")
-    else:
-        print("❌ 本地前端服务 (127.0.0.1:3000) 未运行")
-
-def check_api_endpoints():
-    """检查API端点可访问性"""
-    print("\n🔍 检查API端点可访问性...")
-
-    base_url = "http://127.0.0.1:5001"
-    endpoints = [
-        '/api/auth/me',
-        '/api/logs?endpoint=recent',
-        '/api/user/settings'
-    ]
-
-    for endpoint in endpoints:
-        try:
-            response = requests.get(f"{base_url}{endpoint}", timeout=10)
-            if response.status_code == 401:
-                print(f"✅ {endpoint}: {response.status_code} (需要认证，正常)")
-            elif response.status_code == 200:
-                print(f"✅ {endpoint}: {response.status_code} (可访问)")
-            else:
-                print(f"⚠️  {endpoint}: {response.status_code} ({response.reason})")
-        except requests.exceptions.RequestException as e:
-            print(f"❌ {endpoint}: 连接失败 - {e}")
-
-def check_environment_variables():
-    """检查环境变量配置"""
-    print("\n🔍 检查环境变量配置...")
-
-    important_vars = [
-        'HOST', 'PORT', 'DEBUG',
-        'CORS_ORIGINS', 'SECRET_KEY',
-        'SESSION_LIFETIME'
-    ]
-
-    for var in important_vars:
-        value = os.getenv(var)
-        if value:
-            print(f"✅ {var}: {value}")
-        else:
-            print(f"❌ {var}: 未设置")
-
-def check_nginx_configuration():
-    """检查Nginx配置建议"""
-    print("\n🔍 Nginx配置检查建议...")
-
-    print("如果使用Nginx反向代理，请确保配置包含:")
-    print("""
-    server {
-        listen 80;
-        server_name your-domain.com;
-
-        # 前端静态文件
-        location / {
-            proxy_pass http://127.0.0.1:3000;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-        }
-
-        # API代理
-        location /api {
-            proxy_pass http://127.0.0.1:5001;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-
-            # CORS头
-            add_header Access-Control-Allow-Origin *;
-            add_header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS";
-            add_header Access-Control-Allow-Headers "Origin, X-Requested-With, Content-Type, Accept, Authorization";
-
-            # 处理预检请求
-            if ($request_method = 'OPTIONS') {
-                return 204;
-            }
-        }
-    }
-    """)
-
-def main():
-    """主诊断函数"""
-    print("🚀 403 Forbidden 错误诊断工具")
+    print("🔧 Discord 商品营销系统 - 管理员账号创建工具")
     print("=" * 50)
 
-    check_cors_configuration()
-    check_network_connectivity()
-    check_api_endpoints()
-    check_environment_variables()
-    check_nginx_configuration()
-
-    print("\n📋 故障排除清单:")
-    print("1. 确保后端服务正在运行: python app.py")
-    print("2. 确保前端服务正在运行: npm run dev")
-    print("3. 清除浏览器Cookie和缓存")
-    print("4. 检查防火墙是否阻止了相关端口")
-    print("5. 如果使用Nginx，确保配置正确转发API请求")
-    print("6. 检查服务器安全组/防火墙规则")
-
-if __name__ == "__main__":
-    main()
+    if args.username and args.password:
+        create_admin_user(args.username, args.password)
+    else:
+        create_admin_user()
 

@@ -632,12 +632,28 @@ class Database:
             if image_records:
                 # 从FAISS中删除向量
                 try:
+                    # 优先尝试绝对导入
                     from vector_engine import get_vector_engine
                 except ImportError:
-                    from .vector_engine import get_vector_engine
-                engine = get_vector_engine()
-                for record in image_records:
-                    engine.remove_vector_by_db_id(record['id'])
+                    try:
+                        # 尝试相对导入
+                        from .vector_engine import get_vector_engine
+                    except ImportError:
+                        # 如果都失败，跳过FAISS操作
+                        logger.warning("无法导入vector_engine，跳过FAISS向量删除")
+                        engine = None
+                    else:
+                        engine = get_vector_engine()
+                else:
+                    engine = get_vector_engine()
+
+                # 如果成功获取到引擎，删除向量
+                if engine:
+                    for record in image_records:
+                        try:
+                            engine.remove_vector_by_db_id(record['id'])
+                        except Exception as e:
+                            logger.warning(f"删除FAISS向量失败 {record['id']}: {e}")
 
             # 删除物理文件
             for record in image_records:
@@ -656,8 +672,12 @@ class Database:
                 conn.commit()
 
             # 保存FAISS索引
-            if image_records:
-                engine.save()
+            if image_records and engine:
+                try:
+                    engine.save()
+                    logger.info("FAISS索引已保存")
+                except Exception as e:
+                    logger.warning(f"保存FAISS索引失败: {e}")
 
             return True
         except Exception as e:

@@ -2201,21 +2201,119 @@ def get_indexed_ids():
 # === 修复：批量删除 API ===
 @app.route('/api/products/batch', methods=['DELETE'])
 def batch_delete_products():
-    """批量删除商品"""
+    """批量删除商品（多线程高性能版）"""
     try:
         data = request.get_json()
         ids = data.get('ids', [])
         if not ids:
             return jsonify({'error': 'No IDs provided'}), 400
 
-        count = 0
-        for pid in ids:
-            if db.delete_product_images(pid):
-                count += 1
+        logger.info(f"开始批量删除 {len(ids)} 个商品")
 
-        return jsonify({'success': True, 'count': count})
+        # 使用多线程删除
+        import concurrent.futures
+        max_threads = min(5, len(ids))  # 删除用较少的线程，避免IO冲突
+
+        deleted_count = 0
+        failed_ids = []
+
+        def delete_single_product(product_id):
+            """删除单个商品"""
+            try:
+                # 创建新的数据库实例避免多线程冲突
+                from database import Database
+                temp_db = Database()
+                if temp_db.delete_product_images(product_id):
+                    return {'success': True, 'id': product_id}
+                else:
+                    return {'success': False, 'id': product_id}
+            except Exception as e:
+                logger.error(f"删除商品 {product_id} 失败: {e}")
+                return {'success': False, 'id': product_id}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
+            futures = [executor.submit(delete_single_product, pid) for pid in ids]
+
+            for future in concurrent.futures.as_completed(futures):
+                result = future.result()
+                if result['success']:
+                    deleted_count += 1
+                else:
+                    failed_ids.append(result['id'])
+
+        logger.info(f"批量删除完成: {deleted_count}/{len(ids)} 个商品成功删除")
+
+        response = {'success': True, 'count': deleted_count, 'total': len(ids)}
+        if failed_ids:
+            response['failed_ids'] = failed_ids
+            response['warning'] = f'{len(failed_ids)} 个商品删除失败'
+
+        return jsonify(response)
     except Exception as e:
         logger.error(f"批量删除失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/products/batch-delete-all', methods=['DELETE'])
+def batch_delete_all_products():
+    """删除所有商品（全选删除）"""
+    try:
+        # 获取所有商品ID
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM products")
+            all_ids = [row['id'] for row in cursor.fetchall()]
+
+        if not all_ids:
+            return jsonify({'success': True, 'count': 0, 'message': '没有商品需要删除'})
+
+        logger.info(f"开始删除所有 {len(all_ids)} 个商品")
+
+        # 使用多线程删除所有商品
+        import concurrent.futures
+        max_threads = min(5, len(all_ids))
+
+        deleted_count = 0
+        failed_ids = []
+
+        def delete_single_product(product_id):
+            try:
+                # 创建新的数据库实例避免多线程冲突
+                from database import Database
+                temp_db = Database()
+                if temp_db.delete_product_images(product_id):
+                    return {'success': True, 'id': product_id}
+                else:
+                    return {'success': False, 'id': product_id}
+            except Exception as e:
+                logger.error(f"删除商品 {product_id} 失败: {e}")
+                return {'success': False, 'id': product_id}
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
+            futures = [executor.submit(delete_single_product, pid) for pid in all_ids]
+
+            for future in concurrent.futures.as_completed(futures):
+                result = future.result()
+                if result['success']:
+                    deleted_count += 1
+                else:
+                    failed_ids.append(result['id'])
+
+        logger.info(f"全选删除完成: {deleted_count}/{len(all_ids)} 个商品成功删除")
+
+        response = {
+            'success': True,
+            'count': deleted_count,
+            'total': len(all_ids),
+            'message': f'成功删除 {deleted_count} 个商品'
+        }
+
+        if failed_ids:
+            response['failed_ids'] = failed_ids
+            response['warning'] = f'{len(failed_ids)} 个商品删除失败'
+
+        return jsonify(response)
+    except Exception as e:
+        logger.error(f"全选删除失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/products/<int:product_id>', methods=['DELETE'])
@@ -3400,8 +3498,10 @@ def control_shop_scrape():
 @app.route('/api/scrape/batch', methods=['POST'])
 def batch_scrape_products():
     """批量抓取多个商品（高性能多线程版本）"""
+    logger.info("🚀 batch_scrape_products 函数被调用")
     try:
         data = request.get_json()
+        logger.info(f"📦 接收到的数据: {data}")
         if not data or not data.get('productIds'):
             return jsonify({'error': '缺少productIds参数'}), 400
 
@@ -3409,14 +3509,23 @@ def batch_scrape_products():
         if not isinstance(product_ids, list) or len(product_ids) == 0:
             return jsonify({'error': 'productIds必须是非空数组'}), 400
 
-        # 使用环境变量配置的线程数
-        max_threads = SCRAPE_THREADS
+        # ====================================================
+        # 修复：这里之前直接使用了未定义的 SCRAPE_THREADS，改为从 config 获取
+        # ====================================================
+        try:
+            max_threads = config.SCRAPE_THREADS
+        except AttributeError:
+            max_threads = 5 # 默认兜底值
+
+        # 创建停止事件用于优雅关闭
+        shutdown_event = threading.Event()
 
         logger.info(f"开始批量抓取 {len(product_ids)} 个商品，使用 {max_threads} 个线程")
 
         # 创建批量处理任务
         import concurrent.futures
         import time
+        import threading
 
         results = {
             'total': len(product_ids),
@@ -3573,6 +3682,9 @@ def batch_scrape_products():
 
     except Exception as e:
         logger.error(f"批量抓取失败: {e}")
+        import traceback
+        logger.error(f"详细错误信息: {traceback.format_exc()}")
+        logger.error(f"错误类型: {type(e).__name__}")
         return jsonify({'error': f'批量抓取失败: {str(e)}'}), 500
 
 @app.route('/api/scrape/shop/status', methods=['GET'])
@@ -3696,18 +3808,26 @@ def run_shop_scrape_task(shop_id):
         logger.info("🧵 后台抓取线程结束")
 
 def scrape_shop_products(shop_id):
-    """抓取店铺所有商品的实现 (支持暂停/停止)"""
+    """抓取店铺所有商品的实现 (全局线程池高性能版 - 每个商品一个线程)"""
     import requests
     import time
     from weidian_scraper import get_weidian_scraper
+    import concurrent.futures
 
-    scraper = get_weidian_scraper()  # 实例化爬虫
-    total_products = 0
+    # 获取配置的线程数
+    try:
+        from config import config
+        max_threads = config.SCRAPE_THREADS
+    except:
+        max_threads = 2
+
+    scraper = get_weidian_scraper()
+    all_product_tasks = []  # 收集所有商品任务
     offset = 0
     limit = 20
     page_count = 0
 
-    # 初始化状态到数据库
+    # 初始化状态
     db.update_scrape_status(
         is_scraping=True,
         paused=False,
@@ -3724,115 +3844,132 @@ def scrape_shop_products(shop_id):
     shop_name = shop_info.get('shopName', f'店铺 {shop_id}') if shop_info else f'店铺 {shop_id}'
 
     db.update_scrape_status(message=f'正在抓取店铺: {shop_name}')
-    logger.info(f"开始抓取循环，店铺: {shop_name}")
+    logger.info(f"开始收集商品列表，店铺: {shop_name}")
 
+    # 第一阶段：收集所有商品信息（单线程，避免API压力）
     while True:
-        # === 1. 检查停止信号 ===
+        # 检查停止信号
         current_status = db.get_scrape_status()
         if current_status.get('stop_signal', False):
-            logger.info(f"🔴 检测到停止信号，退出抓取循环。当前状态: {current_status}")
-            db.update_scrape_status(message='抓取已手动停止')
+            logger.info("🔴 停止信号触发，退出收集")
             break
 
         try:
-            # 构建API URL
+            # API 请求商品列表
             url = f"https://thor.weidian.com/decorate/shopDetail.tab.getItemList/1.0"
             param_encoded = quote(f'{{"shopId":"{shop_id}","tabId":0,"sortOrder":"desc","offset":{offset},"limit":{limit},"from":"h5","showItemTag":true}}')
             full_url = f"{url}?param={param_encoded}&wdtoken=8ea9315c&_={int(time.time()*1000)}"
 
-            # 复用scraper的session，确保headers和cookies一致
             response = scraper.session.get(full_url, timeout=10)
-
             if response.status_code != 200:
                 logger.warning(f'API请求失败: {response.status_code}')
                 break
 
             data = response.json()
-
             if data.get('status', {}).get('code') != 0:
                 logger.warning('API响应状态码不为0')
                 break
 
             result = data.get('result', {})
             if not result.get('hasData', False):
-                logger.info('没有更多数据，抓取完成')
+                logger.info('没有更多数据，收集完成')
                 break
 
             items = result.get('itemList', [])
             if not items:
-                logger.info('商品列表为空，抓取完成')
+                logger.info('商品列表为空，收集完成')
                 break
 
-            # === 多线程处理当前页的商品 ===
-            import concurrent.futures
+            # 收集当前页的商品任务
+            page_tasks = []
+            for item in items:
+                item_id = item.get('itemId', '')
+                if item_id:
+                    product_info = {
+                        'item_id': item_id,
+                        'item_url': item.get('itemUrl', ''),
+                        'shop_name': shop_name
+                    }
+                    page_tasks.append(product_info)
 
-            # 获取配置的线程数
-            try:
-                from config import config
-                max_threads = config.SCRAPE_THREADS
-            except:
-                max_threads = 2
+            all_product_tasks.extend(page_tasks)
+            logger.info(f'第 {page_count + 1} 页收集了 {len(page_tasks)} 个商品，总计 {len(all_product_tasks)} 个')
 
-            # 创建线程池处理当前页商品
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
-                futures = []
-                for item in items:
-                    item_id = item.get('itemId', '')
-                    if item_id:
-                        product_info = {
-                            'item_id': item_id,
-                            'item_url': item.get('itemUrl', ''),
-                            'shop_name': shop_name
-                        }
-                        # 提交任务到线程池
-                        futures.append(executor.submit(process_and_save_single_product_sync, product_info))
-
-                # 等待当前页所有任务完成
-                page_processed = 0
-                page_success = 0
-
-                for future in concurrent.futures.as_completed(futures):
-                    # 再次检查停止信号
-                    if db.get_scrape_status().get('stop_signal', False): break
-
-                    try:
-                        success = future.result()
-                        page_processed += 1
-                        total_products += 1
-                        if success: page_success += 1
-
-                        # 实时更新状态
-                        current_status = db.get_scrape_status()
-                        db.update_scrape_status(
-                            processed=total_products,
-                            success=current_status.get('success', 0) + (1 if success else 0),
-                            message=f'正在抓取... (已处理: {total_products})'
-                        )
-                    except Exception as e:
-                        logger.error(f"线程任务异常: {e}")
-
-                if page_processed > 0:
-                    logger.info(f'第 {page_count + 1} 页完成，新增 {page_success} 个商品')
-                    page_count += 1
-
+            page_count += 1
             offset += limit
-            time.sleep(1) # 稍微歇一下防止封IP
+            time.sleep(0.5)  # 稍微歇一下防止封IP
 
         except Exception as e:
-            logger.error(f'抓取过程中出错: {e}')
+            logger.error(f'收集商品列表出错: {e}')
             break
 
-    # 更新最终状态到数据库
+    total_products = len(all_product_tasks)
+    logger.info(f"✅ 商品收集完成，总计 {total_products} 个商品，准备使用 {max_threads} 个线程并发处理")
+
+    # 更新状态：开始处理
+    db.update_scrape_status(
+        total=total_products,
+        message=f'开始处理 {total_products} 个商品...'
+    )
+
+    # 第二阶段：使用全局线程池并发处理所有商品
+    processed_count = 0
+    success_count = 0
+
+    if all_product_tasks:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
+            # 提交所有商品任务到线程池
+            future_to_product = {
+                executor.submit(process_and_save_single_product_sync, product_info): product_info
+                for product_info in all_product_tasks
+            }
+
+            # 处理完成的任务
+            for future in concurrent.futures.as_completed(future_to_product):
+                # 检查停止信号
+                if db.get_scrape_status().get('stop_signal', False):
+                    logger.info("🔴 检测到停止信号，正在取消剩余任务...")
+                    # 取消所有待处理的任务
+                    for f in future_to_product:
+                        if not f.done():
+                            f.cancel()
+                    break
+
+                try:
+                    product_info = future_to_product[future]
+                    success = future.result()
+                    processed_count += 1
+
+                    if success:
+                        success_count += 1
+
+                    # 每处理10个商品或最后一批更新一次状态
+                    if processed_count % 10 == 0 or processed_count == total_products:
+                        progress = int((processed_count / total_products) * 100)
+                        db.update_scrape_status(
+                            processed=processed_count,
+                            success=success_count,
+                            progress=progress,
+                            message=f'正在处理商品... ({processed_count}/{total_products})'
+                        )
+                        logger.info(f'已处理 {processed_count}/{total_products} 个商品，成功 {success_count} 个')
+
+                except Exception as e:
+                    logger.error(f"商品处理异常: {e}")
+                    processed_count += 1
+
+    # 结束
     db.update_scrape_status(
         is_scraping=False,
         completed=True,
         progress=100,
-        message=f'抓取结束，共处理 {total_products} 个商品'
+        message=f'抓取完成，共处理 {processed_count} 个商品，成功 {success_count} 个'
     )
-    logger.info(f"店铺 {shop_id} 抓取任务结束")
+    logger.info(f"✅ 店铺 {shop_id} 抓取任务完成: {success_count}/{processed_count} 商品成功处理")
 
     return {
-        "total_products": total_products,
+        "total_products": processed_count,
+        "success_count": success_count,
         "pages_processed": page_count
     }
 
@@ -3882,11 +4019,11 @@ def process_and_save_single_product_sync(product_info):
             logger.info(f"🔴 入库后检测到停止信号，商品 {item_id} 已入库但跳过图片处理")
             return True  # 商品已入库，算成功
 
-        # 4. 图片处理
+        # 4. 图片处理 (使用多线程版本)
         if product_data.get('images'):
-            from app import save_product_images
-            save_product_images(product_id, product_data['images'])
-            logger.info(f"🖼️ 商品 {item_id} 图片处理完成")
+            from app import save_product_images_unified
+            processed_count = save_product_images_unified(product_id, product_data['images'])
+            logger.info(f"🖼️ 商品 {item_id} 图片处理完成，共处理 {processed_count} 张图片")
 
         return True
     except Exception as e:
