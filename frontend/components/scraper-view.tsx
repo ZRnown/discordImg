@@ -83,26 +83,49 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     }
   }, [keywordSearch, shopFilter])
 
-  // 优化轮询频率：只在有抓取任务时才频繁检查
+  // 优化轮询机制：使用智能轮询，避免重复请求
   useEffect(() => {
-    const statusInterval = setInterval(() => {
-      console.log('轮询状态检查 - isShopScraping:', isShopScraping, 'isBatchScraping:', isBatchScraping)
-      fetchScrapeStatus()
-      // 商品数量只在有抓取任务时才检查
-      if (isShopScraping || isBatchScraping) {
-        fetchProductsCount()
-        // 同时刷新商品列表，显示最新抓取的数据
-        fetchProducts(currentPage)
-      }
-    }, isShopScraping || isBatchScraping ? 2000 : 10000) // 无任务时10秒检查一次
+    let statusInterval: NodeJS.Timeout | null = null
 
-    console.log('设置新的轮询间隔:', isShopScraping || isBatchScraping ? 2000 : 10000, 'ms')
+    // 如果没有抓取任务，减少轮询频率到60秒一次
+    if (!isShopScraping && !isBatchScraping) {
+      statusInterval = setInterval(() => {
+        fetchScrapeStatus()
+      }, 60000) // 60秒检查一次状态
+
+      return () => {
+        if (statusInterval) clearInterval(statusInterval)
+      }
+    }
+
+    // 如果有抓取任务，使用更智能的轮询策略
+    let pollCount = 0
+    statusInterval = setInterval(() => {
+      pollCount++
+
+      // 总是检查抓取状态
+      fetchScrapeStatus()
+
+      // 只有在抓取进行中时才检查商品数量和列表
+      // 前30秒（15次）每2秒检查一次，后续每10秒检查一次
+      if ((isShopScraping || isBatchScraping)) {
+        if (pollCount <= 15) {
+          fetchProductsCount()
+          fetchProducts(currentPage)
+        } else if (pollCount % 5 === 0) {
+          // 每10秒检查一次商品数量和列表
+          fetchProductsCount()
+          fetchProducts(currentPage)
+        }
+      }
+    }, 2000) // 基础间隔2秒
 
     return () => {
-      console.log('清理轮询定时器')
-      clearInterval(statusInterval)
+      if (statusInterval) {
+        clearInterval(statusInterval)
+      }
     }
-  }, [isShopScraping, isBatchScraping, currentPage])
+  }, [isShopScraping, isBatchScraping])
 
   const fetchProducts = async (page: number = 1, append: boolean = false, usePreload: boolean = true) => {
     try {
@@ -246,6 +269,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         const text = await res.text()
         if (text.trim()) {
           const status = JSON.parse(text)
+          console.log('店铺抓取状态更新:', status)
           setScrapeStatus(status)
           setIsShopScraping(status.is_scraping)
           setShopScrapeProgress(status.progress || 0)
@@ -479,39 +503,31 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
   const handleScrapeControl = async (action: 'stop') => {
     try {
-      console.log(`🎮 发送抓取控制请求: action=${action}, 当前状态:`, scrapeStatus)
+      console.log(`🎮 发送抓取控制请求: action=${action}`)
       const response = await fetch('/api/scrape/shop/control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action
-          // 不需要shopId，因为控制的是当前正在运行的任务
         })
       })
-
-      console.log(`🎮 控制API响应状态: ${response.status}`)
 
       if (response.ok) {
         const result = await response.json()
         console.log(`🎮 控制API响应内容:`, result)
 
         if (action === 'stop') {
-          toast.success('正在停止抓取，请等待当前商品处理完成...')
-          // 设置一个定时器来定期检查状态
-          const checkStatusInterval = setInterval(() => {
-            fetchScrapeStatus().then(() => {
-              // 如果抓取已经停止，清除定时器
-              if (!scrapeStatus?.is_scraping) {
-                clearInterval(checkStatusInterval)
-                toast.success('抓取已完全停止')
-              }
-            })
-          }, 2000) // 每2秒检查一次
+          // 立即更新本地状态
+          setIsShopScraping(false)
+          setShopScrapeProgress(100)
+          toast.success('抓取已停止')
 
-          // 30秒后自动清除定时器，避免无限检查
+          // 重新获取状态确认
           setTimeout(() => {
-            clearInterval(checkStatusInterval)
-          }, 30000)
+            fetchScrapeStatus()
+            fetchProductsCount()
+            fetchProducts(currentPage)
+          }, 1000)
         }
       } else {
         const errorText = await response.text()
@@ -625,6 +641,9 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
       // 强制刷新数据
       fetchProducts()
       fetchProductsCount()
+
+      // 强制刷新抓取状态，确保UI正确更新
+      setTimeout(() => fetchScrapeStatus(), 100)
 
       setBatchIds('')
     } catch(e) {

@@ -3188,27 +3188,6 @@ def scrape_shop():
         logger.error(f'店铺抓取失败: {e}')
         return jsonify({'error': str(e)        }), 500
 
-@app.route('/api/scrape/shop/reset', methods=['POST'])
-def reset_scrape_status():
-    """重置抓取状态（紧急修复）"""
-    try:
-        global current_scrape_thread, scrape_thread_lock
-
-        # 重置数据库状态
-        reset_status = db.reset_scrape_status()
-
-        # 终止当前线程
-        with scrape_thread_lock:
-            if current_scrape_thread and current_scrape_thread.is_alive():
-                logger.info("🔄 终止旧的抓取线程...")
-                # 注意：Python线程不能强制终止，这里只是设置信号
-            current_scrape_thread = None
-
-        logger.info("✅ 抓取状态已重置")
-        return jsonify({'message': '抓取状态已重置', 'status': reset_status})
-    except Exception as e:
-        logger.error(f'重置抓取状态失败: {e}')
-        return jsonify({'error': '重置失败'}), 500
 
 @app.route('/api/scrape/shop/control', methods=['POST'])
 def control_shop_scrape():
@@ -3223,50 +3202,29 @@ def control_shop_scrape():
     logger.info(f"收到抓取控制请求: action={action}, shop_id={shop_id}, 当前状态: is_scraping={current_status.get('is_scraping')}, stop_signal={current_status.get('stop_signal')}")
 
     if action == 'stop':
-        # 设置停止信号 - 优雅停止，让当前商品完成处理
-        success = db.update_scrape_status(stop_signal=True, message='正在停止（等待当前商品完成）...')
+        # 立即停止 - 不等待当前商品完成，直接设置状态为停止
+        success = db.update_scrape_status(
+            is_scraping=False,
+            stop_signal=True,
+            completed=True,
+            message='抓取已停止',
+            progress=100
+        )
+
         if success:
-            logger.info("✅ 设置停止信号为True - 将等待当前正在处理的商品完成")
+            logger.info("✅ 抓取任务已强制停止")
 
-            # 启动一个后台线程来监控停止进度
-            def monitor_stop():
-                try:
-                    import time
-                    max_wait_time = 300  # 最多等待5分钟
-                    wait_start = time.time()
-
-                    while time.time() - wait_start < max_wait_time:
-                        with scrape_thread_lock:
-                            if current_scrape_thread and current_scrape_thread.is_alive():
-                                # 线程还在运行，等待
-                                time.sleep(2)
-                                continue
-                            else:
-                                # 线程已结束
-                                break
-
-                    # 无论如何都要清理状态
-                    with scrape_thread_lock:
-                        if current_scrape_thread and current_scrape_thread.is_alive():
-                            logger.warning("⚠️ 停止超时，强制终止线程")
-                            # 这里我们不强制终止，让线程自然结束
-                        current_scrape_thread = None
-
-                    db.update_scrape_status(is_scraping=False, completed=True, message='抓取已停止')
-                    logger.info("✅ 批量抓取已完全停止")
-
-                except Exception as e:
-                    logger.error(f"停止监控线程出错: {e}")
-
-            # 启动监控线程
-            import threading
-            stop_monitor = threading.Thread(target=monitor_stop, daemon=True)
-            stop_monitor.start()
+            # 终止当前线程（如果存在）
+            with scrape_thread_lock:
+                if current_scrape_thread and current_scrape_thread.is_alive():
+                    logger.info("终止抓取线程")
+                    # 设置线程停止信号，但不强制终止
+                    current_scrape_thread = None
 
             updated_status = db.get_scrape_status()
             return jsonify(updated_status)
         else:
-            return jsonify({'error': '设置停止信号失败'}), 500
+            return jsonify({'error': '停止抓取失败'}), 500
 
     if action == 'start':
         if current_status.get('is_scraping', False):
@@ -3477,6 +3435,9 @@ def batch_scrape_products():
         results['duration'] = results['end_time'] - results['start_time']
 
         logger.info(f"批量处理完成: {results}")
+
+        # 注意：批量抓取不应该重置店铺抓取的状态
+        # 批量抓取有自己的状态管理，不影响店铺抓取的状态显示
 
         return jsonify({
             'message': f'批量处理完成，共处理 {results["total"]} 个商品，成功 {results["success"]} 个，跳过 {results["skipped"]} 个，取消 {results["cancelled"]} 个，部分完成 {results["partial"]} 个，失败 {results["errors"]} 个',
