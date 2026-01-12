@@ -383,39 +383,39 @@ class DiscordBotClient(discord.Client):
 
                     if product_rule_enabled:
                         # 使用全局自定义回复
-                    custom_reply = self._get_custom_reply()
+                        custom_reply = self._get_custom_reply()
 
-                    if custom_reply:
-                        reply_type = custom_reply.get('reply_type')
+                        if custom_reply:
+                            reply_type = custom_reply.get('reply_type')
 
-                        if reply_type == 'custom_only':
-                            # 只发送自定义内容，不发送链接
-                            if custom_reply.get('content'):
-                                await message.reply(custom_reply['content'])
-                            if custom_reply.get('image_url'):
-                                # 这里可以实现发送图片的逻辑
-                                pass
+                            if reply_type == 'custom_only':
+                                # 只发送自定义内容，不发送链接
+                                if custom_reply.get('content'):
+                                    await message.reply(custom_reply['content'])
+                                if custom_reply.get('image_url'):
+                                    # 这里可以实现发送图片的逻辑
+                                    pass
 
-                        elif reply_type == 'text_and_link':
-                            # 发送文字 + 链接
+                            elif reply_type == 'text_and_link':
+                                # 发送文字 + 链接
+                                response = get_response_url_for_channel(product, message.channel.id)
+                                full_reply = f"{custom_reply.get('content', '')}\n{response}".strip()
+                                await message.reply(full_reply)
+
+                            elif reply_type == 'text':
+                                # 只发送文字
+                                if custom_reply.get('content'):
+                                    await message.reply(custom_reply['content'])
+
+                            elif reply_type == 'image':
+                                # 发送图片（如果设置了的话）
+                                if custom_reply.get('image_url'):
+                                    # 这里可以实现发送图片的逻辑
+                                    pass
+                        else:
+                            # 默认行为：发送链接
                             response = get_response_url_for_channel(product, message.channel.id)
-                            full_reply = f"{custom_reply.get('content', '')}\n{response}".strip()
-                            await message.reply(full_reply)
-
-                        elif reply_type == 'text':
-                            # 只发送文字
-                            if custom_reply.get('content'):
-                                await message.reply(custom_reply['content'])
-
-                        elif reply_type == 'image':
-                            # 发送图片（如果设置了的话）
-                            if custom_reply.get('image_url'):
-                                # 这里可以实现发送图片的逻辑
-                                pass
-                    else:
-                        # 默认行为：发送链接
-                        response = get_response_url_for_channel(product, message.channel.id)
-                        await message.reply(response)
+                            await message.reply(response)
                     else:
                         # 商品级自定义回复
                         custom_text = product.get('custom_reply_text', '').strip()
@@ -686,22 +686,7 @@ async def get_all_accounts_from_backend():
     """从后端 API 获取所有可用的 Discord 账号"""
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get('http://localhost:5001/api/accounts') as resp:
-                if resp.status == 200:
-                    result = await resp.json()
-                    accounts = result.get('accounts', [])
-                    if accounts:
-                        logger.info(f'Got {len(accounts)} accounts from backend')
-                        return accounts
-    except Exception as e:
-        logger.error(f'Failed to get accounts from backend: {e}')
-    return []
-
-async def get_all_accounts_from_backend():
-    """从后端 API 获取所有可用的 Discord 账号"""
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get('http://localhost:5001/api/accounts') as resp:
+            async with session.get('http://127.0.0.1:5001/api/accounts') as resp:
                 if resp.status == 200:
                     result = await resp.json()
                     accounts = result.get('accounts', [])

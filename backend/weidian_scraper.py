@@ -61,29 +61,6 @@ class WeidianScraper:
             logger.error(f"提取商品ID失败: {e}")
             return None
 
-    def extract_item_id(self, url: str) -> Optional[str]:
-        """从微店URL中提取商品ID"""
-        try:
-            parsed_url = urlparse(url)
-            if 'itemID' in parsed_url.query:
-                query_params = parse_qs(parsed_url.query)
-                return query_params.get('itemID', [None])[0]
-            else:
-                # 尝试从路径中提取
-                path_match = re.search(r'/item/(\d+)', parsed_url.path)
-                if path_match:
-                    return path_match.group(1)
-
-                # 尝试其他格式
-                id_match = re.search(r'itemID[=/](\d+)', url)
-                if id_match:
-                    return id_match.group(1)
-
-            return None
-        except Exception as e:
-            logger.error(f"提取商品ID失败: {e}")
-            return None
-
     def scrape_product_info(self, url: str) -> Optional[Dict]:
         """
         抓取微店商品信息 - 使用官方API

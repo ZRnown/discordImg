@@ -221,7 +221,8 @@ app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-producti
 # CORS 配置，必须允许 Credentials
 CORS(app, origins=[
     "http://localhost:3000",
-    "http://127.0.0.1:3000"
+    "http://127.0.0.1:3000",
+    "http://69.30.204.184:3000"  # 服务器公网 IP
 ], supports_credentials=True)
 
 # Cookie 配置优化 (解决本地调试 Cookie 无法写入的问题)
@@ -229,6 +230,7 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax', # 在同一域名不同端口下 Lax 通常更好
     SESSION_COOKIE_SECURE=False,   # 本地调试必须为 False，否则 http 下不发送 cookie
+    SESSION_COOKIE_DOMAIN=None,    # 确保不限制在 localhost，允许 IP 访问
 )
 
 def extract_features(image_path):
@@ -2128,6 +2130,33 @@ def upload_product_image(product_id):
                     os.remove(save_path)
                     result['error'] = '特征提取失败，图片无效'
                     return
+
+                # === 新增：向量去重检查 ===
+                # 获取该商品已有的所有图片向量
+                existing_images = db.get_product_images(product_id)
+                if existing_images:
+                    import numpy as np
+                    for existing_img in existing_images:
+                        if existing_img.get('features') is not None:
+                            # 反序列化现有向量
+                            try:
+                                existing_features = json.loads(existing_img['features'])
+                                existing_features = np.array(existing_features, dtype='float32')
+                            except (json.JSONDecodeError, ValueError):
+                                continue
+
+                            # 计算余弦相似度
+                            dot_product = np.dot(features, existing_features)
+                            norm_new = np.linalg.norm(features)
+                            norm_existing = np.linalg.norm(existing_features)
+
+                            if norm_new > 0 and norm_existing > 0:
+                                similarity = dot_product / (norm_new * norm_existing)
+                                if similarity > 0.95:  # 相似度阈值95%
+                                    logger.info(f'检测到重复图片 (相似度: {similarity:.3f})，拒绝上传: {os.path.basename(save_path)}')
+                                    os.remove(save_path)
+                                    result['error'] = f'图片与现有图片过于相似 (相似度: {similarity:.1%})，请勿上传重复图片'
+                                    return
 
                 # 存入数据库
                 img_db_id = db.insert_image_record(product_id, save_path, next_index)
@@ -4050,6 +4079,31 @@ def save_product_images(product_id, image_urls):
                     os.remove(image_path)
                     return None
 
+                # === 新增：向量去重检查 ===
+                # 检查与该商品现有图片的相似度
+                if existing_features:
+                    import numpy as np
+                    for existing_feature_json in existing_features:
+                        try:
+                            # 反序列化现有向量
+                            existing_features_array = json.loads(existing_feature_json)
+                            existing_features_array = np.array(existing_features_array, dtype='float32')
+
+                            # 计算余弦相似度
+                            dot_product = np.dot(features, existing_features_array)
+                            norm_new = np.linalg.norm(features)
+                            norm_existing = np.linalg.norm(existing_features_array)
+
+                            if norm_new > 0 and norm_existing > 0:
+                                similarity = dot_product / (norm_new * norm_existing)
+                                if similarity > 0.95:  # 相似度阈值95%
+                                    logger.info(f'检测到重复图片 (相似度: {similarity:.3f})，跳过: {os.path.basename(image_path)}')
+                                    os.remove(image_path)
+                                    return None
+                        except (json.JSONDecodeError, ValueError, TypeError) as e:
+                            logger.warning(f"解析现有向量失败: {e}")
+                            continue
+
                 # 返回处理结果，让主进程统一处理数据库操作
                 return {
                     'image_path': image_path,
@@ -4272,6 +4326,31 @@ def save_product_images_batch(product_id, image_urls):
                     # 特征提取失败，删除文件
                     os.remove(image_path)
                     return None
+
+                # === 新增：向量去重检查 ===
+                # 检查与该商品现有图片的相似度
+                if existing_features:
+                    import numpy as np
+                    for existing_feature_json in existing_features:
+                        try:
+                            # 反序列化现有向量
+                            existing_features_array = json.loads(existing_feature_json)
+                            existing_features_array = np.array(existing_features_array, dtype='float32')
+
+                            # 计算余弦相似度
+                            dot_product = np.dot(features, existing_features_array)
+                            norm_new = np.linalg.norm(features)
+                            norm_existing = np.linalg.norm(existing_features_array)
+
+                            if norm_new > 0 and norm_existing > 0:
+                                similarity = dot_product / (norm_new * norm_existing)
+                                if similarity > 0.95:  # 相似度阈值95%
+                                    logger.info(f'检测到重复图片 (相似度: {similarity:.3f})，跳过: {os.path.basename(image_path)}')
+                                    os.remove(image_path)
+                                    return None
+                        except (json.JSONDecodeError, ValueError, TypeError) as e:
+                            logger.warning(f"解析现有向量失败: {e}")
+                            continue
 
                 # 返回处理结果，让主进程统一处理数据库操作
                 return {
