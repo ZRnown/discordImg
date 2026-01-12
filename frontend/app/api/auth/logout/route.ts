@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
+// 强制使用内网回环地址，速度最快且最稳定
+const BACKEND_URL = 'http://127.0.0.1:5001';
 
 export async function POST(request: NextRequest) {
   try {

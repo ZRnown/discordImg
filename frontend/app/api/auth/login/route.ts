@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
+// 强制使用内网回环地址，速度最快且最稳定
+const BACKEND_URL = 'http://127.0.0.1:5001';
 
 export async function POST(request: NextRequest) {
   try {
@@ -38,8 +39,8 @@ export async function POST(request: NextRequest) {
             httpOnly: true, // 保持 HttpOnly 增强安全性
             path: '/',
             sameSite: 'lax',
-            secure: process.env.NODE_ENV === 'production',
-            maxAge: 60 * 60 * 24 * 7 // 设置为 7 天或与后端一致
+            secure: false, // 【关键修改】强制为 false，允许HTTP访问
+            maxAge: 60 * 60 * 24 * 30 // 30天不过期
           });
         }
       }
@@ -51,10 +52,10 @@ export async function POST(request: NextRequest) {
         timestamp: Date.now()
       }), {
         httpOnly: false, // 允许前端 JS 读取
-        secure: process.env.NODE_ENV === 'production',
+        secure: false, // 【关键修改】强制为 false，允许HTTP访问
         sameSite: 'lax',
         path: '/',
-        maxAge: 60 * 60 * 24 // 24小时
+        maxAge: 60 * 60 * 24 * 30 // 30天不过期
       });
 
       return response;

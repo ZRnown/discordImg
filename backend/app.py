@@ -369,21 +369,21 @@ def get_global_feature_extractor():
 # 在应用启动时初始化
 initialize_feature_extractor()
 
-# Flask配置初始化（完全使用config.py）
+# Flask配置初始化（简化版 - 解决HTTP IP访问问题）
 app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
 
-# CORS 配置（关键：解决401/403问题）
+# CORS 配置（允许所有来源）
 CORS(app, origins=config.CORS_ORIGINS, supports_credentials=True)
 
-# Session配置优化
+# 强制更新配置，覆盖默认的安全设置
 app.config.update(
     SECRET_KEY=config.SECRET_KEY,
     SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE='Lax',
-    SESSION_COOKIE_SECURE=False,  # HTTP环境下必须为False
-    SESSION_COOKIE_DOMAIN=None,   # 允许IP访问
-    PERMANENT_SESSION_LIFETIME=config.SESSION_LIFETIME,
+    SESSION_COOKIE_SAMESITE=config.SESSION_COOKIE_SAMESITE,
+    SESSION_COOKIE_SECURE=config.SESSION_COOKIE_SECURE,  # 确保是False
+    SESSION_COOKIE_DOMAIN=None,
+    PERMANENT_SESSION_LIFETIME=config.SESSION_LIFETIME,  # 30天不过期
 )
 
 def extract_features(image_path):

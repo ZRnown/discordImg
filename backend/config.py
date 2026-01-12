@@ -44,19 +44,18 @@ class Config:
     FORWARD_KEYWORDS = os.getenv('FORWARD_KEYWORDS', '商品,货源,进货,批发,代理').split(',')  # 触发转发的关键词
     FORWARD_TARGET_CHANNEL_ID = int(os.getenv('FORWARD_TARGET_CHANNEL_ID', 0)) if os.getenv('FORWARD_TARGET_CHANNEL_ID') else 0  # 转发目标频道ID
 
-    # === 安全配置 ===
-    SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production-immediately')
-    SESSION_LIFETIME = int(os.getenv('SESSION_LIFETIME', 86400))
+    # === 安全配置 (简化版 - 解决HTTP IP访问问题) ===
+    # 固定密钥，防止重启服务后用户掉线
+    SECRET_KEY = os.getenv('SECRET_KEY', 'my-fixed-secret-key-888888')
 
-    # === CORS配置（关键：解决401/403问题） ===
-    # 自动处理逗号分隔的字符串，并支持动态IP配置
-    default_cors = 'http://localhost:3000,http://127.0.0.1:3000'
-    your_server_ip = os.getenv('YOUR_SERVER_IP')
-    if your_server_ip:
-        default_cors += f',http://{your_server_ip}:3000'
+    # 允许HTTP访问（关键修改）
+    SESSION_COOKIE_SECURE = False  # 允许在非HTTPS下传输Cookie
+    SESSION_COOKIE_SAMESITE = 'Lax'  # 防止浏览器拦截跨站请求
+    SESSION_LIFETIME = int(os.getenv('SESSION_LIFETIME', 86400 * 30))  # 30天不过期
 
-    cors_env = os.getenv('CORS_ORIGINS', default_cors)
-    CORS_ORIGINS = [origin.strip() for origin in cors_env.split(',') if origin.strip()]
+    # === CORS配置（简化版 - 允许所有来源） ===
+    # 简单粗暴，允许所有来源，避免浏览器报错
+    CORS_ORIGINS = ["*"]
 
     # === API服务地址配置 ===
     # 后端API地址（本地服务）
@@ -110,15 +109,6 @@ class Config:
     # === 超时和重试配置 ===
     REQUEST_TIMEOUT = int(os.getenv('REQUEST_TIMEOUT', '30'))  # HTTP请求超时时间(秒)
     MAX_RETRIES = int(os.getenv('MAX_RETRIES', '3'))  # 最大重试次数
-
-    # === CORS配置 ===
-    # 支持动态IP配置
-    default_cors = 'http://localhost:3000,http://127.0.0.1:3000'
-    your_server_ip = os.getenv('YOUR_SERVER_IP')
-    if your_server_ip:
-        default_cors += f',http://{your_server_ip}:3000'
-
-    CORS_ORIGINS = os.getenv('CORS_ORIGINS', default_cors).split(',')
 
     # === 会话配置 ===
     SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
