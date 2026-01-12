@@ -751,6 +751,14 @@ class Database:
             row = cursor.fetchone()
             return dict(row) if row else None
 
+    def get_product_by_item_id(self, item_id: str) -> Optional[Dict]:
+        """根据微店商品ID获取商品信息"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM products WHERE item_id = ?", (item_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
     def cleanup_unused_images(self, days_old: int = 30) -> int:
         """
         清理未使用的图片文件

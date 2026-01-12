@@ -551,8 +551,15 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
       return
     }
 
+    // ==========================================
+    // 修复：立即设置加载状态，防止UI闪烁
+    // ==========================================
     setIsShopScraping(true)
     setShopScrapeProgress(0)
+    setScrapeStatus(prev => ({
+       ...prev,
+       message: '正在发送抓取请求...'
+    }))
 
     try {
       const response = await fetch('/api/scrape/shop', {
@@ -563,18 +570,22 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
       if (response.ok) {
         const data = await response.json()
-        toast.success(`店铺抓取完成！共获取 ${data.totalProducts} 个商品`)
-        fetchProducts()
+        toast.success(`抓取指令已发送`)
+        // 不需要在这里 setProducts，因为轮询会自动更新
       } else {
         const errorData = await response.json()
-        toast.error(errorData.error || "店铺抓取失败")
+        toast.error(errorData.error || "请求被拒绝")
+
+        // 只有请求失败时，才把状态改回去
+        setIsShopScraping(false)
       }
     } catch (error) {
-      toast.error("网络错误，无法抓取店铺")
-    } finally {
+      toast.error("网络错误，无法连接服务器")
       setIsShopScraping(false)
-      setShopScrapeProgress(0)
     }
+    // 注意：这里不要加 finally { setIsShopScraping(false) }
+    // 因为抓取是异步的长任务，请求结束不代表抓取结束。
+    // 状态应该由 useEffect 里的轮询来决定何时变回 false。
   }
 
   const handleBatchScrape = async () => {

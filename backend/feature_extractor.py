@@ -17,23 +17,33 @@ import hashlib
 
 logger = logging.getLogger(__name__)
 
-# 使用类级单例模式
+# === 关键修改：更严格的单例模式 ===
 class FeatureExtractorSingleton:
-    """特征提取器单例管理器"""
     _instance = None
     _lock = threading.Lock()
+    _init_done = False  # 标记是否初始化完成
 
     @classmethod
     def get_instance(cls):
+        # 第一重检查：如果已经有实例，直接返回，不加锁，速度快
+        if cls._instance is not None:
+            return cls._instance
+        # 加锁进行初始化
         with cls._lock:
+            # 第二重检查：防止多个线程同时通过了第一重检查
             if cls._instance is None:
-                logger.info("🚀 创建特征提取器单例实例...")
-                cls._instance = DINOv2FeatureExtractor()
-                logger.info("✅ 特征提取器单例实例创建完成")
+                logger.info("🚀 [系统] 正在初始化 AI 模型 (全局单例)...")
+                try:
+                    instance = DINOv2FeatureExtractor()
+                    cls._instance = instance
+                    cls._init_done = True
+                    logger.info("✅ [系统] AI 模型初始化完成")
+                except Exception as e:
+                    logger.error(f"❌ [系统] AI 模型初始化失败: {e}")
+                    cls._instance = None
         return cls._instance
 
 def get_feature_extractor():
-    """获取特征提取器单例实例"""
     return FeatureExtractorSingleton.get_instance()
 
 class DINOv2FeatureExtractor:
@@ -70,10 +80,9 @@ class DINOv2FeatureExtractor:
     def _load_yolo_detector(self):
         """强制加载YOLO-World模型用于商品识别"""
         try:
-            logger.info("🔥 强制加载YOLO-World模型...")
-
-            # 强制使用YOLO-World，不允许降级
-            self.detector = YOLO('yolov8s-world.pt')
+            # 减少日志级别
+            logging.getLogger("ultralytics").setLevel(logging.WARNING)
+            self.detector = YOLO(config.YOLO_MODEL_PATH)
 
             # [核心配置] 定义全自动识别的范围
             # 优化后的商品类别，覆盖微店/代购场景95%的商品

@@ -329,11 +329,13 @@ console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - 
 console_handler.setFormatter(console_formatter)
 logging.getLogger().addHandler(console_handler)
 
-# 设置其他日志器的级别
-logging.getLogger('werkzeug').setLevel(logging.INFO)  # 显示HTTP请求日志
+# 1. 设置 werkzeug 日志级别为 WARNING，屏蔽 HTTP 请求刷屏
+logging.getLogger('werkzeug').setLevel(logging.WARNING)
+# 2. 设置其他库的日志级别
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 logging.getLogger('requests').setLevel(logging.WARNING)
 logging.getLogger('aiohttp').setLevel(logging.WARNING)
+logging.getLogger('ultralytics').setLevel(logging.WARNING)  # 屏蔽 YOLO 日志
 
 logger = logging.getLogger(__name__)
 
@@ -2475,6 +2477,29 @@ def rebuild_faiss_index():
         logger.error(f"重建索引失败: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/config', methods=['GET'])
+def get_config():
+    """获取系统配置信息"""
+    try:
+        from config import config
+        return jsonify({
+            'version': '1.0.0',
+            'features': {
+                'multithread_scraping': True,
+                'ai_image_processing': True,
+                'discord_bot': True,
+                'real_time_monitoring': True
+            },
+            'limits': {
+                'max_scrape_threads': config.SCRAPE_THREADS,
+                'max_download_threads': config.DOWNLOAD_THREADS,
+                'max_feature_threads': config.FEATURE_EXTRACT_THREADS
+            }
+        })
+    except Exception as e:
+        logger.error(f"获取配置信息失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/config/discord-threshold', methods=['GET'])
 def get_discord_threshold():
     """获取Discord相似度阈值"""
@@ -3738,56 +3763,60 @@ def scrape_shop_products(shop_id):
                 logger.info('商品列表为空，抓取完成')
                 break
 
-            # 逐个处理商品，支持更细粒度的暂停/停止控制
-            page_processed = 0
-            page_success = 0
+            # === 多线程处理当前页的商品 ===
+            import concurrent.futures
 
-            for item in items:
-                # === 检查停止信号 ===
-                item_status = db.get_scrape_status()
-                if item_status.get('stop_signal', False):
-                    logger.info("处理商品期间收到停止信号，退出")
-                    break
+            # 获取配置的线程数
+            try:
+                from config import config
+                max_threads = config.SCRAPE_THREADS
+            except:
+                max_threads = 2
 
-                item_id = item.get('itemId', '')
-                if item_id:
-                    try:
-                        # 处理单个商品
+            # 创建线程池处理当前页商品
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
+                futures = []
+                for item in items:
+                    item_id = item.get('itemId', '')
+                    if item_id:
                         product_info = {
                             'item_id': item_id,
                             'item_url': item.get('itemUrl', ''),
                             'shop_name': shop_name
                         }
+                        # 提交任务到线程池
+                        futures.append(executor.submit(process_and_save_single_product_sync, product_info))
 
-                        success = process_and_save_single_product_sync(product_info)
+                # 等待当前页所有任务完成
+                page_processed = 0
+                page_success = 0
+
+                for future in concurrent.futures.as_completed(futures):
+                    # 再次检查停止信号
+                    if db.get_scrape_status().get('stop_signal', False): break
+
+                    try:
+                        success = future.result()
                         page_processed += 1
                         total_products += 1
+                        if success: page_success += 1
 
-                        if success:
-                            page_success += 1
-
-                        # 更新进度到数据库
+                        # 实时更新状态
                         current_status = db.get_scrape_status()
                         db.update_scrape_status(
                             processed=total_products,
                             success=current_status.get('success', 0) + (1 if success else 0),
-                            message=f'正在抓取... (成功: {current_status.get("success", 0) + (1 if success else 0)}/{total_products})'
+                            message=f'正在抓取... (已处理: {total_products})'
                         )
-
                     except Exception as e:
-                        logger.error(f'处理商品 {item_id} 失败: {e}')
-                        page_processed += 1
-                        total_products += 1
+                        logger.error(f"线程任务异常: {e}")
 
-            if page_processed > 0:
-                logger.info(f'第 {page_count + 1} 页处理完成，处理 {page_processed} 个商品，成功 {page_success} 个')
-                page_count += 1
+                if page_processed > 0:
+                    logger.info(f'第 {page_count + 1} 页完成，新增 {page_success} 个商品')
+                    page_count += 1
 
-            # 增加offset继续抓取
             offset += limit
-
-            # 避免请求过于频繁
-            time.sleep(0.5)
+            time.sleep(1) # 稍微歇一下防止封IP
 
         except Exception as e:
             logger.error(f'抓取过程中出错: {e}')
@@ -3808,13 +3837,20 @@ def scrape_shop_products(shop_id):
     }
 
 def process_and_save_single_product_sync(product_info):
-    """同步处理单个商品"""
+    """同步处理单个商品，避免重复处理"""
     try:
+        item_id = product_info.get('item_id', '')
+
         # === 检查停止信号 ===
         current_status = db.get_scrape_status()
         if current_status.get('stop_signal', False):
-            logger.info(f"🔴 处理商品前检测到停止信号，取消处理商品 {product_info.get('item_id')}")
+            logger.info(f"🔴 处理商品前检测到停止信号，取消处理商品 {item_id}")
             return False
+
+        # === 0. 基于item_id的强力去重 ===
+        if db.get_product_by_item_id(item_id):
+            logger.info(f"⏭️ 商品 {item_id} 已存在，跳过重复处理")
+            return True  # 已存在算处理成功
 
         # 1. 抓取详情
         from app import process_single_product  # 引用 app.py 中的逻辑
@@ -3826,30 +3862,35 @@ def process_and_save_single_product_sync(product_info):
         # === 再次检查停止状态 ===
         current_status = db.get_scrape_status()
         if current_status.get('stop_signal', False):
-            logger.info(f"🔴 抓取详情后检测到停止信号，取消处理商品 {product_info.get('item_id')}")
+            logger.info(f"🔴 抓取详情后检测到停止信号，取消处理商品 {item_id}")
             return False
 
-        # 2. 查重
+        # 2. 再次查重 (双重保险)
         if db.get_product_by_url(product_data['product_url']):
+            logger.info(f"⏭️ 商品URL已存在: {product_data['product_url']}")
             return True  # 已存在算处理成功
 
-        # 3. 入库
+        # 3. 入库 (添加item_id字段)
+        product_data['item_id'] = item_id  # 确保item_id被保存
         product_id = db.insert_product(product_data)
+
+        logger.info(f"✅ 商品 {item_id} 成功入库，数据库ID: {product_id}")
 
         # === 再次检查停止状态 ===
         current_status = db.get_scrape_status()
         if current_status.get('stop_signal', False):
-            logger.info(f"🔴 入库后检测到停止信号，商品 {product_info.get('item_id')} 已入库但跳过图片处理")
+            logger.info(f"🔴 入库后检测到停止信号，商品 {item_id} 已入库但跳过图片处理")
             return True  # 商品已入库，算成功
 
         # 4. 图片处理
         if product_data.get('images'):
             from app import save_product_images
             save_product_images(product_id, product_data['images'])
+            logger.info(f"🖼️ 商品 {item_id} 图片处理完成")
 
         return True
     except Exception as e:
-        logger.error(f"处理商品出错 {product_info.get('item_id')}: {e}")
+        logger.error(f"❌ 处理商品出错 {product_info.get('item_id')}: {e}")
         return False
 
 def scrape_product_info(product_url):
@@ -4445,25 +4486,36 @@ if __name__ == '__main__':
     # 注册退出时停止机器人的函数
     atexit.register(stop_discord_bot)
 
-    # 预加载AI模型
-    print("🤖 Preloading AI models...")
+    # ====================================================
+    # 新增修复：启动时强制重置数据库抓取状态
+    # ====================================================
+    print("🧹 [系统] 正在重置抓取任务状态...")
+    try:
+        # 强制将所有正在运行的状态重置为停止
+        db.update_scrape_status(
+            is_scraping=False,
+            stop_signal=False,
+            message='系统重启，任务状态已重置'
+        )
+        print("✅ [系统] 抓取状态已重置，随时可以开始新任务")
+    except Exception as e:
+        print(f"⚠️ [系统] 状态重置失败 (可能是第一次运行数据库未初始化): {e}")
+
+    # 3. 在主线程预加载模型 (关键)
+    print("🤖 [系统] 正在预热 AI 引擎，请稍候...")
     try:
         from feature_extractor import get_feature_extractor
-        feature_extractor_instance = get_feature_extractor()
-        print("✅ AI models preloaded successfully")
+        # 强制获取一次实例，触发初始化
+        get_feature_extractor()
+        print("✅ [系统] AI 引擎预热完成，多线程任务将共享此实例")
     except Exception as e:
-        print(f"⚠️ AI models preload failed: {e}")
-        print("🔄 Models will be loaded on first use")
-        feature_extractor_instance = None
+        print(f"⚠️ [系统] AI 预热失败: {e}")
 
-    # 本地开发模式 - 总是启用热重载
-    print("🚀 Starting Flask API in development mode...")
-    print("🤖 Discord bot will NOT auto-start. Use web interface to start manually...")
-    print("🔄 Hot reload enabled - modify files and refresh browser")
-
+    # 4. 启动 Flask
+    print("🚀 服务启动中...")
     try:
-        # 使用多线程模式，更好地处理中断信号
-        app.run(host='0.0.0.0', port=5001, debug=config.DEBUG, use_reloader=False, threaded=True)
+        # 关闭 debug 模式，避免 Flask 重载器导致双重初始化
+        app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)
     except KeyboardInterrupt:
         print("\n🛑 Received KeyboardInterrupt, shutting down...")
         signal_handler(signal.SIGINT, None)
