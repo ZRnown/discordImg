@@ -46,7 +46,7 @@ class Database:
 
             # 创建索引以优化查询性能
             try:
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_products_created_at ON products(created_at DESC)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_products_created_at ON products(created_at)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_products_shop_name ON products(shop_name)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_products_rule_enabled ON products(ruleEnabled)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_product_images_product_id ON product_images(product_id)')
