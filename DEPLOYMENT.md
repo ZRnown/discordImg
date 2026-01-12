@@ -88,7 +88,7 @@ grep "NODE_ENV\|NEXT_PUBLIC_BACKEND_URL" ~/discordImg/frontend.log
 
 # 应该看到：
 # NODE_ENV=development
-# NEXT_PUBLIC_BACKEND_URL=http://69.30.204.184:5001
+# NEXT_PUBLIC_BACKEND_URL=http://your-server-ip:5001
 ```
 
 ## 🎯 核心原理
@@ -99,16 +99,38 @@ grep "NODE_ENV\|NEXT_PUBLIC_BACKEND_URL" ~/discordImg/frontend.log
    - 禁用 Cookie 的 Secure 属性
    - 解决 HTTP 无法传输 Cookie 导致的 401/403 错误
 
-2. **NEXT_PUBLIC_BACKEND_URL=http://69.30.204.184:5001**
+2. **NEXT_PUBLIC_BACKEND_URL=http://your-server-ip:5001**
    - 指定后端服务器地址
    - 解决前端访问 localhost 导致的 404 错误
 
 ## 📝 环境变量说明
 
+### 前端环境变量
+
 | 环境变量 | 作用 | 默认值 | 服务器设置 |
 |---------|------|--------|-----------|
 | **NODE_ENV** | 控制 Cookie 的 secure 属性 | development | **development** ❗ |
-| **NEXT_PUBLIC_BACKEND_URL** | 后端 API 地址 | localhost:5001 | **http://69.30.204.184:5001** ❗ |
+| **NEXT_PUBLIC_BACKEND_URL** | 后端 API 地址 | http://127.0.0.1:5001 | **http://your-server-ip:5001** ❗ |
+
+### 后端环境变量 (config.py)
+
+| 环境变量 | 作用 | 默认值 | 说明 |
+|---------|------|--------|------|
+| **HOST** | 服务器监听地址 | 0.0.0.0 | 0.0.0.0监听所有接口 |
+| **PORT** | 服务器端口 | 5001 | Flask应用端口 |
+| **DEBUG** | 调试模式 | True | 生产环境设为False |
+| **DEVICE** | 计算设备 | cpu | cpu/cuda |
+| **SECRET_KEY** | 会话密钥 | dev-secret-key | 生产环境必须修改 |
+| **SESSION_LIFETIME** | 会话生命周期(秒) | 86400 | 24小时 |
+| **CORS_ORIGINS** | 允许的CORS源 | localhost:3000,127.0.0.1:3000 | 逗号分隔的URL列表 |
+| **DOWNLOAD_THREADS** | 图片下载线程数 | 10 | 根据服务器性能调整 |
+| **FEATURE_EXTRACT_THREADS** | 特征提取线程数 | 4 | CPU密集型任务 |
+| **SCRAPE_THREADS** | 商品抓取线程数 | 10 | I/O密集型任务 |
+| **DINO_MODEL_NAME** | DINOv2模型 | facebook/dinov2-small | small/base/large |
+| **YOLO_MODEL_PATH** | YOLO模型路径 | yolov8s-world.pt | 目标检测模型 |
+| **USE_YOLO_CROP** | 启用YOLO裁剪 | True | True/False |
+| **REQUEST_TIMEOUT** | HTTP请求超时(秒) | 30 | 网络请求超时时间 |
+| **MAX_RETRIES** | 最大重试次数 | 3 | 请求失败重试次数 |
 
 ## ⚙️ 高级配置
 
@@ -154,7 +176,7 @@ Type=simple
 User=administrator
 WorkingDirectory=/home/administrator/discordImg
 Environment=NODE_ENV=development
-Environment=NEXT_PUBLIC_BACKEND_URL=http://69.30.204.184:5001
+Environment=NEXT_PUBLIC_BACKEND_URL=http://127.0.0.1:5001
 ExecStart=/home/administrator/discordImg/start.sh
 Restart=on-failure
 

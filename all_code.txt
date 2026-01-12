@@ -1622,7 +1622,8 @@ export async function GET(request: NextRequest) {
 --- File: ./frontend/app/api/logs/stream/route.ts ---
 import { NextRequest, NextResponse } from 'next/server'
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001'
+// 服务器端请求必须走内网 IP，避免 NAT 回环问题
+const BACKEND_URL = 'http://127.0.0.1:5001'
 
 export async function GET(request: NextRequest) {
   try {
@@ -1725,7 +1726,8 @@ export async function GET(request: NextRequest) {
 --- File: ./frontend/app/api/logs/route.ts ---
 import { NextRequest, NextResponse } from 'next/server'
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001'
+// 服务器端请求必须走内网 IP，避免 NAT 回环问题
+const BACKEND_URL = 'http://127.0.0.1:5001'
 
 export async function GET(request: NextRequest) {
   try {
@@ -11582,29 +11584,6 @@ class WeidianScraper:
             logger.error(f"提取商品ID失败: {e}")
             return None
 
-    def extract_item_id(self, url: str) -> Optional[str]:
-        """从微店URL中提取商品ID"""
-        try:
-            parsed_url = urlparse(url)
-            if 'itemID' in parsed_url.query:
-                query_params = parse_qs(parsed_url.query)
-                return query_params.get('itemID', [None])[0]
-            else:
-                # 尝试从路径中提取
-                path_match = re.search(r'/item/(\d+)', parsed_url.path)
-                if path_match:
-                    return path_match.group(1)
-
-                # 尝试其他格式
-                id_match = re.search(r'itemID[=/](\d+)', url)
-                if id_match:
-                    return id_match.group(1)
-
-            return None
-        except Exception as e:
-            logger.error(f"提取商品ID失败: {e}")
-            return None
-
     def scrape_product_info(self, url: str) -> Optional[Dict]:
         """
         抓取微店商品信息 - 使用官方API
@@ -12630,39 +12609,39 @@ class DiscordBotClient(discord.Client):
 
                     if product_rule_enabled:
                         # 使用全局自定义回复
-                    custom_reply = self._get_custom_reply()
+                        custom_reply = self._get_custom_reply()
 
-                    if custom_reply:
-                        reply_type = custom_reply.get('reply_type')
+                        if custom_reply:
+                            reply_type = custom_reply.get('reply_type')
 
-                        if reply_type == 'custom_only':
-                            # 只发送自定义内容，不发送链接
-                            if custom_reply.get('content'):
-                                await message.reply(custom_reply['content'])
-                            if custom_reply.get('image_url'):
-                                # 这里可以实现发送图片的逻辑
-                                pass
+                            if reply_type == 'custom_only':
+                                # 只发送自定义内容，不发送链接
+                                if custom_reply.get('content'):
+                                    await message.reply(custom_reply['content'])
+                                if custom_reply.get('image_url'):
+                                    # 这里可以实现发送图片的逻辑
+                                    pass
 
-                        elif reply_type == 'text_and_link':
-                            # 发送文字 + 链接
+                            elif reply_type == 'text_and_link':
+                                # 发送文字 + 链接
+                                response = get_response_url_for_channel(product, message.channel.id)
+                                full_reply = f"{custom_reply.get('content', '')}\n{response}".strip()
+                                await message.reply(full_reply)
+
+                            elif reply_type == 'text':
+                                # 只发送文字
+                                if custom_reply.get('content'):
+                                    await message.reply(custom_reply['content'])
+
+                            elif reply_type == 'image':
+                                # 发送图片（如果设置了的话）
+                                if custom_reply.get('image_url'):
+                                    # 这里可以实现发送图片的逻辑
+                                    pass
+                        else:
+                            # 默认行为：发送链接
                             response = get_response_url_for_channel(product, message.channel.id)
-                            full_reply = f"{custom_reply.get('content', '')}\n{response}".strip()
-                            await message.reply(full_reply)
-
-                        elif reply_type == 'text':
-                            # 只发送文字
-                            if custom_reply.get('content'):
-                                await message.reply(custom_reply['content'])
-
-                        elif reply_type == 'image':
-                            # 发送图片（如果设置了的话）
-                            if custom_reply.get('image_url'):
-                                # 这里可以实现发送图片的逻辑
-                                pass
-                    else:
-                        # 默认行为：发送链接
-                        response = get_response_url_for_channel(product, message.channel.id)
-                        await message.reply(response)
+                            await message.reply(response)
                     else:
                         # 商品级自定义回复
                         custom_text = product.get('custom_reply_text', '').strip()
@@ -12933,22 +12912,7 @@ async def get_all_accounts_from_backend():
     """从后端 API 获取所有可用的 Discord 账号"""
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get('http://localhost:5001/api/accounts') as resp:
-                if resp.status == 200:
-                    result = await resp.json()
-                    accounts = result.get('accounts', [])
-                    if accounts:
-                        logger.info(f'Got {len(accounts)} accounts from backend')
-                        return accounts
-    except Exception as e:
-        logger.error(f'Failed to get accounts from backend: {e}')
-    return []
-
-async def get_all_accounts_from_backend():
-    """从后端 API 获取所有可用的 Discord 账号"""
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get('http://localhost:5001/api/accounts') as resp:
+            async with session.get('http://127.0.0.1:5001/api/accounts') as resp:
                 if resp.status == 200:
                     result = await resp.json()
                     accounts = result.get('accounts', [])
@@ -14218,6 +14182,119 @@ def load_system_config():
     except Exception as e:
         func_logger.warning(f"加载系统配置失败，使用默认值: {e}")
 
+def check_duplicate_image(new_features, existing_features_list, threshold=0.99):
+    """
+    检查新图片的特征向量是否与现有列表中的图片重复
+
+    :param new_features: 新图片的特征向量 (numpy array)
+    :param existing_features_list: 现有图片的特征向量列表 (可以是json字符串列表或numpy列表)
+    :param threshold: 相似度阈值，默认99%
+    :return: (is_duplicate, similarity_score)
+    """
+    if not existing_features_list:
+        return False, 0.0
+
+    try:
+        # 预计算新向量的范数
+        norm_new = np.linalg.norm(new_features)
+        if norm_new == 0:
+            return False, 0.0
+
+        for feat_item in existing_features_list:
+            try:
+                # 处理输入可能是 JSON 字符串或已经是 numpy 数组的情况
+                if isinstance(feat_item, str):
+                    feat_vec = np.array(json.loads(feat_item), dtype='float32')
+                else:
+                    feat_vec = np.array(feat_item, dtype='float32')
+
+                norm_existing = np.linalg.norm(feat_vec)
+                if norm_existing == 0:
+                    continue
+
+                # 计算余弦相似度
+                dot_product = np.dot(new_features, feat_vec)
+                similarity = dot_product / (norm_new * norm_existing)
+
+                if similarity > threshold:
+                    return True, similarity
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        logger.error(f"向量比对出错: {e}")
+
+    return False, 0.0
+
+def process_and_save_image_core(product_id, image_url_or_file, index, existing_features=None):
+    """
+    核心图片处理单元：保存 -> 特征提取 -> 查重 -> 返回数据
+
+    :param product_id: 商品ID
+    :param image_url_or_file: 或者是 URL 字符串，或者是 Flask 的 FileStorage 对象
+    :param index: 图片索引
+    :param existing_features: 现有特征向量列表，用于查重
+    :return: 处理结果字典
+    """
+    import uuid
+    import os
+
+    # 1. 确定保存路径
+    timestamp = int(time.time() * 1000000)
+    # 如果是文件上传，获取原始文件名；如果是URL，生成名字
+    original_name = image_url_or_file.filename if hasattr(image_url_or_file, 'filename') else 'url_image.jpg'
+    filename = f"{product_id}_{index}_{timestamp}.jpg"
+    save_path = os.path.join('data', 'images', filename)
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+    try:
+        # 2. 保存文件
+        if hasattr(image_url_or_file, 'save'):
+            # 是上传的文件对象
+            image_url_or_file.save(save_path)
+        else:
+            # 是 URL
+            import requests
+            resp = requests.get(image_url_or_file, timeout=10, proxies={'http': None, 'https': None})
+            if resp.status_code != 200:
+                return {'success': False, 'error': 'Download failed'}
+            with open(save_path, 'wb') as f:
+                f.write(resp.content)
+
+        # 验证文件大小
+        if os.path.getsize(save_path) == 0:
+            os.remove(save_path)
+            return {'success': False, 'error': 'Empty file'}
+
+        # 3. 特征提取
+        extractor = get_global_feature_extractor()
+        features = extractor.extract_feature(save_path)
+        if features is None:
+            os.remove(save_path)
+            return {'success': False, 'error': 'Feature extraction failed'}
+
+        # 4. 查重 (复用上面的工具函数)
+        is_dup, score = check_duplicate_image(features, existing_features)
+        if is_dup:
+            os.remove(save_path)
+            logger.info(f"图片重复 (相似度: {score:.2f})，已删除: {filename}")
+            return {'success': False, 'error': 'Duplicate image'}
+
+        # 5. 返回处理结果，让调用者决定如何入库
+        return {
+            'success': True,
+            'image_path': save_path,
+            'features': features,
+            'index': index,
+            'filename': filename
+        }
+
+    except Exception as e:
+        if os.path.exists(save_path):
+            os.remove(save_path)
+        return {'success': False, 'error': str(e)}
+
 # 从环境变量读取线程配置
 import os
 SCRAPE_THREADS = int(os.getenv('SCRAPE_THREADS', '10'))
@@ -14383,7 +14460,8 @@ app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-producti
 # CORS 配置，必须允许 Credentials
 CORS(app, origins=[
     "http://localhost:3000",
-    "http://127.0.0.1:3000"
+    "http://127.0.0.1:3000",
+    "http://69.30.204.184:3000"  # 服务器公网 IP
 ], supports_credentials=True)
 
 # Cookie 配置优化 (解决本地调试 Cookie 无法写入的问题)
@@ -14391,6 +14469,7 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax', # 在同一域名不同端口下 Lax 通常更好
     SESSION_COOKIE_SECURE=False,   # 本地调试必须为 False，否则 http 下不发送 cookie
+    SESSION_COOKIE_DOMAIN=None,    # 确保不限制在 localhost，允许 IP 访问
 )
 
 def extract_features(image_path):
@@ -16239,7 +16318,7 @@ def delete_product(product_id):
 # === 修复：商品图片上传 API ===
 @app.route('/api/products/<int:product_id>/images', methods=['POST'])
 def upload_product_image(product_id):
-    """上传新图片到商品（多线程处理）"""
+    """上传新图片到商品（使用统一的核心处理函数）"""
     if not require_login():
         return jsonify({'error': '需要登录'}), 401
 
@@ -16264,95 +16343,29 @@ def upload_product_image(product_id):
             if count_row and count_row[0] >= 20:
                 return jsonify({'error': '每个商品最多只能上传20张图片'}), 400
 
-        # 保存文件
-        filename = f"{product_id}_{next_index}_{int(time.time())}.jpg"
-        save_path = os.path.join('data', 'images', filename)
-        os.makedirs(os.path.dirname(save_path), exist_ok=True)
-        file.save(save_path)
+        # 获取现有特征向量用于查重
+        existing_images = db.get_product_images(product_id)
+        existing_feats = [img['features'] for img in existing_images if img['features']]
 
-        # 多线程处理：特征提取和索引
-        import concurrent.futures
-        import threading
-
-        result = {'success': False, 'error': None}
-
-        def process_image_async():
-            """异步处理图片特征提取和索引"""
-            try:
-                # 提取特征
-                extractor = get_global_feature_extractor()
-                if extractor is None:
-                    logger.error("特征提取器未初始化")
-                    return None
-                features = extractor.extract_feature(save_path)
-
-                if features is None:
-                    os.remove(save_path)
-                    result['error'] = '特征提取失败，图片无效'
-                    return
-
-                # === 新增：向量去重检查 ===
-                # 获取该商品已有的所有图片向量
-                existing_images = db.get_product_images(product_id)
-                if existing_images:
-                    import numpy as np
-                    for existing_img in existing_images:
-                        if existing_img.get('features') is not None:
-                            # 反序列化现有向量
-                            try:
-                                existing_features = json.loads(existing_img['features'])
-                                existing_features = np.array(existing_features, dtype='float32')
-                            except (json.JSONDecodeError, ValueError):
-                                continue
-
-                            # 计算余弦相似度
-                            dot_product = np.dot(features, existing_features)
-                            norm_new = np.linalg.norm(features)
-                            norm_existing = np.linalg.norm(existing_features)
-
-                            if norm_new > 0 and norm_existing > 0:
-                                similarity = dot_product / (norm_new * norm_existing)
-                                if similarity > 0.95:  # 相似度阈值95%
-                                    logger.info(f'检测到重复图片 (相似度: {similarity:.3f})，拒绝上传: {os.path.basename(save_path)}')
-                                    os.remove(save_path)
-                                    result['error'] = f'图片与现有图片过于相似 (相似度: {similarity:.1%})，请勿上传重复图片'
-                                    return
-
-                # 存入数据库
-                img_db_id = db.insert_image_record(product_id, save_path, next_index)
-
-                # 存入 FAISS
-                try:
-                    from vector_engine import get_vector_engine
-                except ImportError:
-                    from .vector_engine import get_vector_engine
-                engine = get_vector_engine()
-                engine.add_vector(img_db_id, features)
-                engine.save()
-
-                result['success'] = True
-                result['img_db_id'] = img_db_id
-                logger.info(f"图片上传成功: product_id={product_id}, image_index={next_index}, db_id={img_db_id}")
-
-            except Exception as e:
-                logger.error(f"图片处理失败: {e}")
-                result['error'] = str(e)
-                # 清理失败的文件
-                try:
-                    os.remove(save_path)
-                except:
-                    pass
-
-        # 启动后台线程处理图片
-        processing_thread = threading.Thread(target=process_image_async, daemon=True)
-        processing_thread.start()
-
-        # 等待最多5秒让处理完成
-        processing_thread.join(timeout=5.0)
+        # 调用核心处理函数
+        result = process_and_save_image_core(product_id, file, next_index, existing_feats)
 
         if not result['success']:
-            error_msg = result.get('error', '图片处理失败')
-            return jsonify({'error': error_msg}), 500
+            return jsonify({'error': result['error']}), 400
+
+        # 直接入库（单张上传可以同步处理）
+        img_db_id = db.insert_image_record(product_id, result['image_path'], next_index, result['features'])
+
+        # 存入 FAISS
+        try:
+            from vector_engine import get_vector_engine
+        except ImportError:
+            from .vector_engine import get_vector_engine
+        engine = get_vector_engine()
+        engine.add_vector(img_db_id, result['features'])
+        engine.save()
+
+        logger.info(f"图片上传成功: product_id={product_id}, image_index={next_index}, db_id={img_db_id}")
 
         # 返回更新后的商品信息
         product = db._get_product_info_by_id(product_id)
@@ -17535,7 +17548,7 @@ def batch_scrape_products():
 
                     # 处理图片（使用优化后的多线程图片处理）
                     if product_data.get('images'):
-                        save_product_images_batch(product_id_db, product_data['images'])
+                        save_product_images_unified(product_id_db, product_data['images'], shutdown_event=shutdown_event)
 
                     return {'status': 'success', 'product_id': product_id, 'message': '处理成功'}
                 else:
@@ -18417,135 +18430,41 @@ def save_product_images(product_id, image_urls):
     except Exception as e:
         logger.error(f'保存商品图片失败: {e}')
 
-def save_product_images_batch(product_id, image_urls):
-    """批量保存商品图片（高性能版本 - 最大化并发）"""
+def save_product_images_unified(product_id, image_urls, max_workers=None, shutdown_event=None):
+    """统一的批量图片处理函数"""
+    if not image_urls:
+        return 0
+
     try:
-        if not image_urls:
-            return
-
-        # 使用环境变量配置的下载线程数
-        download_threads = DOWNLOAD_THREADS
-        # 为图片下载分配更多线程，但不超过图片数量
-        max_image_threads = min(download_threads * 2, len(image_urls))
-
-        logger.info(f"商品 {product_id} 开始批量处理 {len(image_urls)} 张图片，使用 {max_image_threads} 个线程")
-
         import concurrent.futures
-        import requests
-        import time
-        import hashlib
 
-        # 获取该商品已有的图片向量，用于去重
-        existing_features = []
-        try:
-            existing_images = db.get_product_images(product_id)
-            for img_record in existing_images:
-                if img_record.get('features'):
-                    existing_features.append(img_record['features'])
-            logger.info(f'商品 {product_id} 已存在 {len(existing_features)} 张图片的向量数据')
-        except Exception as e:
-            logger.warning(f'获取商品现有向量失败: {e}')
+        # 动态决定线程数
+        if max_workers is None:
+            max_workers = min(DOWNLOAD_THREADS, len(image_urls))
 
-        def process_single_image_batch(args):
-            """处理单张图片：下载 -> 保存 -> 提取特征 -> 索引"""
-            index, image_url = args
-            try:
-                # 下载图片（更短的超时时间）
-                response = requests.get(image_url, timeout=5, stream=True, proxies={'http': None, 'https': None})
-                if response.status_code != 200:
-                    return None
+        # 获取现有特征向量用于查重
+        existing_images = db.get_product_images(product_id)
+        existing_feats = [img['features'] for img in existing_images if img['features']]
+        logger.info(f'商品 {product_id} 已存在 {len(existing_feats)} 张图片的向量数据')
 
-                # 生成唯一文件名，避免并发冲突
-                timestamp = int(time.time() * 1000000)  # 微秒级时间戳
-                image_filename = f"{product_id}_{index}_{timestamp}.jpg"
-                image_path = os.path.join('data', 'images', image_filename)
+        # 处理结果列表
+        valid_results = []
 
-                # 确保目录存在
-                os.makedirs(os.path.dirname(image_path), exist_ok=True)
-
-                # 流式写入文件，避免内存占用过多
-                with open(image_path, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        if chunk:
-                            f.write(chunk)
-
-                # 验证图片完整性
-                if os.path.getsize(image_path) == 0:
-                    os.remove(image_path)
-                    return None
-
-                # 提取特征（这里会调用YOLO裁剪和DINOv2特征提取）
-                extractor = get_global_feature_extractor()
-                if extractor is None:
-                    logger.error("特征提取器未初始化")
-                    return None
-
-                features = extractor.extract_feature(image_path)
-
-                if features is None:
-                    # 特征提取失败，删除文件
-                    os.remove(image_path)
-                    return None
-
-                # === 新增：向量去重检查 ===
-                # 检查与该商品现有图片的相似度
-                if existing_features:
-                    import numpy as np
-                    for existing_feature_json in existing_features:
-                        try:
-                            # 反序列化现有向量
-                            existing_features_array = json.loads(existing_feature_json)
-                            existing_features_array = np.array(existing_features_array, dtype='float32')
-
-                            # 计算余弦相似度
-                            dot_product = np.dot(features, existing_features_array)
-                            norm_new = np.linalg.norm(features)
-                            norm_existing = np.linalg.norm(existing_features_array)
-
-                            if norm_new > 0 and norm_existing > 0:
-                                similarity = dot_product / (norm_new * norm_existing)
-                                if similarity > 0.95:  # 相似度阈值95%
-                                    logger.info(f'检测到重复图片 (相似度: {similarity:.3f})，跳过: {os.path.basename(image_path)}')
-                                    os.remove(image_path)
-                                    return None
-                        except (json.JSONDecodeError, ValueError, TypeError) as e:
-                            logger.warning(f"解析现有向量失败: {e}")
-                            continue
-
-                # 返回处理结果，让主进程统一处理数据库操作
-                return {
-                    'image_path': image_path,
-                    'features': features,
-                    'index': index,
-                    'url': image_url
-                }
-
-            except Exception as e:
-                logger.error(f'处理图片失败 {image_url}: {e}')
-                return None
-
-        # 使用线程池处理图片下载和特征提取（单例YOLO避免重复加载）
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_image_threads) as executor:
-            # 提交所有图片处理任务
-            future_to_image = {
-                executor.submit(process_single_image_batch, (index, url)): (index, url)
-                for index, url in enumerate(image_urls)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 提交任务
+            future_to_url = {
+                executor.submit(process_and_save_image_core, product_id, url, idx, existing_feats): url
+                for idx, url in enumerate(image_urls)
             }
 
             # 收集处理结果 - 支持优雅停止
-            processed_images = []
-            pending_futures = set(future_to_image.keys())
+            pending_futures = set(future_to_url.keys())
 
             try:
                 while pending_futures:
                     # 检查停止信号或关闭事件
-                    current_status = db.get_scrape_status()
-                    should_stop = (current_status.get('stop_signal', False) or
-                                 (shutdown_event and shutdown_event.is_set()))
-
-                    if should_stop:
-                        logger.info(f"🔴 检测到停止信号，正在等待图片处理完成...")
-                        # 优雅关闭线程池
+                    if shutdown_event and shutdown_event.is_set():
+                        logger.info("检测到停止信号，正在等待图片处理完成...")
                         executor.shutdown(wait=True, timeout=15.0)
                         break
 
@@ -18558,13 +18477,14 @@ def save_product_images_batch(product_id, image_urls):
 
                     # 处理已完成的图片
                     for future in done:
-                        index, url = future_to_image[future]
                         try:
                             result = future.result()
-                            if result:
-                                processed_images.append(result)
+                            if result and result['success']:
+                                valid_results.append(result)
+                                # 实时更新现有特征列表，防止这一批次内部有重复图
+                                existing_feats.append(result['features'])
                         except Exception as e:
-                            logger.error(f"处理图片 {url} 时发生异常: {e}")
+                            logger.error(f"处理图片时发生异常: {e}")
 
             except KeyboardInterrupt:
                 logger.warning("收到键盘中断，正在优雅关闭图片处理...")
@@ -18575,63 +18495,38 @@ def save_product_images_batch(product_id, image_urls):
                 if not executor._shutdown:
                     executor.shutdown(wait=False)
 
-        # 对处理成功的图片进行向量去重和数据库插入
-        if processed_images:
-            # 串行处理数据库操作（SQLite不支持多线程写入）
-            valid_images = []
+        # 批量入库逻辑 (保持在主线程)
+        if valid_results:
+            try:
+                from vector_engine import get_vector_engine
+                engine = get_vector_engine()
 
-            for img_data in processed_images:
-                try:
-                    # 向量去重：检查是否与现有图片过于相似
-                    is_duplicate = False
-                    current_features = img_data['features']
+                for result in valid_results:
+                    img_db_id = db.insert_image_record(product_id, result['image_path'], result['index'], result['features'])
+                    engine.add_vector(img_db_id, result['features'])
 
-                    for existing_feat in existing_features:
-                        try:
-                            # 计算余弦相似度
-                            import numpy as np
-                            similarity = np.dot(current_features, existing_feat) / (
-                                np.linalg.norm(current_features) * np.linalg.norm(existing_feat)
-                            )
-                            if similarity > 0.95:  # 相似度阈值
-                                is_duplicate = True
-                                break
-                        except:
-                            continue
+                engine.save()
+                logger.info(f"商品 {product_id} 保存了 {len(valid_results)} 张新图片")
 
-                    if not is_duplicate:
-                        valid_images.append(img_data)
-                        existing_features.append(current_features)  # 添加到现有特征列表，用于后续去重
-                    else:
-                        # 删除重复图片文件
-                        try:
-                            os.remove(img_data['image_path'])
-                        except:
-                            pass
+            except Exception as e:
+                logger.error(f"批量插入图片数据失败: {e}")
+        else:
+            logger.info(f"商品 {product_id} 所有图片都被去重，没有新图片保存")
 
-                except Exception as e:
-                    logger.error(f"处理图片去重失败 {img_data.get('url', 'unknown')}: {e}")
-
-            # 批量插入数据库
-            if valid_images:
-                try:
-                    # 为每个有效的图片创建数据库记录
-                    for img_data in valid_images:
-                        db.insert_product_image(product_id, img_data['image_path'], img_data['features'], img_data['index'])
-
-                    logger.info(f"商品 {product_id} 成功保存 {len(valid_images)} 张图片，去重了 {len(processed_images) - len(valid_images)} 张")
-
-                except Exception as e:
-                    logger.error(f"批量插入图片数据失败: {e}")
-            else:
-                logger.info(f"商品 {product_id} 所有图片都被去重，沒有新图片保存")
+        return len(valid_results)
 
     except Exception as e:
         logger.error(f"批量保存商品 {product_id} 图片失败: {e}")
+        return 0
+
+# 向后兼容的别名
+def save_product_images(product_id, image_urls):
+    """向后兼容的函数名"""
+    return save_product_images_unified(product_id, image_urls)
 
 def save_product_images_multithreaded(product_id, image_urls):
     """多线程版本的图片保存函数（向后兼容）"""
-    save_product_images(product_id, image_urls)
+    return save_product_images_unified(product_id, image_urls)
 
 if __name__ == '__main__':
     import atexit

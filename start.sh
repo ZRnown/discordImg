@@ -49,11 +49,11 @@ echo "✅ 后端服务已启动 (PID: $BACKEND_PID)"
 # 启动前端（关键环境变量设置）
 echo "启动前端服务 (端口 3000)..."
 echo "   NODE_ENV=development (解决 Cookie 401/403 问题)"
-echo "   NEXT_PUBLIC_BACKEND_URL=http://69.30.204.184:5001 (解决 404 问题)"
+echo "   NEXT_PUBLIC_BACKEND_URL=${NEXT_PUBLIC_BACKEND_URL:-http://127.0.0.1:5001} (使用环境变量或默认本地地址)"
 cd frontend
 
 NODE_ENV=development \
-NEXT_PUBLIC_BACKEND_URL=http://69.30.204.184:5001 \
+NEXT_PUBLIC_BACKEND_URL=${NEXT_PUBLIC_BACKEND_URL:-http://127.0.0.1:5001} \
 nohup npm run dev > ../frontend.log 2>&1 &
 
 FRONTEND_PID=$!
@@ -76,8 +76,8 @@ echo ""
 echo "=========================================="
 echo "✅ 服务启动成功！"
 echo "=========================================="
-echo "📍 前端地址: http://69.30.204.184:3000"
-echo "📍 后端地址: http://69.30.204.184:5001"
+echo "📍 前端地址: http://${FRONTEND_HOST:-127.0.0.1}:3000"
+echo "📍 后端地址: http://${BACKEND_HOST:-127.0.0.1}:5001"
 echo ""
 echo "📋 运行状态:"
 echo "   前端: PID $FRONTEND_PID ✅"
