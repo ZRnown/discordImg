@@ -116,24 +116,24 @@ def check_duplicate_image(new_features, existing_features_list, threshold=0.99):
 
     return False, 0.0
 
-def process_and_save_image_core(product_id, image_url_or_file, index, existing_features=None):
+def process_and_save_image_core(product_id, image_url_or_file, index, existing_features=None, save_faiss_immediately=True):
     """
-    更完整的核心图片处理单元：保存 -> 特征提取 -> 查重 -> 数据库 -> FAISS
+    核心图片处理单元：保存 -> 特征提取 -> 查重 -> 数据库 -> FAISS
 
     :param product_id: 商品ID
     :param image_url_or_file: 或者是 URL 字符串，或者是 Flask 的 FileStorage 对象
     :param index: 图片索引
     :param existing_features: 现有特征向量列表，用于查重
+    :param save_faiss_immediately: 是否立即保存FAISS索引（单张上传时为True，批量处理时为False）
     :return: 处理结果字典
     """
-    import uuid
     import os
+    import time
 
-    # 1. 确定保存路径
+    # 1. 确定保存路径（使用配置的目录）
     timestamp = int(time.time() * 1000000)
-    original_name = image_url_or_file.filename if hasattr(image_url_or_file, 'filename') else 'url_image.jpg'
     filename = f"{product_id}_{index}_{timestamp}.jpg"
-    save_path = os.path.join('data', 'scraped_images', str(product_id), filename)
+    save_path = os.path.join(config.IMAGE_SAVE_DIR, str(product_id), filename)
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
     img_db_id = None  # 初始化数据库 ID
@@ -141,14 +141,14 @@ def process_and_save_image_core(product_id, image_url_or_file, index, existing_f
     try:
         # 2. 保存文件
         if hasattr(image_url_or_file, 'save'):
-            # 是上传的文件对象
+            # 是上传的文件对象 (FileStorage)
             image_url_or_file.save(save_path)
         else:
-            # 是 URL
+            # 是 URL 字符串
             import requests
-            resp = requests.get(image_url_or_file, timeout=10, proxies={'http': None, 'https': None})
+            resp = requests.get(image_url_or_file, timeout=config.REQUEST_TIMEOUT, proxies={'http': None, 'https': None})
             if resp.status_code != 200:
-                return {'success': False, 'error': 'Download failed'}
+                return {'success': False, 'error': f'Download failed: {resp.status_code}'}
             with open(save_path, 'wb') as f:
                 f.write(resp.content)
 
@@ -157,52 +157,67 @@ def process_and_save_image_core(product_id, image_url_or_file, index, existing_f
             os.remove(save_path)
             return {'success': False, 'error': 'Empty file'}
 
-        # 3. 特征提取
+        # 3. 特征提取 (DINOv2 + YOLO)
         extractor = get_global_feature_extractor()
+        if extractor is None:
+            os.remove(save_path)
+            return {'success': False, 'error': 'Feature extractor not initialized'}
+
         features = extractor.extract_feature(save_path)
         if features is None:
             os.remove(save_path)
             return {'success': False, 'error': 'Feature extraction failed'}
 
-        # 4. 查重 (复用上面的工具函数)
-        is_dup, score = check_duplicate_image(features, existing_features)
-        if is_dup:
-            os.remove(save_path)
-            logger.info(f"图片重复 (相似度: {score:.2f})，已删除: {filename}")
-            return {'success': False, 'error': 'Duplicate image'}
+        # 4. 查重逻辑
+        if existing_features:
+            is_dup, score = check_duplicate_image(features, existing_features)
+            if is_dup:
+                os.remove(save_path)
+                logger.info(f"图片重复 (相似度: {score:.2f})，已删除: {filename}")
+                return {'success': False, 'error': 'Duplicate image'}
 
+        # 5. 入库 (SQLite)
+        img_db_id = db.insert_image_record(product_id, save_path, index, features)
+
+        # 6. 入库 (FAISS)
         try:
-            # 5. 入库 （包括图片路径和特征向量）
-            img_db_id = db.insert_image_record(product_id, save_path, index, features)
-
-            try:
-                from vector_engine import get_vector_engine
-            except ImportError:
-                from .vector_engine import get_vector_engine
+            from vector_engine import get_vector_engine
             engine = get_vector_engine()
             engine.add_vector(img_db_id, features)
-            engine.save()
+            # 性能优化：单张上传时立即保存，批量处理时延迟保存
+            if save_faiss_immediately:
+                engine.save()
+        except Exception as faiss_err:
+            logger.error(f"FAISS 入库失败: {faiss_err}")
+            # FAISS失败时删除数据库记录和文件，回滚操作
+            try:
+                db.delete_image_record(img_db_id)
+            except:
+                pass
+            if os.path.exists(save_path):
+                os.remove(save_path)
+            return {'success': False, 'error': f'FAISS error: {faiss_err}'}
 
-        except Exception as db_err:
-            logger.error(f"DB 或 FAISS 出错，尝试回滚: {db_err}")
-            if os.path.exists(save_path):  # 确保文件存在
-                os.remove(save_path)  # 移除图片文件
-            return {'success': False, 'error': f"DB 或 FAISS 错误: {db_err}"}
-
-        # 6. 完成
+        # 7. 完成
         return {
             'success': True,
             'image_path': save_path,
             'features': features,
             'index': index,
             'filename': filename,
-            'img_db_id': img_db_id  # 返回数据库的 ID
+            'db_id': img_db_id
         }
 
     except Exception as e:
         logger.error(f'图片处理总出错，尝试清理: {e}')
         if os.path.exists(save_path):
             os.remove(save_path)
+        # 如果已经插入数据库但后续失败，需要回滚
+        if img_db_id:
+            try:
+                db.delete_image_record(img_db_id)
+            except:
+                pass
         return {'success': False, 'error': str(e)}
 
 # 线程配置现在统一在 config.py 中管理
@@ -354,20 +369,20 @@ def get_global_feature_extractor():
 # 在应用启动时初始化
 initialize_feature_extractor()
 
+# Flask配置初始化（完全使用config.py）
 app = Flask(__name__)
-# 生产环境使用强随机密钥
-app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
+app.secret_key = config.SECRET_KEY
 
-# CORS 配置，必须允许 Credentials
+# CORS 配置（关键：解决401/403问题）
 CORS(app, origins=config.CORS_ORIGINS, supports_credentials=True)
 
-# Cookie 配置优化 (解决本地调试 Cookie 无法写入的问题)
+# Session配置优化
 app.config.update(
     SECRET_KEY=config.SECRET_KEY,
     SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE='Lax',  # 在同一域名不同端口下 Lax 通常更好
-    SESSION_COOKIE_SECURE=False,    # 本地调试必须为 False，否则 http 下不发送 cookie
-    SESSION_COOKIE_DOMAIN=None,     # 确保不限制在 localhost，允许 IP 访问
+    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SECURE=False,  # HTTP环境下必须为False
+    SESSION_COOKIE_DOMAIN=None,   # 允许IP访问
     PERMANENT_SESSION_LIFETIME=config.SESSION_LIFETIME,
 )
 
@@ -4316,7 +4331,7 @@ def save_product_images(product_id, image_urls):
         logger.error(f'保存商品图片失败: {e}')
 
 def save_product_images_unified(product_id, image_urls, max_workers=None, shutdown_event=None):
-    """统一的批量图片处理函数"""
+    """统一的批量图片处理函数（优化版：延迟FAISS保存，提高性能）"""
     if not image_urls:
         return 0
 
@@ -4325,7 +4340,7 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
 
         # 动态决定线程数
         if max_workers is None:
-            max_workers = min(DOWNLOAD_THREADS, len(image_urls))
+            max_workers = min(config.DOWNLOAD_THREADS, len(image_urls))
 
         # 获取现有特征向量用于查重
         existing_images = db.get_product_images(product_id)
@@ -4336,8 +4351,8 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
         processed_images = 0
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # 提交任务
-            futures = [executor.submit(process_and_save_image_core, product_id, url, idx, existing_feats)
+            # 提交任务（批量处理时不立即保存FAISS，延迟到最后）
+            futures = [executor.submit(process_and_save_image_core, product_id, url, idx, existing_feats, save_faiss_immediately=False)
                        for idx, url in enumerate(image_urls)]
 
             # 等待完成 (支持优雅关闭)
@@ -4355,6 +4370,14 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
 
                 except Exception as e:
                     logger.error(f'一个图片处理失败: {e}')
+
+        # 批量操作结束后统一保存 FAISS（性能优化）
+        try:
+            from vector_engine import get_vector_engine
+            get_vector_engine().save()
+            logger.info(f"FAISS索引已保存，共处理 {processed_images} 张图片")
+        except Exception as faiss_err:
+            logger.error(f"FAISS保存失败: {faiss_err}")
 
         logger.info(f"商品 {product_id} 成功处理 {processed_images}/{len(image_urls)} 张图片")
         return processed_images

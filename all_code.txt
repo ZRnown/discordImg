@@ -9245,62 +9245,101 @@ export function cn(...inputs: ClassValue[]) {
 import os
 
 class Config:
-    # Discord 配置
+    # === 基础服务配置 ===
+    HOST = os.getenv('HOST', '0.0.0.0')  # 默认监听所有接口
+    PORT = int(os.getenv('PORT', 5001))  # 默认端口
+    DEBUG = os.getenv('DEBUG', 'True').lower() == 'true'  # 调试模式
+
+    # === 设备配置 ===
+    DEVICE = os.getenv('DEVICE', 'cpu')  # CPU/GPU设备
+
+    # === Discord 配置 ===
     DISCORD_CHANNEL_ID = int(os.getenv('DISCORD_CHANNEL_ID', 0)) if os.getenv('DISCORD_CHANNEL_ID') else 0
     DISCORD_SIMILARITY_THRESHOLD = float(os.getenv('DISCORD_SIMILARITY_THRESHOLD', '0.6'))
 
-    # 全局回复延迟配置
+    # === 全局回复延迟配置 ===
     GLOBAL_REPLY_MIN_DELAY = float(os.getenv('GLOBAL_REPLY_MIN_DELAY', '3.0'))
     GLOBAL_REPLY_MAX_DELAY = float(os.getenv('GLOBAL_REPLY_MAX_DELAY', '8.0'))
 
-    # 频道配置
+    # === 频道配置 ===
     CNFANS_CHANNEL_ID = int(os.getenv('CNFANS_CHANNEL_ID', 0)) if os.getenv('CNFANS_CHANNEL_ID') else 0
     ACBUY_CHANNEL_ID = int(os.getenv('ACBUY_CHANNEL_ID', 0)) if os.getenv('ACBUY_CHANNEL_ID') else 0
 
-    # 关键词转发配置
+    # === 关键词转发配置 ===
     FORWARD_KEYWORDS = os.getenv('FORWARD_KEYWORDS', '商品,货源,进货,批发,代理').split(',')  # 触发转发的关键词
     FORWARD_TARGET_CHANNEL_ID = int(os.getenv('FORWARD_TARGET_CHANNEL_ID', 0)) if os.getenv('FORWARD_TARGET_CHANNEL_ID') else 0  # 转发目标频道ID
 
-    # API服务地址（本地服务）
-    NEXTJS_API_URL = 'http://localhost:5001/api'
-    PADDLE_SERVICE_URL = 'http://localhost:5001'
+    # === API服务地址配置 ===
+    # 后端API地址（本地服务）
+    BACKEND_API_URL = os.getenv('BACKEND_API_URL', 'http://127.0.0.1:5001')
+    # 前端Next.js API地址（用于机器人回调）
+    NEXTJS_API_URL = os.getenv('NEXTJS_API_URL', f'{BACKEND_API_URL}/api')
 
-    # 机器人配置
-    COMMAND_PREFIX = '!'
+    # === 机器人配置 ===
+    COMMAND_PREFIX = os.getenv('COMMAND_PREFIX', '!')
 
-    # DINOv2 & FAISS 配置
+    # === AI模型配置 ===
+    # DINOv2配置
     DINO_MODEL_NAME = os.getenv('DINO_MODEL_NAME', 'facebook/dinov2-small')
     VECTOR_DIMENSION = 384 if 'small' in DINO_MODEL_NAME else 768
-    SIMILARITY_THRESHOLD = 0.6
+    SIMILARITY_THRESHOLD = 0.99  # 图片查重阈值，99%相似度
 
-    # 图像处理配置
-    YOLO_MODEL_PATH = os.getenv('YOLO_MODEL_PATH', 'yolov8s-world.pt')  # 升级到YOLO-World
-    USE_YOLO_CROP = os.getenv('USE_YOLO_CROP', 'True').lower() == 'true'  # 启用YOLO-World裁剪
+    # YOLO-World配置
+    YOLO_MODEL_PATH = os.getenv('YOLO_MODEL_PATH', 'yolov8s-world.pt')
+    USE_YOLO_CROP = os.getenv('USE_YOLO_CROP', 'True').lower() == 'true'
 
-    # 多线程配置
-    DOWNLOAD_THREADS = int(os.getenv('DOWNLOAD_THREADS', '4'))  # 图片下载线程数
+    # === 多线程配置 ===
+    SCRAPE_THREADS = int(os.getenv('SCRAPE_THREADS', '10'))  # 商品抓取线程数
+    DOWNLOAD_THREADS = int(os.getenv('DOWNLOAD_THREADS', '10'))  # 图片下载线程数
     FEATURE_EXTRACT_THREADS = int(os.getenv('FEATURE_EXTRACT_THREADS', '4'))  # 特征提取线程数
 
-
-    # FAISS 配置
+    # === FAISS向量搜索配置 ===
     FAISS_INDEX_FILE = os.path.join(os.path.dirname(__file__), 'data', 'faiss_index.bin')
     FAISS_ID_MAP_FILE = os.path.join(os.path.dirname(__file__), 'data', 'faiss_id_map.pkl')
     FAISS_HNSW_M = int(os.getenv('FAISS_HNSW_M', '64'))
     FAISS_EF_CONSTRUCTION = int(os.getenv('FAISS_EF_CONSTRUCTION', '80'))
     FAISS_EF_SEARCH = int(os.getenv('FAISS_EF_SEARCH', '64'))
 
-    # 图片保存目录
-    IMAGE_SAVE_DIR = os.path.join(os.path.dirname(__file__), 'data')
+    # === 文件路径配置 ===
+    BASE_DIR = os.path.dirname(os.path.dirname(__file__))  # 项目根目录
+    DATA_DIR = os.path.join(BASE_DIR, 'backend', 'data')
+    IMAGE_SAVE_DIR = os.path.join(DATA_DIR, 'scraped_images')  # 图片保存目录
+    LOG_DIR = os.path.join(DATA_DIR, 'logs')  # 日志目录
 
-    # 服务配置
-    HOST = '0.0.0.0'
-    PORT = int(os.getenv('PORT', 5001))
-    DEBUG = os.getenv('DEBUG', 'True').lower() == 'true'
+    # === 数据库配置 ===
+    DATABASE_PATH = os.path.join(DATA_DIR, 'metadata.db')
 
-    # 设备配置
-    DEVICE = os.getenv('DEVICE', 'cpu')
+    # === 超时和重试配置 ===
+    REQUEST_TIMEOUT = int(os.getenv('REQUEST_TIMEOUT', '30'))  # HTTP请求超时时间(秒)
+    MAX_RETRIES = int(os.getenv('MAX_RETRIES', '3'))  # 最大重试次数
 
+    # === CORS配置 ===
+    # 支持动态IP配置
+    default_cors = 'http://localhost:3000,http://127.0.0.1:3000'
+    your_server_ip = os.getenv('YOUR_SERVER_IP')
+    if your_server_ip:
+        default_cors += f',http://{your_server_ip}:3000'
+
+    CORS_ORIGINS = os.getenv('CORS_ORIGINS', default_cors).split(',')
+
+    # === 会话配置 ===
+    SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
+    SESSION_LIFETIME = int(os.getenv('SESSION_LIFETIME', '86400'))  # 会话生命周期(秒)
+
+    @classmethod
+    def init_dirs(cls):
+        """初始化必要的目录"""
+        dirs_to_create = [
+            cls.DATA_DIR,
+            cls.IMAGE_SAVE_DIR,
+            cls.LOG_DIR
+        ]
+        for dir_path in dirs_to_create:
+            os.makedirs(dir_path, exist_ok=True)
+
+# 初始化配置
 config = Config()
+config.init_dirs()
 
 --- File: ./backend/database.py ---
 import sqlite3
@@ -14130,6 +14169,21 @@ import os
 import logging
 import sys
 from datetime import datetime
+
+# 自动加载.env文件
+try:
+    from dotenv import load_dotenv
+    # 从项目根目录加载.env文件
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    env_path = os.path.join(project_root, '.env')
+    if os.path.exists(env_path):
+        load_dotenv(env_path)
+        print(f"✅ 已加载环境变量文件: {env_path}")
+    else:
+        print("ℹ️  未找到.env文件，使用系统环境变量")
+except ImportError:
+    print("ℹ️  python-dotenv未安装，使用系统环境变量")
+
 try:
     from feature_extractor import get_feature_extractor, DINOv2FeatureExtractor
 except ImportError:
@@ -14229,7 +14283,7 @@ def check_duplicate_image(new_features, existing_features_list, threshold=0.99):
 
 def process_and_save_image_core(product_id, image_url_or_file, index, existing_features=None):
     """
-    核心图片处理单元：保存 -> 特征提取 -> 查重 -> 返回数据
+    更完整的核心图片处理单元：保存 -> 特征提取 -> 查重 -> 数据库 -> FAISS
 
     :param product_id: 商品ID
     :param image_url_or_file: 或者是 URL 字符串，或者是 Flask 的 FileStorage 对象
@@ -14242,11 +14296,12 @@ def process_and_save_image_core(product_id, image_url_or_file, index, existing_f
 
     # 1. 确定保存路径
     timestamp = int(time.time() * 1000000)
-    # 如果是文件上传，获取原始文件名；如果是URL，生成名字
     original_name = image_url_or_file.filename if hasattr(image_url_or_file, 'filename') else 'url_image.jpg'
     filename = f"{product_id}_{index}_{timestamp}.jpg"
-    save_path = os.path.join('data', 'images', filename)
+    save_path = os.path.join('data', 'scraped_images', str(product_id), filename)
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+    img_db_id = None  # 初始化数据库 ID
 
     try:
         # 2. 保存文件
@@ -14281,30 +14336,41 @@ def process_and_save_image_core(product_id, image_url_or_file, index, existing_f
             logger.info(f"图片重复 (相似度: {score:.2f})，已删除: {filename}")
             return {'success': False, 'error': 'Duplicate image'}
 
-        # 5. 返回处理结果，让调用者决定如何入库
+        try:
+            # 5. 入库 （包括图片路径和特征向量）
+            img_db_id = db.insert_image_record(product_id, save_path, index, features)
+
+            try:
+                from vector_engine import get_vector_engine
+            except ImportError:
+                from .vector_engine import get_vector_engine
+            engine = get_vector_engine()
+            engine.add_vector(img_db_id, features)
+            engine.save()
+
+        except Exception as db_err:
+            logger.error(f"DB 或 FAISS 出错，尝试回滚: {db_err}")
+            if os.path.exists(save_path):  # 确保文件存在
+                os.remove(save_path)  # 移除图片文件
+            return {'success': False, 'error': f"DB 或 FAISS 错误: {db_err}"}
+
+        # 6. 完成
         return {
             'success': True,
             'image_path': save_path,
             'features': features,
             'index': index,
-            'filename': filename
+            'filename': filename,
+            'img_db_id': img_db_id  # 返回数据库的 ID
         }
 
     except Exception as e:
+        logger.error(f'图片处理总出错，尝试清理: {e}')
         if os.path.exists(save_path):
             os.remove(save_path)
         return {'success': False, 'error': str(e)}
 
-# 从环境变量读取线程配置
-import os
-SCRAPE_THREADS = int(os.getenv('SCRAPE_THREADS', '10'))
-DOWNLOAD_THREADS = int(os.getenv('DOWNLOAD_THREADS', '10'))
-FEATURE_EXTRACT_THREADS = int(os.getenv('FEATURE_EXTRACT_THREADS', '10'))
-
-print(f"📊 线程配置加载完成:")
-print(f"   商品抓取线程: {SCRAPE_THREADS}")
-print(f"   图片下载线程: {DOWNLOAD_THREADS}")
-print(f"   特征提取线程: {FEATURE_EXTRACT_THREADS}")
+# 线程配置现在统一在 config.py 中管理
 
 # 加载系统配置
 load_system_config()
@@ -14458,18 +14524,16 @@ app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
 
 # CORS 配置，必须允许 Credentials
-CORS(app, origins=[
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://69.30.204.184:3000"  # 服务器公网 IP
-], supports_credentials=True)
+CORS(app, origins=config.CORS_ORIGINS, supports_credentials=True)
 
 # Cookie 配置优化 (解决本地调试 Cookie 无法写入的问题)
 app.config.update(
+    SECRET_KEY=config.SECRET_KEY,
     SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE='Lax', # 在同一域名不同端口下 Lax 通常更好
-    SESSION_COOKIE_SECURE=False,   # 本地调试必须为 False，否则 http 下不发送 cookie
-    SESSION_COOKIE_DOMAIN=None,    # 确保不限制在 localhost，允许 IP 访问
+    SESSION_COOKIE_SAMESITE='Lax',  # 在同一域名不同端口下 Lax 通常更好
+    SESSION_COOKIE_SECURE=False,    # 本地调试必须为 False，否则 http 下不发送 cookie
+    SESSION_COOKIE_DOMAIN=None,     # 确保不限制在 localhost，允许 IP 访问
+    PERMANENT_SESSION_LIFETIME=config.SESSION_LIFETIME,
 )
 
 def extract_features(image_path):
@@ -16318,19 +16382,20 @@ def delete_product(product_id):
 # === 修复：商品图片上传 API ===
 @app.route('/api/products/<int:product_id>/images', methods=['POST'])
 def upload_product_image(product_id):
-    """上传新图片到商品（使用统一的核心处理函数）"""
+    """上传新图片到商品（调用完整的核心处理函数）"""
     if not require_login():
         return jsonify({'error': '需要登录'}), 401
 
+    file = request.files.get('image')
+    if not file:
+        return jsonify({'error': '无文件'}), 400
+
     try:
-        if 'image' not in request.files:
-            return jsonify({'error': 'No image file'}), 400
+        # 获取现有特征用于查重
+        existing_images = db.get_product_images(product_id)
+        existing_feats = [img['features'] for img in existing_images if img['features']]
 
-        file = request.files['image']
-        if not file.filename:
-            return jsonify({'error': 'Empty filename'}), 400
-
-        # 获取当前最大的 image_index 和检查图片数量限制
+        # 获取下一个 index
         with db.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT MAX(image_index) FROM product_images WHERE product_id = ?", (product_id,))
@@ -16343,32 +16408,15 @@ def upload_product_image(product_id):
             if count_row and count_row[0] >= 20:
                 return jsonify({'error': '每个商品最多只能上传20张图片'}), 400
 
-        # 获取现有特征向量用于查重
-        existing_images = db.get_product_images(product_id)
-        existing_feats = [img['features'] for img in existing_images if img['features']]
-
-        # 调用核心处理函数
+        # 调用核心处理函数（现在包含完整的数据库和FAISS操作）
         result = process_and_save_image_core(product_id, file, next_index, existing_feats)
 
         if not result['success']:
             return jsonify({'error': result['error']}), 400
 
-        # 直接入库（单张上传可以同步处理）
-        img_db_id = db.insert_image_record(product_id, result['image_path'], next_index, result['features'])
-
-        # 存入 FAISS
-        try:
-            from vector_engine import get_vector_engine
-        except ImportError:
-            from .vector_engine import get_vector_engine
-        engine = get_vector_engine()
-        engine.add_vector(img_db_id, result['features'])
-        engine.save()
-
-        logger.info(f"图片上传成功: product_id={product_id}, image_index={next_index}, db_id={img_db_id}")
-
         # 返回更新后的商品信息
         product = db._get_product_info_by_id(product_id)
+
         # 获取所有图片
         with db.get_connection() as conn:
             cursor = conn.cursor()
@@ -16376,15 +16424,17 @@ def upload_product_image(product_id):
             images = [f"/api/image/{product_id}/{row[0]}" for row in cursor.fetchall()]
 
         product['images'] = images
+
         # 格式化以匹配前端
         product['weidianId'] = product.get('product_url', '').split('itemID=')[1] if 'itemID=' in product.get('product_url', '') else ''
         product['weidianUrl'] = product.get('product_url')
         product['englishTitle'] = product.get('english_title')
         product['cnfansUrl'] = product.get('cnfans_url')
         product['ruleEnabled'] = product.get('ruleEnabled')
-        product['matchType'] = 'fuzzy' # Default
+        product['matchType'] = 'fuzzy'
 
         return jsonify({'success': True, 'product': product})
+
     except Exception as e:
         logger.error(f"上传图片失败: {e}")
         return jsonify({'error': str(e)}), 500
@@ -18447,73 +18497,32 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
         existing_feats = [img['features'] for img in existing_images if img['features']]
         logger.info(f'商品 {product_id} 已存在 {len(existing_feats)} 张图片的向量数据')
 
-        # 处理结果列表
-        valid_results = []
+        # 处理结果计数
+        processed_images = 0
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             # 提交任务
-            future_to_url = {
-                executor.submit(process_and_save_image_core, product_id, url, idx, existing_feats): url
-                for idx, url in enumerate(image_urls)
-            }
+            futures = [executor.submit(process_and_save_image_core, product_id, url, idx, existing_feats)
+                       for idx, url in enumerate(image_urls)]
 
-            # 收集处理结果 - 支持优雅停止
-            pending_futures = set(future_to_url.keys())
-
-            try:
-                while pending_futures:
-                    # 检查停止信号或关闭事件
+            # 等待完成 (支持优雅关闭)
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    # 检查停止信号
                     if shutdown_event and shutdown_event.is_set():
                         logger.info("检测到停止信号，正在等待图片处理完成...")
                         executor.shutdown(wait=True, timeout=15.0)
                         break
 
-                    # 等待图片处理完成
-                    done, pending_futures = concurrent.futures.wait(
-                        pending_futures,
-                        timeout=1.0,
-                        return_when=concurrent.futures.FIRST_COMPLETED
-                    )
+                    result = future.result()
+                    if result and result['success']:
+                        processed_images += 1  # 计数成功处理的图片
 
-                    # 处理已完成的图片
-                    for future in done:
-                        try:
-                            result = future.result()
-                            if result and result['success']:
-                                valid_results.append(result)
-                                # 实时更新现有特征列表，防止这一批次内部有重复图
-                                existing_feats.append(result['features'])
-                        except Exception as e:
-                            logger.error(f"处理图片时发生异常: {e}")
+                except Exception as e:
+                    logger.error(f'一个图片处理失败: {e}')
 
-            except KeyboardInterrupt:
-                logger.warning("收到键盘中断，正在优雅关闭图片处理...")
-                executor.shutdown(wait=True, timeout=5.0)
-                raise
-            finally:
-                # 确保线程池被正确关闭
-                if not executor._shutdown:
-                    executor.shutdown(wait=False)
-
-        # 批量入库逻辑 (保持在主线程)
-        if valid_results:
-            try:
-                from vector_engine import get_vector_engine
-                engine = get_vector_engine()
-
-                for result in valid_results:
-                    img_db_id = db.insert_image_record(product_id, result['image_path'], result['index'], result['features'])
-                    engine.add_vector(img_db_id, result['features'])
-
-                engine.save()
-                logger.info(f"商品 {product_id} 保存了 {len(valid_results)} 张新图片")
-
-            except Exception as e:
-                logger.error(f"批量插入图片数据失败: {e}")
-        else:
-            logger.info(f"商品 {product_id} 所有图片都被去重，没有新图片保存")
-
-        return len(valid_results)
+        logger.info(f"商品 {product_id} 成功处理 {processed_images}/{len(image_urls)} 张图片")
+        return processed_images
 
     except Exception as e:
         logger.error(f"批量保存商品 {product_id} 图片失败: {e}")
@@ -18605,4 +18614,163 @@ if __name__ == '__main__':
         signal_handler(signal.SIGINT, None)
     finally:
         print("👋 Flask API shutdown complete")
+
+--- File: ./backend/diagnose_403.py ---
+#!/usr/bin/env python3
+"""
+403 Forbidden 错误诊断脚本
+
+使用方法:
+python diagnose_403.py
+
+此脚本会检查常见的403 Forbidden错误原因：
+1. CORS配置
+2. Cookie设置
+3. 防火墙规则
+4. Nginx配置
+"""
+
+import os
+import requests
+import socket
+from urllib.parse import urlparse
+
+def check_cors_configuration():
+    """检查CORS配置"""
+    print("🔍 检查CORS配置...")
+    try:
+        from config import config
+        print("✅ CORS允许的源:")
+        for origin in config.CORS_ORIGINS:
+            print(f"   - {origin.strip()}")
+    except Exception as e:
+        print(f"❌ CORS配置检查失败: {e}")
+
+def check_network_connectivity():
+    """检查网络连通性"""
+    print("\n🔍 检查网络连通性...")
+
+    # 检查本地端口
+    def check_port(host, port):
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)
+            result = sock.connect_ex((host, port))
+            sock.close()
+            return result == 0
+        except:
+            return False
+
+    # 检查本地服务
+    if check_port('127.0.0.1', 5001):
+        print("✅ 本地后端服务 (127.0.0.1:5001) 正在运行")
+    else:
+        print("❌ 本地后端服务 (127.0.0.1:5001) 未运行")
+
+    if check_port('127.0.0.1', 3000):
+        print("✅ 本地前端服务 (127.0.0.1:3000) 正在运行")
+    else:
+        print("❌ 本地前端服务 (127.0.0.1:3000) 未运行")
+
+def check_api_endpoints():
+    """检查API端点可访问性"""
+    print("\n🔍 检查API端点可访问性...")
+
+    base_url = "http://127.0.0.1:5001"
+    endpoints = [
+        '/api/auth/me',
+        '/api/logs?endpoint=recent',
+        '/api/user/settings'
+    ]
+
+    for endpoint in endpoints:
+        try:
+            response = requests.get(f"{base_url}{endpoint}", timeout=10)
+            if response.status_code == 401:
+                print(f"✅ {endpoint}: {response.status_code} (需要认证，正常)")
+            elif response.status_code == 200:
+                print(f"✅ {endpoint}: {response.status_code} (可访问)")
+            else:
+                print(f"⚠️  {endpoint}: {response.status_code} ({response.reason})")
+        except requests.exceptions.RequestException as e:
+            print(f"❌ {endpoint}: 连接失败 - {e}")
+
+def check_environment_variables():
+    """检查环境变量配置"""
+    print("\n🔍 检查环境变量配置...")
+
+    important_vars = [
+        'HOST', 'PORT', 'DEBUG',
+        'CORS_ORIGINS', 'SECRET_KEY',
+        'SESSION_LIFETIME'
+    ]
+
+    for var in important_vars:
+        value = os.getenv(var)
+        if value:
+            print(f"✅ {var}: {value}")
+        else:
+            print(f"❌ {var}: 未设置")
+
+def check_nginx_configuration():
+    """检查Nginx配置建议"""
+    print("\n🔍 Nginx配置检查建议...")
+
+    print("如果使用Nginx反向代理，请确保配置包含:")
+    print("""
+    server {
+        listen 80;
+        server_name your-domain.com;
+
+        # 前端静态文件
+        location / {
+            proxy_pass http://127.0.0.1:3000;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+        }
+
+        # API代理
+        location /api {
+            proxy_pass http://127.0.0.1:5001;
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+
+            # CORS头
+            add_header Access-Control-Allow-Origin *;
+            add_header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS";
+            add_header Access-Control-Allow-Headers "Origin, X-Requested-With, Content-Type, Accept, Authorization";
+
+            # 处理预检请求
+            if ($request_method = 'OPTIONS') {
+                return 204;
+            }
+        }
+    }
+    """)
+
+def main():
+    """主诊断函数"""
+    print("🚀 403 Forbidden 错误诊断工具")
+    print("=" * 50)
+
+    check_cors_configuration()
+    check_network_connectivity()
+    check_api_endpoints()
+    check_environment_variables()
+    check_nginx_configuration()
+
+    print("\n📋 故障排除清单:")
+    print("1. 确保后端服务正在运行: python app.py")
+    print("2. 确保前端服务正在运行: npm run dev")
+    print("3. 清除浏览器Cookie和缓存")
+    print("4. 检查防火墙是否阻止了相关端口")
+    print("5. 如果使用Nginx，确保配置正确转发API请求")
+    print("6. 检查服务器安全组/防火墙规则")
+
+if __name__ == "__main__":
+    main()
 

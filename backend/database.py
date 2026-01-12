@@ -664,6 +664,20 @@ class Database:
             logger.error(f"删除商品图像失败: {e}")
             return False
 
+    def delete_image_record(self, image_id: int) -> bool:
+        """根据图片ID删除图片记录（用于回滚操作）"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM product_images WHERE id = ?", (image_id,))
+                deleted = cursor.rowcount > 0
+                if deleted:
+                    logger.info(f"已删除图片记录: id={image_id}")
+                return deleted
+        except Exception as e:
+            logger.error(f"删除图片记录失败: {e}")
+            return False
+
     def delete_image_vector(self, product_id: int, image_index: int) -> bool:
         """删除特定的图像向量和物理文件"""
         try:
