@@ -1599,7 +1599,7 @@ class Database:
                         # 一次性获取所有商品和对应的图片索引
                         query = '''
                             SELECT p.*,
-                                   GROUP_CONCAT(pi.image_index ORDER BY pi.image_index) as image_indices,
+                                   GROUP_CONCAT(pi.image_index) as image_indices,
                                    COUNT(pi.id) as image_count,
                                    p.custom_reply_text, p.custom_reply_images, p.custom_image_urls, p.image_source
                             FROM products p
@@ -1617,7 +1617,7 @@ class Database:
                         # 分页查询 - 使用子查询优化性能
                         query = '''
                             SELECT p.*,
-                                   GROUP_CONCAT(pi.image_index ORDER BY pi.image_index) as image_indices,
+                                   GROUP_CONCAT(pi.image_index) as image_indices,
                                    COUNT(pi.id) as image_count,
                                    p.custom_reply_text, p.custom_reply_images, p.custom_image_urls, p.image_source
                             FROM products p
@@ -1689,7 +1689,7 @@ class Database:
                 if limit is None or limit <= 0:
                     query = f'''
                         SELECT p.*,
-                               GROUP_CONCAT(pi.image_index ORDER BY pi.image_index) as image_indices,
+                               GROUP_CONCAT(pi.image_index) as image_indices,
                                COUNT(pi.id) as image_count,
                                p.custom_reply_text, p.custom_reply_images, p.custom_image_urls, p.image_source
                         FROM products p
@@ -1708,7 +1708,7 @@ class Database:
                 else:
                     query = f'''
                         SELECT p.*,
-                               GROUP_CONCAT(pi.image_index ORDER BY pi.image_index) as image_indices,
+                               GROUP_CONCAT(pi.image_index) as image_indices,
                                COUNT(pi.id) as image_count,
                                p.custom_reply_text, p.custom_reply_images, p.custom_image_urls, p.image_source
                         FROM products p
