@@ -20,6 +20,14 @@ interface UserSettings {
   discord_similarity_threshold: number
   global_reply_min_delay: number
   global_reply_max_delay: number
+  user_blacklist: string
+  keyword_filters: string
+}
+
+interface SystemSettings {
+  scrape_threads: number
+  download_threads: number
+  feature_extract_threads: number
 }
 
 export function SettingsView() {
@@ -27,9 +35,17 @@ export function SettingsView() {
     discord_similarity_threshold: 0.6,
     global_reply_min_delay: 3.0,
     global_reply_max_delay: 8.0,
+    user_blacklist: '',
+    keyword_filters: '',
+  })
+  const [systemSettings, setSystemSettings] = useState<SystemSettings>({
+    scrape_threads: 2,
+    download_threads: 4,
+    feature_extract_threads: 4,
   })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [savingSystem, setSavingSystem] = useState(false)
   const [passwordData, setPasswordData] = useState({
     currentPassword: '',
     newPassword: '',
@@ -39,6 +55,7 @@ export function SettingsView() {
 
   useEffect(() => {
     fetchSettings()
+    fetchSystemSettings()
   }, [])
 
   const fetchSettings = async () => {
@@ -51,6 +68,8 @@ export function SettingsView() {
           discord_similarity_threshold: data.discord_similarity_threshold ?? 0.6,
           global_reply_min_delay: data.global_reply_min_delay ?? 3.0,
           global_reply_max_delay: data.global_reply_max_delay ?? 8.0,
+          user_blacklist: data.user_blacklist ?? '',
+          keyword_filters: data.keyword_filters ?? '',
         })
       } else {
         toast.error("获取设置失败")
@@ -60,6 +79,55 @@ export function SettingsView() {
       toast.error("获取设置失败")
     } finally {
       setLoading(false)
+    }
+  }
+
+  const handleSaveSystemSettings = async () => {
+    setSavingSystem(true)
+    try {
+      const response = await fetch('/api/config/scrape-threads', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          scrape_threads: systemSettings.scrape_threads
+        })
+      })
+
+      if (response.ok) {
+        toast.success("系统设置已保存")
+      } else {
+        const errorData = await response.json()
+        toast.error(errorData.error || "保存系统设置失败")
+      }
+    } catch (error) {
+      console.error('Failed to save system settings:', error)
+      toast.error("保存系统设置失败")
+    } finally {
+      setSavingSystem(false)
+    }
+  }
+
+  const fetchSystemSettings = async () => {
+    try {
+      // 获取抓取线程配置
+      const scrapeResponse = await fetch('/api/config/scrape-threads')
+      let scrape_threads = 2
+      if (scrapeResponse.ok) {
+        const data = await scrapeResponse.json()
+        scrape_threads = data.scrape_threads ?? 2
+      }
+
+      // 注意：其他线程配置目前在后端没有单独的API，这里先使用默认值
+      // 后续可以添加更多的API来获取这些配置
+      setSystemSettings({
+        scrape_threads: scrape_threads,
+        download_threads: 4,  // 默认值
+        feature_extract_threads: 4,  // 默认值
+      })
+    } catch (error) {
+      console.error('Failed to fetch system settings:', error)
     }
   }
 
@@ -162,10 +230,16 @@ export function SettingsView() {
           <h2 className="text-4xl font-extrabold tracking-tight">个人设置</h2>
           <p className="text-sm text-muted-foreground mt-1">配置您的个性化运行参数</p>
         </div>
-        <Button onClick={handleSave} disabled={saving}>
-          <Save className="w-4 h-4 mr-2" />
-          {saving ? "保存中..." : "保存设置"}
-        </Button>
+        <div className="flex gap-2">
+          <Button onClick={handleSave} disabled={saving} variant="outline">
+            <Save className="w-4 h-4 mr-2" />
+            {saving ? "保存用户设置..." : "保存用户设置"}
+          </Button>
+          <Button onClick={handleSaveSystemSettings} disabled={savingSystem}>
+            <Settings className="w-4 h-4 mr-2" />
+            {savingSystem ? "保存系统设置..." : "保存系统设置"}
+          </Button>
+        </div>
       </div>
 
       {/* 密码修改 */}
@@ -219,13 +293,13 @@ export function SettingsView() {
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-lg">系统参数</CardTitle>
-          <CardDescription>配置图片匹配和回复延迟参数</CardDescription>
+          <CardDescription>配置图片匹配、回复延迟和抓取多线程参数</CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          {/* 相似度和延迟设置 - 紧凑布局 */}
-          <div className="flex flex-col sm:flex-row gap-6">
+        <CardContent className="space-y-6">
+          {/* 系统设置 - 多列网格布局 */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
             {/* 相似度设置 */}
-            <div className="flex-1 space-y-2">
+            <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label htmlFor="similarity-threshold" className="text-sm font-medium">相似度阈值</Label>
                 <span className="text-sm font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded">
@@ -244,10 +318,86 @@ export function SettingsView() {
                   className="h-9"
                 />
                 <p className="text-xs text-muted-foreground">
-                  阈值越低匹配越宽松，建议范围 0.3-0.8
+                  匹配阈值，范围 0.1-1.0
                 </p>
               </div>
             </div>
+
+            {/* 商品抓取线程数 */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="scrape-threads" className="text-sm font-medium">商品抓取线程</Label>
+                <span className="text-sm font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                  {systemSettings.scrape_threads}
+                </span>
+              </div>
+              <div className="space-y-1">
+                <Input
+                  id="scrape-threads"
+                  type="number"
+                  step="1"
+                  min="1"
+                  max="10"
+                  value={systemSettings.scrape_threads}
+                  onChange={(e) => setSystemSettings(prev => ({ ...prev, scrape_threads: parseInt(e.target.value) || 2 }))}
+                  className="h-9"
+                />
+                <p className="text-xs text-muted-foreground">
+                  批量商品处理并发数
+                </p>
+              </div>
+            </div>
+
+            {/* 图片下载线程数 */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="download-threads" className="text-sm font-medium">图片下载线程</Label>
+                <span className="text-sm font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                  {systemSettings.download_threads}
+                </span>
+              </div>
+              <div className="space-y-1">
+                <Input
+                  id="download-threads"
+                  type="number"
+                  step="1"
+                  min="1"
+                  max="20"
+                  value={systemSettings.download_threads}
+                  onChange={(e) => setSystemSettings(prev => ({ ...prev, download_threads: parseInt(e.target.value) || 4 }))}
+                  className="h-9"
+                />
+                <p className="text-xs text-muted-foreground">
+                  每个商品的图片下载数
+                </p>
+              </div>
+            </div>
+
+            {/* 特征提取线程数 */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="feature-extract-threads" className="text-sm font-medium">特征提取线程</Label>
+                <span className="text-sm font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                  {systemSettings.feature_extract_threads}
+                </span>
+              </div>
+              <div className="space-y-1">
+                <Input
+                  id="feature-extract-threads"
+                  type="number"
+                  step="1"
+                  min="1"
+                  max="10"
+                  value={systemSettings.feature_extract_threads}
+                  onChange={(e) => setSystemSettings(prev => ({ ...prev, feature_extract_threads: parseInt(e.target.value) || 4 }))}
+                  className="h-9"
+                />
+                <p className="text-xs text-muted-foreground">
+                  AI特征提取并发数
+                </p>
+              </div>
+            </div>
+          </div>
 
             {/* 回复延迟设置 */}
             <div className="flex-1 space-y-2">
@@ -283,6 +433,42 @@ export function SettingsView() {
                   每次回复随机延迟 {settings.global_reply_min_delay}-{settings.global_reply_max_delay} 秒
                 </p>
               </div>
+            </div>
+          </div>
+
+          {/* 用户黑名单设置 */}
+          <div className="space-y-2">
+            <Label htmlFor="user-blacklist" className="text-sm font-medium">用户黑名单</Label>
+            <div className="space-y-1">
+              <Input
+                id="user-blacklist"
+                type="text"
+                value={settings.user_blacklist}
+                onChange={(e) => setSettings(prev => ({ ...prev, user_blacklist: e.target.value }))}
+                placeholder="输入不回复的用户ID，多个用逗号分隔"
+                className="h-9"
+              />
+              <p className="text-xs text-muted-foreground">
+                不会回复这些用户发送的消息，格式：user123,user456,user789
+              </p>
+            </div>
+          </div>
+
+          {/* 关键词过滤设置 */}
+          <div className="space-y-2">
+            <Label htmlFor="keyword-filters" className="text-sm font-medium">关键词过滤</Label>
+            <div className="space-y-1">
+              <Input
+                id="keyword-filters"
+                type="text"
+                value={settings.keyword_filters}
+                onChange={(e) => setSettings(prev => ({ ...prev, keyword_filters: e.target.value }))}
+                placeholder="输入不回复的关键词，多个用逗号分隔"
+                className="h-9"
+              />
+              <p className="text-xs text-muted-foreground">
+                消息包含这些关键词时不会回复，格式：广告,刷屏,测试,垃圾
+              </p>
             </div>
           </div>
         </CardContent>

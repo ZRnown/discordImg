@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { DashboardView } from "@/components/dashboard-view"
 import { AccountsView } from "@/components/accounts-view"
 import { ScraperView } from "@/components/scraper-view"
@@ -30,8 +30,15 @@ export default function Page() {
   const [loading, setLoading] = useState(true)
   const [botStatus, setBotStatus] = useState<'stopped' | 'starting' | 'running' | 'stopping'>('stopped')
 
+  // 使用useRef防止重复请求
+  const hasFetchedUser = useRef(false)
+
   useEffect(() => {
+    // 检查锁，防止重复请求
+    if (!hasFetchedUser.current) {
+      hasFetchedUser.current = true // 立即上锁
     checkLoginStatus()
+    }
   }, [])
 
   const checkLoginStatus = async () => {
@@ -42,6 +49,7 @@ export default function Page() {
       if (response.ok) {
         const data = await response.json()
         setCurrentUser(data.user)
+        // 移除预加载，避免重复API调用
       }
     } catch (error) {
       // 未登录或网络错误
@@ -49,6 +57,11 @@ export default function Page() {
       setLoading(false)
     }
   }
+
+  // 移除预加载逻辑，避免重复API调用
+  // const preloadCommonData = async (user: User) => {
+  //   console.log('预加载已禁用，避免重复API调用')
+  // }
 
   const handleLogin = (user: User) => {
     setCurrentUser(user)
@@ -197,13 +210,48 @@ export default function Page() {
           </div>
         </header>
         <main className="flex-1 overflow-auto p-6">
-          {currentView === "dashboard" && <DashboardView currentUser={currentUser} />}
-          {currentView === "accounts" && <AccountsView />}
-          {currentView === "shops" && (currentUser.role === 'admin' || (currentUser.shops && currentUser.shops.length > 0)) && <ShopsView currentUser={currentUser} />}
-          {currentView === "scraper" && <ScraperView currentUser={currentUser} />}
-          {currentView === "image-search" && <ImageSearchView />}
-          {currentView === "users" && currentUser.role === 'admin' && <UsersView />}
-          {currentView === "logs" && currentUser.role === 'admin' && <LogsView />}
+          {/*
+
+            核心修改：
+
+            不再使用条件渲染 (&&)，而是全部渲染但通过 CSS 控制显示隐藏。
+
+            这样切换 Tab 时组件不会卸载，数据和滚动位置得以保留。
+
+          */}
+          <div style={{ display: currentView === "dashboard" ? 'block' : 'none', height: '100%' }}>
+            <DashboardView currentUser={currentUser} />
+          </div>
+
+          <div style={{ display: currentView === "accounts" ? 'block' : 'none', height: '100%' }}>
+            <AccountsView />
+          </div>
+
+          {(currentUser.role === 'admin' || (currentUser.shops && currentUser.shops.length > 0)) && (
+            <div style={{ display: currentView === "shops" ? 'block' : 'none', height: '100%' }}>
+              <ShopsView currentUser={currentUser} />
+            </div>
+          )}
+
+          <div style={{ display: currentView === "scraper" ? 'block' : 'none', height: '100%' }}>
+            {/* ScraperView 内部建议实现轮询机制来获取最新抓取结果 */}
+            <ScraperView currentUser={currentUser} />
+          </div>
+
+          <div style={{ display: currentView === "image-search" ? 'block' : 'none', height: '100%' }}>
+            <ImageSearchView />
+          </div>
+
+          {currentUser.role === 'admin' && (
+            <>
+              <div style={{ display: currentView === "users" ? 'block' : 'none', height: '100%' }}>
+                <UsersView />
+              </div>
+              <div style={{ display: currentView === "logs" ? 'block' : 'none', height: '100%' }}>
+                <LogsView />
+              </div>
+            </>
+          )}
         </main>
       </SidebarInset>
     </SidebarProvider>

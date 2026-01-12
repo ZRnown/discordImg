@@ -10,7 +10,7 @@ export async function GET(request: NextRequest) {
     }
 
     // 代理请求到后端，使用127.0.0.1避免代理问题
-    const backendUrl = `http://69.30.204.184:5001/api/shop-info?shopId=${shopId}`
+    const backendUrl = `http://localhost:5001/api/shop-info?shopId=${shopId}`
 
     const response = await fetch(backendUrl, {
       method: 'GET',

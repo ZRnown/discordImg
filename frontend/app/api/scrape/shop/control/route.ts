@@ -9,7 +9,7 @@ export async function POST(request: Request) {
     const cookieHeader = request.headers.get('cookie') || '';
 
     // 调用后端 API
-    const backendResponse = await fetch(`${BACKEND_URL}/api/scrape/shop`, {
+    const backendResponse = await fetch(`${BACKEND_URL}/api/scrape/shop/control`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

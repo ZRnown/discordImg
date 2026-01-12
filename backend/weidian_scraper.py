@@ -13,28 +13,29 @@ class WeidianScraper:
 
     def __init__(self):
         self.session = requests.Session()
-        # 设置固定的请求头，模拟浏览器行为
+        # 修复：更新 Headers，完全匹配你的 CURL 请求
         self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
-            'Accept': 'application/json, */*',
-            'Accept-Language': 'en-US,en;q=0.9,zh-HK;q=0.8,zh-CN;q=0.7,zh;q=0.6',
-            'Origin': 'https://weidian.com',
-            'Referer': 'https://weidian.com/',
-            'Sec-Ch-Ua': '"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
-            'Sec-Ch-Ua-Mobile': '?0',
-            'Sec-Ch-Ua-Platform': '"macOS"',
-            'Sec-Fetch-Dest': 'empty',
-            'Sec-Fetch-Mode': 'cors',
-            'Sec-Fetch-Site': 'same-site',
+            'accept': 'application/json, */*',  # 注意：curl中是 application/json, / 但实际应该是 /*
+            'accept-language': 'en-US,en;q=0.9,zh-HK;q=0.8,zh-CN;q=0.7,zh;q=0.6',
+            'origin': 'https://weidian.com',
+            'priority': 'u=1, i',
+            'referer': 'https://weidian.com/',
+            'sec-ch-ua': '"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"macOS"',
+            'sec-fetch-dest': 'empty',
+            'sec-fetch-mode': 'cors',
+            'sec-fetch-site': 'same-site',
+            'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
         })
 
-        # 设置cookie
+        # 修复：更新 Cookies
         self.session.cookies.update({
             'wdtoken': '8ea9315c',
             '__spider__visitorid': '0dcf6a5b878847ec',
             'visitor_id': '4d36e980-4128-451c-8178-a976b6303114',
-            'v-components/cpn-coupon-dialog@nologinshop': '2',
-            '__spider__sessionid': 'c7da7d6e06b1f1ac'
+            'v-components/cpn-coupon-dialog@nologinshop': '6',
+            '__spider__sessionid': 'e0e858ac8efb20a2'
         })
 
     def extract_item_id(self, url: str) -> Optional[str]:
@@ -233,34 +234,25 @@ class WeidianScraper:
 
             api_url = f"https://thor.weidian.com/detail/getItemSkuInfo/1.0?param={encoded_param}&wdtoken=8ea9315c&_={timestamp}"
 
-            logger.debug(f"调用标题API: {api_url}")
+            logger.info(f"调用SKU API: {api_url}")  # 修改日志级别为 INFO 以便调试
 
-            # 使用更稳定的请求头，模拟浏览器行为
-            import requests
+            # 使用与前端 fetch 完全一致的 headers
             headers = {
-                'accept': 'application/json, text/plain, */*',
-                'accept-language': 'en-US,en;q=0.9,zh-HK;q=0.8,zh-CN;q=0.7,zh;q=0.6',
-                'origin': 'https://weidian.com',
-                'referer': 'https://weidian.com/',
-                'sec-ch-ua': '"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
-                'sec-ch-ua-mobile': '?0',
-                'sec-ch-ua-platform': '"macOS"',
-                'sec-fetch-dest': 'empty',
-                'sec-fetch-mode': 'cors',
-                'sec-fetch-site': 'same-site',
-                'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
+                "accept": "application/json, */*",
+                "accept-language": "en-US,en;q=0.9,zh-HK;q=0.8,zh-CN;q=0.7,zh;q=0.6",
+                "priority": "u=1, i",
+                "sec-ch-ua": '"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": '"macOS"',
+                "sec-fetch-dest": "empty",
+                "sec-fetch-mode": "cors",
+                "sec-fetch-site": "same-site",
+                "referrer": "https://weidian.com/",
+                "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36"
             }
 
-            # 设置cookies
-            cookies = {
-                'wdtoken': '8ea9315c',
-                '__spider__visitorid': '0dcf6a5b878847ec',
-                'visitor_id': '4d36e980-4128-451c-8178-a976b6303114',
-                'v-components/cpn-coupon-dialog@nologinshop': '10',
-                '__spider__sessionid': 'e55c6458ac1fdba4'
-            }
-
-            response = requests.get(api_url, timeout=15, proxies={'http': None, 'https': None}, headers=headers, cookies=cookies)
+            # 不带 cookies 发送请求 (有时候 cookies 会导致校验失败)
+            response = requests.get(api_url, headers=headers, timeout=15)
             response.raise_for_status()
 
             data = response.json()
@@ -315,7 +307,37 @@ class WeidianScraper:
             return None
 
     def _get_item_images(self, item_id: str) -> List[str]:
-        """获取商品图片信息"""
+        """获取商品图片信息 - 同时调用两个API并去重"""
+        try:
+            all_images = []
+
+            # 1. 获取商品详情图片 (原有API)
+            detail_images = self._get_detail_images(item_id)
+            all_images.extend(detail_images)
+
+            # 2. 获取SKU属性图片 (新API)
+            sku_images = self._get_sku_images(item_id)
+            all_images.extend(sku_images)
+
+            # 3. 简单URL去重
+            unique_images = []
+            seen_urls = set()
+            for img_url in all_images:
+                if img_url and img_url not in seen_urls:
+                    unique_images.append(img_url)
+                    seen_urls.add(img_url)
+
+            logger.info(f"✅ 商品 {item_id} 图片获取完成: 共 {len(unique_images)} 张 (详情:{len(detail_images)}, SKU:{len(sku_images)})")
+            if len(unique_images) > 0:
+                logger.info(f"📸 图片URL样例: {unique_images[:3]}")
+            return unique_images
+
+        except Exception as e:
+            logger.error(f"获取商品图片失败: {e}")
+            return []
+
+    def _get_detail_images(self, item_id: str) -> List[str]:
+        """获取商品详情图片 (原有API)"""
         try:
             # 构造API URL
             param = json.dumps({"vItemId": item_id})
@@ -324,7 +346,7 @@ class WeidianScraper:
 
             api_url = f"https://thor.weidian.com/detail/getDetailDesc/1.0?param={encoded_param}&wdtoken=8ea9315c&_={timestamp}"
 
-            logger.debug(f"调用图片API: {api_url}")
+            logger.debug(f"调用详情图片API: {api_url}")
 
             # 使用更稳定的请求头，模拟浏览器行为
             import requests
@@ -356,7 +378,7 @@ class WeidianScraper:
             response.raise_for_status()
 
             data = response.json()
-            logger.debug(f"图片API返回状态: {data.get('status', {}).get('code')}")
+            logger.debug(f"详情图片API返回状态: {data.get('status', {}).get('code')}")
 
             images = []
             if data.get('status', {}).get('code') == 0:
@@ -370,7 +392,42 @@ class WeidianScraper:
             return images
 
         except Exception as e:
-            logger.error(f"获取商品图片失败: {e}")
+            logger.error(f"获取详情图片失败: {e}")
+            return []
+
+    def _get_sku_images(self, item_id: str) -> List[str]:
+        """获取SKU属性图片 (新API)"""
+        try:
+            logger.info(f"开始获取SKU图片，商品ID: {item_id}")
+            # 复用 _get_item_title_and_sku 的逻辑
+            title_info = self._get_item_title_and_sku(item_id)
+            if not title_info or 'sku_info' not in title_info:
+                logger.warning(f"无法获取SKU信息，跳过图片提取: {item_id}")
+                return []
+
+            result = title_info['sku_info']
+            attr_list = result.get('attrList', [])
+            logger.info(f"找到 {len(attr_list)} 个属性组")
+
+            images = []
+            for i, attr in enumerate(attr_list):
+                attr_values = attr.get('attrValues', [])
+                logger.info(f"属性组 {i+1} 有 {len(attr_values)} 个属性值")
+                for j, attr_value in enumerate(attr_values):
+                    # === 修复：从 attrValues 中提取 img ===
+                    img_url = attr_value.get('img')
+                    if img_url:
+                        logger.debug(f"找到SKU图片: {img_url}")
+                        # 确保URL格式正确
+                        if img_url.startswith('//'):
+                            img_url = 'https:' + img_url
+                        if img_url not in images:
+                            images.append(img_url)
+
+            logger.info(f"从SKU属性中成功提取 {len(images)} 张图片")
+            return images
+        except Exception as e:
+            logger.error(f"获取SKU图片失败: {e}")
             return []
 
 
@@ -503,8 +560,9 @@ class WeidianScraper:
         saved_paths = []
         os.makedirs(save_dir, exist_ok=True)
 
-        # 限制下载前6张图片
-        image_urls = image_urls[:6]
+        # 移除图片数量限制，抓取所有可用的图片
+        # SKU图片通常排在详情图之后，现在可以获取所有图片
+        logger.info(f"准备下载 {len(image_urls)} 张图片（无数量限制）")
 
         def download_single_image(args):
             """下载单张图片的函数"""

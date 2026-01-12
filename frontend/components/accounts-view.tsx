@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { useApiCache } from "@/hooks/use-api-cache"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -30,6 +31,9 @@ export function AccountsView() {
   const [currentUser, setCurrentUser] = useState<any>(null)
   const [deleteAccountConfirm, setDeleteAccountConfirm] = useState<any>(null)
 
+  // 使用API缓存hook
+  const { cachedFetch } = useApiCache()
+
   // 网站配置相关状态
   const [websites, setWebsites] = useState<any[]>([])
   const [showAddWebsite, setShowAddWebsite] = useState(false)
@@ -55,21 +59,17 @@ export function AccountsView() {
 
   const fetchWebsites = async () => {
     try {
-      const res = await fetch('/api/websites', { credentials: 'include' })
-      if (res.ok) {
-        const data = await res.json()
-        setWebsites(data.websites || [])
-        // 获取每个网站的频道绑定
+      const data = await cachedFetch('/api/websites', { credentials: 'include' })
+      const websites = data.websites || []
+
+      // 后端已包含channels信息，无需额外请求
         const channels: {[key: number]: string[]} = {}
-        for (const website of data.websites) {
-          const channelRes = await fetch(`/api/websites/${website.id}/channels`, { credentials: 'include' })
-          if (channelRes.ok) {
-            const channelData = await channelRes.json()
-            channels[website.id] = channelData.channels || []
-          }
-        }
+      websites.forEach((website: any) => {
+        channels[website.id] = website.channels || []
+      })
+
+      setWebsites(websites)
         setWebsiteChannels(channels)
-      }
     } catch (e) {
       console.error('获取网站配置失败:', e)
     }
@@ -111,8 +111,47 @@ export function AccountsView() {
     fetchMessageFilters();
   }, [])
 
-  const fetchSettings = async () => {
+  const fetchSettings = async (usePreload: boolean = true) => {
     try {
+      // 首先检查是否有预加载数据
+      if (usePreload) {
+        const preloadData = sessionStorage.getItem('preload_settings')
+        if (preloadData) {
+          try {
+            console.log('使用预加载设置数据')
+            const data = JSON.parse(preloadData)
+            setSettings({
+              discord_similarity_threshold: data.discord_similarity_threshold || 0.6,
+              global_reply_min_delay: data.global_reply_min_delay || 3.0,
+              global_reply_max_delay: data.global_reply_max_delay || 8.0,
+            })
+
+            // 清除预加载数据，避免重复使用
+            sessionStorage.removeItem('preload_settings')
+
+            // 在后台获取最新数据，但不显示加载状态
+            setTimeout(() => fetchSettings(false), 500)
+            return
+          } catch (e) {
+            console.error('预加载设置数据解析失败:', e)
+            // 预加载数据损坏，清除并重新获取
+            sessionStorage.removeItem('preload_settings')
+          }
+        } else {
+          // 如果没有预加载数据，等待一下再试
+          setTimeout(() => {
+            const retryPreload = sessionStorage.getItem('preload_settings')
+            if (retryPreload) {
+              fetchSettings(true)
+            } else {
+              fetchSettings(false)
+            }
+          }, 200)
+          return
+        }
+      }
+
+      console.log('从API获取设置数据')
       const response = await fetch('/api/user/settings', {
         credentials: 'include'
       })
@@ -152,19 +191,13 @@ export function AccountsView() {
   }
 
   const fetchAccounts = async () => {
-    try {
-      const response = await fetch('/api/accounts', {
-        credentials: 'include'
-      })
-      if (response.ok) {
-        const data = await response.json()
-        setAccounts(data.accounts || [])
-      } else {
-        console.error('Failed to fetch accounts:', response.status)
-        setAccounts([])
-      }
+          try {
+      console.log('获取账号列表...')
+      const data = await cachedFetch('/api/accounts', { credentials: 'include' })
+            setAccounts(data.accounts || [])
     } catch (error) {
-      console.error('Failed to fetch accounts:', error)
+      console.error('获取账号列表出错:', error)
+      setAccounts([])
     } finally {
       setLoading(false)
     }
@@ -510,18 +543,24 @@ export function AccountsView() {
           </Button>
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-
-          {/* 相似度设置 */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">相似度设置</CardTitle>
-              <CardDescription>设置图片匹配的相似度阈值</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <Label htmlFor="similarity-threshold">相似度阈值</Label>
-                <div className="flex items-center space-x-2">
+        {/* 系统参数设置 - 合并相似度和延迟设置 */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-lg">系统参数</CardTitle>
+            <CardDescription>配置图片匹配和回复延迟参数</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {/* 相似度和延迟设置 - 紧凑布局 */}
+            <div className="flex flex-col sm:flex-row gap-6">
+              {/* 相似度设置 */}
+              <div className="flex-1 space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="similarity-threshold" className="text-sm font-medium">相似度阈值</Label>
+                  <span className="text-sm font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                    {(settings.discord_similarity_threshold * 100).toFixed(0)}%
+                  </span>
+                </div>
+                <div className="space-y-1">
                   <Input
                     id="similarity-threshold"
                     type="number"
@@ -530,57 +569,211 @@ export function AccountsView() {
                     max="1.0"
                     value={settings.discord_similarity_threshold}
                     onChange={(e) => setSettings(prev => ({ ...prev, discord_similarity_threshold: parseFloat(e.target.value) }))}
+                    className="h-9"
                   />
-                  <span className="text-sm text-muted-foreground">
-                    {(settings.discord_similarity_threshold * 100).toFixed(0)}%
-                  </span>
+                  <p className="text-xs text-muted-foreground">
+                    阈值越低匹配越宽松，建议范围 0.3-0.8
+                  </p>
                 </div>
-                <p className="text-xs text-muted-foreground mt-1">
-                  阈值越低匹配越宽松，建议范围: 0.3-0.8
-                </p>
               </div>
-            </CardContent>
-          </Card>
 
-          {/* 回复延迟设置 */}
-          <Card className="md:col-span-2">
-            <CardHeader>
-              <CardTitle className="text-lg">回复延迟设置</CardTitle>
-              <CardDescription>设置账号回复的时间间隔</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="min-delay">最小延迟(秒)</Label>
-                  <Input
-                    id="min-delay"
-                    type="number"
-                    step="0.5"
-                    min="0.5"
-                    max="30"
-                    value={settings.global_reply_min_delay}
-                    onChange={(e) => setSettings(prev => ({ ...prev, global_reply_min_delay: parseFloat(e.target.value) }))}
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="max-delay">最大延迟(秒)</Label>
-                  <Input
-                    id="max-delay"
-                    type="number"
-                    step="0.5"
-                    min="1"
-                    max="60"
-                    value={settings.global_reply_max_delay}
-                    onChange={(e) => setSettings(prev => ({ ...prev, global_reply_max_delay: parseFloat(e.target.value) }))}
-                  />
+              {/* 回复延迟设置 */}
+              <div className="flex-1 space-y-2">
+                <Label className="text-sm font-medium">回复延迟</Label>
+                <div className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1">
+                      <Input
+                        id="min-delay"
+                        type="number"
+                        step="0.1"
+                        min="0.1"
+                        max="30"
+                        value={settings.global_reply_min_delay}
+                        onChange={(e) => setSettings(prev => ({ ...prev, global_reply_min_delay: parseFloat(e.target.value) }))}
+                        className="w-16 h-9 text-center"
+                      />
+                      <span className="text-sm text-muted-foreground">-</span>
+                      <Input
+                        id="max-delay"
+                        type="number"
+                        step="0.5"
+                        min="1"
+                        max="60"
+                        value={settings.global_reply_max_delay}
+                        onChange={(e) => setSettings(prev => ({ ...prev, global_reply_max_delay: parseFloat(e.target.value) }))}
+                        className="w-16 h-9 text-center"
+                      />
+                    </div>
+                    <span className="text-xs text-muted-foreground">秒</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    每次回复随机延迟 {settings.global_reply_min_delay}-{settings.global_reply_max_delay} 秒
+                  </p>
                 </div>
               </div>
-              <p className="text-xs text-muted-foreground">
-                每次回复将在 {settings.global_reply_min_delay}-{settings.global_reply_max_delay} 秒之间随机延迟
-              </p>
+            </div>
+          </CardContent>
+        </Card>
+
+
+        {/* 编辑网站对话框 */}
+        {editingWebsite && (
+          <Dialog open={!!editingWebsite} onOpenChange={() => setEditingWebsite(null)}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>编辑网站配置</DialogTitle>
+                <DialogDescription>修改网站配置信息</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div>
+                  <Label>网站标识</Label>
+                  <Input
+                    value={editingWebsite.name}
+                    onChange={e => setEditingWebsite(prev => ({ ...prev, name: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <Label>显示名称</Label>
+                  <Input
+                    value={editingWebsite.display_name}
+                    onChange={e => setEditingWebsite(prev => ({ ...prev, display_name: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <Label>URL模板</Label>
+                  <Input
+                    value={editingWebsite.url_template}
+                    onChange={e => setEditingWebsite(prev => ({ ...prev, url_template: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <Label>ID提取模式</Label>
+                  <Input
+                    value={editingWebsite.id_pattern}
+                    onChange={e => setEditingWebsite(prev => ({ ...prev, id_pattern: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <Label>徽章颜色</Label>
+                  <Select value={editingWebsite?.badge_color || 'blue'} onValueChange={value => setEditingWebsite(prev => ({ ...prev, badge_color: value }))}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="blue">蓝色</SelectItem>
+                      <SelectItem value="green">绿色</SelectItem>
+                      <SelectItem value="orange">橙色</SelectItem>
+                      <SelectItem value="red">红色</SelectItem>
+                      <SelectItem value="purple">紫色</SelectItem>
+                      <SelectItem value="gray">灰色</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setEditingWebsite(null)}>取消</Button>
+                <Button onClick={handleUpdateWebsite}>保存</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )}
+
+        {/* 消息过滤设置 */}
+        {currentUser?.role === 'admin' && (
+          <Card className="mt-6">
+            <CardHeader>
+              <div className="flex justify-between items-center">
+                <div>
+                  <CardTitle className="text-lg">消息过滤</CardTitle>
+                  <CardDescription>设置账号不回复的消息内容规则</CardDescription>
+                </div>
+                <Dialog open={showAddFilter} onOpenChange={setShowAddFilter}>
+                  <DialogTrigger asChild>
+                    <Button size="sm">
+                      <Plus className="w-4 h-4 mr-2" />
+                      添加过滤规则
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>添加消息过滤规则</DialogTitle>
+                      <DialogDescription>设置账号忽略的消息类型</DialogDescription>
+                    </DialogHeader>
+                    <div className="space-y-4">
+                      <div>
+                        <Label>过滤类型</Label>
+                        <Select value={newFilter.filter_type} onValueChange={value => setNewFilter(prev => ({ ...prev, filter_type: value }))}>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="contains">包含文本</SelectItem>
+                            <SelectItem value="starts_with">开头是</SelectItem>
+                            <SelectItem value="ends_with">结尾是</SelectItem>
+                            <SelectItem value="regex">正则表达式</SelectItem>
+                            <SelectItem value="user_id">用户ID</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label>过滤值</Label>
+                        <Input
+                          value={newFilter.filter_value}
+                          onChange={e => setNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
+                          placeholder={
+                            newFilter.filter_type === 'user_id'
+                              ? "输入用户ID，多个用逗号分隔"
+                              : "输入要过滤的内容"
+                          }
+                        />
+                      </div>
+                    </div>
+                    <DialogFooter>
+                      <Button variant="outline" onClick={() => setShowAddFilter(false)}>取消</Button>
+                      <Button onClick={handleAddMessageFilter}>添加规则</Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3">
+                {messageFilters.map((filter: any) => (
+                  <div key={filter.id} className="flex items-center justify-between p-3 border rounded">
+                    <div>
+                      <div className="font-medium">{filter.filter_type} "{filter.filter_value}"</div>
+                      <div className="text-sm text-muted-foreground">
+                        创建时间: {new Date(filter.created_at).toLocaleString('zh-CN')}
+                      </div>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setEditingFilter(filter)}
+                      >
+                        <Edit className="w-4 h-4" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleDeleteMessageFilter(filter.id)}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+                {messageFilters.length === 0 && (
+                  <div className="text-center py-4 text-muted-foreground">
+                    暂无过滤规则
+                  </div>
+                )}
+              </div>
             </CardContent>
           </Card>
-        </div>
+        )}
 
         {/* 网站配置区域 */}
         {currentUser?.role === 'admin' && (
@@ -774,160 +967,6 @@ export function AccountsView() {
           </Card>
         )}
 
-        {/* 编辑网站对话框 */}
-        {editingWebsite && (
-          <Dialog open={!!editingWebsite} onOpenChange={() => setEditingWebsite(null)}>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>编辑网站配置</DialogTitle>
-                <DialogDescription>修改网站配置信息</DialogDescription>
-              </DialogHeader>
-              <div className="space-y-4">
-                <div>
-                  <Label>网站标识</Label>
-                  <Input
-                    value={editingWebsite.name}
-                    onChange={e => setEditingWebsite(prev => ({ ...prev, name: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <Label>显示名称</Label>
-                  <Input
-                    value={editingWebsite.display_name}
-                    onChange={e => setEditingWebsite(prev => ({ ...prev, display_name: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <Label>URL模板</Label>
-                  <Input
-                    value={editingWebsite.url_template}
-                    onChange={e => setEditingWebsite(prev => ({ ...prev, url_template: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <Label>ID提取模式</Label>
-                  <Input
-                    value={editingWebsite.id_pattern}
-                    onChange={e => setEditingWebsite(prev => ({ ...prev, id_pattern: e.target.value }))}
-                  />
-                </div>
-                <div>
-                  <Label>徽章颜色</Label>
-                  <Select value={editingWebsite.badge_color} onValueChange={value => setEditingWebsite(prev => ({ ...prev, badge_color: value }))}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="blue">蓝色</SelectItem>
-                      <SelectItem value="green">绿色</SelectItem>
-                      <SelectItem value="orange">橙色</SelectItem>
-                      <SelectItem value="red">红色</SelectItem>
-                      <SelectItem value="purple">紫色</SelectItem>
-                      <SelectItem value="gray">灰色</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setEditingWebsite(null)}>取消</Button>
-                <Button onClick={handleUpdateWebsite}>保存</Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        )}
-
-        {/* 消息过滤设置 */}
-        {currentUser?.role === 'admin' && (
-          <Card className="mt-6">
-            <CardHeader>
-              <div className="flex justify-between items-center">
-                <div>
-                  <CardTitle className="text-lg">消息过滤</CardTitle>
-                  <CardDescription>设置账号不回复的消息内容规则</CardDescription>
-                </div>
-                <Dialog open={showAddFilter} onOpenChange={setShowAddFilter}>
-                  <DialogTrigger asChild>
-                    <Button size="sm">
-                      <Plus className="w-4 h-4 mr-2" />
-                      添加过滤规则
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>添加消息过滤规则</DialogTitle>
-                      <DialogDescription>设置账号忽略的消息类型</DialogDescription>
-                    </DialogHeader>
-                    <div className="space-y-4">
-                      <div>
-                        <Label>过滤类型</Label>
-                        <Select value={newFilter.filter_type} onValueChange={value => setNewFilter(prev => ({ ...prev, filter_type: value }))}>
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="contains">包含文本</SelectItem>
-                            <SelectItem value="starts_with">开头是</SelectItem>
-                            <SelectItem value="ends_with">结尾是</SelectItem>
-                            <SelectItem value="regex">正则表达式</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div>
-                        <Label>过滤值</Label>
-                        <Input
-                          value={newFilter.filter_value}
-                          onChange={e => setNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
-                          placeholder="输入要过滤的内容"
-                        />
-                      </div>
-                    </div>
-                    <DialogFooter>
-                      <Button variant="outline" onClick={() => setShowAddFilter(false)}>取消</Button>
-                      <Button onClick={handleAddMessageFilter}>添加规则</Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-3">
-                {messageFilters.map((filter: any) => (
-                  <div key={filter.id} className="flex items-center justify-between p-3 border rounded">
-                    <div>
-                      <div className="font-medium">{filter.filter_type} "{filter.filter_value}"</div>
-                      <div className="text-sm text-muted-foreground">
-                        创建时间: {new Date(filter.created_at).toLocaleString('zh-CN')}
-                      </div>
-                    </div>
-                    <div className="flex gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setEditingFilter(filter)}
-                      >
-                        <Edit className="w-4 h-4" />
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleDeleteMessageFilter(filter.id)}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-                {messageFilters.length === 0 && (
-                  <div className="text-center py-4 text-muted-foreground">
-                    暂无过滤规则
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        )}
-
-
         {/* 编辑消息过滤对话框 */}
         {editingFilter && (
           <Dialog open={!!editingFilter} onOpenChange={() => setEditingFilter(null)}>
@@ -947,6 +986,7 @@ export function AccountsView() {
                       <SelectItem value="starts_with">开头是</SelectItem>
                       <SelectItem value="ends_with">结尾是</SelectItem>
                       <SelectItem value="regex">正则表达式</SelectItem>
+                      <SelectItem value="user_id">用户ID</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

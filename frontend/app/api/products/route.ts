@@ -1,4 +1,4 @@
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://69.30.204.184:5001'
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001'
 
 export async function GET(request: Request) {
   try {
@@ -32,16 +32,33 @@ export async function GET(request: Request) {
 
 export async function PUT(request: Request) {
   try {
-    const body = await request.json()
+    const contentType = request.headers.get('content-type') || ''
 
-    const response = await fetch(`${BACKEND_URL}/api/products`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'Cookie': request.headers.get('cookie') || ''
-      },
-      body: JSON.stringify(body)
-    })
+    let response;
+    if (contentType.includes('multipart/form-data')) {
+      // 处理FormData请求（包含文件上传）
+      const formData = await request.formData()
+
+      response = await fetch(`${BACKEND_URL}/api/products`, {
+        method: 'PUT',
+        headers: {
+          'Cookie': request.headers.get('cookie') || ''
+        },
+        body: formData
+      })
+    } else {
+      // 处理JSON请求
+      const body = await request.json()
+
+      response = await fetch(`${BACKEND_URL}/api/products`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Cookie': request.headers.get('cookie') || ''
+        },
+        body: JSON.stringify(body)
+      })
+    }
 
     if (!response.ok) {
       return new Response(JSON.stringify({ error: 'Failed to update product' }), {

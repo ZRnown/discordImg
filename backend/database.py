@@ -2,6 +2,7 @@ import sqlite3
 import numpy as np
 import os
 import logging
+import json
 from typing import List, Dict, Any, Optional, Tuple
 from contextlib import contextmanager
 try:
@@ -42,6 +43,16 @@ class Database:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+
+            # 创建索引以优化查询性能
+            try:
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_products_created_at ON products(created_at DESC)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_products_shop_name ON products(shop_name)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_products_rule_enabled ON products(ruleEnabled)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_product_images_product_id ON product_images(product_id)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_product_images_image_index ON product_images(image_index)')
+            except sqlite3.OperationalError:
+                pass
 
             # 创建店铺表
             cursor.execute('''
@@ -87,6 +98,27 @@ class Database:
             except sqlite3.OperationalError:
                 pass
 
+            # 添加自定义回复字段
+            try:
+                cursor.execute('ALTER TABLE products ADD COLUMN custom_reply_text TEXT')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE products ADD COLUMN custom_reply_images TEXT')  # JSON格式存储图片索引数组
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE products ADD COLUMN custom_image_urls TEXT')  # JSON格式存储自定义图片URL数组
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE products ADD COLUMN image_source TEXT DEFAULT \'product\'')  # 图片来源：'product'(商品图片), 'upload'(本地上传), 'custom'(URL)
+            except sqlite3.OperationalError:
+                pass
+
             try:
                 cursor.execute('ALTER TABLE products ADD COLUMN shop_name TEXT')
             except sqlite3.OperationalError:
@@ -109,6 +141,7 @@ class Database:
                     product_id INTEGER NOT NULL,
                     image_path TEXT NOT NULL,
                     image_index INTEGER NOT NULL,
+                    features TEXT,  -- 存储序列化的特征向量
                     milvus_id INTEGER UNIQUE,
                     FOREIGN KEY (product_id) REFERENCES products (id) ON DELETE CASCADE,
                     UNIQUE(product_id, image_index)
@@ -215,6 +248,7 @@ class Database:
                     discord_similarity_threshold REAL DEFAULT 0.6,
                     cnfans_channel_id TEXT DEFAULT '',
                     acbuy_channel_id TEXT DEFAULT '',
+                    scrape_threads INTEGER DEFAULT 2,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
@@ -224,6 +258,12 @@ class Database:
                 INSERT OR IGNORE INTO system_config (id, discord_channel_id, download_threads, feature_extract_threads, discord_similarity_threshold, cnfans_channel_id, acbuy_channel_id)
                 VALUES (1, '', 4, 4, 0.6, '', '')
             ''')
+
+            # 为现有记录添加scrape_threads字段
+            try:
+                cursor.execute('ALTER TABLE system_config ADD COLUMN scrape_threads INTEGER DEFAULT 2')
+            except sqlite3.OperationalError:
+                pass  # 字段已存在
 
             # 创建网站配置表
             cursor.execute('''
@@ -305,11 +345,37 @@ class Database:
                     discord_similarity_threshold REAL DEFAULT 0.6,
                     global_reply_min_delay REAL DEFAULT 3.0,
                     global_reply_max_delay REAL DEFAULT 8.0,
+                    user_blacklist TEXT DEFAULT '',  -- 用户黑名单，逗号分隔
+                    keyword_filters TEXT DEFAULT '',  -- 关键词过滤，逗号分隔
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
                     UNIQUE(user_id)
                 )
+            ''')
+
+            # 创建抓取状态表（持久化存储抓取状态）
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS scrape_status (
+                    id INTEGER PRIMARY KEY CHECK (id = 1),  -- 只允许一条记录
+                    is_scraping BOOLEAN DEFAULT 0,
+                    stop_signal BOOLEAN DEFAULT 0,
+                    current_shop_id TEXT,
+                    total INTEGER DEFAULT 0,
+                    processed INTEGER DEFAULT 0,
+                    success INTEGER DEFAULT 0,
+                    progress REAL DEFAULT 0,
+                    message TEXT DEFAULT '等待开始...',
+                    completed BOOLEAN DEFAULT 0,
+                    thread_id TEXT,  -- 记录当前线程ID
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            # 插入默认状态记录
+            cursor.execute('''
+                INSERT OR IGNORE INTO scrape_status (id, is_scraping, stop_signal, message)
+                VALUES (1, 0, 0, '等待开始...')
             ''')
 
             # 插入默认全局延迟配置
@@ -377,16 +443,23 @@ class Database:
             conn.commit()
             return product_id
 
-    def insert_image_record(self, product_id: int, image_path: str, image_index: int) -> int:
+    def insert_image_record(self, product_id: int, image_path: str, image_index: int, features: np.ndarray = None) -> int:
         """插入图像记录到数据库，返回记录ID供FAISS使用"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
+
+                # 将特征向量序列化为字符串存储
+                features_str = None
+                if features is not None:
+                    import json
+                    features_str = json.dumps(features.tolist())
+
                 cursor.execute('''
                     INSERT INTO product_images
-                    (product_id, image_path, image_index)
-                    VALUES (?, ?, ?)
-                ''', (product_id, image_path, image_index))
+                    (product_id, image_path, image_index, features)
+                    VALUES (?, ?, ?, ?)
+                ''', (product_id, image_path, image_index, features_str))
                 conn.commit()
                 record_id = cursor.lastrowid
                 logger.info(f"图像记录插入成功: product_id={product_id}, image_index={image_index}, record_id={record_id}")
@@ -511,6 +584,40 @@ class Database:
                 JOIN product_images pi ON p.id = pi.product_id
             ''')
             return [row['product_url'] for row in cursor.fetchall()]
+
+    def get_product_images(self, product_id: int) -> List[Dict]:
+        """获取商品的所有图片及其特征向量"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT id, image_path, image_index, features
+                    FROM product_images
+                    WHERE product_id = ?
+                    ORDER BY image_index
+                ''', (product_id,))
+
+                images = []
+                for row in cursor.fetchall():
+                    image_data = dict(row)
+                    # 反序列化特征向量
+                    if image_data.get('features'):
+                        import json
+                        try:
+                            features_list = json.loads(image_data['features'])
+                            image_data['features'] = np.array(features_list, dtype='float32')
+                        except Exception as e:
+                            logger.warning(f"反序列化特征向量失败: {e}")
+                            image_data['features'] = None
+                    else:
+                        image_data['features'] = None
+                    images.append(image_data)
+
+                return images
+
+        except Exception as e:
+            logger.error(f"获取商品图片失败: {e}")
+            return []
 
     def delete_product_images(self, product_id: int) -> bool:
         """删除商品的所有图像和物理文件"""
@@ -1022,6 +1129,48 @@ class Database:
             logger.error(f"更新商品标题失败: {e}")
             return False
 
+    def update_product(self, product_id: int, updates: Dict) -> bool:
+        """更新商品信息（通用方法）"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # 构建动态更新语句
+                set_parts = []
+                params = []
+                allowed_fields = [
+                    'title', 'english_title', 'ruleEnabled',
+                    'custom_reply_text', 'custom_reply_images', 'custom_image_urls'
+                ]
+
+                for field in allowed_fields:
+                    if field in updates:
+                        set_parts.append(f'{field} = ?')
+                        if (field == 'custom_reply_images' or field == 'custom_image_urls') and isinstance(updates[field], list):
+                            # 将图片索引或URL数组转换为JSON字符串
+                            params.append(json.dumps(updates[field]))
+                        else:
+                            params.append(updates[field])
+
+                if not set_parts:
+                    return False
+
+                set_parts.append('updated_at = datetime(\'now\')')
+
+                query = f'''
+                    UPDATE products
+                    SET {', '.join(set_parts)}
+                    WHERE id = ?
+                '''
+                params.append(product_id)
+
+                cursor.execute(query, params)
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"更新商品失败: {e}")
+            return False
+
     def get_product_by_id(self, product_id: int) -> Optional[Dict]:
         """根据ID获取商品"""
         try:
@@ -1069,16 +1218,34 @@ class Database:
             return False
 
     def get_website_configs(self) -> List[Dict]:
-        """获取所有网站配置"""
+        """获取所有网站配置及其频道绑定（优化版本，避免N+1查询）"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
+
+                # 使用LEFT JOIN一次性获取所有网站和其频道绑定
                 cursor.execute('''
-                    SELECT id, name, display_name, url_template, id_pattern, badge_color
-                    FROM website_configs
-                    ORDER BY created_at
+                    SELECT
+                        wc.id, wc.name, wc.display_name, wc.url_template,
+                        wc.id_pattern, wc.badge_color, wc.created_at,
+                        GROUP_CONCAT(wcb.channel_id) as channels
+                    FROM website_configs wc
+                    LEFT JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
+                    GROUP BY wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.created_at
+                    ORDER BY wc.created_at
                 ''')
-                return [dict(row) for row in cursor.fetchall()]
+
+                configs = []
+                for row in cursor.fetchall():
+                    config = dict(row)
+                    # 将channels字符串解析为数组
+                    if config.get('channels'):
+                        config['channels'] = config['channels'].split(',') if config['channels'] else []
+                    else:
+                        config['channels'] = []
+                    configs.append(config)
+
+                return configs
         except Exception as e:
             logger.error(f"获取网站配置失败: {e}")
             return []
@@ -1413,21 +1580,32 @@ class Database:
                 cursor = conn.cursor()
 
                 if user_shops is None:
-                    # 管理员可以看到所有商品（不限制店铺）
+                    # 管理员可以看到所有商品（不限制店铺）- 优化查询性能
                     if limit is None or limit <= 0:
+                        # 一次性获取所有商品和对应的图片索引
                         query = '''
-                            SELECT p.*, GROUP_CONCAT(pi.image_path) as image_paths,
-                                   COUNT(pi.id) as image_count
+                            SELECT p.*,
+                                   GROUP_CONCAT(pi.image_index ORDER BY pi.image_index) as image_indices,
+                                   COUNT(pi.id) as image_count,
+                                   p.custom_reply_text, p.custom_reply_images, p.custom_image_urls, p.image_source
                             FROM products p
                             LEFT JOIN product_images pi ON p.id = pi.product_id
                             GROUP BY p.id
                             ORDER BY p.created_at DESC
                         '''
                         cursor.execute(query)
+                        rows = cursor.fetchall()
+
+                        # 获取总数
+                        cursor.execute('SELECT COUNT(*) FROM products')
+                        total = cursor.fetchone()[0]
                     else:
+                        # 分页查询 - 使用子查询优化性能
                         query = '''
-                            SELECT p.*, GROUP_CONCAT(pi.image_path) as image_paths,
-                                   COUNT(pi.id) as image_count
+                            SELECT p.*,
+                                   GROUP_CONCAT(pi.image_index ORDER BY pi.image_index) as image_indices,
+                                   COUNT(pi.id) as image_count,
+                                   p.custom_reply_text, p.custom_reply_images, p.custom_image_urls, p.image_source
                             FROM products p
                             LEFT JOIN product_images pi ON p.id = pi.product_id
                             GROUP BY p.id
@@ -1438,18 +1616,15 @@ class Database:
                     rows = cursor.fetchall()
 
                     # 获取总数
-                    count_query = 'SELECT COUNT(*) FROM products'
-                    cursor.execute(count_query)
+                    cursor.execute('SELECT COUNT(*) FROM products')
                     total = cursor.fetchone()[0]
 
                     products = []
                     for row in rows:
                         prod = dict(row)
-                        # 处理图片路径 - 使用真实的image_index
-                        if prod.get('image_count', 0) > 0:
-                            # 查询真实的image_index并排序
-                            cursor.execute("SELECT image_index FROM product_images WHERE product_id = ? ORDER BY image_index", (prod['id'],))
-                            image_indices = [row[0] for row in cursor.fetchall()]
+                        # 处理图片路径 - 直接使用预查询的image_indices
+                        if prod.get('image_indices'):
+                            image_indices = [int(idx) for idx in prod['image_indices'].split(',') if idx]
                             prod['images'] = [f"/api/image/{prod['id']}/{idx}" for idx in image_indices]
                         else:
                             prod['images'] = []
@@ -1495,12 +1670,14 @@ class Database:
                     # 如果没有找到对应的店铺名称，返回空结果
                     return {'products': [], 'total': 0}
 
-                # 构建IN查询
+                # 构建IN查询 - 优化性能
                 placeholders = ','.join('?' * len(shop_names))
                 if limit is None or limit <= 0:
                     query = f'''
-                        SELECT p.*, GROUP_CONCAT(pi.image_path) as image_paths,
-                               COUNT(pi.id) as image_count
+                        SELECT p.*,
+                               GROUP_CONCAT(pi.image_index ORDER BY pi.image_index) as image_indices,
+                               COUNT(pi.id) as image_count,
+                               p.custom_reply_text, p.custom_reply_images, p.custom_image_urls, p.image_source
                         FROM products p
                         LEFT JOIN product_images pi ON p.id = pi.product_id
                         WHERE p.shop_name IN ({placeholders})
@@ -1508,10 +1685,18 @@ class Database:
                         ORDER BY p.created_at DESC
                     '''
                     cursor.execute(query, shop_names)
+                    rows = cursor.fetchall()
+
+                    # 获取总数
+                    count_query = f'SELECT COUNT(*) FROM products WHERE shop_name IN ({placeholders})'
+                    cursor.execute(count_query, shop_names)
+                    total = cursor.fetchone()[0]
                 else:
                     query = f'''
-                        SELECT p.*, GROUP_CONCAT(pi.image_path) as image_paths,
-                               COUNT(pi.id) as image_count
+                        SELECT p.*,
+                               GROUP_CONCAT(pi.image_index ORDER BY pi.image_index) as image_indices,
+                               COUNT(pi.id) as image_count,
+                               p.custom_reply_text, p.custom_reply_images, p.custom_image_urls, p.image_source
                         FROM products p
                         LEFT JOIN product_images pi ON p.id = pi.product_id
                         WHERE p.shop_name IN ({placeholders})
@@ -1530,11 +1715,9 @@ class Database:
                 products = []
                 for row in rows:
                     prod = dict(row)
-                    # 处理图片路径 - 使用真实的image_index
-                    if prod.get('image_count', 0) > 0:
-                        # 查询真实的image_index并排序
-                        cursor.execute("SELECT image_index FROM product_images WHERE product_id = ? ORDER BY image_index", (prod['id'],))
-                        image_indices = [row[0] for row in cursor.fetchall()]
+                    # 处理图片路径 - 直接使用预查询的image_indices
+                    if prod.get('image_indices'):
+                        image_indices = [int(idx) for idx in prod['image_indices'].split(',') if idx]
                         prod['images'] = [f"/api/image/{prod['id']}/{idx}" for idx in image_indices]
                     else:
                         prod['images'] = []
@@ -1547,6 +1730,16 @@ class Database:
                     prod['createdAt'] = prod.get('created_at')
                     prod['autoReplyEnabled'] = prod.get('ruleEnabled', True)
                     prod['shopName'] = prod.get('shop_name') or '未知店铺'
+                    prod['customReplyText'] = prod.get('custom_reply_text') or ''
+                    # 解析自定义回复图片索引
+                    try:
+                        custom_reply_images = prod.get('custom_reply_images')
+                        if custom_reply_images:
+                            prod['selectedImageIndexes'] = json.loads(custom_reply_images)
+                        else:
+                            prod['selectedImageIndexes'] = []
+                    except:
+                        prod['selectedImageIndexes'] = []
 
                     # 提取微店ID
                     try:
@@ -1602,30 +1795,43 @@ class Database:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute('SELECT discord_channel_id, discord_similarity_threshold, cnfans_channel_id, acbuy_channel_id FROM system_config WHERE id = 1')
+                cursor.execute('SELECT discord_channel_id, download_threads, feature_extract_threads, discord_similarity_threshold, cnfans_channel_id, acbuy_channel_id, scrape_threads FROM system_config WHERE id = 1')
                 row = cursor.fetchone()
                 if row:
                     return {
                         'discord_channel_id': row[0] or '',
-                        'discord_similarity_threshold': row[1] or 0.6,
-                        'cnfans_channel_id': row[2] or '',
-                        'acbuy_channel_id': row[3] or ''
+                        'download_threads': row[1] or 4,
+                        'feature_extract_threads': row[2] or 4,
+                        'discord_similarity_threshold': row[3] or 0.6,
+                        'cnfans_channel_id': row[4] or '',
+                        'acbuy_channel_id': row[5] or '',
+                        'scrape_threads': row[6] or 2
                     }
                 # 如果没有配置记录，创建默认配置
                 cursor.execute('''
-                    INSERT OR IGNORE INTO system_config (id, discord_channel_id, discord_similarity_threshold, cnfans_channel_id, acbuy_channel_id)
-                    VALUES (1, '', 0.6, '', '')
+                    INSERT OR IGNORE INTO system_config (id, discord_channel_id, download_threads, feature_extract_threads, discord_similarity_threshold, cnfans_channel_id, acbuy_channel_id, scrape_threads)
+                    VALUES (1, '', 4, 4, 0.6, '', '', 2)
                 ''')
                 conn.commit()
                 return {
                     'discord_channel_id': '',
-                    'discord_similarity_threshold': 0.6
+                    'download_threads': 4,
+                    'feature_extract_threads': 4,
+                    'discord_similarity_threshold': 0.6,
+                    'cnfans_channel_id': '',
+                    'acbuy_channel_id': '',
+                    'scrape_threads': 2
                 }
         except Exception as e:
             logger.error(f"获取系统配置失败: {e}")
             return {
                 'discord_channel_id': '',
-                'discord_similarity_threshold': 0.6
+                'download_threads': 4,
+                'feature_extract_threads': 4,
+                'discord_similarity_threshold': 0.6,
+                'cnfans_channel_id': '',
+                'acbuy_channel_id': '',
+                'scrape_threads': 2
             }
 
     def get_user_settings(self, user_id: int) -> Dict[str, any]:
@@ -1634,7 +1840,8 @@ class Database:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT discord_similarity_threshold, global_reply_min_delay, global_reply_max_delay
+                    SELECT discord_similarity_threshold, global_reply_min_delay, global_reply_max_delay,
+                           user_blacklist, keyword_filters
                     FROM user_settings WHERE user_id = ?
                 ''', (user_id,))
                 row = cursor.fetchone()
@@ -1643,12 +1850,16 @@ class Database:
                         'discord_similarity_threshold': row[0] or 0.6,
                         'global_reply_min_delay': row[1] or 3.0,
                         'global_reply_max_delay': row[2] or 8.0,
+                        'user_blacklist': row[3] or '',
+                        'keyword_filters': row[4] or '',
                     }
                 # 如果用户没有设置，返回默认值
                 return {
                     'discord_similarity_threshold': 0.6,
                     'global_reply_min_delay': 3.0,
                     'global_reply_max_delay': 8.0,
+                    'user_blacklist': '',
+                    'keyword_filters': '',
                 }
         except Exception as e:
             logger.error(f"获取用户设置失败: {e}")
@@ -1658,10 +1869,13 @@ class Database:
                 'discord_similarity_threshold': 0.6,
                 'global_reply_min_delay': 3.0,
                 'global_reply_max_delay': 8.0,
+                'user_blacklist': '',
+                'keyword_filters': '',
             }
 
     def update_user_settings(self, user_id: int, discord_similarity_threshold: float = None,
-                           global_reply_min_delay: float = None, global_reply_max_delay: float = None) -> bool:
+                           global_reply_min_delay: float = None, global_reply_max_delay: float = None,
+                           user_blacklist: str = None, keyword_filters: str = None) -> bool:
         """更新用户个性化设置"""
         try:
             with self.get_connection() as conn:
@@ -1689,6 +1903,14 @@ class Database:
                         update_fields.append('global_reply_max_delay = ?')
                         params.append(global_reply_max_delay)
 
+                    if user_blacklist is not None:
+                        update_fields.append('user_blacklist = ?')
+                        params.append(user_blacklist)
+
+                    if keyword_filters is not None:
+                        update_fields.append('keyword_filters = ?')
+                        params.append(keyword_filters)
+
                     if update_fields:
                         update_fields.append('updated_at = CURRENT_TIMESTAMP')
                         sql = f'UPDATE user_settings SET {", ".join(update_fields)} WHERE user_id = ?'
@@ -1698,13 +1920,16 @@ class Database:
                     # 插入新设置
                     cursor.execute('''
                         INSERT INTO user_settings
-                        (user_id, discord_similarity_threshold, global_reply_min_delay, global_reply_max_delay)
-                        VALUES (?, ?, ?, ?)
+                        (user_id, discord_similarity_threshold, global_reply_min_delay, global_reply_max_delay,
+                         user_blacklist, keyword_filters)
+                        VALUES (?, ?, ?, ?, ?, ?)
                     ''', (
                         user_id,
                         discord_similarity_threshold or 0.6,
                         global_reply_min_delay or 3.0,
-                        global_reply_max_delay or 8.0
+                        global_reply_max_delay or 8.0,
+                        user_blacklist or '',
+                        keyword_filters or ''
                     ))
 
                 conn.commit()
@@ -1853,6 +2078,139 @@ class Database:
         except Exception as e:
             logger.error(f"删除店铺失败: {e}")
             return False
+
+    # ========== 抓取状态管理方法 ==========
+
+    def get_scrape_status(self) -> Dict:
+        """获取抓取状态"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT * FROM scrape_status WHERE id = 1')
+                row = cursor.fetchone()
+
+                if row:
+                    return {
+                        'id': row[0],
+                        'is_scraping': bool(row[1]),
+                        'stop_signal': bool(row[2]),
+                        'current_shop_id': row[3],
+                        'total': row[4] or 0,
+                        'processed': row[5] or 0,
+                        'success': row[6] or 0,
+                        'progress': row[7] or 0.0,
+                        'message': row[8] or '等待开始...',
+                        'completed': bool(row[9]),
+                        'thread_id': row[10],
+                        'updated_at': row[11]
+                    }
+                else:
+                    # 如果没有记录，创建默认记录
+                    return self.reset_scrape_status()
+
+        except Exception as e:
+            logger.error(f"获取抓取状态失败: {e}")
+            return {
+                'is_scraping': False,
+                'stop_signal': False,
+                'current_shop_id': None,
+                'total': 0,
+                'processed': 0,
+                'success': 0,
+                'progress': 0.0,
+                'message': '获取状态失败',
+                'completed': False,
+                'thread_id': None,
+                'updated_at': None
+            }
+
+    def update_scrape_status(self, **kwargs) -> bool:
+        """更新抓取状态"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # 构建更新语句
+                fields = []
+                values = []
+                for key, value in kwargs.items():
+                    if key in ['is_scraping', 'stop_signal', 'completed']:
+                        fields.append(f'{key} = ?')
+                        values.append(1 if value else 0)
+                    elif key in ['total', 'processed', 'success']:
+                        fields.append(f'{key} = ?')
+                        values.append(int(value) if value is not None else 0)
+                    elif key == 'progress':
+                        fields.append(f'{key} = ?')
+                        values.append(float(value) if value is not None else 0.0)
+                    elif key in ['current_shop_id', 'message', 'thread_id']:
+                        fields.append(f'{key} = ?')
+                        values.append(str(value) if value is not None else None)
+
+                if fields:
+                    fields.append('updated_at = CURRENT_TIMESTAMP')
+                    query = f'UPDATE scrape_status SET {", ".join(fields)} WHERE id = 1'
+                    cursor.execute(query, values)
+                    conn.commit()
+                    return cursor.rowcount > 0
+
+                return False
+
+        except Exception as e:
+            logger.error(f"更新抓取状态失败: {e}")
+            return False
+
+    def reset_scrape_status(self) -> Dict:
+        """重置抓取状态"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE scrape_status SET
+                        is_scraping = 0,
+                        stop_signal = 0,
+                        current_shop_id = NULL,
+                        total = 0,
+                        processed = 0,
+                        success = 0,
+                        progress = 0,
+                        message = '等待开始...',
+                        completed = 0,
+                        thread_id = NULL,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = 1
+                ''')
+                conn.commit()
+
+                return {
+                    'is_scraping': False,
+                    'stop_signal': False,
+                    'current_shop_id': None,
+                    'total': 0,
+                    'processed': 0,
+                    'success': 0,
+                    'progress': 0.0,
+                    'message': '等待开始...',
+                    'completed': False,
+                    'thread_id': None,
+                    'updated_at': None
+                }
+
+        except Exception as e:
+            logger.error(f"重置抓取状态失败: {e}")
+            return {
+                'is_scraping': False,
+                'stop_signal': False,
+                'current_shop_id': None,
+                'total': 0,
+                'processed': 0,
+                'success': 0,
+                'progress': 0.0,
+                'message': '重置失败',
+                'completed': False,
+                'thread_id': None,
+                'updated_at': None
+            }
 
 # 全局数据库实例
 db = Database()

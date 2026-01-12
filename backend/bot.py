@@ -6,6 +6,7 @@ import asyncio
 import random
 import os
 import json
+import io
 from datetime import datetime
 try:
     from config import config
@@ -163,8 +164,9 @@ class DiscordBotClient(discord.Client):
                 from database import db
             except ImportError:
                 from .database import db
-            filters = db.get_message_filters()
 
+            # 1. 检查全局消息过滤规则
+            filters = db.get_message_filters()
             message_content = message.content.lower()
 
             for filter_rule in filters:
@@ -191,6 +193,45 @@ class DiscordBotClient(discord.Client):
                             return True
                     except re.error:
                         logger.warning(f'无效的正则表达式: {filter_value}')
+                elif filter_type == 'user_id':
+                    # 检查用户ID过滤
+                    filter_user_ids = [uid.strip() for uid in filter_value.split(',') if uid.strip()]
+                    sender_id = str(message.author.id)
+                    sender_name = str(message.author.name).lower()
+
+                    for blocked_id in filter_user_ids:
+                        blocked_id = blocked_id.strip()
+                        if blocked_id == sender_id or blocked_id.lower() in sender_name:
+                            logger.info(f'消息被过滤: 用户 {message.author.name} (ID: {sender_id}) 在过滤列表中')
+                            return True
+
+            # 2. 检查用户个性化设置的过滤规则
+            if self.user_id:
+                user_settings = db.get_user_settings(self.user_id)
+                if user_settings:
+                    # 检查用户黑名单
+                    user_blacklist = user_settings.get('user_blacklist', '')
+                    if user_blacklist:
+                        blacklist_users = [u.strip().lower() for u in user_blacklist.split(',') if u.strip()]
+                        sender_name = str(message.author.name).lower()
+                        sender_id = str(message.author.id).lower()
+
+                        for blocked_user in blacklist_users:
+                            blocked_user = blocked_user.lower()
+                            if blocked_user in sender_name or blocked_user == sender_id:
+                                logger.info(f'消息被过滤: 用户 {message.author.name} 在黑名单中')
+                                return True
+
+                    # 检查关键词过滤
+                    keyword_filters = user_settings.get('keyword_filters', '')
+                    if keyword_filters:
+                        filter_keywords = [k.strip().lower() for k in keyword_filters.split(',') if k.strip()]
+
+                        for keyword in filter_keywords:
+                            if keyword in message_content:
+                                logger.info(f'消息被过滤: 包含关键词 "{keyword}"')
+                                return True
+
         except Exception as e:
             logger.error(f'检查消息过滤失败: {e}')
 
@@ -311,9 +352,9 @@ class DiscordBotClient(discord.Client):
                 if self.user_id:
                     try:
                         try:
-                from database import db
-            except ImportError:
-                from .database import db
+                            from database import db
+                        except ImportError:
+                            from .database import db
                         user_settings = db.get_user_settings(self.user_id)
                         if user_settings and 'discord_similarity_threshold' in user_settings:
                             user_threshold = user_settings['discord_similarity_threshold']
@@ -337,7 +378,11 @@ class DiscordBotClient(discord.Client):
                         delay = random.uniform(min_d, max_d)
                         await asyncio.sleep(delay)
 
-                    # 获取自定义回复设置
+                    # 检查商品是否启用了自动回复规则
+                    product_rule_enabled = product.get('ruleEnabled', True)
+
+                    if product_rule_enabled:
+                        # 使用全局自定义回复
                     custom_reply = self._get_custom_reply()
 
                     if custom_reply:
@@ -371,6 +416,88 @@ class DiscordBotClient(discord.Client):
                         # 默认行为：发送链接
                         response = get_response_url_for_channel(product, message.channel.id)
                         await message.reply(response)
+                    else:
+                        # 商品级自定义回复
+                        custom_text = product.get('custom_reply_text', '').strip()
+                        custom_image_indexes = product.get('selectedImageIndexes', [])
+                        custom_image_urls = product.get('customImageUrls', [])
+
+                        # 发送自定义文本消息
+                        if custom_text:
+                            await message.reply(custom_text)
+
+                        # 发送图片（按优先级：本地上传 > 自定义链接 > 商品图片）
+                        images_sent = False
+
+                        # 优先检查图片来源类型
+                        image_source = product.get('image_source', 'product')
+
+                        if image_source == 'upload':
+                            # 发送本地上传的图片
+                            try:
+                                from database import db
+                                # 获取该商品的所有图片（包括上传的）
+                                product_images = db.get_product_images(product['id'])
+                                if product_images:
+                                    for img_data in product_images[:10]:  # 最多发送10张图片
+                                        try:
+                                            image_path = img_data.get('image_path')
+                                            # 如果是相对路径，构建完整路径
+                                            if image_path and not os.path.isabs(image_path):
+                                                image_path = os.path.join(os.path.dirname(__file__), image_path)
+                                            if image_path and os.path.exists(image_path):
+                                                await message.reply(file=discord.File(image_path, os.path.basename(image_path)))
+                                                images_sent = True
+                                        except Exception as e:
+                                            logger.error(f'发送本地上传图片失败: {e}')
+                            except Exception as e:
+                                logger.error(f'处理本地上传图片回复失败: {e}')
+
+                        elif image_source == 'custom' and custom_image_urls and len(custom_image_urls) > 0:
+                            # 发送自定义图片链接
+                            try:
+                                import aiohttp
+                                for url in custom_image_urls[:10]:  # 最多发送10张图片
+                                    try:
+                                        async with aiohttp.ClientSession() as session:
+                                            async with session.get(url.strip()) as resp:
+                                                if resp.status == 200:
+                                                    image_data = await resp.read()
+                                                    # 从URL提取文件名
+                                                    filename = url.split('/')[-1].split('?')[0] or f"image_{custom_image_urls.index(url)}.jpg"
+                                                    if not filename.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp')):
+                                                        filename += '.jpg'
+                                                    await message.reply(file=discord.File(io.BytesIO(image_data), filename))
+                                                    images_sent = True
+                                    except Exception as e:
+                                        logger.error(f'发送自定义图片失败 {url}: {e}')
+                            except Exception as e:
+                                logger.error(f'处理自定义图片回复失败: {e}')
+
+                        elif custom_image_indexes and len(custom_image_indexes) > 0:
+                            # 发送选中的商品图片
+                            try:
+                                import aiofiles
+                                import os
+                                from database import db
+
+                                for image_index in custom_image_indexes:
+                                    try:
+                                        # 获取图片路径
+                                        image_path = db.get_product_image_path(product['id'], image_index)
+                                        if image_path and os.path.exists(image_path):
+                                            # 发送图片文件
+                                            await message.reply(file=discord.File(image_path, f"image_{image_index}.jpg"))
+                                            images_sent = True
+                                    except Exception as e:
+                                        logger.error(f'发送商品图片失败: {e}')
+                            except Exception as e:
+                                logger.error(f'处理商品图片回复失败: {e}')
+
+                        # 如果既没有文本也没有图片，则发送默认链接
+                        if not custom_text and not images_sent:
+                            response = get_response_url_for_channel(product, message.channel.id)
+                            await message.reply(response)
 
                     logger.info(f'图片识别成功，相似度: {similarity:.4f}')
                 else:
@@ -526,9 +653,9 @@ class DiscordBotClient(discord.Client):
                 if self.user_id:
                     try:
                         try:
-                from database import db
-            except ImportError:
-                from .database import db
+                            from database import db
+                        except ImportError:
+                            from .database import db
                         user_settings = db.get_user_settings(self.user_id)
                         if user_settings and 'discord_similarity_threshold' in user_settings:
                             api_threshold = user_settings['discord_similarity_threshold']

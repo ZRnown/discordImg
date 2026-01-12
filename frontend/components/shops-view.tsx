@@ -90,19 +90,7 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
       const data = await res.json()
 
       if (res.ok) {
-        toast.success("店铺添加成功，正在开始抓取商品...")
-
-        // 添加成功后自动开始抓取该店铺的商品
-        const shopId = newShopId.trim()
-        try {
-          await fetch(`/api/scrape/shop?shopId=${shopId}`, {
-            method: 'POST'
-          })
-          toast.success("商品抓取已启动，请查看实时日志")
-        } catch (scrapeError) {
-          toast.warning("店铺添加成功，但商品抓取启动失败")
-        }
-
+        toast.success("店铺添加成功")
         setNewShopId('')
         fetchShops()
       } else {
@@ -220,46 +208,46 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
 
       {/* 添加新店铺 - 仅管理员可见 */}
       {currentUser?.role === 'admin' && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Plus className="h-5 w-5" />
-              添加新店铺
-            </CardTitle>
-            <CardDescription>
-              输入微店店铺ID，系统会自动获取店铺名称
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex gap-3">
-              <div className="flex-1">
-                <Input
-                  placeholder="输入店铺ID (例如: 1713062461)"
-                  value={newShopId}
-                  onChange={(e) => setNewShopId(e.target.value)}
-                  disabled={isAddingShop}
-                  onKeyPress={(e) => e.key === 'Enter' && handleAddShop()}
-                />
-              </div>
-              <Button
-                onClick={handleAddShop}
-                disabled={!newShopId.trim() || isAddingShop}
-              >
-                {isAddingShop ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    添加中...
-                  </>
-                ) : (
-                  <>
-                    <Plus className="mr-2 h-4 w-4" />
-                    添加店铺
-                  </>
-                )}
-              </Button>
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Plus className="h-5 w-5" />
+            添加新店铺
+          </CardTitle>
+          <CardDescription>
+            输入微店店铺ID，系统会自动获取店铺名称
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex gap-3">
+            <div className="flex-1">
+              <Input
+                placeholder="输入店铺ID (例如: 1713062461)"
+                value={newShopId}
+                onChange={(e) => setNewShopId(e.target.value)}
+                disabled={isAddingShop}
+                onKeyPress={(e) => e.key === 'Enter' && handleAddShop()}
+              />
             </div>
-          </CardContent>
-        </Card>
+            <Button
+              onClick={handleAddShop}
+              disabled={!newShopId.trim() || isAddingShop}
+            >
+              {isAddingShop ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  添加中...
+                </>
+              ) : (
+                <>
+                  <Plus className="mr-2 h-4 w-4" />
+                  添加店铺
+                </>
+              )}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
       )}
 
 
@@ -384,14 +372,14 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
                     </div>
                   </div>
                   {(currentUser?.role === 'admin' || currentUser?.shops?.includes(shop.shop_id)) && (
-                    <Button
-                      variant="destructive"
-                      size="sm"
-                      onClick={() => handleDeleteShop(shop.shop_id)}
-                      disabled={isShopScraping}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => handleDeleteShop(shop.shop_id)}
+                    disabled={isShopScraping}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
                   )}
                 </div>
               ))}
@@ -412,10 +400,10 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowBatchDeleteConfirm(false)}>
               取消
-            </Button>
+              </Button>
             <Button variant="destructive" onClick={confirmBatchDeleteShops} disabled={isBatchDeleting}>
               {isBatchDeleting ? "删除中..." : "确认删除"}
-            </Button>
+              </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

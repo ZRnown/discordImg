@@ -48,28 +48,35 @@ def load_system_config():
             os.environ['DISCORD_CHANNEL_ID'] = discord_channel_id
 
         func_logger.info("系统配置已从数据库加载")
-        func_logger.info(f"下载线程: {config.DOWNLOAD_THREADS}")
-        func_logger.info(f"特征提取线程: {config.FEATURE_EXTRACT_THREADS}")
+        func_logger.info(f"下载线程: {DOWNLOAD_THREADS}")
+        func_logger.info(f"特征提取线程: {FEATURE_EXTRACT_THREADS}")
         func_logger.info(f"Discord相似度阈值: {config.DISCORD_SIMILARITY_THRESHOLD} ({config.DISCORD_SIMILARITY_THRESHOLD*100:.0f}%)")
         func_logger.info(f"全局回复延迟设置为: {config.GLOBAL_REPLY_MIN_DELAY}-{config.GLOBAL_REPLY_MAX_DELAY}秒")
         func_logger.info(f"Discord频道ID: {discord_channel_id or '未设置(监听所有频道)'}")
     except Exception as e:
         func_logger.warning(f"加载系统配置失败，使用默认值: {e}")
 
+# 从环境变量读取线程配置
+import os
+SCRAPE_THREADS = int(os.getenv('SCRAPE_THREADS', '10'))
+DOWNLOAD_THREADS = int(os.getenv('DOWNLOAD_THREADS', '10'))
+FEATURE_EXTRACT_THREADS = int(os.getenv('FEATURE_EXTRACT_THREADS', '10'))
+
+print(f"📊 线程配置加载完成:")
+print(f"   商品抓取线程: {SCRAPE_THREADS}")
+print(f"   图片下载线程: {DOWNLOAD_THREADS}")
+print(f"   特征提取线程: {FEATURE_EXTRACT_THREADS}")
+
 # 加载系统配置
 load_system_config()
 
 # === 重构：店铺抓取状态控制 ===
-scrape_status = {
-    'is_scraping': False,
-    'paused': False,
-    'stop_signal': False,
-    'current_shop_id': None,
-    'total': 0,
-    'processed': 0,
-    'success': 0,
-    'message': '等待开始...'
-}
+# 移除全局状态变量，改为数据库持久化存储
+# scrape_status现在通过db.get_scrape_status()和db.update_scrape_status()管理
+
+# 线程管理：跟踪当前运行的抓取线程
+current_scrape_thread = None
+scrape_thread_lock = threading.Lock()
 
 # 全局关闭事件，用于优雅关闭
 shutdown_event = None
@@ -138,18 +145,19 @@ class QueueHandler(logging.Handler):
         if record.module in ['urllib3', 'requests', 'aiohttp']:
             return True
 
-        # 对于未知模块，只显示WARNING级别以上的日志
-        if record.levelno < logging.WARNING and record.module not in [
-            '__main__',  # 主程序日志
-            'app',       # Flask应用日志
-            'database',  # 数据库操作日志
-            'bot',       # Discord机器人日志
-            'weidian_scraper',  # 微店爬虫日志
-            'feature_extractor', # 特征提取日志
-            'vector_engine',      # 向量引擎日志
-            'migrate_data',       # 数据迁移日志
-            'test_search_debug'   # 测试脚本日志
-        ]:
+        # 2. 关键修复：允许 weidian_scraper 和 app 的 INFO 日志通过
+        # 只要是这些模块，即使是 INFO 级别也允许通过
+        whitelist_modules = [
+            '__main__', 'app', 'database', 'bot',
+            'weidian_scraper', 'feature_extractor',
+            'vector_engine', 'migrate_data'
+        ]
+
+        if record.module in whitelist_modules:
+            return False
+
+        # 对于其他未知模块，只显示WARNING级别以上
+        if record.levelno < logging.WARNING:
             return True
 
         return False
@@ -159,8 +167,15 @@ queue_handler = QueueHandler()
 queue_handler.setLevel(logging.INFO)
 logging.getLogger().addHandler(queue_handler)
 
+# 确保控制台输出不受QueueHandler过滤影响
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(console_formatter)
+logging.getLogger().addHandler(console_handler)
+
 # 设置其他日志器的级别
-logging.getLogger('werkzeug').setLevel(logging.WARNING)  # 只显示警告和错误
+logging.getLogger('werkzeug').setLevel(logging.INFO)  # 显示HTTP请求日志
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 logging.getLogger('requests').setLevel(logging.WARNING)
 logging.getLogger('aiohttp').setLevel(logging.WARNING)
@@ -206,8 +221,7 @@ app.secret_key = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-producti
 # CORS 配置，必须允许 Credentials
 CORS(app, origins=[
     "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://69.30.204.184:3000"
+    "http://127.0.0.1:3000"
 ], supports_credentials=True)
 
 # Cookie 配置优化 (解决本地调试 Cookie 无法写入的问题)
@@ -240,10 +254,7 @@ def extract_features(image_path):
 def search_similar():
     """搜索相似图像 - 使用 FAISS HNSW"""
     try:
-        if 'image' not in request.files:
-            return jsonify({'error': 'No image provided'}), 400
-
-        image_file = request.files['image']
+        image_url = request.form.get('image_url')
         threshold = float(request.form.get('threshold', 0.6))  # DINOv2需要更高的阈值
         limit = int(request.form.get('limit', 5))  # 返回结果数量，默认5个
 
@@ -260,9 +271,73 @@ def search_similar():
         print(f"DEBUG: Received threshold: {threshold}")
         print(f"DEBUG: User shops filter: {user_shops}")
         print(f"DEBUG: Form data: {list(request.form.keys())}")
+        print(f"DEBUG: Files: {list(request.files.keys()) if request.files else 'No files'}")
+        print(f"DEBUG: Content-Type: {request.content_type}")
+        print(f"DEBUG: Method: {request.method}")
+        print(f"DEBUG: image_url parameter: '{image_url}'")
 
-        # 保存查询图片到临时文件
+        # 处理图片来源
         import uuid
+        import os
+        if image_url:
+            print(f"DEBUG: Processing image URL: {image_url}")
+            # 验证URL格式
+            if not image_url.startswith(('http://', 'https://')):
+                return jsonify({'error': 'Invalid URL format, must start with http:// or https://'}), 400
+
+            # 从URL下载图片
+            import requests
+            try:
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                }
+                response = requests.get(image_url, timeout=15, headers=headers, stream=True)
+                print(f"DEBUG: URL response status: {response.status_code}")
+                print(f"DEBUG: Content-Type: {response.headers.get('content-type', 'unknown')}")
+
+                if response.status_code != 200:
+                    return jsonify({'error': f'Failed to download image from URL, status: {response.status_code}'}), 400
+
+                # 检查内容类型
+                content_type = response.headers.get('content-type', '').lower()
+                if not any(img_type in content_type for img_type in ['image/', 'application/octet-stream']):
+                    print(f"DEBUG: Warning - Content-Type '{content_type}' may not be an image")
+
+                temp_filename = f"{uuid.uuid4()}.jpg"
+                image_path = f"/tmp/{temp_filename}"
+
+                with open(image_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+
+                # 检查文件大小
+                file_size = os.path.getsize(image_path)
+                print(f"DEBUG: Image downloaded to: {image_path}, size: {file_size} bytes")
+
+                if file_size == 0:
+                    os.remove(image_path)
+                    return jsonify({'error': 'Downloaded file is empty'}), 400
+
+                if file_size > 10 * 1024 * 1024:  # 10MB limit
+                    os.remove(image_path)
+                    return jsonify({'error': 'Image file too large (max 10MB)'}), 400
+
+            except requests.exceptions.RequestException as e:
+                print(f"DEBUG: Network error downloading image: {str(e)}")
+                return jsonify({'error': f'Network error downloading image: {str(e)}'}), 400
+            except Exception as e:
+                print(f"DEBUG: Failed to download image: {str(e)}")
+                return jsonify({'error': f'Failed to download image: {str(e)}'}), 400
+        else:
+            print("DEBUG: No image_url provided, checking for uploaded file")
+            # 从上传的文件获取图片
+            if 'image' not in request.files:
+                print("DEBUG: No 'image' file found in request.files")
+                return jsonify({'error': 'No image provided'}), 400
+
+            image_file = request.files['image']
+            print(f"DEBUG: Found uploaded file: {image_file.filename if image_file else 'None'}")
         temp_filename = f"{uuid.uuid4()}.jpg"
         image_path = f"/tmp/{temp_filename}"
         image_file.save(image_path)
@@ -394,23 +469,30 @@ def search_similar():
 def scrape_product():
     """抓取商品并建立索引"""
     try:
+        logger.info("收到商品抓取请求")
         data = request.get_json()
         if data is None:
+            logger.error("请求体为空")
             return jsonify({'error': 'Invalid request body'}), 400
+
+        logger.info(f"请求数据: {data}")
 
         # 支持两种输入方式：完整URL或商品ID
         url = data.get('url')
         weidian_id = data.get('weidianId')
 
         if not url and not weidian_id:
+            logger.error("缺少URL或weidianId")
             return jsonify({'error': 'URL or weidianId is required'}), 400
 
         # 如果提供了weidianId，构造URL
         if weidian_id and not url:
             url = f"https://weidian.com/item.html?itemID={weidian_id}"
+            logger.info(f"构造URL: {url}")
 
         # 验证URL格式
         if 'weidian.com' not in url:
+            logger.error(f"不支持的URL格式: {url}")
             return jsonify({'error': '只支持微店商品链接'}), 400
 
         logger.info(f"开始抓取商品: {url}")
@@ -498,7 +580,7 @@ def scrape_product():
             # 第一步：多线程特征提取
             logger.info("开始多线程特征提取...")
             features_list = []
-            max_workers = min(config.FEATURE_EXTRACT_THREADS, len(saved_image_paths))
+            max_workers = min(FEATURE_EXTRACT_THREADS, len(saved_image_paths))
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                 # 提交特征提取任务
@@ -772,7 +854,7 @@ def reset_user_password(user_id):
 # === 新增：网站配置管理API ===
 @app.route('/api/websites', methods=['GET'])
 def get_website_configs():
-    """获取所有网站配置"""
+    """获取所有网站配置及其频道绑定（优化版本，避免N+1查询）"""
     try:
         configs = db.get_website_configs()
         return jsonify({'websites': configs})
@@ -1194,16 +1276,21 @@ def list_products():
 
     current_user = get_current_user()
     try:
-        # 根据用户权限获取商品（获取所有记录，不分页）
+        # 获取分页参数
+        page = int(request.args.get('page', 1))
+        limit = int(request.args.get('limit', 50))  # 默认每页50条
+        offset = (page - 1) * limit
+
+        # 根据用户权限获取商品（支持分页）
         if current_user['role'] == 'admin':
             # 管理员可以看到所有商品
-            logger.info(f"管理员用户 {current_user['username']} 获取所有商品")
-            result = db.get_products_by_user_shops(None, limit=None)
+            logger.info(f"管理员用户 {current_user['username']} 获取商品列表 (页{page}, 每页{limit}条)")
+            result = db.get_products_by_user_shops(None, limit=limit, offset=offset)
         else:
             # 普通用户只能看到自己管理的店铺的商品
             user_shops = current_user.get('shops', [])
-            logger.info(f"普通用户 {current_user['username']} 获取店铺商品，分配的店铺: {user_shops}")
-            result = db.get_products_by_user_shops(user_shops, limit=None)
+            logger.info(f"普通用户 {current_user['username']} 获取店铺商品 (页{page}, 每页{limit}条)，分配的店铺: {user_shops}")
+            result = db.get_products_by_user_shops(user_shops, limit=limit, offset=offset)
 
             # 调试：检查数据库中的商品和店铺匹配情况
             if user_shops:
@@ -1231,7 +1318,11 @@ def list_products():
                 'is_admin': current_user['role'] == 'admin'
             }
         }
-        return jsonify(response_data)
+
+        # 添加缓存头以优化性能（5分钟缓存）
+        response = jsonify(response_data)
+        response.headers['Cache-Control'] = 'private, max-age=300'
+        return response
     except Exception as e:
         logger.error(f"列出商品失败: {e}")
         return jsonify({'error': str(e)}), 500
@@ -1244,31 +1335,137 @@ def update_product():
         return jsonify({'error': '需要登录'}), 401
 
     current_user = get_current_user()
-    data = request.get_json()
+
+    # 检查是否是multipart/form-data（包含文件上传）
+    if request.content_type and 'multipart/form-data' in request.content_type:
+        # 处理文件上传
+        product_id = request.form.get('id')
+        if not product_id:
+            return jsonify({'error': '商品ID不能为空'}), 400
+
+        try:
+            # 检查权限
+            if current_user['role'] == 'admin':
+                pass
+            else:
+                user_shops = current_user.get('shops', [])
+                product = db.get_product_by_id(int(product_id))
+                if not product or product.get('shop_name') not in user_shops:
+                    return jsonify({'error': '无权限更新此商品'}), 403
+
+            # 处理上传的图片文件
+            uploaded_files = []
+            if 'uploadedImages' in request.files:
+                files = request.files.getlist('uploadedImages')
+                for file in files:
+                    if file and file.filename:
+                        # 保存文件到商品图片目录
+                        import uuid
+                        import os
+                        filename = f"{uuid.uuid4()}_{file.filename}"
+                        image_path = os.path.join('data', 'images', str(product_id), filename)
+
+                        # 确保目录存在
+                        os.makedirs(os.path.dirname(image_path), exist_ok=True)
+
+                        # 保存文件
+                        file.save(image_path)
+
+                        # 添加到数据库
+                        db.add_product_image(int(product_id), filename)
+                        uploaded_files.append(filename)
+
+            # 构建更新数据
+            updates = {}
+            for key in ['title', 'englishTitle', 'ruleEnabled', 'customReplyText', 'imageSource']:
+                value = request.form.get(key)
+                if value is not None:
+                    if key == 'englishTitle':
+                        updates['english_title'] = value
+                    elif key == 'ruleEnabled':
+                        updates['ruleEnabled'] = value.lower() == 'true'
+                    elif key == 'customReplyText':
+                        updates['custom_reply_text'] = value
+                    elif key == 'imageSource':
+                        updates['image_source'] = value
+                    else:
+                        updates[key] = value
+
+            # 处理数组数据
+            if 'selectedImageIndexes' in request.form:
+                import json
+                try:
+                    updates['custom_reply_images'] = json.loads(request.form.get('selectedImageIndexes'))
+                except:
+                    pass
+
+            if 'customImageUrls' in request.form:
+                try:
+                    updates['custom_image_urls'] = json.loads(request.form.get('customImageUrls'))
+                except:
+                    pass
+
+            # 执行更新
+            if updates:
+                success = db.update_product(int(product_id), updates)
+                if success:
+                    updated_product = db.get_product_by_id(int(product_id))
+                    return jsonify({'message': '商品更新成功', 'product': updated_product})
+                else:
+                    return jsonify({'error': '更新失败'}), 500
+            else:
+                return jsonify({'error': '没有要更新的字段'}), 400
+
+        except Exception as e:
+            logger.error(f"更新商品失败: {e}")
+            return jsonify({'error': '更新失败'}), 500
+    else:
+        # 处理JSON数据（原有逻辑）
+        data = request.get_json()
 
     if not data or not data.get('id'):
         return jsonify({'error': '商品ID不能为空'}), 400
 
     product_id = data['id']
-    title = data.get('title')
 
     try:
-        # 检查商品是否存在且用户有权限访问
+            # 检查权限
         if current_user['role'] == 'admin':
-            # 管理员可以更新所有商品
             pass
         else:
-            # 普通用户只能更新自己管理的店铺的商品
             user_shops = current_user.get('shops', [])
             product = db.get_product_by_id(product_id)
             if not product or product.get('shop_name') not in user_shops:
                 return jsonify({'error': '无权限更新此商品'}), 403
 
-        # 更新商品标题
-        if title is not None:
-            db.update_product_title(product_id, title)
+            # 构建更新数据
+            updates = {}
+            if 'title' in data:
+                updates['title'] = data['title']
+            if 'englishTitle' in data:
+                updates['english_title'] = data['englishTitle']
+            if 'ruleEnabled' in data:
+                updates['ruleEnabled'] = data['ruleEnabled']
+            if 'customReplyText' in data:
+                updates['custom_reply_text'] = data['customReplyText']
+            if 'selectedImageIndexes' in data:
+                updates['custom_reply_images'] = data['selectedImageIndexes']
+            if 'customImageUrls' in data:
+                updates['custom_image_urls'] = data['customImageUrls']
+            if 'imageSource' in data:
+                updates['image_source'] = data['imageSource']
 
-        return jsonify({'message': '商品更新成功', 'product': {'id': product_id, 'title': title}})
+            # 执行更新
+            if updates:
+                success = db.update_product(product_id, updates)
+                if success:
+                    updated_product = db.get_product_by_id(product_id)
+                    return jsonify({'message': '商品更新成功', 'product': updated_product})
+                else:
+                    return jsonify({'error': '更新失败'}), 500
+            else:
+                return jsonify({'error': '没有要更新的字段'}), 400
+
     except Exception as e:
         logger.error(f"更新商品失败: {e}")
         return jsonify({'error': '更新失败'}), 500
@@ -1796,7 +1993,9 @@ def update_user_settings():
             feature_extract_threads=data.get('feature_extract_threads'),
             discord_similarity_threshold=data.get('discord_similarity_threshold'),
             global_reply_min_delay=data.get('global_reply_min_delay'),
-            global_reply_max_delay=data.get('global_reply_max_delay')
+            global_reply_max_delay=data.get('global_reply_max_delay'),
+            user_blacklist=data.get('user_blacklist'),
+            keyword_filters=data.get('keyword_filters')
         )
 
         if success:
@@ -2204,19 +2403,56 @@ def update_discord_threshold():
         # 保存到数据库
         if db.update_system_config(discord_similarity_threshold=threshold):
             # 同时更新内存中的配置
-            config.DISCORD_SIMILARITY_THRESHOLD = threshold
-            logger.info(f"Discord相似度阈值设置为: {threshold} ({threshold*100:.0f}%)")
 
             return jsonify({
-            'success': True,
-            'threshold': threshold,
-            'threshold_percentage': threshold * 100,
-            'message': 'Discord阈值设置已更新，请重启Discord机器人服务以生效'
-        })
+                'message': f'Discord相似度阈值已更新为 {threshold}',
+                'threshold': threshold
+            })
 
+        return jsonify({'error': '更新配置失败'}), 500
+    except ValueError as e:
+        return jsonify({'error': '阈值必须是数字'}), 400
     except Exception as e:
         logger.error(f"更新Discord阈值失败: {e}")
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': '更新配置失败'}), 500
+
+@app.route('/api/config/scrape-threads', methods=['GET', 'POST'])
+def config_scrape_threads():
+    """配置抓取多线程数量"""
+    if request.method == 'GET':
+        config = db.get_system_config()
+        return jsonify({
+            'scrape_threads': config.get('scrape_threads', 2)
+        })
+
+    try:
+        data = request.get_json()
+        if data is None:
+            return jsonify({'error': 'Invalid request body'}), 400
+
+        scrape_threads = int(data.get('scrape_threads', 2))
+
+        # 确保线程数在合理范围内
+        if scrape_threads < 1 or scrape_threads > 10:
+            return jsonify({'error': '抓取线程数必须是1-10之间的整数'}), 400
+
+        # 保存到数据库
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('UPDATE system_config SET scrape_threads = ?, updated_at = CURRENT_TIMESTAMP WHERE id = 1',
+                          (scrape_threads,))
+            conn.commit()
+
+        return jsonify({
+            'message': f'抓取线程数已设置为 {scrape_threads}',
+            'scrape_threads': scrape_threads
+        })
+
+    except ValueError as e:
+        return jsonify({'error': '线程数必须是整数'}), 400
+    except Exception as e:
+        logger.error(f"更新抓取线程配置失败: {e}")
+        return jsonify({'error': '更新配置失败'}), 500
 
 @app.route('/api/config/global-reply-delay', methods=['GET'])
 def get_global_reply_delay():
@@ -2917,8 +3153,8 @@ def scrape_shop():
             return jsonify({'error': 'shopId必须是数字'}), 400
 
         # 检查是否已有抓取任务在运行
-        global scrape_status
-        if scrape_status.get('is_scraping', False):
+        current_status = db.get_scrape_status()
+        if current_status.get('is_scraping', False):
             return jsonify({'error': '已有抓取任务在运行中，请等待完成后再试'}), 409
 
         logger.info(f'开始抓取店铺: {shop_id}')
@@ -2934,11 +3170,8 @@ def scrape_shop():
                 logger.error(f'抓取任务异常: {e}')
             finally:
                 # 确保状态正确重置
-                global scrape_status
-                scrape_status.update({
-                    'is_scraping': False,
-                    'message': f'抓取异常结束: {str(e)}' if 'e' in locals() else '抓取已完成'
-                })
+                error_msg = f'抓取异常结束: {str(e)}' if 'e' in locals() else '抓取已完成'
+                db.update_scrape_status(is_scraping=False, message=error_msg)
 
         # 创建守护线程，确保不会阻塞应用退出
         scrape_thread = threading.Thread(target=run_scrape_task, daemon=True, name=f'scrape-{shop_id}')
@@ -2953,67 +3186,331 @@ def scrape_shop():
 
     except Exception as e:
         logger.error(f'店铺抓取失败: {e}')
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': str(e)        }), 500
+
+@app.route('/api/scrape/shop/reset', methods=['POST'])
+def reset_scrape_status():
+    """重置抓取状态（紧急修复）"""
+    try:
+        global current_scrape_thread, scrape_thread_lock
+
+        # 重置数据库状态
+        reset_status = db.reset_scrape_status()
+
+        # 终止当前线程
+        with scrape_thread_lock:
+            if current_scrape_thread and current_scrape_thread.is_alive():
+                logger.info("🔄 终止旧的抓取线程...")
+                # 注意：Python线程不能强制终止，这里只是设置信号
+            current_scrape_thread = None
+
+        logger.info("✅ 抓取状态已重置")
+        return jsonify({'message': '抓取状态已重置', 'status': reset_status})
+    except Exception as e:
+        logger.error(f'重置抓取状态失败: {e}')
+        return jsonify({'error': '重置失败'}), 500
 
 @app.route('/api/scrape/shop/control', methods=['POST'])
 def control_shop_scrape():
-    """控制抓取任务: start, pause, resume, stop"""
+    """控制抓取任务: start, stop"""
     action = request.json.get('action')
-    shop_id = request.json.get('shopId')
+    shop_id = request.json.get('shopId')  # 可选参数
 
-    global scrape_status
+    global current_scrape_thread, scrape_thread_lock
+
+    # 获取当前状态
+    current_status = db.get_scrape_status()
+    logger.info(f"收到抓取控制请求: action={action}, shop_id={shop_id}, 当前状态: is_scraping={current_status.get('is_scraping')}, stop_signal={current_status.get('stop_signal')}")
 
     if action == 'stop':
-        scrape_status['stop_signal'] = True
-        scrape_status['message'] = '正在停止...'
-        return jsonify(scrape_status)
+        # 设置停止信号 - 优雅停止，让当前商品完成处理
+        success = db.update_scrape_status(stop_signal=True, message='正在停止（等待当前商品完成）...')
+        if success:
+            logger.info("✅ 设置停止信号为True - 将等待当前正在处理的商品完成")
 
-    if action == 'pause':
-        scrape_status['paused'] = True
-        scrape_status['message'] = '已暂停'
-        return jsonify(scrape_status)
+            # 启动一个后台线程来监控停止进度
+            def monitor_stop():
+                try:
+                    import time
+                    max_wait_time = 300  # 最多等待5分钟
+                    wait_start = time.time()
 
-    if action == 'resume':
-        scrape_status['paused'] = False
-        scrape_status['message'] = '继续抓取...'
-        return jsonify(scrape_status)
+                    while time.time() - wait_start < max_wait_time:
+                        with scrape_thread_lock:
+                            if current_scrape_thread and current_scrape_thread.is_alive():
+                                # 线程还在运行，等待
+                                time.sleep(2)
+                                continue
+                            else:
+                                # 线程已结束
+                                break
+
+                    # 无论如何都要清理状态
+                    with scrape_thread_lock:
+                        if current_scrape_thread and current_scrape_thread.is_alive():
+                            logger.warning("⚠️ 停止超时，强制终止线程")
+                            # 这里我们不强制终止，让线程自然结束
+                        current_scrape_thread = None
+
+                    db.update_scrape_status(is_scraping=False, completed=True, message='抓取已停止')
+                    logger.info("✅ 批量抓取已完全停止")
+
+                except Exception as e:
+                    logger.error(f"停止监控线程出错: {e}")
+
+            # 启动监控线程
+            import threading
+            stop_monitor = threading.Thread(target=monitor_stop, daemon=True)
+            stop_monitor.start()
+
+            updated_status = db.get_scrape_status()
+            return jsonify(updated_status)
+        else:
+            return jsonify({'error': '设置停止信号失败'}), 500
 
     if action == 'start':
-        if scrape_status['is_scraping']:
+        if current_status.get('is_scraping', False):
             return jsonify({'error': '已有任务在运行'}), 400
 
+        # 检查是否有线程在运行
+        with scrape_thread_lock:
+            if current_scrape_thread and current_scrape_thread.is_alive():
+                return jsonify({'error': '已有线程在运行'}), 400
+
         # 重置状态
-        scrape_status.update({
-            'is_scraping': True,
-            'paused': False,
-            'stop_signal': False,
-            'current_shop_id': shop_id,
-            'total': 0,
-            'processed': 0,
-            'success': 0,
-            'message': '初始化抓取...'
-        })
+        success = db.update_scrape_status(
+            is_scraping=True,
+            stop_signal=False,
+            current_shop_id=shop_id,
+            total=0,
+            processed=0,
+            success=0,
+            progress=0,
+            message='初始化抓取...',
+            completed=False,
+            thread_id=None
+        )
+
+        if not success:
+            return jsonify({'error': '重置状态失败'}), 500
 
         # 异步启动
-        threading.Thread(target=run_shop_scrape_task, args=(shop_id,), daemon=True).start()
-        return jsonify(scrape_status)
+        with scrape_thread_lock:
+            current_scrape_thread = threading.Thread(
+                target=run_shop_scrape_task,
+                args=(shop_id,),
+                daemon=True,
+                name=f'scrape-{shop_id}'
+            )
+            current_scrape_thread.start()
+
+            # 更新线程ID到数据库
+            db.update_scrape_status(thread_id=current_scrape_thread.ident)
+
+        updated_status = db.get_scrape_status()
+        return jsonify(updated_status)
 
     return jsonify({'error': 'Invalid action'}), 400
+
+@app.route('/api/scrape/batch', methods=['POST'])
+def batch_scrape_products():
+    """批量抓取多个商品（高性能多线程版本）"""
+    try:
+        data = request.get_json()
+        if not data or not data.get('productIds'):
+            return jsonify({'error': '缺少productIds参数'}), 400
+
+        product_ids = data.get('productIds', [])
+        if not isinstance(product_ids, list) or len(product_ids) == 0:
+            return jsonify({'error': 'productIds必须是非空数组'}), 400
+
+        # 使用环境变量配置的线程数
+        max_threads = SCRAPE_THREADS
+
+        logger.info(f"开始批量抓取 {len(product_ids)} 个商品，使用 {max_threads} 个线程")
+
+        # 创建批量处理任务
+        import concurrent.futures
+        import time
+
+        results = {
+            'total': len(product_ids),
+            'processed': 0,
+            'success': 0,
+            'skipped': 0,
+            'cancelled': 0,
+            'partial': 0,
+            'errors': 0,
+            'start_time': time.time()
+        }
+
+        def process_single_product_batch(product_id):
+            """处理单个商品（用于线程池）"""
+            try:
+                # === 检查停止信号 ===
+                current_status = db.get_scrape_status()
+                if current_status.get('stop_signal', False):
+                    logger.info(f"🔴 处理商品前检测到停止信号，取消处理商品 {product_id}")
+                    return {'status': 'cancelled', 'product_id': product_id, 'message': '任务已取消'}
+
+                # 调用现有的单个商品处理逻辑
+                from app import process_single_product
+
+                # 构建商品信息
+                product_info = {
+                    'item_id': str(product_id),
+                    'item_url': f'https://weidian.com/item.html?itemID={product_id}',
+                    'shop_name': '批量上传'
+                }
+
+                # 处理商品
+                product_data = process_single_product(product_info)
+
+                if product_data:
+                    # === 再次检查停止信号 ===
+                    current_status = db.get_scrape_status()
+                    if current_status.get('stop_signal', False):
+                        logger.info(f"🔴 获取商品数据后检测到停止信号，跳过商品 {product_id}")
+                        return {'status': 'cancelled', 'product_id': product_id, 'message': '任务已取消'}
+
+                    # 检查是否已存在
+                    if db.get_product_by_url(product_data['product_url']):
+                        return {'status': 'skipped', 'product_id': product_id, 'message': '商品已存在'}
+
+                    # 入库
+                    product_id_db = db.insert_product(product_data)
+
+                    # === 再次检查停止信号 ===
+                    current_status = db.get_scrape_status()
+                    if current_status.get('stop_signal', False):
+                        logger.info(f"🔴 入库后检测到停止信号，商品 {product_id} 已入库但跳过图片处理")
+                        return {'status': 'partial', 'product_id': product_id, 'message': '商品已入库，图片处理被取消'}
+
+                    # 处理图片（使用优化后的多线程图片处理）
+                    if product_data.get('images'):
+                        save_product_images_batch(product_id_db, product_data['images'])
+
+                    return {'status': 'success', 'product_id': product_id, 'message': '处理成功'}
+                else:
+                    return {'status': 'error', 'product_id': product_id, 'message': '获取商品数据失败'}
+
+            except Exception as e:
+                logger.error(f"处理商品 {product_id} 失败: {e}")
+                return {'status': 'error', 'product_id': product_id, 'message': str(e)}
+
+        # 使用线程池并发处理商品
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
+            # 提交所有任务
+            future_to_product = {
+                executor.submit(process_single_product_batch, pid): pid
+                for pid in product_ids
+            }
+
+            # 收集结果 - 支持优雅停止
+            pending_futures = set(future_to_product.keys())
+            stop_detected = False
+
+            try:
+                while pending_futures:
+                    # 检查是否有停止信号或关闭事件
+                    current_status = db.get_scrape_status()
+                    should_stop = (current_status.get('stop_signal', False) or
+                                 (shutdown_event and shutdown_event.is_set()))
+
+                    if should_stop and not stop_detected:
+                        logger.info("🔴 检测到停止信号，正在等待已提交的任务完成...")
+                        db.update_scrape_status(message='正在等待当前商品完成...')
+                        stop_detected = True
+                        # 不关闭线程池，让已提交的任务继续完成
+
+                    # 等待任意一个任务完成
+                    done, pending_futures = concurrent.futures.wait(
+                        pending_futures,
+                        timeout=1.0,
+                        return_when=concurrent.futures.FIRST_COMPLETED
+                    )
+
+                    # 处理已完成的任务
+                    for future in done:
+                        product_id = future_to_product[future]
+                        try:
+                            result = future.result()
+                            results['processed'] += 1
+
+                            if result['status'] == 'success':
+                                results['success'] += 1
+                                logger.info(f"商品 {product_id} 处理成功")
+                            elif result['status'] == 'skipped':
+                                results['skipped'] += 1
+                                logger.info(f"商品 {product_id} 已存在，跳过")
+                            elif result['status'] == 'cancelled':
+                                results['cancelled'] += 1
+                                logger.info(f"商品 {product_id} 处理被取消")
+                            elif result['status'] == 'partial':
+                                results['partial'] += 1
+                                logger.info(f"商品 {product_id} 部分完成（已入库，图片处理被取消）")
+                            else:
+                                results['errors'] += 1
+                                logger.error(f"商品 {product_id} 处理失败: {result.get('message', '未知错误')}")
+
+                        except Exception as e:
+                            results['processed'] += 1
+                            results['errors'] += 1
+                            logger.error(f"处理商品 {product_id} 时发生异常: {e}")
+
+                    # 如果检测到停止信号且没有待处理的任务，退出循环
+                    if stop_detected and len(pending_futures) == 0:
+                        logger.info("✅ 所有已提交的任务已完成，退出批量处理")
+                        break
+
+            except KeyboardInterrupt:
+                logger.warning("收到键盘中断，正在优雅关闭...")
+                executor.shutdown(wait=True, timeout=10.0)
+                raise
+            finally:
+                # 确保线程池被正确关闭
+                if not executor._shutdown:
+                    executor.shutdown(wait=False)
+
+        # 计算处理时间
+        results['end_time'] = time.time()
+        results['duration'] = results['end_time'] - results['start_time']
+
+        logger.info(f"批量处理完成: {results}")
+
+        return jsonify({
+            'message': f'批量处理完成，共处理 {results["total"]} 个商品，成功 {results["success"]} 个，跳过 {results["skipped"]} 个，取消 {results["cancelled"]} 个，部分完成 {results["partial"]} 个，失败 {results["errors"]} 个',
+            'results': results
+        })
+
+    except Exception as e:
+        logger.error(f"批量抓取失败: {e}")
+        return jsonify({'error': f'批量抓取失败: {str(e)}'}), 500
 
 @app.route('/api/scrape/shop/status', methods=['GET'])
 def get_scrape_status():
     """获取抓取状态"""
     try:
-        # 确保返回有效的状态数据
-        status = dict(scrape_status)  # 创建副本避免并发问题
-        # 确保必要字段存在
-        status.setdefault('is_scraping', False)
-        status.setdefault('progress', 0)
-        status.setdefault('total', 0)
-        status.setdefault('current', 0)
-        status.setdefault('message', '')
-        status.setdefault('completed', False)
-        return jsonify(status)
+        status = db.get_scrape_status()
+
+        # 确保返回必要的字段（兼容前端期望的字段名）
+        result = {
+            'is_scraping': status.get('is_scraping', False),
+            'progress': status.get('progress', 0),
+            'total': status.get('total', 0),
+            'current': status.get('processed', 0),  # 前端期望current字段
+            'processed': status.get('processed', 0),
+            'success': status.get('success', 0),
+            'message': status.get('message', ''),
+            'completed': status.get('completed', False),
+            'current_shop_id': status.get('current_shop_id'),
+            'thread_id': status.get('thread_id')
+        }
+
+        # 调试日志
+        logger.debug(f"DEBUG: Scrape status - is_scraping: {result.get('is_scraping')}, message: {result.get('message')}")
+
+        return jsonify(result)
     except Exception as e:
         logger.error(f'获取抓取状态失败: {e}')
         return jsonify({
@@ -3021,8 +3518,12 @@ def get_scrape_status():
             'progress': 0,
             'total': 0,
             'current': 0,
+            'processed': 0,
+            'success': 0,
             'message': '获取状态失败',
-            'completed': False
+            'completed': False,
+            'current_shop_id': None,
+            'thread_id': None
         })
 
 @app.route('/api/products/count', methods=['GET'])
@@ -3088,107 +3589,71 @@ def debug_user_permissions():
         return jsonify({'error': str(e)}), 500
 
 def run_shop_scrape_task(shop_id):
-    """后台抓取任务"""
-    global scrape_status
+    """后台任务包装器 - 调用真正的抓取逻辑"""
     try:
-        from weidian_scraper import get_weidian_scraper
-        # 这里复用之前的 scrape_shop_products 逻辑，但加入状态检查
-        # 为简化代码，此处模拟逻辑，您应将原 scrape_shop_products 修改为检查 scrape_status
-
-        logger.info(f"后台任务开始抓取店铺: {shop_id}")
-
-        # 模拟初始化
-        time.sleep(1)
-        scrape_status['total'] = 100 # 假设
-
-        for i in range(100):
-            # 检查停止
-            if scrape_status['stop_signal']:
-                scrape_status['message'] = '任务已取消'
-                break
-
-            # 检查暂停
-            while scrape_status['paused']:
-                if scrape_status['stop_signal']: break
-                time.sleep(1)
-
-            # 执行抓取 (模拟)
-            # 实际代码调用: process_single_product(...)
-            time.sleep(0.1)
-
-            scrape_status['processed'] += 1
-            scrape_status['success'] += 1
-            scrape_status['message'] = f'正在处理第 {i+1} 个商品...'
-
-        if not scrape_status['stop_signal']:
-            scrape_status['message'] = '抓取完成'
-
+        logger.info(f"🧵 后台抓取线程启动: {shop_id}")
+        scrape_shop_products(shop_id)
     except Exception as e:
-        logger.error(f"后台抓取异常: {e}")
-        scrape_status['message'] = f"出错: {str(e)}"
+        logger.error(f"❌ 后台抓取线程崩溃: {e}")
+        db.update_scrape_status(message=f"系统错误: {str(e)}")
     finally:
-        scrape_status['is_scraping'] = False
+        # 确保状态正确重置
+        final_status = db.get_scrape_status()
+        db.update_scrape_status(
+            is_scraping=False,
+            completed=True
+        )
+        if not final_status.get('stop_signal', False):
+            db.update_scrape_status(message='任务结束')
+        logger.info("🧵 后台抓取线程结束")
 
 def scrape_shop_products(shop_id):
-    """抓取店铺所有商品的实现"""
+    """抓取店铺所有商品的实现 (支持暂停/停止)"""
     import requests
     import time
+    from weidian_scraper import get_weidian_scraper
 
-    global scrape_status
-
+    scraper = get_weidian_scraper()  # 实例化爬虫
     total_products = 0
     offset = 0
     limit = 20
     page_count = 0
 
-    # 初始化状态
-    scrape_status.update({
-        'is_scraping': True,
-        'progress': 0,
-        'total': 0,
-        'current': 0,
-        'message': '正在初始化...'
-    })
+    # 初始化状态到数据库
+    db.update_scrape_status(
+        is_scraping=True,
+        paused=False,
+        stop_signal=False,
+        progress=0,
+        total=0,
+        processed=0,
+        success=0,
+        message='正在初始化...'
+    )
 
     # 获取店铺名称
     shop_info = get_shop_info_from_api(shop_id)
     shop_name = shop_info.get('shopName', f'店铺 {shop_id}') if shop_info else f'店铺 {shop_id}'
-    logger.info(f'开始抓取店铺: {shop_name} (ID: {shop_id})')
-    scrape_status['message'] = f'正在抓取店铺: {shop_name}'
+
+    db.update_scrape_status(message=f'正在抓取店铺: {shop_name}')
+    logger.info(f"开始抓取循环，店铺: {shop_name}")
 
     while True:
+        # === 1. 检查停止信号 ===
+        current_status = db.get_scrape_status()
+        if current_status.get('stop_signal', False):
+            logger.info(f"🔴 检测到停止信号，退出抓取循环。当前状态: {current_status}")
+            db.update_scrape_status(message='抓取已手动停止')
+            break
+
         try:
             # 构建API URL
             url = f"https://thor.weidian.com/decorate/shopDetail.tab.getItemList/1.0"
-            params = {
-                "param": f'{{"shopId":"{shop_id}","tabId":0,"sortOrder":"desc","offset":{offset},"limit":{limit},"from":"h5","showItemTag":true}}'
-            }
+            param_encoded = quote(f'{{"shopId":"{shop_id}","tabId":0,"sortOrder":"desc","offset":{offset},"limit":{limit},"from":"h5","showItemTag":true}}')
+            full_url = f"{url}?param={param_encoded}&wdtoken=8ea9315c&_={int(time.time()*1000)}"
 
-            # 发送请求
-            headers = {
-                'accept': 'application/json, text/plain, */*',
-                'accept-language': 'en-US,en;q=0.9,zh-HK;q=0.8,zh-CN;q=0.7,zh;q=0.6',
-                'origin': 'https://weidian.com',
-                'priority': 'u=1, i',
-                'referer': 'https://weidian.com/',
-                'sec-ch-ua': '"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
-                'sec-ch-ua-mobile': '?0',
-                'sec-ch-ua-platform': '"macOS"',
-                'sec-fetch-dest': 'empty',
-                'sec-fetch-mode': 'cors',
-                'sec-fetch-site': 'same-site',
-                'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
-            }
-
-            cookies = {
-                'wdtoken': '8ea9315c',
-                '__spider__visitorid': '0dcf6a5b878847ec',
-                'visitor_id': '4d36e980-4128-451c-8178-a976b6303114',
-                'v-components/cpn-coupon-dialog@nologinshop': '10',
-                '__spider__sessionid': 'e55c6458ac1fdba4'
-            }
-
-            response = requests.get(url, params=params, headers=headers, cookies=cookies, timeout=10, proxies={'http': None, 'https': None})
+            # 复用scraper的session，确保headers和cookies一致
+            response = scraper.session.get(full_url, timeout=10)
 
             if response.status_code != 200:
                 logger.warning(f'API请求失败: {response.status_code}')
@@ -3210,30 +3675,49 @@ def scrape_shop_products(shop_id):
                 logger.info('商品列表为空，抓取完成')
                 break
 
-            # 批量处理商品详情（多线程）
-            products_to_process = []
+            # 逐个处理商品，支持更细粒度的暂停/停止控制
+            page_processed = 0
+            page_success = 0
+
             for item in items:
+                # === 检查停止信号 ===
+                item_status = db.get_scrape_status()
+                if item_status.get('stop_signal', False):
+                    logger.info("处理商品期间收到停止信号，退出")
+                    break
+
                 item_id = item.get('itemId', '')
                 if item_id:
-                    products_to_process.append({
-                        'item_id': item_id,
-                        'item_url': item.get('itemUrl', ''),
-                        'shop_name': shop_name
-                    })
+                    try:
+                        # 处理单个商品
+                        product_info = {
+                            'item_id': item_id,
+                            'item_url': item.get('itemUrl', ''),
+                            'shop_name': shop_name
+                        }
 
-            if products_to_process:
-                # 多线程处理整个页面：获取详情 + 插入数据库 + 下载图片
-                processed_count = process_page_multithreaded(products_to_process, page_count + 1)
-                total_products += processed_count
-                logger.info(f'第 {page_count + 1} 页处理完成，新增 {processed_count} 个商品')
+                        success = process_and_save_single_product_sync(product_info)
+                        page_processed += 1
+                        total_products += 1
 
-                # 更新状态
-                scrape_status.update({
-                    'current': total_products,
-                    'message': f'已处理 {page_count + 1} 页，新增 {total_products} 个商品'
-                })
+                        if success:
+                            page_success += 1
 
-                # 增加页数计数
+                        # 更新进度到数据库
+                        current_status = db.get_scrape_status()
+                        db.update_scrape_status(
+                            processed=total_products,
+                            success=current_status.get('success', 0) + (1 if success else 0),
+                            message=f'正在抓取... (成功: {current_status.get("success", 0) + (1 if success else 0)}/{total_products})'
+                        )
+
+                    except Exception as e:
+                        logger.error(f'处理商品 {item_id} 失败: {e}')
+                        page_processed += 1
+                        total_products += 1
+
+            if page_processed > 0:
+                logger.info(f'第 {page_count + 1} 页处理完成，处理 {page_processed} 个商品，成功 {page_success} 个')
                 page_count += 1
 
             # 增加offset继续抓取
@@ -3246,20 +3730,64 @@ def scrape_shop_products(shop_id):
             logger.error(f'抓取过程中出错: {e}')
             break
 
-    # 抓取完成，重置状态
-    scrape_status.update({
-        'is_scraping': False,
-        'completed': True,
-        'progress': 100,
-        'message': f'抓取完成，共处理 {total_products} 个商品，{page_count} 页'
-    })
-
-    logger.info(f'店铺 {shop_id} 抓取完成，共处理 {total_products} 个商品，{page_count} 页')
+    # 更新最终状态到数据库
+    db.update_scrape_status(
+        is_scraping=False,
+        completed=True,
+        progress=100,
+        message=f'抓取结束，共处理 {total_products} 个商品'
+    )
+    logger.info(f"店铺 {shop_id} 抓取任务结束")
 
     return {
         "total_products": total_products,
         "pages_processed": page_count
     }
+
+def process_and_save_single_product_sync(product_info):
+    """同步处理单个商品"""
+    try:
+        # === 检查停止信号 ===
+        current_status = db.get_scrape_status()
+        if current_status.get('stop_signal', False):
+            logger.info(f"🔴 处理商品前检测到停止信号，取消处理商品 {product_info.get('item_id')}")
+            return False
+
+        # 1. 抓取详情
+        from app import process_single_product  # 引用 app.py 中的逻辑
+        product_data = process_single_product(product_info)
+
+        if not product_data:
+            return False
+
+        # === 再次检查停止状态 ===
+        current_status = db.get_scrape_status()
+        if current_status.get('stop_signal', False):
+            logger.info(f"🔴 抓取详情后检测到停止信号，取消处理商品 {product_info.get('item_id')}")
+            return False
+
+        # 2. 查重
+        if db.get_product_by_url(product_data['product_url']):
+            return True  # 已存在算处理成功
+
+        # 3. 入库
+        product_id = db.insert_product(product_data)
+
+        # === 再次检查停止状态 ===
+        current_status = db.get_scrape_status()
+        if current_status.get('stop_signal', False):
+            logger.info(f"🔴 入库后检测到停止信号，商品 {product_info.get('item_id')} 已入库但跳过图片处理")
+            return True  # 商品已入库，算成功
+
+        # 4. 图片处理
+        if product_data.get('images'):
+            from app import save_product_images
+            save_product_images(product_id, product_data['images'])
+
+        return True
+    except Exception as e:
+        logger.error(f"处理商品出错 {product_info.get('item_id')}: {e}")
+        return False
 
 def scrape_product_info(product_url):
     """根据商品URL获取商品详细信息"""
@@ -3274,7 +3802,8 @@ def scrape_product_info(product_url):
             return {
                 'title': product_info.get('title', ''),
                 'description': product_info.get('description', ''),
-                'images': product_info.get('images', [])[:5],  # 最多5张图片
+                # 修复：移除 [:5] 限制，返回所有抓取到的图片
+                'images': product_info.get('images', []),
                 'shop_name': product_info.get('shop_name', '')
             }
 
@@ -3423,7 +3952,7 @@ def process_products_multithreaded(products_list):
     processed_products = []
 
     # 获取配置的线程数
-    max_workers = config.DOWNLOAD_THREADS if hasattr(config, 'DOWNLOAD_THREADS') else 4
+    max_workers = DOWNLOAD_THREADS
 
     logger.info(f'开始多线程处理 {len(products_list)} 个商品，使用 {max_workers} 个线程')
 
@@ -3456,7 +3985,7 @@ def process_page_multithreaded(products_list, page_num):
     processed_count = 0
 
     # 获取配置的线程数
-    max_workers = config.DOWNLOAD_THREADS if hasattr(config, 'DOWNLOAD_THREADS') else 4
+    max_workers = DOWNLOAD_THREADS
 
     logger.info(f'第 {page_num} 页开始多线程处理 {len(products_list)} 个商品')
 
@@ -3571,16 +4100,87 @@ def save_product_images(product_id, image_urls):
                 logger.error(f'处理图片失败 {image_url}: {e}')
                 return None
 
+        # 获取该商品已有的图片向量，用于去重
+        existing_features = []
+        try:
+            existing_images = db.get_product_images(product_id)
+            for img_record in existing_images:
+                if img_record.get('features'):
+                    existing_features.append(img_record['features'])
+            logger.info(f'商品 {product_id} 已存在 {len(existing_features)} 张图片的向量数据')
+        except Exception as e:
+            logger.warning(f'获取商品现有向量失败: {e}')
+
         # 使用线程池处理图片下载和特征提取（单例YOLO避免重复加载）
         # 降低并发数避免内存爆炸
         max_workers = min(2, len(image_urls))  # 最多2个并发线程
 
         logger.info(f'商品 {product_id} 开始多线程处理 {len(image_urls)} 张图片，使用 {max_workers} 个线程')
 
+        def process_single_image_with_deduplication(args):
+            """处理单张图片：下载 -> 保存 -> 提取特征 -> 向量去重"""
+            index, image_url = args
+            try:
+                # 下载图片（使用更短的超时时间）
+                response = requests.get(image_url, timeout=5, proxies={'http': None, 'https': None})
+                if response.status_code != 200:
+                    return None
+
+                # 生成唯一文件名，避免并发冲突
+                timestamp = int(time.time() * 1000000)  # 微秒级时间戳
+                image_filename = f"{product_id}_{index}_{timestamp}.jpg"
+                image_path = os.path.join('data', 'images', image_filename)
+
+                # 确保目录存在
+                os.makedirs(os.path.dirname(image_path), exist_ok=True)
+
+                # 直接写入文件，避免内存占用过多
+                with open(image_path, 'wb') as f:
+                    f.write(response.content)
+
+                # 验证图片完整性
+                if os.path.getsize(image_path) == 0:
+                    os.remove(image_path)
+                    return None
+
+                # 提取特征（这里会调用YOLO裁剪和DINOv2特征提取）
+                extractor = get_global_feature_extractor()
+                if extractor is None:
+                    logger.error("特征提取器未初始化")
+                    return None
+                features = extractor.extract_feature(image_path)
+
+                if features is None:
+                    # 特征提取失败，删除文件
+                    os.remove(image_path)
+                    return None
+
+                # 向量去重：检查与该商品现有图片的相似度
+                if existing_features:
+                    import numpy as np
+                    for existing_feature in existing_features:
+                        # 计算余弦相似度
+                        similarity = np.dot(features, existing_feature) / (np.linalg.norm(features) * np.linalg.norm(existing_feature))
+                        if similarity > 0.95:  # 相似度阈值95%
+                            logger.info(f'检测到重复图片 (相似度: {similarity:.3f})，跳过: {os.path.basename(image_path)}')
+                            os.remove(image_path)
+                            return None
+
+                # 返回处理结果，让主进程统一处理数据库操作
+                return {
+                    'image_path': image_path,
+                    'features': features,
+                    'index': index
+                }
+
+            except Exception as e:
+                logger.error(f'处理图片失败 {image_url}: {e}')
+                return None
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # 提交任务
-            image_tasks = [(index, url) for index, url in enumerate(image_urls[:5]) if url]
-            futures = [executor.submit(process_single_image, task) for task in image_tasks]
+            # 提交任务 - 移除图片数量限制
+            image_tasks = [(index, url) for index, url in enumerate(image_urls) if url]
+            futures = [executor.submit(process_single_image_with_deduplication, task) for task in image_tasks]
 
             # 收集结果，支持优雅关闭
             processed_results = []
@@ -3606,8 +4206,8 @@ def save_product_images(product_id, image_urls):
         processed_images = 0
         for result in processed_results:
             try:
-                # 插入图片记录到数据库
-                img_db_id = db.insert_image_record(product_id, result['image_path'], result['index'])
+                # 插入图片记录到数据库（包含特征向量）
+                img_db_id = db.insert_image_record(product_id, result['image_path'], result['index'], result['features'])
 
                 # 添加到FAISS索引
                 try:
@@ -3642,6 +4242,193 @@ def save_product_images(product_id, image_urls):
     except Exception as e:
         logger.error(f'保存商品图片失败: {e}')
 
+def save_product_images_batch(product_id, image_urls):
+    """批量保存商品图片（高性能版本 - 最大化并发）"""
+    try:
+        if not image_urls:
+            return
+
+        # 使用环境变量配置的下载线程数
+        download_threads = DOWNLOAD_THREADS
+        # 为图片下载分配更多线程，但不超过图片数量
+        max_image_threads = min(download_threads * 2, len(image_urls))
+
+        logger.info(f"商品 {product_id} 开始批量处理 {len(image_urls)} 张图片，使用 {max_image_threads} 个线程")
+
+        import concurrent.futures
+        import requests
+        import time
+        import hashlib
+
+        # 获取该商品已有的图片向量，用于去重
+        existing_features = []
+        try:
+            existing_images = db.get_product_images(product_id)
+            for img_record in existing_images:
+                if img_record.get('features'):
+                    existing_features.append(img_record['features'])
+            logger.info(f'商品 {product_id} 已存在 {len(existing_features)} 张图片的向量数据')
+        except Exception as e:
+            logger.warning(f'获取商品现有向量失败: {e}')
+
+        def process_single_image_batch(args):
+            """处理单张图片：下载 -> 保存 -> 提取特征 -> 索引"""
+            index, image_url = args
+            try:
+                # 下载图片（更短的超时时间）
+                response = requests.get(image_url, timeout=5, stream=True, proxies={'http': None, 'https': None})
+                if response.status_code != 200:
+                    return None
+
+                # 生成唯一文件名，避免并发冲突
+                timestamp = int(time.time() * 1000000)  # 微秒级时间戳
+                image_filename = f"{product_id}_{index}_{timestamp}.jpg"
+                image_path = os.path.join('data', 'images', image_filename)
+
+                # 确保目录存在
+                os.makedirs(os.path.dirname(image_path), exist_ok=True)
+
+                # 流式写入文件，避免内存占用过多
+                with open(image_path, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        if chunk:
+                            f.write(chunk)
+
+                # 验证图片完整性
+                if os.path.getsize(image_path) == 0:
+                    os.remove(image_path)
+                    return None
+
+                # 提取特征（这里会调用YOLO裁剪和DINOv2特征提取）
+                extractor = get_global_feature_extractor()
+                if extractor is None:
+                    logger.error("特征提取器未初始化")
+                    return None
+
+                features = extractor.extract_feature(image_path)
+
+                if features is None:
+                    # 特征提取失败，删除文件
+                    os.remove(image_path)
+                    return None
+
+                # 返回处理结果，让主进程统一处理数据库操作
+                return {
+                    'image_path': image_path,
+                    'features': features,
+                    'index': index,
+                    'url': image_url
+                }
+
+            except Exception as e:
+                logger.error(f'处理图片失败 {image_url}: {e}')
+                return None
+
+        # 使用线程池处理图片下载和特征提取（单例YOLO避免重复加载）
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_image_threads) as executor:
+            # 提交所有图片处理任务
+            future_to_image = {
+                executor.submit(process_single_image_batch, (index, url)): (index, url)
+                for index, url in enumerate(image_urls)
+            }
+
+            # 收集处理结果 - 支持优雅停止
+            processed_images = []
+            pending_futures = set(future_to_image.keys())
+
+            try:
+                while pending_futures:
+                    # 检查停止信号或关闭事件
+                    current_status = db.get_scrape_status()
+                    should_stop = (current_status.get('stop_signal', False) or
+                                 (shutdown_event and shutdown_event.is_set()))
+
+                    if should_stop:
+                        logger.info(f"🔴 检测到停止信号，正在等待图片处理完成...")
+                        # 优雅关闭线程池
+                        executor.shutdown(wait=True, timeout=15.0)
+                        break
+
+                    # 等待图片处理完成
+                    done, pending_futures = concurrent.futures.wait(
+                        pending_futures,
+                        timeout=1.0,
+                        return_when=concurrent.futures.FIRST_COMPLETED
+                    )
+
+                    # 处理已完成的图片
+                    for future in done:
+                        index, url = future_to_image[future]
+                        try:
+                            result = future.result()
+                            if result:
+                                processed_images.append(result)
+                        except Exception as e:
+                            logger.error(f"处理图片 {url} 时发生异常: {e}")
+
+            except KeyboardInterrupt:
+                logger.warning("收到键盘中断，正在优雅关闭图片处理...")
+                executor.shutdown(wait=True, timeout=5.0)
+                raise
+            finally:
+                # 确保线程池被正确关闭
+                if not executor._shutdown:
+                    executor.shutdown(wait=False)
+
+        # 对处理成功的图片进行向量去重和数据库插入
+        if processed_images:
+            # 串行处理数据库操作（SQLite不支持多线程写入）
+            valid_images = []
+
+            for img_data in processed_images:
+                try:
+                    # 向量去重：检查是否与现有图片过于相似
+                    is_duplicate = False
+                    current_features = img_data['features']
+
+                    for existing_feat in existing_features:
+                        try:
+                            # 计算余弦相似度
+                            import numpy as np
+                            similarity = np.dot(current_features, existing_feat) / (
+                                np.linalg.norm(current_features) * np.linalg.norm(existing_feat)
+                            )
+                            if similarity > 0.95:  # 相似度阈值
+                                is_duplicate = True
+                                break
+                        except:
+                            continue
+
+                    if not is_duplicate:
+                        valid_images.append(img_data)
+                        existing_features.append(current_features)  # 添加到现有特征列表，用于后续去重
+                    else:
+                        # 删除重复图片文件
+                        try:
+                            os.remove(img_data['image_path'])
+                        except:
+                            pass
+
+                except Exception as e:
+                    logger.error(f"处理图片去重失败 {img_data.get('url', 'unknown')}: {e}")
+
+            # 批量插入数据库
+            if valid_images:
+                try:
+                    # 为每个有效的图片创建数据库记录
+                    for img_data in valid_images:
+                        db.insert_product_image(product_id, img_data['image_path'], img_data['features'], img_data['index'])
+
+                    logger.info(f"商品 {product_id} 成功保存 {len(valid_images)} 张图片，去重了 {len(processed_images) - len(valid_images)} 张")
+
+                except Exception as e:
+                    logger.error(f"批量插入图片数据失败: {e}")
+            else:
+                logger.info(f"商品 {product_id} 所有图片都被去重，沒有新图片保存")
+
+    except Exception as e:
+        logger.error(f"批量保存商品 {product_id} 图片失败: {e}")
+
 def save_product_images_multithreaded(product_id, image_urls):
     """多线程版本的图片保存函数（向后兼容）"""
     save_product_images(product_id, image_urls)
@@ -3661,16 +4448,33 @@ if __name__ == '__main__':
         shutdown_event.set()
 
         # 设置抓取状态为停止
-        global scrape_status
-        if scrape_status.get('is_scraping', False):
-            scrape_status.update({
-                'stop_signal': True,
-                'message': '系统正在关闭，已停止抓取任务'
-            })
+        current_status = db.get_scrape_status()
+        if current_status.get('is_scraping', False):
+            db.update_scrape_status(
+                stop_signal=True,
+                message='系统正在关闭，已停止抓取任务'
+            )
             print("⏹️  已停止所有抓取任务")
 
-        # 等待一段时间让线程完成
-        time.sleep(2)
+        # 等待抓取线程结束（最多等待10秒）
+        global current_scrape_thread, scrape_thread_lock
+        with scrape_thread_lock:
+            if current_scrape_thread and current_scrape_thread.is_alive():
+                print("⏳ 等待抓取线程结束...")
+                current_scrape_thread.join(timeout=10.0)
+                if current_scrape_thread.is_alive():
+                    print("⚠️ 抓取线程未能在10秒内结束")
+                else:
+                    print("✅ 抓取线程已结束")
+
+        # 立即停止Discord机器人
+        stop_discord_bot()
+
+        # 短暂等待让其他线程有机会清理
+        time.sleep(0.2)
+        print("💥 Force exiting...")
+        import os
+        os._exit(0)
 
     # 注册信号处理器
     signal.signal(signal.SIGINT, signal_handler)
@@ -3679,17 +4483,30 @@ if __name__ == '__main__':
     # 注册退出时停止机器人的函数
     atexit.register(stop_discord_bot)
 
+    # 预加载AI模型
+    print("🤖 Preloading AI models...")
+    try:
+        from feature_extractor import get_feature_extractor
+        feature_extractor_instance = get_feature_extractor()
+        print("✅ AI models preloaded successfully")
+    except Exception as e:
+        print(f"⚠️ AI models preload failed: {e}")
+        print("🔄 Models will be loaded on first use")
+        feature_extractor_instance = None
+
     # 本地开发模式 - 总是启用热重载
     print("🚀 Starting Flask API in development mode...")
     print("🤖 Discord bot will NOT auto-start. Use web interface to start manually...")
     print("🔄 Hot reload enabled - modify files and refresh browser")
 
     try:
-        app.run(host='0.0.0.0', port=5001, debug=config.DEBUG, use_reloader=False)
+        # 使用多线程模式，更好地处理中断信号
+        app.run(host='0.0.0.0', port=5001, debug=config.DEBUG, use_reloader=False, threaded=True)
     except KeyboardInterrupt:
-        print("\n🛑 Received interrupt signal, shutting down...")
+        print("\n🛑 Received KeyboardInterrupt, shutting down...")
+        signal_handler(signal.SIGINT, None)
     except Exception as e:
         print(f"\n💥 Unexpected error: {e}")
+        signal_handler(signal.SIGINT, None)
     finally:
-        stop_discord_bot()
         print("👋 Flask API shutdown complete")

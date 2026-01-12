@@ -1,13 +1,15 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react"
+import { useApiCache } from "@/hooks/use-api-cache"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { Copy, ChevronLeft, ChevronRight, Trash2, ImageIcon, Edit, X, Download, Loader2, List, Upload, Store, CheckSquare, Square, Search, ChevronDown, ChevronUp } from "lucide-react"
+import { Copy, ChevronLeft, ChevronRight, Trash2, ImageIcon, Edit, X, Download, Loader2, List, Upload, Store, CheckSquare, Square, Search, ChevronDown, ChevronUp, Pause, Play, StopCircle } from "lucide-react"
 import { toast } from "sonner"
 import {
   Dialog,
@@ -49,37 +51,124 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null)
   const [batchUploading, setBatchUploading] = useState(false)
 
+  // 使用API缓存hook
+  const { cachedFetch } = useApiCache()
+
   // 抓取相关状态
   const [shopId, setShopId] = useState('')
   const [isShopScraping, setIsShopScraping] = useState(false)
   const [shopScrapeProgress, setShopScrapeProgress] = useState(0)
+  const [scrapeStatus, setScrapeStatus] = useState<any>(null)
   const [availableShops, setAvailableShops] = useState<any[]>([])
   const [selectedShopId, setSelectedShopId] = useState('')
   const [totalProductsCount, setTotalProductsCount] = useState(0)
   // 搜索类型状态
   const [searchType, setSearchType] = useState<'all' | 'id' | 'keyword' | 'chinese'>('all')
 
+  // 优化：分离不同类型的加载逻辑
   useEffect(() => {
-    fetchProducts()
     fetchIndexedIds()
     fetchAvailableShops()
     fetchProductsCount()
+  }, []) // 静态数据只加载一次
 
-    // 定期检查抓取状态和商品数量
+  useEffect(() => {
+    fetchProducts(currentPage)
+  }, [currentPage, itemsPerPage, keywordSearch, shopFilter]) // 只在相关参数改变时重新加载商品
+
+  useEffect(() => {
+    // 当搜索条件改变时，重置到第一页
+    if (keywordSearch || shopFilter) {
+      setCurrentPage(1)
+    }
+  }, [keywordSearch, shopFilter])
+
+  // 优化轮询频率：只在有抓取任务时才频繁检查
+  useEffect(() => {
     const statusInterval = setInterval(() => {
+      console.log('轮询状态检查 - isShopScraping:', isShopScraping, 'isBatchScraping:', isBatchScraping)
       fetchScrapeStatus()
-      fetchProductsCount()
-    }, 2000)
-    return () => clearInterval(statusInterval)
-  }, [])
+      // 商品数量只在有抓取任务时才检查
+      if (isShopScraping || isBatchScraping) {
+        fetchProductsCount()
+        // 同时刷新商品列表，显示最新抓取的数据
+        fetchProducts(currentPage)
+      }
+    }, isShopScraping || isBatchScraping ? 2000 : 10000) // 无任务时10秒检查一次
 
-  const fetchProducts = async () => {
+    console.log('设置新的轮询间隔:', isShopScraping || isBatchScraping ? 2000 : 10000, 'ms')
+
+    return () => {
+      console.log('清理轮询定时器')
+      clearInterval(statusInterval)
+    }
+  }, [isShopScraping, isBatchScraping, currentPage])
+
+  const fetchProducts = async (page: number = 1, append: boolean = false, usePreload: boolean = true) => {
     try {
-      const res = await fetch('/api/products')
+      // 首先检查是否有预加载数据（只在第一次加载且未追加时）
+      if (page === 1 && !append && usePreload) {
+        const preloadData = sessionStorage.getItem('preload_products')
+        if (preloadData) {
+          try {
+            console.log('使用预加载商品数据')
+            const data = JSON.parse(preloadData)
+            // 使用预加载数据
+            const processedProducts = (Array.isArray(data.products) ? data.products : []).map((product: any) => ({
+              ...product,
+              id: product.id,
+              shopName: product.shopName || product.shop_name || '未知店铺',
+              title: product.title || '',
+              englishTitle: product.englishTitle || product.english_title || '',
+              weidianUrl: product.weidianUrl || product.product_url || '',
+              cnfansUrl: product.cnfansUrl || product.cnfans_url || '',
+              acbuyUrl: product.acbuyUrl || product.acbuy_url || '',
+              weidianId: product.weidianId || '',
+              ruleEnabled: product.ruleEnabled !== undefined ? product.ruleEnabled : true,
+              customReplyText: product.customReplyText || product.custom_reply_text || '',
+              customReplyImages: product.customReplyImages || product.custom_reply_images || [],
+              selectedImageIndexes: product.selectedImageIndexes || [],
+              customImageUrls: product.customImageUrls || product.custom_image_urls || [],
+              imageSource: product.imageSource || product.image_source || (product.custom_image_urls ? 'custom' : 'upload')
+            }))
+
+            setProducts(processedProducts)
+            setTotalProducts(data.total || 0)
+
+            // 清除预加载数据，避免重复使用
+            sessionStorage.removeItem('preload_products')
+
+            // 在后台获取最新数据，但不显示加载状态
+            setTimeout(() => fetchProducts(1, false, false), 500)
+            return
+          } catch (e) {
+            console.error('预加载数据解析失败:', e)
+            // 预加载数据损坏，清除并重新获取
+            sessionStorage.removeItem('preload_products')
+          }
+        } else {
+          // 如果没有预加载数据，等待一下再试（给预加载一点时间）
+          if (page === 1 && !append) {
+            setTimeout(() => {
+              const retryPreload = sessionStorage.getItem('preload_products')
+              if (retryPreload) {
+                fetchProducts(1, false, true)
+              } else {
+                fetchProducts(1, false, false)
+              }
+            }, 200)
+            return
+          }
+        }
+      }
+
+      console.log('从API获取商品数据')
+      const res = await fetch(`/api/products?page=${page}&limit=${itemsPerPage}`)
       const data = await res.json()
 
       // 调试信息
       console.log('商品列表API响应:', {
+        page,
         total: data.total,
         productsCount: data.products?.length || 0,
         debug: data.debug,
@@ -100,9 +189,23 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         cnfansUrl: product.cnfansUrl || product.cnfans_url || '',
         acbuyUrl: product.acbuyUrl || product.acbuy_url || '',
         weidianId: product.weidianId || '',
-        autoReplyEnabled: product.autoReplyEnabled !== undefined ? product.autoReplyEnabled : (product.ruleEnabled !== undefined ? product.ruleEnabled : true)
+        ruleEnabled: product.ruleEnabled !== undefined ? product.ruleEnabled : true,
+        customReplyText: product.customReplyText || product.custom_reply_text || '',
+        customReplyImages: product.customReplyImages || product.custom_reply_images || [],
+        selectedImageIndexes: product.selectedImageIndexes || [],
+        customImageUrls: product.customImageUrls || product.custom_image_urls || [],
+        imageSource: product.imageSource || product.image_source || (product.custom_image_urls ? 'custom' : 'upload'),
+        uploadedImages: product.uploadedImages || []
       }))
-      setProducts(processedProducts)
+
+      if (append) {
+        // 分页加载更多
+        setProducts(prev => [...prev, ...processedProducts])
+      } else {
+        // 重新加载第一页
+        setProducts(processedProducts)
+      }
+
       setTotalProducts(data.total || 0)
     } catch (e) {
       toast.error("加载商品库失败")
@@ -111,31 +214,28 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
   const fetchIndexedIds = async () => {
     try {
-      const res = await fetch('/api/scrape?type=indexed', { credentials: 'include' })
-      const data = await res.json()
+      const data = await cachedFetch('/api/scrape?type=indexed', { credentials: 'include' })
       setIndexedIds(data.indexedIds || [])
-    } catch (e) {}
+    } catch (e) {
+      console.error('获取已索引ID失败:', e)
+    }
   }
 
   const fetchAvailableShops = async () => {
     try {
-      const res = await fetch('/api/shops')
-      if (res.ok) {
-        const data = await res.json()
-        setAvailableShops(data.shops || [])
-      }
-    } catch (e) {}
+      const data = await cachedFetch('/api/shops')
+      setAvailableShops(data.shops || [])
+    } catch (e) {
+      console.error('获取店铺列表失败:', e)
+    }
   }
 
   const fetchProductsCount = async () => {
     try {
-      const res = await fetch('/api/products/count')
-      if (res.ok) {
-        const data = await res.json()
-        setTotalProductsCount(data.count || 0)
-      }
+      const data = await cachedFetch('/api/products/count')
+      setTotalProductsCount(data.count || 0)
     } catch (e) {
-      // 静默失败
+      console.error('获取商品数量失败:', e)
     }
   }
 
@@ -146,6 +246,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         const text = await res.text()
         if (text.trim()) {
           const status = JSON.parse(text)
+          setScrapeStatus(status)
           setIsShopScraping(status.is_scraping)
           setShopScrapeProgress(status.progress || 0)
           // 如果抓取完成，刷新商品列表
@@ -263,10 +364,10 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   }
 
   const handleSelectAll = () => {
-    if (selectedProducts.length === filteredProducts.length && filteredProducts.length > 0) {
+    if (selectedProducts.length === currentProducts.length && currentProducts.length > 0) {
       setSelectedProducts([])
     } else {
-      setSelectedProducts(filteredProducts.map(p => p.id))
+      setSelectedProducts(currentProducts.map(p => p.id))
     }
   }
 
@@ -315,25 +416,118 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
   const handleUpdateProduct = async (updatedProduct: any) => {
     try {
-      const res = await fetch('/api/products', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(updatedProduct)
-      })
+      let res;
+
+      // 检查是否有上传的图片文件
+      if (updatedProduct.uploadedImages && updatedProduct.uploadedImages.length > 0) {
+        // 使用FormData发送文件
+        const formData = new FormData();
+
+        // 添加基本数据
+        formData.append('id', updatedProduct.id.toString());
+        if (updatedProduct.title) formData.append('title', updatedProduct.title);
+        if (updatedProduct.englishTitle) formData.append('englishTitle', updatedProduct.englishTitle);
+        if (updatedProduct.ruleEnabled !== undefined) formData.append('ruleEnabled', updatedProduct.ruleEnabled.toString());
+        if (updatedProduct.customReplyText) formData.append('customReplyText', updatedProduct.customReplyText);
+        if (updatedProduct.imageSource) formData.append('imageSource', updatedProduct.imageSource);
+
+        // 添加数组数据（序列化为JSON）
+        if (updatedProduct.selectedImageIndexes) {
+          formData.append('selectedImageIndexes', JSON.stringify(updatedProduct.selectedImageIndexes));
+        }
+        if (updatedProduct.customImageUrls) {
+          formData.append('customImageUrls', JSON.stringify(updatedProduct.customImageUrls));
+        }
+
+        // 添加上传的文件
+        updatedProduct.uploadedImages.forEach((file: File, index: number) => {
+          formData.append('uploadedImages', file);
+        });
+
+        res = await fetch('/api/products', {
+          method: 'PUT',
+          credentials: 'include',
+          body: formData
+        });
+      } else {
+        // 使用JSON发送普通数据
+        res = await fetch('/api/products', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify(updatedProduct)
+        });
+      }
+
       if (res.ok) {
         const data = await res.json()
-        setProducts(products.map(p => p.id === data.id ? data : p))
+        setProducts(products.map(p => p.id === data.product.id ? data.product : p))
         setEditingProduct(null)
         toast.success("更新成功")
+      } else {
+        const errorData = await res.json().catch(() => ({}));
+        toast.error(errorData.error || "更新失败")
       }
     } catch (e) {
+      console.error('Update error:', e);
       toast.error("更新失败")
     }
   }
 
 
   // ... (保留 handleScrapeShop, handleBatchScrape, handleJumpPage) ...
+
+  const handleScrapeControl = async (action: 'stop') => {
+    try {
+      console.log(`🎮 发送抓取控制请求: action=${action}, 当前状态:`, scrapeStatus)
+      const response = await fetch('/api/scrape/shop/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action
+          // 不需要shopId，因为控制的是当前正在运行的任务
+        })
+      })
+
+      console.log(`🎮 控制API响应状态: ${response.status}`)
+
+      if (response.ok) {
+        const result = await response.json()
+        console.log(`🎮 控制API响应内容:`, result)
+
+        if (action === 'stop') {
+          toast.success('正在停止抓取，请等待当前商品处理完成...')
+          // 设置一个定时器来定期检查状态
+          const checkStatusInterval = setInterval(() => {
+            fetchScrapeStatus().then(() => {
+              // 如果抓取已经停止，清除定时器
+              if (!scrapeStatus?.is_scraping) {
+                clearInterval(checkStatusInterval)
+                toast.success('抓取已完全停止')
+              }
+            })
+          }, 2000) // 每2秒检查一次
+
+          // 30秒后自动清除定时器，避免无限检查
+          setTimeout(() => {
+            clearInterval(checkStatusInterval)
+          }, 30000)
+        }
+      } else {
+        const errorText = await response.text()
+        console.error(`控制API错误响应:`, errorText)
+        try {
+          const errorData = JSON.parse(errorText)
+          toast.error(errorData.error || `操作失败: ${action}`)
+        } catch {
+          toast.error(`操作失败: ${action}`)
+        }
+      }
+    } catch (error) {
+      console.error(`控制请求异常:`, error)
+      toast.error(`操作失败: ${action}`)
+    }
+  }
 
   const handleScrapeShop = async () => {
     if (!selectedShopId) {
@@ -367,37 +561,99 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     }
   }
 
-  const handleBatchScrape = async () => { /* ... existing code with 409 fix ... */
+  const handleBatchScrape = async () => {
     const ids = batchIds.split('\n').map(id => id.trim()).filter(id => id && id.match(/^\d+$/))
-    if (ids.length === 0) { toast.error("请输入有效的商品ID"); return }
+    if (ids.length === 0) {
+      toast.error("请输入有效的商品ID")
+      return
+    }
+
+    console.log('开始批量上传，商品数量:', ids.length)
     setIsBatchScraping(true)
     setBatchProgress(0)
-    let successCount = 0
-    let skipCount = 0
+
     try {
-        for(let i=0; i<ids.length; i++) {
-        const id = ids[i]
-            const res = await fetch('/api/scrape', {
-            method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ weidianId: id })
-          })
-            if(res.ok) successCount++
-            else if(res.status === 409) skipCount++
-            setBatchProgress(((i+1)/ids.length)*100)
+      console.log(`发送批量请求到 /api/scrape/batch，商品数量: ${ids.length}`)
+
+      // 调用新的批量API
+      const res = await fetch('/api/scrape/batch', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ productIds: ids }),
+        signal: AbortSignal.timeout(300000) // 5分钟超时（批量处理需要更长时间）
+      })
+
+      console.log(`收到批量响应，状态码: ${res.status}`)
+
+      if(res.ok) {
+        const result = await res.json()
+        console.log('批量处理结果:', result)
+
+        // 从结果中提取统计信息
+        const results = result.results || {}
+        const successCount = results.success || 0
+        const skipCount = results.skipped || 0
+        const cancelledCount = results.cancelled || 0
+        const partialCount = results.partial || 0
+        const errorCount = results.errors || 0
+
+        // 构建结果消息
+        let messageParts = []
+        if (successCount > 0) messageParts.push(`成功 ${successCount}`)
+        if (skipCount > 0) messageParts.push(`跳过 ${skipCount}`)
+        if (cancelledCount > 0) messageParts.push(`取消 ${cancelledCount}`)
+        if (partialCount > 0) messageParts.push(`部分完成 ${partialCount}`)
+        if (errorCount > 0) messageParts.push(`失败 ${errorCount}`)
+
+        const message = messageParts.length > 0 ? messageParts.join(', ') : '无结果'
+
+        toast.success(`批量上传完成: ${message}`)
+        console.log('批量上传完成')
+
+        // 显示处理时间
+        if (results.duration) {
+          console.log(`处理时间: ${results.duration.toFixed(2)} 秒`)
         }
-        toast.success(`完成: 成功 ${successCount}, 跳过 ${skipCount}`)
-        fetchProducts()
-        setBatchIds('')
-    } catch(e) { toast.error("错误") }
-    finally { setIsBatchScraping(false) }
+      } else {
+        const errorText = await res.text()
+        console.error('批量上传失败:', res.status, errorText)
+        toast.error(`批量上传失败: ${errorText}`)
+      }
+
+      setBatchProgress(100)
+
+      // 强制刷新数据
+      fetchProducts()
+      fetchProductsCount()
+
+      setBatchIds('')
+    } catch(e) {
+      console.error('批量上传出现错误:', e)
+      if (e.name === 'TimeoutError') {
+        toast.error("批量上传超时，请减少商品数量或稍后重试")
+      } else {
+        toast.error("批量上传失败")
+      }
+    } finally {
+      console.log('设置 isBatchScraping 为 false')
+      setIsBatchScraping(false)
+    }
   }
 
   const handleJumpPage = () => { /* ... */ }
 
-  // 筛选和分页逻辑
+  // 筛选和分页逻辑（简化版，避免一次性加载过多数据）
   const uniqueShops = Array.from(new Set(products.map(p => p?.shopName || '').filter(name => name && name.trim()))).sort()
-  const filteredProducts = products.filter(p => {
+
+  // 简化分页：直接使用当前页的产品数据，不再进行复杂的内存筛选
+  // 这样可以显著提升加载速度，但暂时不支持跨页搜索
+  const currentProducts = products.filter(p => {
+    // 只有在没有搜索条件时才显示当前页数据
+    if (!keywordSearch && !shopFilter) {
+      return true
+    }
+
+    // 有搜索条件时，对当前加载的数据进行筛选
     let matchesSearch = true
     if (keywordSearch) {
       if (searchType === 'id') {
@@ -408,15 +664,16 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         matchesSearch = p.title?.toLowerCase().includes(keywordSearch.toLowerCase())
       } else {
         matchesSearch = p.title?.toLowerCase().includes(keywordSearch.toLowerCase()) ||
-      p.englishTitle?.toLowerCase().includes(keywordSearch.toLowerCase()) ||
-      p.weidianId?.includes(keywordSearch)
+        p.englishTitle?.toLowerCase().includes(keywordSearch.toLowerCase()) ||
+        p.weidianId?.includes(keywordSearch)
       }
     }
     const matchesShop = !shopFilter || shopFilter === "__ALL__" || p.shopName === shopFilter
     return matchesSearch && matchesShop
   })
-  const totalPages = Math.ceil(filteredProducts.length / itemsPerPage)
-  const currentProducts = filteredProducts.slice((currentPage - 1) * itemsPerPage, currentPage * itemsPerPage)
+
+  // 计算总页数（基于总数）
+  const totalPages = Math.ceil(totalProducts / itemsPerPage)
 
   return (
     <div className="space-y-8">
@@ -453,9 +710,21 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                     </SelectContent>
                                 </Select>
                 </div>
-                            <Button onClick={handleScrapeShop} disabled={!selectedShopId || isShopScraping} className="w-full">
-                                {isShopScraping ? "抓取中..." : "抓取店铺"}
-                </Button>
+                            {!isShopScraping ? (
+                              <Button onClick={handleScrapeShop} disabled={!selectedShopId} className="w-full">
+                                抓取店铺
+                              </Button>
+                            ) : (
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                onClick={() => handleScrapeControl('stop')}
+                                className="w-full"
+                              >
+                                <StopCircle className="w-4 h-4 mr-2" />
+                                取消抓取
+                              </Button>
+                            )}
               </div>
             </div>
           </CardContent>
@@ -508,7 +777,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                 <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4">
             <div className="flex flex-col gap-1">
                         <CardTitle className="text-xl font-bold">
-                          商品库 ({totalProductsCount}{isShopScraping ? ' - 抓取中...' : ''})
+                          商品库{isShopScraping ? ' - 抓取中...' : ''}
                         </CardTitle>
             </div>
                     <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center w-full sm:w-auto">
@@ -565,8 +834,8 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
             </div>
                         {/* 操作按钮 */}
                         <div className="flex items-center gap-3">
-                            <Button variant={selectedProducts.length===filteredProducts.length && filteredProducts.length>0?"secondary":"outline"} size="sm" onClick={handleSelectAll}>
-                                {selectedProducts.length===filteredProducts.length && filteredProducts.length>0 ? <CheckSquare className="mr-2 h-4 w-4"/> : <Square className="mr-2 h-4 w-4"/>} 全选 ({filteredProducts.length})
+                            <Button variant={selectedProducts.length===currentProducts.length && currentProducts.length>0?"secondary":"outline"} size="sm" onClick={handleSelectAll}>
+                                {selectedProducts.length===currentProducts.length && currentProducts.length>0 ? <CheckSquare className="mr-2 h-4 w-4"/> : <Square className="mr-2 h-4 w-4"/>} 全选 ({currentProducts.length})
             </Button>
                             {selectedProducts.length > 0 && (
                                 <Button variant="destructive" size="sm" onClick={handleBatchDelete} disabled={isDeleting}>
@@ -772,6 +1041,212 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                             </div>
                                                     <Switch checked={editingProduct?.ruleEnabled || false} onCheckedChange={(c) => setEditingProduct({...editingProduct, ruleEnabled: c})} />
                           </div>
+
+                          {/* 自定义回复设置 - 当自动回复规则关闭时显示 */}
+                          {!editingProduct?.ruleEnabled && (
+                            <div className="space-y-4 p-4 border rounded-lg bg-blue-50/30">
+                              <div className="space-y-2">
+                                <Label className="text-sm font-medium">自定义回复消息</Label>
+                                <Textarea
+                                  value={editingProduct?.customReplyText || ""}
+                                  onChange={(e) => setEditingProduct({...editingProduct, customReplyText: e.target.value})}
+                                  placeholder="输入自定义回复消息内容..."
+                                  rows={3}
+                                />
+                                <p className="text-xs text-muted-foreground">留空则不发送文本消息</p>
+                              </div>
+
+                              <div className="space-y-2">
+                                <Label className="text-sm font-medium">选择回复图片来源</Label>
+                                <div className="flex flex-wrap gap-4">
+                                  <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                      type="radio"
+                                      name="imageSource"
+                                      checked={editingProduct?.imageSource === 'product'}
+                                      onChange={() => setEditingProduct({...editingProduct, imageSource: 'product'})}
+                                    />
+                                    <span className="text-sm">选择现有图片</span>
+                                  </label>
+                                  <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                      type="radio"
+                                      name="imageSource"
+                                      checked={editingProduct?.imageSource === 'upload'}
+                                      onChange={() => setEditingProduct({...editingProduct, imageSource: 'upload'})}
+                                    />
+                                    <span className="text-sm">本地上传新图片</span>
+                                  </label>
+                                  <label className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                      type="radio"
+                                      name="imageSource"
+                                      checked={editingProduct?.imageSource === 'custom'}
+                                      onChange={() => setEditingProduct({...editingProduct, imageSource: 'custom'})}
+                                    />
+                                    <span className="text-sm">使用图片链接</span>
+                                  </label>
+                                </div>
+                              </div>
+
+                              {editingProduct?.imageSource === 'product' ? (
+                                <div className="space-y-2">
+                                  <Label className="text-sm font-medium">选择现有图片 (多选)</Label>
+                                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3 max-h-60 overflow-y-auto">
+                                    {editingProduct?.images?.map((image: any, index: number) => (
+                                      <div
+                                        key={index}
+                                        className={`relative border-2 rounded-lg overflow-hidden cursor-pointer transition-all ${
+                                          editingProduct?.selectedImageIndexes?.includes(index)
+                                            ? 'border-blue-500 bg-blue-50'
+                                            : 'border-gray-200 hover:border-gray-300'
+                                        }`}
+                                        onClick={() => {
+                                          const selectedIndexes = editingProduct?.selectedImageIndexes || [];
+                                          const newIndexes = selectedIndexes.includes(index)
+                                            ? selectedIndexes.filter((i: number) => i !== index)
+                                            : [...selectedIndexes, index];
+                                          setEditingProduct({...editingProduct, selectedImageIndexes: newIndexes});
+                                        }}
+                                      >
+                                        <img
+                                          src={`/api/products/${editingProduct.id}/images/${index}`}
+                                          alt={`图片 ${index + 1}`}
+                                          className="w-full h-20 object-cover"
+                                        />
+                                        {editingProduct?.selectedImageIndexes?.includes(index) && (
+                                          <div className="absolute inset-0 bg-blue-500/20 flex items-center justify-center">
+                                            <div className="bg-blue-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold">
+                                              ✓
+                                            </div>
+                                          </div>
+                                        )}
+                                        <div className="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-xs p-1">
+                                          图片 {index + 1}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                  {(!editingProduct?.images || editingProduct.images.length === 0) && (
+                                    <div className="text-center py-8 text-muted-foreground text-sm border-2 border-dashed border-gray-200 rounded-lg">
+                                      此商品暂无图片
+                                    </div>
+                                  )}
+                                  <p className="text-xs text-muted-foreground">
+                                    已选择 {editingProduct?.selectedImageIndexes?.length || 0} 张图片用于回复
+                                  </p>
+                                </div>
+                              ) : editingProduct?.imageSource === 'upload' ? (
+                                <div className="space-y-2">
+                                  <Label className="text-sm font-medium">本地上传图片</Label>
+                                  <div className="space-y-3">
+                                    <input
+                                      type="file"
+                                      multiple
+                                      accept="image/*"
+                                      onChange={(e) => {
+                                        const files = Array.from(e.target.files || []);
+                                        setEditingProduct({...editingProduct, uploadedImages: files});
+                                      }}
+                                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                    />
+                                    {editingProduct?.uploadedImages && editingProduct.uploadedImages.length > 0 && (
+                                      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                                        {editingProduct.uploadedImages.map((file: File, index: number) => (
+                                          <div key={index} className="relative border rounded-lg overflow-hidden">
+                                            <img
+                                              src={URL.createObjectURL(file)}
+                                              alt={`上传图片 ${index + 1}`}
+                                              className="w-full h-20 object-cover"
+                                            />
+                                            <button
+                                              type="button"
+                                              onClick={() => {
+                                                const newFiles = editingProduct.uploadedImages.filter((_: File, i: number) => i !== index);
+                                                setEditingProduct({...editingProduct, uploadedImages: newFiles});
+                                              }}
+                                              className="absolute top-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs"
+                                            >
+                                              ×
+                                            </button>
+                                            <div className="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-xs p-1">
+                                              {file.name}
+                                            </div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                  <p className="text-xs text-muted-foreground">
+                                    选择图片文件上传到商品中，支持多选
+                                  </p>
+                                </div>
+                              ) : editingProduct?.imageSource === 'custom' ? (
+                                <div className="space-y-2">
+                                  <Label className="text-sm font-medium">自定义图片链接</Label>
+                                  <Input
+                                    value={editingProduct?.customImageUrls?.join('\n') || ""}
+                                    onChange={(e) => {
+                                      const urls = e.target.value.split('\n').filter(url => url.trim());
+                                      setEditingProduct({...editingProduct, customImageUrls: urls});
+                                    }}
+                                    placeholder="每行一个图片链接&#10;https://example.com/image1.jpg&#10;https://example.com/image2.jpg"
+                                    className="min-h-20"
+                                  />
+                                  <p className="text-xs text-muted-foreground">
+                                    每行一个图片链接，最多支持10个链接
+                                  </p>
+                                </div>
+                              ) : (
+                                <div className="space-y-2">
+                                  <Label className="text-sm font-medium">选择商品图片 (多选)</Label>
+                                  <div className="grid grid-cols-2 md:grid-cols-3 gap-3 max-h-60 overflow-y-auto">
+                                    {editingProduct?.images?.map((image: any, index: number) => (
+                                      <div
+                                        key={index}
+                                        className={`relative border-2 rounded-lg overflow-hidden cursor-pointer transition-all ${
+                                          editingProduct?.selectedImageIndexes?.includes(index)
+                                            ? 'border-blue-500 bg-blue-50'
+                                            : 'border-gray-200 hover:border-gray-300'
+                                        }`}
+                                        onClick={() => {
+                                          const selectedIndexes = editingProduct?.selectedImageIndexes || [];
+                                          const newIndexes = selectedIndexes.includes(index)
+                                            ? selectedIndexes.filter((i: number) => i !== index)
+                                            : [...selectedIndexes, index];
+                                          setEditingProduct({...editingProduct, selectedImageIndexes: newIndexes});
+                                        }}
+                                      >
+                                        <img
+                                          src={`/api/products/${editingProduct.id}/images/${index}`}
+                                          alt={`图片 ${index + 1}`}
+                                          className="w-full h-20 object-cover"
+                                        />
+                                        {editingProduct?.selectedImageIndexes?.includes(index) && (
+                                          <div className="absolute inset-0 bg-blue-500/20 flex items-center justify-center">
+                                            <div className="bg-blue-500 text-white rounded-full w-6 h-6 flex items-center justify-center text-sm font-bold">
+                                              ✓
+                                            </div>
+                                          </div>
+                                        )}
+                                        <div className="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-xs p-1">
+                                          图片 {index + 1}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                  {(!editingProduct?.images || editingProduct.images.length === 0) && (
+                                    <div className="text-center py-8 text-muted-foreground text-sm border-2 border-dashed border-gray-200 rounded-lg">
+                                      此商品暂无图片
+                                    </div>
+                                  )}
+                                  <p className="text-xs text-muted-foreground">
+                                    已选择 {editingProduct?.selectedImageIndexes?.length || 0} 张图片
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                         <DialogFooter>
                                                 <Button variant="outline" onClick={()=>setEditingProduct(null)}>取消</Button>
@@ -792,10 +1267,10 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
           </div>
           
                 {/* 分页组件 */}
-                {filteredProducts.length > 0 && (
+                {currentProducts.length > 0 && (
                     <div className="flex flex-col sm:flex-row justify-between items-center gap-4 p-6 border-t bg-muted/5">
               <div className="text-sm text-muted-foreground font-medium">
-                            显示第 {(currentPage-1)*itemsPerPage + 1} - {Math.min(currentPage*itemsPerPage, filteredProducts.length)} 条，共 {filteredProducts.length} 条记录
+                            显示第 {(currentPage-1)*itemsPerPage + 1} - {Math.min(currentPage*itemsPerPage, currentProducts.length)} 条，共 {currentProducts.length} 条记录
                             <span className="ml-2">({currentPage}/{totalPages}页)</span>
               </div>
                 <div className="flex items-center gap-2">

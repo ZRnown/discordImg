@@ -13,6 +13,7 @@ import { toast } from "sonner"
 
 export function ImageSearchView() {
   const [uploadedImage, setUploadedImage] = useState<string | null>(null)
+  const [imageUrl, setImageUrl] = useState<string>("")
   const [isSearching, setIsSearching] = useState(false)
   const [searchResults, setSearchResults] = useState<any[]>([])
   const [threshold, setThreshold] = useState(30) // 0-100，默认30% (降低阈值以提高匹配成功率)
@@ -102,27 +103,54 @@ export function ImageSearchView() {
     const reader = new FileReader()
     reader.onload = (event) => {
       setUploadedImage(event.target?.result as string)
+      // 清空链接输入
+      setImageUrl("")
       toast.success("图片已上传")
     }
     reader.readAsDataURL(file)
   }, [])
 
+  const handleClearImage = () => {
+    setUploadedImage(null)
+  }
+
   const handleSearch = async () => {
-    if (!uploadedImage) {
-      toast.error("请先上传图片")
+    if (!uploadedImage && !imageUrl.trim()) {
+      toast.error("请上传图片或输入图片链接")
       return
     }
 
     setIsSearching(true)
 
     try {
-      // 将base64图片转换为blob
-      const response = await fetch(uploadedImage);
-      const blob = await response.blob();
-
       // 创建FormData
       const formData = new FormData();
-      formData.append('image', blob, 'search.jpg');
+
+      if (uploadedImage) {
+        // 将base64图片转换为blob
+        try {
+          const base64Data = uploadedImage.split(',')[1]; // 去掉data:image/jpeg;base64,前缀
+          const byteCharacters = atob(base64Data);
+          const byteNumbers = new Array(byteCharacters.length);
+          for (let i = 0; i < byteCharacters.length; i++) {
+            byteNumbers[i] = byteCharacters.charCodeAt(i);
+          }
+          const byteArray = new Uint8Array(byteNumbers);
+          const blob = new Blob([byteArray], { type: 'image/jpeg' });
+        formData.append('image', blob, 'search.jpg');
+        console.log('使用上传的图片进行搜索');
+        } catch (error) {
+          console.error('图片转换失败:', error);
+          toast.error('图片处理失败，请重试');
+          setIsSearching(false);
+          return;
+        }
+      } else if (imageUrl.trim()) {
+        // 发送图片URL
+        formData.append('image_url', imageUrl.trim());
+        console.log('使用图片链接进行搜索:', imageUrl.trim());
+      }
+
       formData.append('threshold', (threshold / 100).toString()); // 转换为0-1
       formData.append('limit', maxResults.toString()); // 返回结果数量
 
@@ -157,9 +185,6 @@ export function ImageSearchView() {
     }
   }
 
-  const handleClearImage = () => {
-    setUploadedImage(null)
-  }
 
 
 
@@ -173,42 +198,95 @@ export function ImageSearchView() {
       <div className="grid gap-6 lg:grid-cols-1">
         <Card>
           <CardHeader>
-            <CardTitle>上传图片并搜索</CardTitle>
-            <CardDescription>支持 JPG、PNG、WebP 格式，拖拽或点击上传图片进行向量搜索</CardDescription>
+            <CardTitle>上传图片或输入链接进行搜索</CardTitle>
+            <CardDescription>支持 JPG、PNG、WebP 格式，可上传图片文件或输入图片链接进行向量搜索</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex gap-4">
-              {/* 图片上传区域 */}
-              <div className="flex-1">
-                {!uploadedImage ? (
-                  <label
-                    htmlFor="image-upload"
-                    className="flex flex-col items-center justify-center h-48 border-2 border-dashed border-muted-foreground/25 rounded-lg cursor-pointer hover:border-muted-foreground/50 transition-colors"
-                  >
-                    <Upload className="size-12 text-muted-foreground mb-2" />
-                    <p className="text-sm text-muted-foreground">点击或拖拽上传图片</p>
-                    <input id="image-upload" type="file" accept="image/*" className="hidden" onChange={handleFileUpload} />
-                  </label>
-                ) : (
-                  <div className="relative">
-                    <img
-                      src={uploadedImage || "/placeholder.svg"}
-                      alt="Uploaded"
-                      className="w-full h-48 object-contain rounded-lg border"
-                    />
-                    <Button
-                      variant="destructive"
-                      size="icon"
-                      className="absolute top-2 right-2 w-8 h-8"
-                      onClick={handleClearImage}
-                    >
-                      <X className="w-4 h-4" />
-                    </Button>
+            <div className="flex gap-6">
+              {/* 左侧：图片输入区域 */}
+              <div className="flex-1 space-y-4">
+                {/* 图片上传区域 */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">上传图片</label>
+                  <div className="space-y-3">
+                    {!uploadedImage ? (
+                      <label
+                        htmlFor="image-upload"
+                        className={`flex flex-col items-center justify-center h-48 border-2 border-dashed rounded-lg cursor-pointer transition-colors ${
+                          imageUrl.trim()
+                            ? 'border-gray-200 bg-gray-50 cursor-not-allowed opacity-50'
+                            : 'border-muted-foreground/25 hover:border-muted-foreground/50'
+                        }`}
+                      >
+                        <Upload className="size-12 text-muted-foreground mb-2" />
+                        <input
+                          id="image-upload"
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={handleFileUpload}
+                          disabled={!!imageUrl.trim()}
+                        />
+                      </label>
+                    ) : (
+                      <div className="relative">
+                        <img
+                          src={uploadedImage || "/placeholder.svg"}
+                          alt="Uploaded"
+                          className="w-full h-48 object-contain rounded-lg border"
+                        />
+                        <Button
+                          variant="destructive"
+                          size="icon"
+                          className="absolute top-2 right-2 w-8 h-8"
+                          onClick={handleClearImage}
+                        >
+                          <X className="w-4 h-4" />
+                        </Button>
+                      </div>
+                    )}
                   </div>
-                )}
+                </div>
+
+                {/* 图片链接输入 */}
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">图片链接</label>
+                  <input
+                    type="url"
+                    value={imageUrl}
+                    onChange={(e) => {
+                      setImageUrl(e.target.value)
+                      // 当输入链接时，清空已上传的图片
+                      if (e.target.value.trim()) {
+                        setUploadedImage(null)
+                      }
+                    }}
+                    placeholder="输入图片链接 (https://...)"
+                    className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                      uploadedImage ? 'border-gray-200 bg-gray-50 cursor-not-allowed opacity-50' : 'border-gray-300'
+                    }`}
+                    disabled={!!uploadedImage}
+                  />
+                  {imageUrl && !uploadedImage && (
+                    <div className="flex items-center gap-2">
+                      <img
+                        src={imageUrl}
+                        alt="Preview"
+                        className="w-16 h-16 object-cover rounded border"
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                        }}
+                      />
+                      <span className="text-sm text-muted-foreground">图片预览</span>
+                    </div>
+                  )}
+                  {uploadedImage && (
+                    <p className="text-xs text-muted-foreground">已上传图片，无法输入链接</p>
+                  )}
+                </div>
               </div>
 
-              {/* 搜索设置 */}
+              {/* 右侧：搜索设置 */}
               <div className="w-80 space-y-4">
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
@@ -249,7 +327,7 @@ export function ImageSearchView() {
                 <Button
                   className="w-full"
                   onClick={handleSearch}
-                  disabled={!uploadedImage || isSearching}
+                  disabled={(!uploadedImage && !imageUrl.trim()) || isSearching}
                 >
                   <Search className="w-4 h-4 mr-2" />
                   {isSearching ? "搜索中..." : "开始搜索"}
@@ -442,18 +520,18 @@ export function ImageSearchView() {
                       <div className="space-y-0.5 min-w-0 flex-1">
                         <div className="flex items-center gap-2">
                           <h4 className="font-bold text-base truncate">{history.title}</h4>
-                          <Badge
-                            className={
-                              history.similarity >= 0.95
-                                ? "bg-green-600 hover:bg-green-700"
-                                : history.similarity >= 0.85
-                                ? "bg-blue-600 hover:bg-blue-700"
-                                : "bg-yellow-600 hover:bg-yellow-700"
-                            }
-                          >
-                            {(history.similarity * 100).toFixed(1)}% 相似度
-                          </Badge>
-                        </div>
+                            <Badge
+                              className={
+                                history.similarity >= 0.95
+                                  ? "bg-green-600 hover:bg-green-700"
+                                  : history.similarity >= 0.85
+                                  ? "bg-blue-600 hover:bg-blue-700"
+                                  : "bg-yellow-600 hover:bg-yellow-700"
+                              }
+                            >
+                              {(history.similarity * 100).toFixed(1)}% 相似度
+                            </Badge>
+                          </div>
                         <div className="flex items-center gap-2 mt-1">
                           <p className="text-sm font-bold text-blue-600 truncate">{history.english_title || "No English Title"}</p>
                         </div>
@@ -466,8 +544,8 @@ export function ImageSearchView() {
                           <span>|</span>
                           <span>搜索时间: {new Date(history.search_time).toLocaleString('zh-CN')}</span>
                         </div>
-                      </div>
-                    </div>
+                              </div>
+                            </div>
 
                     {/* 链接显示区域 */}
                     <div className="flex items-center gap-4">
@@ -496,7 +574,7 @@ export function ImageSearchView() {
                               </a>
                               <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(history.cnfans_url); toast.success("Copied")}}>
                                 <Copy className="h-2.5 w-2.5"/>
-                              </Button>
+                            </Button>
                             </div>
                           </div>
                         )}
@@ -511,21 +589,21 @@ export function ImageSearchView() {
                               </a>
                               <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(history.acbuy_url); toast.success("Copied")}}>
                                 <Copy className="h-2.5 w-2.5"/>
-                              </Button>
+                            </Button>
                             </div>
                           </div>
                         )}
                       </div>
 
                       {/* 删除按钮 */}
-                      <Button
+                        <Button
                         variant="outline"
-                        size="icon"
+                          size="icon"
                         className="h-8 w-8 hover:bg-red-50 hover:text-red-600"
-                        onClick={() => handleDeleteHistory(history.id)}
-                      >
+                          onClick={() => handleDeleteHistory(history.id)}
+                        >
                         <X className="size-3.5" />
-                      </Button>
+                        </Button>
                     </div>
                   </div>
                 ))}
