@@ -1225,8 +1225,8 @@ def update_website_rotation(config_id):
         # 更新轮换间隔
         if 'rotation_interval' in data:
             rotation_interval = data['rotation_interval']
-        if rotation_interval <= 0:
-            return jsonify({'error': '轮换间隔必须大于0秒'}), 400
+            if rotation_interval <= 0:
+                return jsonify({'error': '轮换间隔必须大于0秒'}), 400
 
             if db.update_website_config_rotation(config_id, rotation_interval):
                 updates.append(True)

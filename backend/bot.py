@@ -574,7 +574,7 @@ class DiscordBotClient(discord.Client):
                         elif image_source == 'custom' and custom_image_urls and len(custom_image_urls) > 0:
                             # 发送自定义图片链接
                             try:
-                                import aiohttp
+                                # aiohttp already imported at module level
                                 for url in custom_image_urls[:10]:  # 最多发送10张图片
                                     try:
                                         async with aiohttp.ClientSession() as session:
