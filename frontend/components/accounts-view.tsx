@@ -47,6 +47,18 @@ export function AccountsView() {
   })
   const [websiteChannels, setWebsiteChannels] = useState<{[key: number]: string[]}>({})
 
+  // 网站账号绑定相关状态
+  const [websiteAccounts, setWebsiteAccounts] = useState<{[key: number]: any[]}>({})
+  const [showBindAccount, setShowBindAccount] = useState<number | null>(null)
+  const [newAccountBinding, setNewAccountBinding] = useState({
+    account_id: '',
+    role: 'both'
+  })
+
+  // 网站过滤规则相关状态
+  const [websiteFilters, setWebsiteFilters] = useState<{[key: number]: any[]}>({})
+  const [showAddWebsiteFilter, setShowAddWebsiteFilter] = useState<number | null>(null)
+
   // 消息过滤相关状态
   const [messageFilters, setMessageFilters] = useState<any[]>([])
   const [showAddFilter, setShowAddFilter] = useState(false)
@@ -62,14 +74,38 @@ export function AccountsView() {
       const data = await cachedFetch('/api/websites', { credentials: 'include' })
       const websites = data.websites || []
 
-      // 后端已包含channels信息，无需额外请求
-        const channels: {[key: number]: string[]} = {}
-      websites.forEach((website: any) => {
-        channels[website.id] = website.channels || []
+      // 后端已包含channels和accounts信息
+      const channels: {[key: number]: string[]} = {}
+      const accounts: {[key: number]: any[]} = {}
+      const filters: {[key: number]: any[]} = {}
+
+      // 并行获取所有网站的过滤规则
+      const filterPromises = websites.map(async (website: any) => {
+        try {
+          const res = await fetch(`/api/websites/${website.id}/filters`, { credentials: 'include' })
+          if (res.ok) {
+            const data = await res.json()
+            filters[website.id] = data.filters || []
+          } else {
+            filters[website.id] = []
+          }
+        } catch (e) {
+          filters[website.id] = []
+        }
       })
 
+      websites.forEach((website: any) => {
+        channels[website.id] = website.channels || []
+        accounts[website.id] = website.accounts || []
+      })
+
+      // 等待所有过滤规则获取完成
+      await Promise.all(filterPromises)
+
       setWebsites(websites)
-        setWebsiteChannels(channels)
+      setWebsiteChannels(channels)
+      setWebsiteAccounts(accounts)
+      setWebsiteFilters(filters)
     } catch (e) {
       console.error('获取网站配置失败:', e)
     }
@@ -371,6 +407,133 @@ export function AccountsView() {
         fetchWebsites()
       } else {
         toast.error('移除失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
+  // 账号绑定处理函数
+  const handleBindAccount = async (websiteId: number) => {
+    try {
+      const res = await fetch(`/api/websites/${websiteId}/accounts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(newAccountBinding)
+      })
+      if (res.ok) {
+        toast.success('账号绑定成功')
+        setShowBindAccount(null)
+        setNewAccountBinding({ account_id: '', role: 'both' })
+        fetchWebsites()
+      } else {
+        const error = await res.json()
+        toast.error(error.error || '绑定失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
+  const handleUnbindAccount = async (websiteId: number, accountId: number) => {
+    try {
+      const res = await fetch(`/api/websites/${websiteId}/accounts/${accountId}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      })
+      if (res.ok) {
+        toast.success('账号解绑成功')
+        fetchWebsites()
+      } else {
+        toast.error('解绑失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
+  // 轮换间隔设置
+  const handleUpdateRotation = async (websiteId: number, rotationInterval: number) => {
+    try {
+      const res = await fetch(`/api/websites/${websiteId}/rotation`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ rotation_interval: rotationInterval })
+      })
+      if (res.ok) {
+        toast.success('轮换间隔已更新')
+        fetchWebsites()
+      } else {
+        toast.error('更新失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
+  // 网站过滤规则管理
+  const handleAddFilter = async (websiteId: number) => {
+    try {
+      // 首先获取当前网站的过滤规则
+      const res = await fetch(`/api/websites/${websiteId}/filters`, { credentials: 'include' })
+      if (!res.ok) {
+        toast.error('获取当前过滤规则失败')
+        return
+      }
+
+      const currentData = await res.json()
+      const currentFilters = currentData.filters || []
+
+      // 添加新规则
+      const newFilters = [...currentFilters, {
+        filter_type: newFilter.filter_type,
+        filter_value: newFilter.filter_value
+      }]
+
+      // 更新过滤规则
+      const updateRes = await fetch(`/api/websites/${websiteId}/filters`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ filters: newFilters })
+      })
+
+      if (updateRes.ok) {
+        toast.success('过滤规则已添加')
+        setNewFilter({ filter_type: 'contains', filter_value: '' })
+        setShowAddWebsiteFilter(null)
+        fetchWebsites()
+      } else {
+        toast.error('添加过滤规则失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
+  const handleRemoveWebsiteFilter = async (websiteId: number, filterIndex: number) => {
+    try {
+      // 获取当前网站的过滤规则
+      const currentFilters = websiteFilters[websiteId] || []
+
+      // 移除指定索引的规则
+      const newFilters = currentFilters.filter((_, index) => index !== filterIndex)
+
+      // 更新过滤规则
+      const updateRes = await fetch(`/api/websites/${websiteId}/filters`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ filters: newFilters })
+      })
+
+      if (updateRes.ok) {
+        toast.success('过滤规则已删除')
+        fetchWebsites()
+      } else {
+        toast.error('删除过滤规则失败')
       }
     } catch (e) {
       toast.error('网络错误')
@@ -960,6 +1123,196 @@ export function AccountsView() {
                         ))}
                       </div>
                     </div>
+
+                    {/* 账号绑定 */}
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Settings className="w-4 h-4" />
+                        <span className="text-sm font-medium">绑定账号</span>
+                        <Dialog open={showBindAccount === website.id} onOpenChange={(open) => {
+                          setShowBindAccount(open ? website.id : null)
+                          if (!open) setNewAccountBinding({ account_id: '', role: 'both' })
+                        }}>
+                          <DialogTrigger asChild>
+                            <Button variant="outline" size="sm">
+                              <Plus className="w-3 h-3 mr-1" />
+                              绑定账号
+                            </Button>
+                          </DialogTrigger>
+                          <DialogContent>
+                            <DialogHeader>
+                              <DialogTitle>绑定Discord账号</DialogTitle>
+                              <DialogDescription>选择账号并设置角色</DialogDescription>
+                            </DialogHeader>
+                            <div className="space-y-4">
+                              <div>
+                                <Label>选择账号</Label>
+                                <Select value={newAccountBinding.account_id} onValueChange={value => setNewAccountBinding(prev => ({ ...prev, account_id: value }))}>
+                                  <SelectTrigger>
+                                    <SelectValue placeholder="选择Discord账号" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {accounts.filter(account => !websiteAccounts[website.id]?.some(binding => binding.account_id === account.id)).map((account: any) => (
+                                      <SelectItem key={account.id} value={account.id.toString()}>
+                                        {account.username} ({account.status})
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div>
+                                <Label>账号角色</Label>
+                                <Select value={newAccountBinding.role} onValueChange={value => setNewAccountBinding(prev => ({ ...prev, role: value }))}>
+                                  <SelectTrigger>
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="listener">监听 (只接收消息)</SelectItem>
+                                    <SelectItem value="sender">发送 (只发送回复)</SelectItem>
+                                    <SelectItem value="both">两者 (监听+发送)</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            </div>
+                            <DialogFooter>
+                              <Button variant="outline" onClick={() => setShowBindAccount(null)}>取消</Button>
+                              <Button onClick={() => handleBindAccount(website.id)} disabled={!newAccountBinding.account_id}>
+                                绑定
+                              </Button>
+                            </DialogFooter>
+                          </DialogContent>
+                        </Dialog>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        {(websiteAccounts[website.id] || []).map((binding: any) => (
+                          <div key={binding.id} className="flex items-center gap-1 bg-muted rounded px-2 py-1">
+                            <span className="text-xs">{binding.username}</span>
+                            <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">
+                              {binding.role === 'listener' ? '监听' : binding.role === 'sender' ? '发送' : '两者'}
+                            </Badge>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-4 w-4 p-0"
+                              onClick={() => handleUnbindAccount(website.id, binding.account_id)}
+                            >
+                              <X className="w-3 h-3" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* 账号轮换设置 */}
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Settings className="w-4 h-4" />
+                        <span className="text-sm font-medium">轮换设置</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Label className="text-xs">轮换间隔(秒):</Label>
+                        <Input
+                          type="number"
+                          defaultValue={website.rotation_interval || 180}
+                          className="w-20 h-7 text-xs"
+                          onBlur={(e) => {
+                            const value = parseInt(e.target.value)
+                            if (value >= 30 && value <= 3600 && value !== website.rotation_interval) {
+                              handleUpdateRotation(website.id, value)
+                            } else if (value < 30 || value > 3600) {
+                              toast.error('轮换间隔必须在30-3600秒之间')
+                              e.target.value = website.rotation_interval?.toString() || '180'
+                            }
+                          }}
+                        />
+                        <span className="text-xs text-muted-foreground">
+                          ({Math.floor((website.rotation_interval || 180) / 60)}分{(website.rotation_interval || 180) % 60}秒)
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* 消息过滤规则 */}
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Settings className="w-4 h-4" />
+                        <span className="text-sm font-medium">消息过滤</span>
+                        <Dialog open={showAddWebsiteFilter === website.id} onOpenChange={(open) => {
+                          setShowAddWebsiteFilter(open ? website.id : null)
+                          if (!open) setNewFilter({ filter_type: 'contains', filter_value: '' })
+                        }}>
+                          <DialogTrigger asChild>
+                            <Button variant="outline" size="sm">
+                              <Plus className="w-3 h-3 mr-1" />
+                              添加规则
+                            </Button>
+                          </DialogTrigger>
+                          <DialogContent>
+                            <DialogHeader>
+                              <DialogTitle>添加过滤规则</DialogTitle>
+                              <DialogDescription>为网站设置特定的消息过滤规则</DialogDescription>
+                            </DialogHeader>
+                            <div className="space-y-4">
+                              <div>
+                                <Label>过滤类型</Label>
+                                <Select value={newFilter.filter_type} onValueChange={value => setNewFilter(prev => ({ ...prev, filter_type: value }))}>
+                                  <SelectTrigger>
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="contains">包含文本</SelectItem>
+                                    <SelectItem value="starts_with">开头是</SelectItem>
+                                    <SelectItem value="ends_with">结尾是</SelectItem>
+                                    <SelectItem value="regex">正则表达式</SelectItem>
+                                    <SelectItem value="user_id">用户ID</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div>
+                                <Label>过滤值</Label>
+                                <Input
+                                  value={newFilter.filter_value}
+                                  onChange={e => setNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
+                                  placeholder="输入过滤条件"
+                                />
+                              </div>
+                            </div>
+                            <DialogFooter>
+                              <Button variant="outline" onClick={() => setShowAddWebsiteFilter(null)}>取消</Button>
+                              <Button onClick={() => handleAddFilter(website.id)}>添加</Button>
+                            </DialogFooter>
+                          </DialogContent>
+                        </Dialog>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        {(websiteFilters[website.id] || []).map((filter: any, index: number) => (
+                          <div key={index} className="flex items-center gap-1 bg-muted rounded px-2 py-1">
+                            <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">
+                              {filter.filter_type === 'contains' ? '包含' :
+                               filter.filter_type === 'starts_with' ? '开头' :
+                               filter.filter_type === 'ends_with' ? '结尾' :
+                               filter.filter_type === 'regex' ? '正则' : '用户ID'}
+                            </Badge>
+                            <span className="text-xs truncate max-w-20" title={filter.filter_value}>
+                              {filter.filter_value}
+                            </span>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-4 w-4 p-0"
+                              onClick={() => handleRemoveWebsiteFilter(website.id, index)}
+                            >
+                              <X className="w-3 h-3" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        网站特定的过滤规则 (独立于全局规则)
+                      </div>
+                    </div>
+
                   </div>
                 ))}
               </div>
