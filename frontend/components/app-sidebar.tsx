@@ -61,7 +61,7 @@ export function AppSidebar({
           <SidebarGroupContent>
             <SidebarMenu>
               {baseMenuItems
-                .filter(item => item.id !== 'shops' || currentUser?.role === 'admin' || (currentUser?.shops && currentUser.shops.length > 0))
+                .filter(item => item.id !== 'shops' || currentUser?.role === 'admin')
                 .map((item) => (
                 <SidebarMenuItem key={item.id}>
                   <SidebarMenuButton onClick={() => setCurrentView(item.id)} isActive={currentView === item.id}>

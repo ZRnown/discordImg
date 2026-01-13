@@ -286,7 +286,13 @@ class Database:
             try:
                 cursor.execute('ALTER TABLE website_configs ADD COLUMN rotation_enabled INTEGER DEFAULT 1')
             except sqlite3.OperationalError:
-                pass  # 字段已存在
+                pass
+
+    def cleanup_processed_messages(self):
+        """清理旧的消息处理记录，只保留最近1小时的记录"""
+        with self.get_connection() as conn:
+            conn.execute("DELETE FROM processed_messages WHERE processed_at < datetime('now', '-1 hour')")
+            conn.commit()  # 字段已存在
 
             # 创建网站配置表
             cursor.execute('''
@@ -304,12 +310,27 @@ class Database:
                 )
             ''')
 
+            # 1. 消息处理去重表（防止多个Bot回复同一条消息）
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS processed_messages (
+                    message_id TEXT PRIMARY KEY,
+                    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            # 2. 修改频道绑定表，增加 user_id 实现用户隔离
+            try:
+                cursor.execute('ALTER TABLE website_channel_bindings ADD COLUMN user_id INTEGER')
+            except sqlite3.OperationalError:
+                pass
+
             # 创建网站频道绑定表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS website_channel_bindings (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     website_id INTEGER NOT NULL,
                     channel_id TEXT NOT NULL,
+                    user_id INTEGER,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE,
                     UNIQUE(website_id, channel_id)

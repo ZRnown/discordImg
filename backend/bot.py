@@ -7,6 +7,7 @@ import random
 import os
 import json
 import io
+import sqlite3
 from datetime import datetime
 try:
     from config import config
@@ -28,6 +29,18 @@ def is_account_on_cooldown(account_id, interval):
 def set_account_cooldown(account_id):
     """设置账号冷却时间"""
     account_last_sent[account_id] = time.time()
+
+def mark_message_as_processed(message_id):
+    """检查消息是否已处理（原子操作）"""
+    try:
+        from database import db
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO processed_messages (message_id) VALUES (?)", (str(message_id),))
+            conn.commit()
+        return True  # 抢锁成功
+    except sqlite3.IntegrityError:
+        return False  # 已经被其他Bot抢锁
 
 def get_response_url_for_channel(product, channel_id):
     """根据频道ID决定发送哪个链接"""

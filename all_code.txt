@@ -13478,76 +13478,97 @@ class DiscordBotClient(discord.Client):
         self.role = role  # 'listener', 'sender', 'both' - 账号角色
 
     async def schedule_reply(self, message, product, custom_reply=None):
-        """调度回复到合适的发送账号"""
+        """调度回复到合适的发送账号 (增强版：带在线检查和兜底机制)"""
         try:
             try:
                 from database import db
             except ImportError:
                 from .database import db
 
-            # 1. 确定当前频道属于哪个网站配置
+            # 生成回复内容
+            response_content = self._generate_reply_content(product, message.channel.id, custom_reply)
+
+            # 1. 尝试获取网站配置
             website_config = await self.get_website_config_by_channel_async(message.channel.id)
 
-            if not website_config:
-                logger.info("当前频道未绑定任何网站配置，忽略")
-                return
+            target_client = None
 
-            # 2. 获取该配置下的可用 Sender 账号 (异步执行)
-            sender_account_ids = await asyncio.get_event_loop().run_in_executor(None, db.get_website_senders, website_config['id'])
+            if website_config:
+                # 2. 获取数据库配置的发送者 ID
+                db_sender_ids = await asyncio.get_event_loop().run_in_executor(None, db.get_website_senders, website_config['id'])
 
-            # 3. 检查轮换功能是否启用
-            rotation_enabled = website_config.get('rotation_enabled', 1)  # 默认启用
+                # === 关键修复：获取当前真正"活着"的机器人 ID ===
+                # bot_clients 是全局变量，存着当前内存里的机器人实例
+                online_client_ids = [c.account_id for c in bot_clients if c.is_ready() and not c.is_closed()]
 
-            if rotation_enabled:
-                # 轮换功能启用：筛选非冷却中的账号
+                # 取交集：既在数据库配置了，又是当前在线的
+                valid_senders = [uid for uid in db_sender_ids if uid in online_client_ids]
+
+                # 3. 轮换/冷却逻辑
+                rotation_enabled = website_config.get('rotation_enabled', 1)
                 rotation_interval = website_config.get('rotation_interval', 180)
-                available_senders = [
-                    uid for uid in sender_account_ids
-                    if not is_account_on_cooldown(uid, rotation_interval)
-                ]
 
-                if not available_senders:
-                    logger.info("所有发送账号均在冷却中，跳过回复")
-                    return
-            else:
-                # 轮换功能禁用：使用所有可用的发送账号
-                available_senders = sender_account_ids
-                if not available_senders:
-                    logger.info("没有可用的发送账号，跳过回复")
-                    return
+                available_senders = []
+                if rotation_enabled:
+                    # 筛选非冷却的
+                    available_senders = [uid for uid in valid_senders if not is_account_on_cooldown(uid, rotation_interval)]
+                    # 如果都在冷却，为了保证回复，忽略冷却，从在线的中选一个
+                    if not available_senders and valid_senders:
+                        available_senders = valid_senders
+                else:
+                    available_senders = valid_senders
 
-            # 4. 选择一个账号 (随机 或 轮询)
-            selected_account_id = random.choice(available_senders)
+                # 4. 选中一个 ID
+                if available_senders:
+                    selected_id = random.choice(available_senders)
+                    # 从全局列表中找到这个实例
+                    target_client = next((c for c in bot_clients if c.account_id == selected_id), None)
 
-            # 5. 找到该账号对应的 Discord Client 实例
-            target_client = next((c for c in bot_clients if c.account_id == selected_account_id), None)
+            # === 兜底逻辑 (最重要的一步) ===
+            # 如果上面一顿操作猛如虎，最后没找到人（比如配置错误、没在线、列表为空）
+            # 或者当前账号本身就是"Both"角色，且上面随机没随到自己，但为了稳妥
+            if not target_client:
+                logger.warning(f"调度失败或未配置，启用兜底机制：使用当前接收账号回复")
+                target_client = self  # <--- 强制使用自己，保证消息一定能发出去
 
+            # 5. 执行发送
             if target_client:
-                # 6. 设置冷却并发送
-                set_account_cooldown(selected_account_id)
+                # 记录冷却
+                if hasattr(target_client, 'account_id') and target_client.account_id:
+                    set_account_cooldown(target_client.account_id)
 
-                # 生成回复内容
-                response_content = self._generate_reply_content(product, message.channel.id, custom_reply)
-
-                # 注意：target_client 必须也在同一个服务器(Guild)中才能发送消息
                 try:
+                    # 只有当 target_client 和 message 在同一个服务器时，get_channel 才有效
+                    # 如果是用别的号回复，那个号也必须在这个服务器里
                     target_channel = target_client.get_channel(message.channel.id)
+
                     if target_channel:
                         async with target_channel.typing():
                             await asyncio.sleep(random.uniform(config.GLOBAL_REPLY_MIN_DELAY, config.GLOBAL_REPLY_MAX_DELAY))
 
-                        # 发送回复
                         await target_channel.send(response_content)
-                        logger.info(f"账号 {target_client.user.name} 已回复消息")
+                        logger.info(f"✅ [回复成功] 账号: {target_client.user.name} | 商品ID: {product.get('id')}")
                     else:
-                        logger.error(f"账号 {selected_account_id} 无法访问频道 {message.channel.id}")
+                        # 这种情况是：选中的机器人不在这个频道/服务器里
+                        logger.warning(f"❌ 选中的账号 {target_client.user.name} 无法访问频道，回退到直接回复")
+                        await message.reply(response_content)
+
                 except Exception as e:
-                    logger.error(f"发送失败: {e}")
+                    logger.error(f"❌ 发送异常，尝试最后一次回退: {e}")
+                    # 最后的最后，直接用 message 对象回复
+                    await message.reply(response_content)
             else:
-                logger.error(f"找不到账号 {selected_account_id} 的客户端实例")
+                # 理论上不会走到这里，因为有 target_client = self
+                await message.reply(response_content)
 
         except Exception as e:
-            logger.error(f"调度回复失败: {e}")
+            logger.error(f"❌ 严重错误: {e}")
+            # 无论发生什么错误，保证回复
+            try:
+                response_content = self._generate_reply_content(product, message.channel.id, custom_reply)
+                await message.reply(response_content)
+            except:
+                pass
 
     def _generate_reply_content(self, product, channel_id, custom_reply=None):
         """生成回复内容"""
@@ -14224,10 +14245,20 @@ if __name__ == '__main__':
 
 --- File: ./backend/feature_extractor.py ---
 import os
+# === 添加这一行 ===
+os.environ["OIMP_NUM_THREADS"] = "1"
+
 import warnings
-# 抑制NNPACK不支持硬件的警告
 warnings.filterwarnings("ignore", message="Could not initialize NNPACK")
 import torch
+
+# === 添加这段代码 ===
+try:
+    # 显式禁用 NNPACK
+    torch.backends.nnpack.enabled = False
+except Exception:
+    pass
+# =================
 import numpy as np
 import threading
 from typing import List, Optional, Union, Dict
