@@ -18,17 +18,19 @@ except ImportError:
 bot_clients = []
 bot_tasks = []
 
-# 全局冷却管理器：account_id -> timestamp (上次发送时间)
+# 全局冷却管理器：(account_id, channel_id) -> timestamp (上次发送时间)
 account_last_sent = {}
 
-def is_account_on_cooldown(account_id, interval):
-    """检查账号是否在冷却中"""
-    last = account_last_sent.get(account_id, 0)
+def is_account_on_cooldown(account_id, channel_id, interval):
+    """检查账号在指定频道是否在冷却中"""
+    key = (account_id, channel_id)
+    last = account_last_sent.get(key, 0)
     return (time.time() - last) < interval
 
-def set_account_cooldown(account_id):
-    """设置账号冷却时间"""
-    account_last_sent[account_id] = time.time()
+def set_account_cooldown(account_id, channel_id):
+    """设置账号在指定频道的冷却时间"""
+    key = (account_id, channel_id)
+    account_last_sent[key] = time.time()
 
 def mark_message_as_processed(message_id):
     """检查消息是否已处理（原子操作）"""
@@ -225,11 +227,11 @@ class DiscordBotClient(discord.Client):
 
                 available_senders = []
                 if rotation_enabled:
-                    # 筛选非冷却的
-                    available_senders = [uid for uid in valid_senders if not is_account_on_cooldown(uid, rotation_interval)]
+                    # 筛选非冷却的（按频道区分冷却）
+                    available_senders = [uid for uid in valid_senders if not is_account_on_cooldown(uid, message.channel.id, rotation_interval)]
                     # 如果都在冷却，不发送消息（根据用户要求）
                     if not available_senders:
-                        logger.info(f"所有账号都在{rotation_interval}秒冷却期内，跳过发送")
+                        logger.info(f"所有账号在频道{message.channel.id}的{rotation_interval}秒冷却期内，跳过发送")
                         return  # 不发送消息，直接返回
                 else:
                     available_senders = valid_senders
@@ -249,9 +251,9 @@ class DiscordBotClient(discord.Client):
 
             # 5. 执行发送
             if target_client:
-                # 记录冷却
+                # 记录冷却（按频道区分）
                 if hasattr(target_client, 'account_id') and target_client.account_id:
-                    set_account_cooldown(target_client.account_id)
+                    set_account_cooldown(target_client.account_id, message.channel.id)
 
                 try:
                     # 只有当 target_client 和 message 在同一个服务器时，get_channel 才有效

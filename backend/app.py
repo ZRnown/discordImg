@@ -2394,13 +2394,18 @@ def update_user_settings():
         if not data:
             return jsonify({'error': 'Invalid request body'}), 400
 
+        # 调试延迟设置
+        min_delay = data.get('global_reply_min_delay')
+        max_delay = data.get('global_reply_max_delay')
+        logger.info(f"用户设置延迟 - 最小: {min_delay}, 最大: {max_delay}")
+
         success = db.update_user_settings(
             user_id=user['id'],
             download_threads=data.get('download_threads'),
             feature_extract_threads=data.get('feature_extract_threads'),
             discord_similarity_threshold=data.get('discord_similarity_threshold'),
-            global_reply_min_delay=data.get('global_reply_min_delay'),
-            global_reply_max_delay=data.get('global_reply_max_delay'),
+            global_reply_min_delay=min_delay,
+            global_reply_max_delay=max_delay,
             user_blacklist=data.get('user_blacklist'),
             keyword_filters=data.get('keyword_filters')
         )
@@ -4240,20 +4245,23 @@ def scrape_shop_products(shop_id):
                 if len(items) > 0:
                     logger.info(f'API响应调试 - 第一商品ID: {items[0].get("itemId", "unknown")}')
 
-                # 收集当前页的商品任务 (内存去重)
+                # 收集当前页的商品任务 (内存去重 + 数据库去重)
                 page_new_count = 0
                 for item in items:
                     item_id = item.get('itemId', '')
                     if item_id and item_id not in unique_product_tasks:  # 内存去重
-                        # 再次检查数据库是否已存在 (避免处理已抓过的)
-                        if not db.get_product_by_item_id(item_id):
-                            product_info = {
-                                'item_id': item_id,
-                                'item_url': item.get('itemUrl', ''),
-                                'shop_name': shop_name
-                            }
-                            unique_product_tasks[item_id] = product_info
-                            page_new_count += 1
+                        # 检查数据库是否已存在该商品，如果存在则跳过不进行任何抓取
+                        if db.get_product_by_item_id(item_id):
+                            logger.debug(f'商品 {item_id} 已存在于数据库中，跳过')
+                            continue
+
+                        product_info = {
+                            'item_id': item_id,
+                            'item_url': item.get('itemUrl', ''),
+                            'shop_name': shop_name
+                        }
+                        unique_product_tasks[item_id] = product_info
+                        page_new_count += 1
 
                 # === 新增：实时更新收集进度到数据库，让前端能看到 ===
                 current_total = len(unique_product_tasks)

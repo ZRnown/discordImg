@@ -412,7 +412,12 @@ export function SettingsView() {
                       min="0.1"
                       max="30"
                       value={settings.global_reply_min_delay}
-                      onChange={(e) => setSettings(prev => ({ ...prev, global_reply_min_delay: parseFloat(e.target.value) }))}
+                      onChange={(e) => {
+                        const value = parseFloat(e.target.value);
+                        if (!isNaN(value) && value >= 0.1 && value <= 30) {
+                          setSettings(prev => ({ ...prev, global_reply_min_delay: value }));
+                        }
+                      }}
                       className="w-16 h-9 text-center"
                     />
                     <span className="text-sm text-muted-foreground">-</span>
@@ -423,7 +428,12 @@ export function SettingsView() {
                       min="1"
                       max="60"
                       value={settings.global_reply_max_delay}
-                      onChange={(e) => setSettings(prev => ({ ...prev, global_reply_max_delay: parseFloat(e.target.value) }))}
+                      onChange={(e) => {
+                        const value = parseFloat(e.target.value);
+                        if (!isNaN(value) && value >= 1 && value <= 60) {
+                          setSettings(prev => ({ ...prev, global_reply_max_delay: value }));
+                        }
+                      }}
                       className="w-16 h-9 text-center"
                     />
                   </div>
