@@ -1473,7 +1473,7 @@ class Database:
                 cursor = conn.cursor()
                 cursor.execute('''
                     DELETE FROM website_channel_bindings
-                    WHERE website_id = ? AND channel_id = ? AND user_id = ?
+                    WHERE website_id = ? AND channel_id = ? AND (user_id = ? OR user_id IS NULL)
                 ''', (website_id, channel_id, user_id))
                 conn.commit()
                 return cursor.rowcount > 0
@@ -1531,7 +1531,7 @@ class Database:
                 cursor = conn.cursor()
                 cursor.execute('''
                     DELETE FROM website_account_bindings
-                    WHERE website_id = ? AND account_id = ? AND user_id = ?
+                    WHERE website_id = ? AND account_id = ? AND (user_id = ? OR user_id IS NULL)
                 ''', (website_id, account_id, user_id))
                 conn.commit()
                 return cursor.rowcount > 0
