@@ -2107,11 +2107,11 @@ def add_account():
                     return jsonify({'error': '此Discord token已被其他用户使用'}), 400
             else:
                 # token不存在，插入新记录
-            cursor.execute("""
-                INSERT INTO discord_accounts (username, token, status, user_id)
-                VALUES (?, ?, 'offline', ?)
-            """, (username, token, current_user['id']))
-            account_id = cursor.lastrowid
+                cursor.execute("""
+                    INSERT INTO discord_accounts (username, token, status, user_id)
+                    VALUES (?, ?, 'offline', ?)
+                """, (username, token, current_user['id']))
+                account_id = cursor.lastrowid
                 logger.info(f"添加新账号: {username} (用户ID: {current_user['id']})")
 
             # 获取账号信息
