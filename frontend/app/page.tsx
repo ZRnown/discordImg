@@ -37,7 +37,8 @@ export default function Page() {
     // 检查锁，防止重复请求
     if (!hasFetchedUser.current) {
       hasFetchedUser.current = true // 立即上锁
-    checkLoginStatus()
+      checkLoginStatus()
+      fetchBotStatus()
     }
   }, [])
 
@@ -55,6 +56,21 @@ export default function Page() {
       // 未登录或网络错误
     } finally {
       setLoading(false)
+    }
+  }
+
+  const fetchBotStatus = async () => {
+    try {
+      const response = await fetch('/api/bot/status')
+      if (response.ok) {
+        const data = await response.json()
+        // 如果后端说是 running，前端就设为 running
+        if (data.running) {
+          setBotStatus('running')
+        }
+      }
+    } catch (error) {
+      console.error('获取机器人状态失败:', error)
     }
   }
 
