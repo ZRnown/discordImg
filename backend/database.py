@@ -270,6 +270,12 @@ class Database:
             except sqlite3.OperationalError:
                 pass  # 字段已存在
 
+            # 为website_configs表添加rotation_interval字段
+            try:
+                cursor.execute('ALTER TABLE website_configs ADD COLUMN rotation_interval INTEGER DEFAULT 180')
+            except sqlite3.OperationalError:
+                pass  # 字段已存在
+
             # 创建网站配置表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS website_configs (
@@ -279,6 +285,7 @@ class Database:
                     url_template TEXT NOT NULL,
                     id_pattern TEXT NOT NULL,
                     badge_color TEXT DEFAULT 'blue',
+                    rotation_interval INTEGER DEFAULT 180,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
@@ -292,6 +299,20 @@ class Database:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE,
                     UNIQUE(website_id, channel_id)
+                )
+            ''')
+
+            # 创建网站账号绑定表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS website_account_bindings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    website_id INTEGER NOT NULL,
+                    account_id INTEGER NOT NULL,
+                    role TEXT NOT NULL CHECK (role IN ('listener', 'sender', 'both')),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE,
+                    FOREIGN KEY (account_id) REFERENCES discord_accounts (id) ON DELETE CASCADE,
+                    UNIQUE(website_id, account_id)
                 )
             ''')
 
@@ -1279,11 +1300,11 @@ class Database:
                 cursor.execute('''
                     SELECT
                         wc.id, wc.name, wc.display_name, wc.url_template,
-                        wc.id_pattern, wc.badge_color, wc.created_at,
+                        wc.id_pattern, wc.badge_color, wc.rotation_interval, wc.created_at,
                         GROUP_CONCAT(wcb.channel_id) as channels
                     FROM website_configs wc
                     LEFT JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
-                    GROUP BY wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.created_at
+                    GROUP BY wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.rotation_interval, wc.created_at
                     ORDER BY wc.created_at
                 ''')
 
@@ -1302,31 +1323,31 @@ class Database:
             logger.error(f"获取网站配置失败: {e}")
             return []
 
-    def add_website_config(self, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str = 'blue') -> bool:
+    def add_website_config(self, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str = 'blue', rotation_interval: int = 180) -> bool:
         """添加网站配置"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    INSERT INTO website_configs (name, display_name, url_template, id_pattern, badge_color)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (name, display_name, url_template, id_pattern, badge_color))
+                    INSERT INTO website_configs (name, display_name, url_template, id_pattern, badge_color, rotation_interval)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (name, display_name, url_template, id_pattern, badge_color, rotation_interval))
                 conn.commit()
                 return True
         except Exception as e:
             logger.error(f"添加网站配置失败: {e}")
             return False
 
-    def update_website_config(self, config_id: int, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str) -> bool:
+    def update_website_config(self, config_id: int, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str, rotation_interval: int = 180) -> bool:
         """更新网站配置"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     UPDATE website_configs
-                    SET name = ?, display_name = ?, url_template = ?, id_pattern = ?, badge_color = ?
+                    SET name = ?, display_name = ?, url_template = ?, id_pattern = ?, badge_color = ?, rotation_interval = ?
                     WHERE id = ?
-                ''', (name, display_name, url_template, id_pattern, badge_color, config_id))
+                ''', (name, display_name, url_template, id_pattern, badge_color, rotation_interval, config_id))
                 conn.commit()
                 return cursor.rowcount > 0
         except Exception as e:
@@ -1414,6 +1435,119 @@ class Database:
         except Exception as e:
             logger.error(f"生成网站URL失败: {e}")
             return []
+
+    # ===== 网站账号绑定方法 =====
+
+    def add_website_account_binding(self, website_id: int, account_id: int, role: str) -> bool:
+        """添加网站账号绑定"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT OR REPLACE INTO website_account_bindings
+                    (website_id, account_id, role)
+                    VALUES (?, ?, ?)
+                ''', (website_id, account_id, role))
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"添加网站账号绑定失败: {e}")
+            return False
+
+    def remove_website_account_binding(self, website_id: int, account_id: int) -> bool:
+        """移除网站账号绑定"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    DELETE FROM website_account_bindings
+                    WHERE website_id = ? AND account_id = ?
+                ''', (website_id, account_id))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"移除网站账号绑定失败: {e}")
+            return False
+
+    def get_website_account_bindings(self, website_id: int) -> List[Dict]:
+        """获取网站的所有账号绑定"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT wab.id, wab.account_id, wab.role, wab.created_at,
+                           da.username, da.token, da.status
+                    FROM website_account_bindings wab
+                    JOIN discord_accounts da ON wab.account_id = da.id
+                    WHERE wab.website_id = ?
+                    ORDER BY wab.created_at
+                ''', (website_id,))
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"获取网站账号绑定失败: {e}")
+            return []
+
+    def get_account_website_bindings(self, account_id: int) -> List[Dict]:
+        """获取账号的所有网站绑定"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT wab.id, wab.website_id, wab.role, wab.created_at,
+                           wc.name, wc.display_name
+                    FROM website_account_bindings wab
+                    JOIN website_configs wc ON wab.website_id = wc.id
+                    WHERE wab.account_id = ?
+                    ORDER BY wab.created_at
+                ''', (account_id,))
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"获取账号网站绑定失败: {e}")
+            return []
+
+    def get_website_senders(self, website_id: int) -> List[int]:
+        """获取网站的发送账号ID列表"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT account_id FROM website_account_bindings
+                    WHERE website_id = ? AND role IN ('sender', 'both')
+                ''', (website_id,))
+                return [row['account_id'] for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"获取网站发送账号失败: {e}")
+            return []
+
+    def get_website_listeners(self, website_id: int) -> List[int]:
+        """获取网站的监听账号ID列表"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT account_id FROM website_account_bindings
+                    WHERE website_id = ? AND role IN ('listener', 'both')
+                ''', (website_id,))
+                return [row['account_id'] for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"获取网站监听账号失败: {e}")
+            return []
+
+    def update_website_config_rotation(self, config_id: int, rotation_interval: int) -> bool:
+        """更新网站配置的轮换间隔"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE website_configs
+                    SET rotation_interval = ?
+                    WHERE id = ?
+                ''', (rotation_interval, config_id))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"更新网站轮换间隔失败: {e}")
+            return False
 
     def get_system_stats(self) -> Dict:
         """获取系统统计信息"""

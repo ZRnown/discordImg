@@ -1030,9 +1030,15 @@ def reset_user_password(user_id):
 # === 新增：网站配置管理API ===
 @app.route('/api/websites', methods=['GET'])
 def get_website_configs():
-    """获取所有网站配置及其频道绑定（优化版本，避免N+1查询）"""
+    """获取所有网站配置及其频道绑定和账号绑定"""
     try:
         configs = db.get_website_configs()
+
+        # 为每个配置添加账号绑定信息
+        for config in configs:
+            config_id = config['id']
+            config['accounts'] = db.get_website_account_bindings(config_id)
+
         return jsonify({'websites': configs})
     except Exception as e:
         logger.error(f"获取网站配置失败: {e}")
@@ -1141,6 +1147,76 @@ def remove_website_channel(config_id, channel_id):
             return jsonify({'error': '移除失败'}), 500
     except Exception as e:
         logger.error(f"移除网站频道绑定失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# ===== 网站账号绑定API =====
+
+@app.route('/api/websites/<int:config_id>/accounts', methods=['GET'])
+def get_website_accounts(config_id):
+    """获取网站绑定的账号"""
+    try:
+        accounts = db.get_website_account_bindings(config_id)
+        return jsonify({'accounts': accounts})
+    except Exception as e:
+        logger.error(f"获取网站账号绑定失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/websites/<int:config_id>/accounts', methods=['POST'])
+def add_website_account(config_id):
+    """为网站绑定账号"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        data = request.get_json()
+        account_id = data.get('account_id')
+        role = data.get('role', 'both')  # 'listener', 'sender', 'both'
+
+        if not account_id or role not in ['listener', 'sender', 'both']:
+            return jsonify({'error': '无效的账号ID或角色'}), 400
+
+        if db.add_website_account_binding(config_id, account_id, role):
+            return jsonify({'success': True, 'message': f'账号绑定成功，角色: {role}'})
+        else:
+            return jsonify({'error': '绑定失败'}), 500
+    except Exception as e:
+        logger.error(f"添加网站账号绑定失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/websites/<int:config_id>/accounts/<int:account_id>', methods=['DELETE'])
+def remove_website_account(config_id, account_id):
+    """移除网站账号绑定"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        if db.remove_website_account_binding(config_id, account_id):
+            return jsonify({'success': True, 'message': '账号绑定已移除'})
+        else:
+            return jsonify({'error': '移除失败'}), 500
+    except Exception as e:
+        logger.error(f"移除网站账号绑定失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/websites/<int:config_id>/rotation', methods=['PUT'])
+def update_website_rotation(config_id):
+    """更新网站轮换间隔"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        data = request.get_json()
+        rotation_interval = data.get('rotation_interval', 180)
+
+        if rotation_interval < 30 or rotation_interval > 3600:
+            return jsonify({'error': '轮换间隔必须在30-3600秒之间'}), 400
+
+        if db.update_website_config_rotation(config_id, rotation_interval):
+            return jsonify({'success': True, 'message': f'轮换间隔已设置为 {rotation_interval} 秒'})
+        else:
+            return jsonify({'error': '更新失败'}), 500
+    except Exception as e:
+        logger.error(f"更新网站轮换间隔失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/products/<int:product_id>/urls', methods=['GET'])
@@ -3088,10 +3164,28 @@ def start_discord_bot(user_id=None):
                 if user:
                     user_shops = user.get('shops', [])
 
-            logger.info(f"正在启动机器人账号: {username} (用户ID: {user_id}, 管理店铺: {user_shops})")
+            # 确定账号角色：检查是否绑定了任何网站配置
+            account_bindings = db.get_account_website_bindings(account_id)
+            if account_bindings:
+                # 检查账号是否有发送或监听角色
+                has_sender = any(b['role'] in ['sender', 'both'] for b in account_bindings)
+                has_listener = any(b['role'] in ['listener', 'both'] for b in account_bindings)
 
-            # 创建机器人实例
-            client = DiscordBotClient(account_id=account_id, user_id=user_id, user_shops=user_shops)
+                if has_sender and has_listener:
+                    role = 'both'
+                elif has_sender:
+                    role = 'sender'
+                elif has_listener:
+                    role = 'listener'
+                else:
+                    role = 'both'  # 默认
+            else:
+                role = 'both'  # 未绑定的账号默认为both
+
+            logger.info(f"正在启动机器人账号: {username} (用户ID: {user_id}, 管理店铺: {user_shops}, 角色: {role})")
+
+            # 创建机器人实例，传入角色参数
+            client = DiscordBotClient(account_id=account_id, user_id=user_id, user_shops=user_shops, role=role)
 
             # 启动机器人
             try:
@@ -3207,6 +3301,16 @@ def stop_bot():
     except Exception as e:
         logger.error(f"停止机器人失败: {e}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/bot/status', methods=['GET'])
+def get_bot_status():
+    """获取Discord机器人全局运行状态"""
+    try:
+        # 返回全局机器人运行状态
+        return jsonify({'running': bot_running})
+    except Exception as e:
+        logger.error(f"获取机器人状态失败: {e}")
+        return jsonify({'running': False}), 500
 
 @app.route('/api/shop-info', methods=['GET'])
 def get_shop_info():

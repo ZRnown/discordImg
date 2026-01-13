@@ -17,6 +17,18 @@ except ImportError:
 bot_clients = []
 bot_tasks = []
 
+# 全局冷却管理器：account_id -> timestamp (上次发送时间)
+account_last_sent = {}
+
+def is_account_on_cooldown(account_id, interval):
+    """检查账号是否在冷却中"""
+    last = account_last_sent.get(account_id, 0)
+    return (time.time() - last) < interval
+
+def set_account_cooldown(account_id):
+    """设置账号冷却时间"""
+    account_last_sent[account_id] = time.time()
+
 def get_response_url_for_channel(product, channel_id):
     """根据频道ID决定发送哪个链接"""
     channel_id_str = str(channel_id)
@@ -139,7 +151,7 @@ logger = logging.getLogger(__name__)
 logging.getLogger('discord').setLevel(logging.INFO)
 
 class DiscordBotClient(discord.Client):
-    def __init__(self, account_id=None, user_id=None, user_shops=None):
+    def __init__(self, account_id=None, user_id=None, user_shops=None, role='both'):
         # discord.py-self 可能不需要 intents，或者使用不同的语法
         try:
             # 尝试使用标准的 intents
@@ -156,6 +168,128 @@ class DiscordBotClient(discord.Client):
         self.account_id = account_id
         self.user_id = user_id  # 用户ID，用于获取个性化设置
         self.user_shops = user_shops  # 用户管理的店铺列表
+        self.role = role  # 'listener', 'sender', 'both' - 账号角色
+
+    async def schedule_reply(self, message, product, custom_reply=None):
+        """调度回复到合适的发送账号"""
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+
+            # 1. 确定当前频道属于哪个网站配置
+            website_config = await self.get_website_config_by_channel_async(message.channel.id)
+
+            if not website_config:
+                logger.info("当前频道未绑定任何网站配置，忽略")
+                return
+
+            # 2. 获取该配置下的可用 Sender 账号 (异步执行)
+            sender_account_ids = await asyncio.get_event_loop().run_in_executor(None, db.get_website_senders, website_config['id'])
+
+            # 3. 筛选非冷却中的账号
+            rotation_interval = website_config.get('rotation_interval', 180)
+            available_senders = [
+                uid for uid in sender_account_ids
+                if not is_account_on_cooldown(uid, rotation_interval)
+            ]
+
+            if not available_senders:
+                logger.info("所有发送账号均在冷却中，跳过回复")
+                return
+
+            # 4. 选择一个账号 (随机 或 轮询)
+            selected_account_id = random.choice(available_senders)
+
+            # 5. 找到该账号对应的 Discord Client 实例
+            target_client = next((c for c in bot_clients if c.account_id == selected_account_id), None)
+
+            if target_client:
+                # 6. 设置冷却并发送
+                set_account_cooldown(selected_account_id)
+
+                # 生成回复内容
+                response_content = self._generate_reply_content(product, message.channel.id, custom_reply)
+
+                # 注意：target_client 必须也在同一个服务器(Guild)中才能发送消息
+                try:
+                    target_channel = target_client.get_channel(message.channel.id)
+                    if target_channel:
+                        async with target_channel.typing():
+                            await asyncio.sleep(random.uniform(config.GLOBAL_REPLY_MIN_DELAY, config.GLOBAL_REPLY_MAX_DELAY))
+
+                        # 发送回复
+                        await target_channel.send(response_content)
+                        logger.info(f"账号 {target_client.user.name} 已回复消息")
+                    else:
+                        logger.error(f"账号 {selected_account_id} 无法访问频道 {message.channel.id}")
+                except Exception as e:
+                    logger.error(f"发送失败: {e}")
+            else:
+                logger.error(f"找不到账号 {selected_account_id} 的客户端实例")
+
+        except Exception as e:
+            logger.error(f"调度回复失败: {e}")
+
+    def _generate_reply_content(self, product, channel_id, custom_reply=None):
+        """生成回复内容"""
+        if custom_reply:
+            reply_type = custom_reply.get('reply_type')
+
+            if reply_type == 'custom_only':
+                # 只发送自定义内容，不发送链接
+                return custom_reply.get('content', '')
+
+            elif reply_type == 'text_and_link':
+                # 发送文字 + 链接
+                response = get_response_url_for_channel(product, channel_id)
+                return f"{custom_reply.get('content', '')}\n{response}".strip()
+
+            elif reply_type == 'text':
+                # 只发送文字
+                return custom_reply.get('content', '')
+
+        # 默认行为：发送链接
+        return get_response_url_for_channel(product, channel_id)
+
+    def get_website_config_by_channel(self, channel_id):
+        """根据频道ID获取对应的网站配置"""
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+
+            # 查询频道绑定的网站配置
+            configs = db.get_website_configs()
+            for config in configs:
+                channels = config.get('channels', [])
+                if str(channel_id) in channels:
+                    return config
+            return None
+        except Exception as e:
+            logger.error(f"获取频道网站配置失败: {e}")
+            return None
+
+    async def get_website_config_by_channel_async(self, channel_id):
+        """异步版本：根据频道ID获取对应的网站配置"""
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+
+            # 异步查询频道绑定的网站配置
+            configs = await asyncio.get_event_loop().run_in_executor(None, db.get_website_configs)
+            for config in configs:
+                channels = config.get('channels', [])
+                if str(channel_id) in channels:
+                    return config
+            return None
+        except Exception as e:
+            logger.error(f"异步获取频道网站配置失败: {e}")
+            return None
 
     def _should_filter_message(self, message):
         """检查消息是否应该被过滤"""
@@ -284,13 +418,25 @@ class DiscordBotClient(discord.Client):
         if message.author.bot or message.webhook_id:
             return
 
-        # 如果配置了频道ID，只处理特定频道的消息；否则处理所有频道
-        if config.DISCORD_CHANNEL_ID and str(message.channel.id) != str(config.DISCORD_CHANNEL_ID):
+        # --- 新增过滤需求 ---
+
+        # 1. 忽略 @别人的信息 (Message Mentions)
+        # 如果消息中包含 mention，且 mention 的不是自己，则忽略
+        if message.mentions:
+            # 如果仅仅是不想回复 @别人的消息（不管是不是@自己），直接 return
             return
 
-        # 检查消息过滤规则
+        # 2. 忽略回复别人的信息 (Message Reference)
+        if message.reference is not None:
+            return
+
+        # 3. 触发消息过滤规则
         if self._should_filter_message(message):
             return
+
+        # 4. 角色过滤：纯 sender 账号不处理消息
+        if self.role == 'sender':
+            return  # 纯发送账号不监听消息
 
         logger.info(f'收到消息: {message.author.name} 在 #{message.channel.name}: "{message.content[:100]}{"..." if len(message.content) > 100 else ""}"')
 
@@ -355,7 +501,8 @@ class DiscordBotClient(discord.Client):
                             from database import db
                         except ImportError:
                             from .database import db
-                        user_settings = db.get_user_settings(self.user_id)
+                        # 异步获取用户设置
+                        user_settings = await asyncio.get_event_loop().run_in_executor(None, db.get_user_settings, self.user_id)
                         if user_settings and 'discord_similarity_threshold' in user_settings:
                             user_threshold = user_settings['discord_similarity_threshold']
                     except Exception as e:
@@ -368,16 +515,6 @@ class DiscordBotClient(discord.Client):
                     product = best_match.get('product', {})
                     logger.info(f'✅ 匹配成功! 相似度: {similarity:.2f} | 商品: {product.get("id")} | 频道: {message.channel.name}')
 
-                    # 模拟打字状态并延迟回复
-                    async with message.channel.typing():
-                        # === 修复延迟逻辑 ===
-                        # 直接读取配置，不设硬性下限，允许 0.1s
-                        min_d = max(0.1, float(config.GLOBAL_REPLY_MIN_DELAY))
-                        max_d = max(min_d, float(config.GLOBAL_REPLY_MAX_DELAY))
-
-                        delay = random.uniform(min_d, max_d)
-                        await asyncio.sleep(delay)
-
                     # 检查商品是否启用了自动回复规则
                     product_rule_enabled = product.get('ruleEnabled', True)
 
@@ -385,37 +522,8 @@ class DiscordBotClient(discord.Client):
                         # 使用全局自定义回复
                         custom_reply = self._get_custom_reply()
 
-                        if custom_reply:
-                            reply_type = custom_reply.get('reply_type')
-
-                            if reply_type == 'custom_only':
-                                # 只发送自定义内容，不发送链接
-                                if custom_reply.get('content'):
-                                    await message.reply(custom_reply['content'])
-                                if custom_reply.get('image_url'):
-                                    # 这里可以实现发送图片的逻辑
-                                    pass
-
-                            elif reply_type == 'text_and_link':
-                                # 发送文字 + 链接
-                                response = get_response_url_for_channel(product, message.channel.id)
-                                full_reply = f"{custom_reply.get('content', '')}\n{response}".strip()
-                                await message.reply(full_reply)
-
-                            elif reply_type == 'text':
-                                # 只发送文字
-                                if custom_reply.get('content'):
-                                    await message.reply(custom_reply['content'])
-
-                            elif reply_type == 'image':
-                                # 发送图片（如果设置了的话）
-                                if custom_reply.get('image_url'):
-                                    # 这里可以实现发送图片的逻辑
-                                    pass
-                        else:
-                            # 默认行为：发送链接
-                            response = get_response_url_for_channel(product, message.channel.id)
-                            await message.reply(response)
+                        # 使用调度机制回复，而不是直接回复
+                        await self.schedule_reply(message, product, custom_reply)
                     else:
                         # 商品级自定义回复
                         custom_text = product.get('custom_reply_text', '').strip()
@@ -656,7 +764,8 @@ class DiscordBotClient(discord.Client):
                             from database import db
                         except ImportError:
                             from .database import db
-                        user_settings = db.get_user_settings(self.user_id)
+                        # 异步获取用户设置
+                        user_settings = await asyncio.get_event_loop().run_in_executor(None, db.get_user_settings, self.user_id)
                         if user_settings and 'discord_similarity_threshold' in user_settings:
                             api_threshold = user_settings['discord_similarity_threshold']
                     except Exception as e:
