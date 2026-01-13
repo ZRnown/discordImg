@@ -125,6 +125,11 @@ class Database:
                 pass
 
             try:
+                cursor.execute('ALTER TABLE products ADD COLUMN item_id TEXT')
+            except sqlite3.OperationalError:
+                pass  # 字段已存在
+
+            try:
                 cursor.execute('ALTER TABLE system_config ADD COLUMN cnfans_channel_id TEXT')
             except sqlite3.OperationalError:
                 pass
