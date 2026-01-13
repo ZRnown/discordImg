@@ -1,5 +1,18 @@
 import os
+# === 添加这一行 ===
+os.environ["OIMP_NUM_THREADS"] = "1"
+
+import warnings
+warnings.filterwarnings("ignore", message="Could not initialize NNPACK")
 import torch
+
+# === 添加这段代码 ===
+try:
+    # 显式禁用 NNPACK
+    torch.backends.nnpack.enabled = False
+except Exception:
+    pass
+# =================
 import numpy as np
 import threading
 from typing import List, Optional, Union, Dict

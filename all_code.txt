@@ -2389,6 +2389,32 @@ export async function POST(request: NextRequest) {
   }
 }
 
+--- File: ./frontend/app/api/bot/status/route.ts ---
+import { NextRequest, NextResponse } from 'next/server'
+
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001'
+
+export async function GET(request: NextRequest) {
+  try {
+    const cookieHeader = request.headers.get('cookie') || '';
+
+    const response = await fetch(`${BACKEND_URL}/api/bot/status`, {
+      headers: { 'Cookie': cookieHeader }
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      return NextResponse.json(errorData, { status: response.status })
+    }
+
+    const data = await response.json()
+    return NextResponse.json(data)
+  } catch (error: any) {
+    console.error('GET /api/bot/status failed:', error)
+    return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+}
+
 --- File: ./frontend/app/api/websites/route.ts ---
 import { NextRequest, NextResponse } from 'next/server'
 
@@ -2441,6 +2467,128 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(data)
   } catch (error: any) {
     console.error('POST /api/websites failed:', error)
+    return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+}
+
+--- File: ./frontend/app/api/websites/[id]/filters/route.ts ---
+import { NextRequest, NextResponse } from 'next/server'
+
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001'
+
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params
+    const cookieHeader = request.headers.get('cookie') || '';
+
+    const response = await fetch(`${BACKEND_URL}/api/websites/${id}/filters`, {
+      headers: { 'Cookie': cookieHeader }
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      return NextResponse.json(errorData, { status: response.status })
+    }
+
+    const data = await response.json()
+    return NextResponse.json(data)
+  } catch (error: any) {
+    console.error('GET /api/websites/[id]/filters failed:', error)
+    return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+}
+
+export async function PUT(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params
+    const body = await request.json()
+    const cookieHeader = request.headers.get('cookie') || '';
+
+    const response = await fetch(`${BACKEND_URL}/api/websites/${id}/filters`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Cookie': cookieHeader
+      },
+      body: JSON.stringify(body)
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      return NextResponse.json(errorData, { status: response.status })
+    }
+
+    const data = await response.json()
+    return NextResponse.json(data)
+  } catch (error: any) {
+    console.error('PUT /api/websites/[id]/filters failed:', error)
+    return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+}
+
+--- File: ./frontend/app/api/websites/[id]/accounts/route.ts ---
+import { NextRequest, NextResponse } from 'next/server'
+
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001'
+
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params
+    const cookieHeader = request.headers.get('cookie') || '';
+
+    const response = await fetch(`${BACKEND_URL}/api/websites/${id}/accounts`, {
+      headers: { 'Cookie': cookieHeader }
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      return NextResponse.json(errorData, { status: response.status })
+    }
+
+    const data = await response.json()
+    return NextResponse.json(data)
+  } catch (error: any) {
+    console.error('GET /api/websites/[id]/accounts failed:', error)
+    return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+}
+
+export async function POST(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params
+    const body = await request.json()
+    const cookieHeader = request.headers.get('cookie') || '';
+
+    const response = await fetch(`${BACKEND_URL}/api/websites/${id}/accounts`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Cookie': cookieHeader
+      },
+      body: JSON.stringify(body)
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      return NextResponse.json(errorData, { status: response.status })
+    }
+
+    const data = await response.json()
+    return NextResponse.json(data)
+  } catch (error: any) {
+    console.error('POST /api/websites/[id]/accounts failed:', error)
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }
@@ -2503,6 +2651,42 @@ export async function DELETE(
     return NextResponse.json(data)
   } catch (error: any) {
     console.error('DELETE /api/websites/[id] failed:', error)
+    return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+}
+
+--- File: ./frontend/app/api/websites/[id]/rotation/route.ts ---
+import { NextRequest, NextResponse } from 'next/server'
+
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001'
+
+export async function PUT(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params
+    const body = await request.json()
+    const cookieHeader = request.headers.get('cookie') || '';
+
+    const response = await fetch(`${BACKEND_URL}/api/websites/${id}/rotation`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Cookie': cookieHeader
+      },
+      body: JSON.stringify(body)
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      return NextResponse.json(errorData, { status: response.status })
+    }
+
+    const data = await response.json()
+    return NextResponse.json(data)
+  } catch (error: any) {
+    console.error('PUT /api/websites/[id]/rotation failed:', error)
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }
@@ -2640,8 +2824,14 @@ export default function Page() {
     if (!hasFetchedUser.current) {
       hasFetchedUser.current = true // 立即上锁
     checkLoginStatus()
+      fetchBotStatus()
     }
   }, [])
+
+  // 调试：监听状态变化
+  useEffect(() => {
+    console.log('BotStatus changed to:', botStatus)
+  }, [botStatus])
 
   const checkLoginStatus = async () => {
     try {
@@ -2657,6 +2847,21 @@ export default function Page() {
       // 未登录或网络错误
     } finally {
       setLoading(false)
+    }
+  }
+
+  const fetchBotStatus = async () => {
+    try {
+      const response = await fetch('/api/bot/status')
+      if (response.ok) {
+        const data = await response.json()
+        // 如果后端说是 running，前端就设为 running
+        if (data.running) {
+          setBotStatus('running')
+        }
+      }
+    } catch (error) {
+      console.error('获取机器人状态失败:', error)
     }
   }
 
@@ -2690,6 +2895,7 @@ export default function Page() {
       return
     }
 
+    console.log('开始启动机器人...')
     setBotStatus('starting')
     try {
       // 调用后端启动账号的API
@@ -2700,15 +2906,22 @@ export default function Page() {
         body: JSON.stringify({ userId: currentUser.id })
       })
 
+      console.log('启动API响应:', response.status, response.ok)
+
       if (response.ok) {
+        console.log('设置状态为running')
         setBotStatus('running')
+        // 强制重新获取状态以确认
+        setTimeout(() => fetchBotStatus(), 100)
         toast.success("Discord账号已启动")
       } else {
         const error = await response.json()
+        console.log('启动失败，错误:', error)
         setBotStatus('stopped')
         toast.error(error.error || "启动账号失败")
       }
     } catch (error) {
+      console.log('网络错误:', error)
       setBotStatus('stopped')
       toast.error("网络错误，无法启动账号")
     }
@@ -2783,6 +2996,10 @@ export default function Page() {
                    botStatus === 'starting' ? '启动中' :
                    botStatus === 'stopping' ? '停止中' :
                    '已停止'}
+                </span>
+                {/* 调试信息 */}
+                <span className="text-[10px] text-gray-500 ml-2">
+                  (状态: {botStatus})
                 </span>
               </div>
 
@@ -2863,7 +3080,7 @@ export default function Page() {
 --- File: ./frontend/next-env.d.ts ---
 /// <reference types="next" />
 /// <reference types="next/image-types/global" />
-import "./.next/dev/types/routes.d.ts";
+import "./.next/types/routes.d.ts";
 
 // NOTE: This file should not be edited
 // see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
@@ -2889,9 +3106,11 @@ import { useApiCache } from "@/hooks/use-api-cache"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit } from "lucide-react"
@@ -2930,6 +3149,21 @@ export function AccountsView() {
     badge_color: 'blue'
   })
   const [websiteChannels, setWebsiteChannels] = useState<{[key: number]: string[]}>({})
+  const [channelInputs, setChannelInputs] = useState<{[key: number]: string}>({})
+  const [rotationEnabled, setRotationEnabled] = useState<{[key: number]: boolean}>({})
+  const [rotationIntervals, setRotationIntervals] = useState<{[key: number]: number}>({})
+
+  // 网站账号绑定相关状态
+  const [websiteAccounts, setWebsiteAccounts] = useState<{[key: number]: any[]}>({})
+  const [showBindAccount, setShowBindAccount] = useState<number | null>(null)
+  const [newAccountBinding, setNewAccountBinding] = useState({
+    account_id: '',
+    role: 'both'
+  })
+
+  // 网站过滤规则相关状态
+  const [websiteFilters, setWebsiteFilters] = useState<{[key: number]: any[]}>({})
+  const [showAddWebsiteFilter, setShowAddWebsiteFilter] = useState<number | null>(null)
 
   // 消息过滤相关状态
   const [messageFilters, setMessageFilters] = useState<any[]>([])
@@ -2946,14 +3180,38 @@ export function AccountsView() {
       const data = await cachedFetch('/api/websites', { credentials: 'include' })
       const websites = data.websites || []
 
-      // 后端已包含channels信息，无需额外请求
+      // 后端已包含channels和accounts信息
         const channels: {[key: number]: string[]} = {}
+      const accounts: {[key: number]: any[]} = {}
+      const filters: {[key: number]: any[]} = {}
+
+      // 并行获取所有网站的过滤规则
+      const filterPromises = websites.map(async (website: any) => {
+        try {
+          const res = await fetch(`/api/websites/${website.id}/filters`, { credentials: 'include' })
+          if (res.ok) {
+            const data = await res.json()
+            filters[website.id] = data.filters || []
+          } else {
+            filters[website.id] = []
+          }
+        } catch (e) {
+          filters[website.id] = []
+        }
+      })
+
       websites.forEach((website: any) => {
         channels[website.id] = website.channels || []
+        accounts[website.id] = website.accounts || []
       })
+
+      // 等待所有过滤规则获取完成
+      await Promise.all(filterPromises)
 
       setWebsites(websites)
         setWebsiteChannels(channels)
+      setWebsiteAccounts(accounts)
+      setWebsiteFilters(filters)
     } catch (e) {
       console.error('获取网站配置失败:', e)
     }
@@ -3235,7 +3493,11 @@ export function AccountsView() {
       })
       if (res.ok) {
         toast.success('频道绑定已添加')
-        fetchWebsites()
+        // 立即更新前端状态，而不是重新获取所有数据
+        setWebsiteChannels(prev => ({
+          ...prev,
+          [websiteId]: [...(prev[websiteId] || []), channelId.trim()]
+        }))
       } else {
         toast.error('添加失败')
       }
@@ -3252,9 +3514,175 @@ export function AccountsView() {
       })
       if (res.ok) {
         toast.success('频道绑定已移除')
-        fetchWebsites()
+        // 立即更新前端状态，而不是重新获取所有数据
+        setWebsiteChannels(prev => ({
+          ...prev,
+          [websiteId]: prev[websiteId]?.filter(id => id !== channelId) || []
+        }))
       } else {
         toast.error('移除失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
+  // 账号绑定处理函数
+  const handleBindAccount = async (websiteId: number) => {
+    try {
+      const res = await fetch(`/api/websites/${websiteId}/accounts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(newAccountBinding)
+      })
+      if (res.ok) {
+        toast.success('账号绑定成功')
+        setShowBindAccount(null)
+
+        // 获取绑定的账号信息
+        const boundAccount = accounts.find(acc => acc.id.toString() === newAccountBinding.account_id)
+        if (boundAccount) {
+          // 立即更新前端状态，而不是重新获取所有数据
+          setWebsiteAccounts(prev => ({
+            ...prev,
+            [websiteId]: [...(prev[websiteId] || []), {
+              id: Date.now(), // 临时ID，后端会返回真实ID
+              account_id: parseInt(newAccountBinding.account_id),
+              username: boundAccount.username,
+              role: newAccountBinding.role
+            }]
+          }))
+        }
+
+        setNewAccountBinding({ account_id: '', role: 'both' })
+      } else {
+        const error = await res.json()
+        toast.error(error.error || '绑定失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
+  const handleUnbindAccount = async (websiteId: number, accountId: number) => {
+    try {
+      const res = await fetch(`/api/websites/${websiteId}/accounts/${accountId}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      })
+      if (res.ok) {
+        toast.success('账号解绑成功')
+        // 立即更新前端状态，而不是重新获取所有数据
+        setWebsiteAccounts(prev => ({
+          ...prev,
+          [websiteId]: prev[websiteId]?.filter(binding => binding.account_id !== accountId) || []
+        }))
+      } else {
+        toast.error('解绑失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
+  // 轮换间隔设置
+  const handleUpdateRotation = async (websiteId: number, rotationInterval: number) => {
+    try {
+      const res = await fetch(`/api/websites/${websiteId}/rotation`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ rotation_interval: rotationInterval })
+      })
+      if (res.ok) {
+        toast.success('轮换间隔已更新')
+        // 立即更新前端状态，而不是重新获取所有数据
+        setWebsites(prev => prev.map(website =>
+          website.id === websiteId
+            ? { ...website, rotation_interval: rotationInterval }
+            : website
+        ))
+        // 同步更新本地输入框状态
+        setRotationIntervals(prev => ({ ...prev, [websiteId]: rotationInterval }))
+      } else {
+        toast.error('更新失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
+  // 网站过滤规则管理
+  const handleAddFilter = async (websiteId: number) => {
+    try {
+      // 首先获取当前网站的过滤规则
+      const res = await fetch(`/api/websites/${websiteId}/filters`, { credentials: 'include' })
+      if (!res.ok) {
+        toast.error('获取当前过滤规则失败')
+        return
+      }
+
+      const currentData = await res.json()
+      const currentFilters = currentData.filters || []
+
+      // 添加新规则
+      const newFilters = [...currentFilters, {
+        filter_type: newFilter.filter_type,
+        filter_value: newFilter.filter_value
+      }]
+
+      // 更新过滤规则
+      const updateRes = await fetch(`/api/websites/${websiteId}/filters`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ filters: newFilters })
+      })
+
+      if (updateRes.ok) {
+        toast.success('过滤规则已添加')
+        setNewFilter({ filter_type: 'contains', filter_value: '' })
+        setShowAddWebsiteFilter(null)
+
+        // 立即更新前端状态，而不是重新获取所有数据
+        setWebsiteFilters(prev => ({
+          ...prev,
+          [websiteId]: newFilters
+        }))
+      } else {
+        toast.error('添加过滤规则失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
+  const handleRemoveWebsiteFilter = async (websiteId: number, filterIndex: number) => {
+    try {
+      // 获取当前网站的过滤规则
+      const currentFilters = websiteFilters[websiteId] || []
+
+      // 移除指定索引的规则
+      const newFilters = currentFilters.filter((_, index) => index !== filterIndex)
+
+      // 更新过滤规则
+      const updateRes = await fetch(`/api/websites/${websiteId}/filters`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ filters: newFilters })
+      })
+
+      if (updateRes.ok) {
+        toast.success('过滤规则已删除')
+        // 立即更新前端状态，而不是重新获取所有数据
+        setWebsiteFilters(prev => ({
+          ...prev,
+          [websiteId]: newFilters
+        }))
+      } else {
+        toast.error('删除过滤规则失败')
       }
     } catch (e) {
       toast.error('网络错误')
@@ -3804,24 +4232,25 @@ export function AccountsView() {
                                 <Label>频道ID</Label>
                                 <Input
                                   placeholder="例如: 1234567890123456789"
+                                  value={channelInputs[website.id] || ''}
+                                  onChange={(e) => setChannelInputs(prev => ({ ...prev, [website.id]: e.target.value }))}
                                   onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                      handleAddChannel(website.id, (e.target as HTMLInputElement).value)
-                                      ;(e.target as HTMLInputElement).value = ''
+                                    if (e.key === 'Enter' && channelInputs[website.id]?.trim()) {
+                                      handleAddChannel(website.id, channelInputs[website.id].trim())
+                                      setChannelInputs(prev => ({ ...prev, [website.id]: '' }))
                                     }
                                   }}
                                 />
                               </div>
                             </div>
                             <DialogFooter>
-                              <Button variant="outline" onClick={() => {}}>取消</Button>
+                              <Button variant="outline" onClick={() => setChannelInputs(prev => ({ ...prev, [website.id]: '' }))}>取消</Button>
                               <Button onClick={() => {
-                                const input = document.querySelector('input[placeholder*="频道ID"]') as HTMLInputElement
-                                if (input?.value) {
-                                  handleAddChannel(website.id, input.value)
-                                  input.value = ''
+                                if (channelInputs[website.id]?.trim()) {
+                                  handleAddChannel(website.id, channelInputs[website.id].trim())
+                                  setChannelInputs(prev => ({ ...prev, [website.id]: '' }))
                                 }
-                              }}>添加</Button>
+                              }} disabled={!channelInputs[website.id]?.trim()}>添加</Button>
                             </DialogFooter>
                           </DialogContent>
                         </Dialog>
@@ -3844,6 +4273,241 @@ export function AccountsView() {
                         ))}
                       </div>
                     </div>
+
+                    {/* 账号绑定 */}
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Settings className="w-4 h-4" />
+                        <span className="text-sm font-medium">绑定账号</span>
+                        <Dialog open={showBindAccount === website.id} onOpenChange={(open) => {
+                          setShowBindAccount(open ? website.id : null)
+                          if (!open) setNewAccountBinding({ account_id: '', role: 'both' })
+                        }}>
+                          <DialogTrigger asChild>
+                            <Button variant="outline" size="sm">
+                              <Plus className="w-3 h-3 mr-1" />
+                              绑定账号
+                            </Button>
+                          </DialogTrigger>
+                          <DialogContent>
+                            <DialogHeader>
+                              <DialogTitle>绑定Discord账号</DialogTitle>
+                              <DialogDescription>选择账号并设置角色</DialogDescription>
+                            </DialogHeader>
+                            <div className="space-y-4">
+                              <div>
+                                <Label>选择账号</Label>
+                                <Select value={newAccountBinding.account_id} onValueChange={value => setNewAccountBinding(prev => ({ ...prev, account_id: value }))}>
+                                  <SelectTrigger>
+                                    <SelectValue placeholder="选择Discord账号" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    {accounts.filter(account => !websiteAccounts[website.id]?.some(binding => binding.account_id === account.id)).map((account: any) => (
+                                      <SelectItem key={account.id} value={account.id.toString()}>
+                                        {account.username} ({account.status})
+                                      </SelectItem>
+                                    ))}
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div>
+                                <Label>账号角色</Label>
+                                <Select value={newAccountBinding.role} onValueChange={value => setNewAccountBinding(prev => ({ ...prev, role: value }))}>
+                                  <SelectTrigger>
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="listener">监听 (只接收消息)</SelectItem>
+                                    <SelectItem value="sender">发送 (只发送回复)</SelectItem>
+                                    <SelectItem value="both">两者 (监听+发送)</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                            </div>
+                            <DialogFooter>
+                              <Button variant="outline" onClick={() => setShowBindAccount(null)}>取消</Button>
+                              <Button onClick={() => handleBindAccount(website.id)} disabled={!newAccountBinding.account_id}>
+                                绑定
+                              </Button>
+                            </DialogFooter>
+                          </DialogContent>
+                        </Dialog>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        {(websiteAccounts[website.id] || []).map((binding: any) => (
+                          <div key={binding.id} className="flex items-center gap-1 bg-muted rounded px-2 py-1">
+                            <span className="text-xs">{binding.username}</span>
+                            <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">
+                              {binding.role === 'listener' ? '监听' : binding.role === 'sender' ? '发送' : '两者'}
+                            </Badge>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-4 w-4 p-0"
+                              onClick={() => handleUnbindAccount(website.id, binding.account_id)}
+                            >
+                              <X className="w-3 h-3" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* 账号轮换设置 */}
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Settings className="w-4 h-4" />
+                        <span className="text-sm font-medium">轮换设置</span>
+                      </div>
+
+                      {/* 轮换启用开关 */}
+                      <div className="flex items-center gap-2">
+                        <Label className="text-xs">启用轮换:</Label>
+                        <Switch
+                          checked={rotationEnabled[website.id] ?? (website.rotation_enabled !== 0)}
+                          onCheckedChange={(checked) => {
+                            setRotationEnabled(prev => ({ ...prev, [website.id]: checked }))
+                            // 发送API请求更新轮换启用状态
+                            fetch(`/api/websites/${website.id}/rotation`, {
+                              method: 'PUT',
+                              headers: { 'Content-Type': 'application/json' },
+                              credentials: 'include',
+                              body: JSON.stringify({ rotation_enabled: checked ? 1 : 0 })
+                            }).then(response => {
+                              if (response.ok) {
+                                toast.success(`轮换功能已${checked ? '启用' : '禁用'}`)
+                              } else {
+                                toast.error('更新失败')
+                                // 恢复开关状态
+                                setRotationEnabled(prev => ({ ...prev, [website.id]: !checked }))
+                              }
+                            }).catch(() => {
+                              toast.error('网络错误')
+                              // 恢复开关状态
+                              setRotationEnabled(prev => ({ ...prev, [website.id]: !checked }))
+                            })
+                          }}
+                        />
+                      </div>
+
+                      {/* 轮换间隔设置 */}
+                      <div className="flex items-center gap-2">
+                        <Label className="text-xs">轮换间隔(秒):</Label>
+                        <Input
+                          type="number"
+                          value={rotationIntervals[website.id] ?? website.rotation_interval ?? 180}
+                          className="w-20 h-7 text-xs"
+                          disabled={!(rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))}
+                          onChange={(e) => {
+                            const value = parseInt(e.target.value) || 180
+                            setRotationIntervals(prev => ({ ...prev, [website.id]: value }))
+                          }}
+                          onBlur={(e) => {
+                            const value = rotationIntervals[website.id] ?? website.rotation_interval ?? 180
+                            if (value > 0 && value !== website.rotation_interval) {
+                              handleUpdateRotation(website.id, value)
+                            } else if (value <= 0) {
+                              toast.error('轮换间隔必须大于0秒')
+                              setRotationIntervals(prev => ({ ...prev, [website.id]: website.rotation_interval ?? 180 }))
+                            }
+                          }}
+                        />
+                        <span className="text-xs text-muted-foreground">
+                          ({Math.floor((rotationIntervals[website.id] ?? website.rotation_interval ?? 180) / 60)}分{(rotationIntervals[website.id] ?? website.rotation_interval ?? 180) % 60}秒)
+                        </span>
+                      </div>
+
+                      {/* 状态说明 */}
+                      <div className="text-xs text-muted-foreground">
+                        {(rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))
+                          ? '轮换已启用，将在账号间自动切换'
+                          : '轮换已禁用，将使用固定账号发送'
+                        }
+                      </div>
+                    </div>
+
+                    {/* 消息过滤规则 */}
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Settings className="w-4 h-4" />
+                        <span className="text-sm font-medium">消息过滤</span>
+                        <Dialog open={showAddWebsiteFilter === website.id} onOpenChange={(open) => {
+                          setShowAddWebsiteFilter(open ? website.id : null)
+                          if (!open) setNewFilter({ filter_type: 'contains', filter_value: '' })
+                        }}>
+                          <DialogTrigger asChild>
+                            <Button variant="outline" size="sm">
+                              <Plus className="w-3 h-3 mr-1" />
+                              添加规则
+                            </Button>
+                          </DialogTrigger>
+                          <DialogContent>
+                            <DialogHeader>
+                              <DialogTitle>添加过滤规则</DialogTitle>
+                              <DialogDescription>为网站设置特定的消息过滤规则</DialogDescription>
+                            </DialogHeader>
+                            <div className="space-y-4">
+                              <div>
+                                <Label>过滤类型</Label>
+                                <Select value={newFilter.filter_type} onValueChange={value => setNewFilter(prev => ({ ...prev, filter_type: value }))}>
+                                  <SelectTrigger>
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="contains">包含文本</SelectItem>
+                                    <SelectItem value="starts_with">开头是</SelectItem>
+                                    <SelectItem value="ends_with">结尾是</SelectItem>
+                                    <SelectItem value="regex">正则表达式</SelectItem>
+                                    <SelectItem value="user_id">用户ID</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
+                              <div>
+                                <Label>过滤值</Label>
+                                <Input
+                                  value={newFilter.filter_value}
+                                  onChange={e => setNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
+                                  placeholder="输入过滤条件"
+                                />
+                              </div>
+                            </div>
+                            <DialogFooter>
+                              <Button variant="outline" onClick={() => setShowAddWebsiteFilter(null)}>取消</Button>
+                              <Button onClick={() => handleAddFilter(website.id)}>添加</Button>
+                            </DialogFooter>
+                          </DialogContent>
+                        </Dialog>
+                      </div>
+
+                      <div className="flex flex-wrap gap-2">
+                        {(websiteFilters[website.id] || []).map((filter: any, index: number) => (
+                          <div key={index} className="flex items-center gap-1 bg-muted rounded px-2 py-1">
+                            <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">
+                              {filter.filter_type === 'contains' ? '包含' :
+                               filter.filter_type === 'starts_with' ? '开头' :
+                               filter.filter_type === 'ends_with' ? '结尾' :
+                               filter.filter_type === 'regex' ? '正则' : '用户ID'}
+                            </Badge>
+                            <span className="text-xs truncate max-w-20" title={filter.filter_value}>
+                              {filter.filter_value}
+                            </span>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-4 w-4 p-0"
+                              onClick={() => handleRemoveWebsiteFilter(website.id, index)}
+                            >
+                              <X className="w-3 h-3" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        网站特定的过滤规则 (独立于全局规则)
+                      </div>
+                    </div>
+
                   </div>
                 ))}
               </div>
@@ -4330,53 +4994,46 @@ export function ImageSearchView() {
                       </div>
                     </div>
 
-                    {/* 链接显示区域 */}
-                    <div className="flex items-center gap-4">
-                      <div className="flex flex-col gap-1 min-w-[300px]">
-                        <div className="flex items-center gap-1.5">
-                          <Badge className="text-[9px] px-1 py-0 h-4 border-none w-12 justify-center shrink-0 text-white bg-gray-600">
-                            微店
-                          </Badge>
-                          <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
-                            <a href={result.product.weidianUrl} target="_blank" className="font-mono truncate hover:underline text-muted-foreground">
-                              {result.product.weidianUrl}
-                            </a>
-                            <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(result.product.weidianUrl); toast.success("Copied")}}>
-                              <Copy className="h-2.5 w-2.5"/>
-                            </Button>
-                          </div>
-                        </div>
-                        {result.product.cnfansUrl && (
-                          <div className="flex items-center gap-1.5">
-                            <Badge className="text-[9px] px-1 py-0 h-4 border-none w-12 justify-center shrink-0 text-white bg-blue-600">
-                              CNFans
+                    {/* 网站链接网格显示区域 */}
+                    <div className="w-full">
+                      <div className="grid grid-cols-2 gap-1 max-w-md">
+                        {(result.product.websiteUrls || []).slice(0, 8).map((site: any, index: number) => (
+                          <div key={index} className="flex items-center gap-1">
+                            <Badge
+                              className="text-[8px] px-1 py-0 h-3 border-none min-w-[40px] justify-center shrink-0 text-white"
+                              style={{ backgroundColor: site.badge_color || '#6b7280' }}
+                            >
+                              {site.display_name}
                             </Badge>
-                            <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
-                              <a href={result.product.cnfansUrl} target="_blank" className="font-mono truncate hover:underline text-blue-500">
-                                {result.product.cnfansUrl}
+                            <div className="flex-1 bg-muted/30 p-0.5 px-1.5 rounded border text-[9px] flex items-center justify-between overflow-hidden min-w-0">
+                              <a
+                                href={site.url}
+                                target="_blank"
+                                className="truncate hover:underline"
+                                style={{ color: site.badge_color || '#6b7280' }}
+                              >
+                                {site.url}
                               </a>
-                              <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(result.product.cnfansUrl); toast.success("Copied")}}>
-                                <Copy className="h-2.5 w-2.5"/>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-3 w-3 shrink-0"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(site.url)
+                                  toast.success("已复制链接")
+                                }}
+                              >
+                                <Copy className="h-2 w-2"/>
                               </Button>
                             </div>
                           </div>
-                        )}
-                        {result.product.acbuyUrl && (
-                          <div className="flex items-center gap-1.5">
-                            <Badge className="text-[9px] px-1 py-0 h-4 border-none w-12 justify-center shrink-0 text-white bg-purple-600">
-                              ACBuy
-                            </Badge>
-                            <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
-                              <a href={result.product.acbuyUrl} target="_blank" className="font-mono truncate hover:underline text-purple-500">
-                                {result.product.acbuyUrl}
-                              </a>
-                              <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(result.product.acbuyUrl); toast.success("Copied")}}>
-                                <Copy className="h-2.5 w-2.5"/>
-                              </Button>
-                            </div>
-                          </div>
-                        )}
+                        ))}
                       </div>
+                      {(result.product.websiteUrls || []).length > 8 && (
+                        <div className="mt-2 text-xs text-muted-foreground">
+                          还有 {(result.product.websiteUrls || []).length - 8} 个网站链接...
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -9787,6 +10444,24 @@ class Database:
             except sqlite3.OperationalError:
                 pass  # 字段已存在
 
+            # 为website_configs表添加rotation_interval字段
+            try:
+                cursor.execute('ALTER TABLE website_configs ADD COLUMN rotation_interval INTEGER DEFAULT 180')
+            except sqlite3.OperationalError:
+                pass  # 字段已存在
+
+            # 为website_configs表添加message_filters字段
+            try:
+                cursor.execute('ALTER TABLE website_configs ADD COLUMN message_filters TEXT DEFAULT \'[]\'')
+            except sqlite3.OperationalError:
+                pass  # 字段已存在
+
+            # 为website_configs表添加rotation_enabled字段
+            try:
+                cursor.execute('ALTER TABLE website_configs ADD COLUMN rotation_enabled INTEGER DEFAULT 1')
+            except sqlite3.OperationalError:
+                pass  # 字段已存在
+
             # 创建网站配置表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS website_configs (
@@ -9796,6 +10471,9 @@ class Database:
                     url_template TEXT NOT NULL,
                     id_pattern TEXT NOT NULL,
                     badge_color TEXT DEFAULT 'blue',
+                    rotation_interval INTEGER DEFAULT 180,
+                    rotation_enabled INTEGER DEFAULT 1,  -- 是否启用轮换功能 (1=启用, 0=禁用)
+                    message_filters TEXT DEFAULT '[]',  -- JSON格式存储过滤条件数组
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
@@ -9809,6 +10487,20 @@ class Database:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE,
                     UNIQUE(website_id, channel_id)
+                )
+            ''')
+
+            # 创建网站账号绑定表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS website_account_bindings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    website_id INTEGER NOT NULL,
+                    account_id INTEGER NOT NULL,
+                    role TEXT NOT NULL CHECK (role IN ('listener', 'sender', 'both')),
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE,
+                    FOREIGN KEY (account_id) REFERENCES discord_accounts (id) ON DELETE CASCADE,
+                    UNIQUE(website_id, account_id)
                 )
             ''')
 
@@ -10796,11 +11488,11 @@ class Database:
                 cursor.execute('''
                     SELECT
                         wc.id, wc.name, wc.display_name, wc.url_template,
-                        wc.id_pattern, wc.badge_color, wc.created_at,
+                        wc.id_pattern, wc.badge_color, wc.rotation_interval, wc.rotation_enabled, wc.message_filters, wc.created_at,
                         GROUP_CONCAT(wcb.channel_id) as channels
                     FROM website_configs wc
                     LEFT JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
-                    GROUP BY wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.created_at
+                    GROUP BY wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.rotation_interval, wc.rotation_enabled, wc.message_filters, wc.created_at
                     ORDER BY wc.created_at
                 ''')
 
@@ -10819,31 +11511,31 @@ class Database:
             logger.error(f"获取网站配置失败: {e}")
             return []
 
-    def add_website_config(self, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str = 'blue') -> bool:
+    def add_website_config(self, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str = 'blue', rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> bool:
         """添加网站配置"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    INSERT INTO website_configs (name, display_name, url_template, id_pattern, badge_color)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (name, display_name, url_template, id_pattern, badge_color))
+                    INSERT INTO website_configs (name, display_name, url_template, id_pattern, badge_color, rotation_interval, rotation_enabled, message_filters)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (name, display_name, url_template, id_pattern, badge_color, rotation_interval, rotation_enabled, message_filters))
                 conn.commit()
                 return True
         except Exception as e:
             logger.error(f"添加网站配置失败: {e}")
             return False
 
-    def update_website_config(self, config_id: int, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str) -> bool:
+    def update_website_config(self, config_id: int, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str, rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> bool:
         """更新网站配置"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     UPDATE website_configs
-                    SET name = ?, display_name = ?, url_template = ?, id_pattern = ?, badge_color = ?
+                    SET name = ?, display_name = ?, url_template = ?, id_pattern = ?, badge_color = ?, rotation_interval = ?, rotation_enabled = ?, message_filters = ?
                     WHERE id = ?
-                ''', (name, display_name, url_template, id_pattern, badge_color, config_id))
+                ''', (name, display_name, url_template, id_pattern, badge_color, rotation_interval, rotation_enabled, message_filters, config_id))
                 conn.commit()
                 return cursor.rowcount > 0
         except Exception as e:
@@ -10931,6 +11623,151 @@ class Database:
         except Exception as e:
             logger.error(f"生成网站URL失败: {e}")
             return []
+
+    # ===== 网站账号绑定方法 =====
+
+    def add_website_account_binding(self, website_id: int, account_id: int, role: str) -> bool:
+        """添加网站账号绑定"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT OR REPLACE INTO website_account_bindings
+                    (website_id, account_id, role)
+                    VALUES (?, ?, ?)
+                ''', (website_id, account_id, role))
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"添加网站账号绑定失败: {e}")
+            return False
+
+    def remove_website_account_binding(self, website_id: int, account_id: int) -> bool:
+        """移除网站账号绑定"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    DELETE FROM website_account_bindings
+                    WHERE website_id = ? AND account_id = ?
+                ''', (website_id, account_id))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"移除网站账号绑定失败: {e}")
+            return False
+
+    def get_website_account_bindings(self, website_id: int) -> List[Dict]:
+        """获取网站的所有账号绑定"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT wab.id, wab.account_id, wab.role, wab.created_at,
+                           da.username, da.token, da.status
+                    FROM website_account_bindings wab
+                    JOIN discord_accounts da ON wab.account_id = da.id
+                    WHERE wab.website_id = ?
+                    ORDER BY wab.created_at
+                ''', (website_id,))
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"获取网站账号绑定失败: {e}")
+            return []
+
+    def get_account_website_bindings(self, account_id: int) -> List[Dict]:
+        """获取账号的所有网站绑定"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT wab.id, wab.website_id, wab.role, wab.created_at,
+                           wc.name, wc.display_name
+                    FROM website_account_bindings wab
+                    JOIN website_configs wc ON wab.website_id = wc.id
+                    WHERE wab.account_id = ?
+                    ORDER BY wab.created_at
+                ''', (account_id,))
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"获取账号网站绑定失败: {e}")
+            return []
+
+    def get_website_senders(self, website_id: int) -> List[int]:
+        """获取网站的发送账号ID列表"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT account_id FROM website_account_bindings
+                    WHERE website_id = ? AND role IN ('sender', 'both')
+                ''', (website_id,))
+                return [row['account_id'] for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"获取网站发送账号失败: {e}")
+            return []
+
+    def get_website_listeners(self, website_id: int) -> List[int]:
+        """获取网站的监听账号ID列表"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT account_id FROM website_account_bindings
+                    WHERE website_id = ? AND role IN ('listener', 'both')
+                ''', (website_id,))
+                return [row['account_id'] for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"获取网站监听账号失败: {e}")
+            return []
+
+    def update_website_config_rotation(self, config_id: int, rotation_interval: int) -> bool:
+        """更新网站配置的轮换间隔"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE website_configs
+                    SET rotation_interval = ?
+                    WHERE id = ?
+                ''', (rotation_interval, config_id))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"更新网站轮换间隔失败: {e}")
+            return False
+
+    def update_website_config_rotation_enabled(self, config_id: int, rotation_enabled: int) -> bool:
+        """更新网站配置的轮换启用状态"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE website_configs
+                    SET rotation_enabled = ?
+                    WHERE id = ?
+                ''', (rotation_enabled, config_id))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"更新网站配置轮换启用状态失败: {e}")
+            return False
+
+    def update_website_message_filters(self, config_id: int, message_filters: str) -> bool:
+        """更新网站配置的消息过滤条件"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE website_configs
+                    SET message_filters = ?
+                    WHERE id = ?
+                ''', (message_filters, config_id))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"更新网站消息过滤条件失败: {e}")
+            return False
 
     def get_system_stats(self) -> Dict:
         """获取系统统计信息"""
@@ -11409,21 +12246,25 @@ class Database:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT discord_similarity_threshold, global_reply_min_delay, global_reply_max_delay,
-                           user_blacklist, keyword_filters
+                    SELECT download_threads, feature_extract_threads, discord_similarity_threshold,
+                           global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters
                     FROM user_settings WHERE user_id = ?
                 ''', (user_id,))
                 row = cursor.fetchone()
                 if row:
                     return {
-                        'discord_similarity_threshold': row[0] or 0.6,
-                        'global_reply_min_delay': row[1] or 3.0,
-                        'global_reply_max_delay': row[2] or 8.0,
-                        'user_blacklist': row[3] or '',
-                        'keyword_filters': row[4] or '',
+                        'download_threads': row[0] or 4,
+                        'feature_extract_threads': row[1] or 4,
+                        'discord_similarity_threshold': row[2] or 0.6,
+                        'global_reply_min_delay': row[3] or 3.0,
+                        'global_reply_max_delay': row[4] or 8.0,
+                        'user_blacklist': row[5] or '',
+                        'keyword_filters': row[6] or '',
                     }
                 # 如果用户没有设置，返回默认值
                 return {
+                    'download_threads': 4,
+                    'feature_extract_threads': 4,
                     'discord_similarity_threshold': 0.6,
                     'global_reply_min_delay': 3.0,
                     'global_reply_max_delay': 8.0,
@@ -11442,7 +12283,8 @@ class Database:
                 'keyword_filters': '',
             }
 
-    def update_user_settings(self, user_id: int, discord_similarity_threshold: float = None,
+    def update_user_settings(self, user_id: int, download_threads: int = None,
+                           feature_extract_threads: int = None, discord_similarity_threshold: float = None,
                            global_reply_min_delay: float = None, global_reply_max_delay: float = None,
                            user_blacklist: str = None, keyword_filters: str = None) -> bool:
         """更新用户个性化设置"""
@@ -11459,6 +12301,13 @@ class Database:
                     update_fields = []
                     params = []
 
+                    if download_threads is not None:
+                        update_fields.append('download_threads = ?')
+                        params.append(download_threads)
+
+                    if feature_extract_threads is not None:
+                        update_fields.append('feature_extract_threads = ?')
+                        params.append(feature_extract_threads)
 
                     if discord_similarity_threshold is not None:
                         update_fields.append('discord_similarity_threshold = ?')
@@ -11489,11 +12338,13 @@ class Database:
                     # 插入新设置
                     cursor.execute('''
                         INSERT INTO user_settings
-                        (user_id, discord_similarity_threshold, global_reply_min_delay, global_reply_max_delay,
-                         user_blacklist, keyword_filters)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        (user_id, download_threads, feature_extract_threads, discord_similarity_threshold,
+                         global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         user_id,
+                        download_threads or 4,
+                        feature_extract_threads or 4,
                         discord_similarity_threshold or 0.6,
                         global_reply_min_delay or 3.0,
                         global_reply_max_delay or 8.0,
@@ -12473,6 +13324,18 @@ except ImportError:
 bot_clients = []
 bot_tasks = []
 
+# 全局冷却管理器：account_id -> timestamp (上次发送时间)
+account_last_sent = {}
+
+def is_account_on_cooldown(account_id, interval):
+    """检查账号是否在冷却中"""
+    last = account_last_sent.get(account_id, 0)
+    return (time.time() - last) < interval
+
+def set_account_cooldown(account_id):
+    """设置账号冷却时间"""
+    account_last_sent[account_id] = time.time()
+
 def get_response_url_for_channel(product, channel_id):
     """根据频道ID决定发送哪个链接"""
     channel_id_str = str(channel_id)
@@ -12595,7 +13458,7 @@ logger = logging.getLogger(__name__)
 logging.getLogger('discord').setLevel(logging.INFO)
 
 class DiscordBotClient(discord.Client):
-    def __init__(self, account_id=None, user_id=None, user_shops=None):
+    def __init__(self, account_id=None, user_id=None, user_shops=None, role='both'):
         # discord.py-self 可能不需要 intents，或者使用不同的语法
         try:
             # 尝试使用标准的 intents
@@ -12612,6 +13475,138 @@ class DiscordBotClient(discord.Client):
         self.account_id = account_id
         self.user_id = user_id  # 用户ID，用于获取个性化设置
         self.user_shops = user_shops  # 用户管理的店铺列表
+        self.role = role  # 'listener', 'sender', 'both' - 账号角色
+
+    async def schedule_reply(self, message, product, custom_reply=None):
+        """调度回复到合适的发送账号"""
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+
+            # 1. 确定当前频道属于哪个网站配置
+            website_config = await self.get_website_config_by_channel_async(message.channel.id)
+
+            if not website_config:
+                logger.info("当前频道未绑定任何网站配置，忽略")
+                return
+
+            # 2. 获取该配置下的可用 Sender 账号 (异步执行)
+            sender_account_ids = await asyncio.get_event_loop().run_in_executor(None, db.get_website_senders, website_config['id'])
+
+            # 3. 检查轮换功能是否启用
+            rotation_enabled = website_config.get('rotation_enabled', 1)  # 默认启用
+
+            if rotation_enabled:
+                # 轮换功能启用：筛选非冷却中的账号
+                rotation_interval = website_config.get('rotation_interval', 180)
+                available_senders = [
+                    uid for uid in sender_account_ids
+                    if not is_account_on_cooldown(uid, rotation_interval)
+                ]
+
+                if not available_senders:
+                    logger.info("所有发送账号均在冷却中，跳过回复")
+                    return
+            else:
+                # 轮换功能禁用：使用所有可用的发送账号
+                available_senders = sender_account_ids
+                if not available_senders:
+                    logger.info("没有可用的发送账号，跳过回复")
+                    return
+
+            # 4. 选择一个账号 (随机 或 轮询)
+            selected_account_id = random.choice(available_senders)
+
+            # 5. 找到该账号对应的 Discord Client 实例
+            target_client = next((c for c in bot_clients if c.account_id == selected_account_id), None)
+
+            if target_client:
+                # 6. 设置冷却并发送
+                set_account_cooldown(selected_account_id)
+
+                # 生成回复内容
+                response_content = self._generate_reply_content(product, message.channel.id, custom_reply)
+
+                # 注意：target_client 必须也在同一个服务器(Guild)中才能发送消息
+                try:
+                    target_channel = target_client.get_channel(message.channel.id)
+                    if target_channel:
+                        async with target_channel.typing():
+                            await asyncio.sleep(random.uniform(config.GLOBAL_REPLY_MIN_DELAY, config.GLOBAL_REPLY_MAX_DELAY))
+
+                        # 发送回复
+                        await target_channel.send(response_content)
+                        logger.info(f"账号 {target_client.user.name} 已回复消息")
+                    else:
+                        logger.error(f"账号 {selected_account_id} 无法访问频道 {message.channel.id}")
+                except Exception as e:
+                    logger.error(f"发送失败: {e}")
+            else:
+                logger.error(f"找不到账号 {selected_account_id} 的客户端实例")
+
+        except Exception as e:
+            logger.error(f"调度回复失败: {e}")
+
+    def _generate_reply_content(self, product, channel_id, custom_reply=None):
+        """生成回复内容"""
+        if custom_reply:
+            reply_type = custom_reply.get('reply_type')
+
+            if reply_type == 'custom_only':
+                # 只发送自定义内容，不发送链接
+                return custom_reply.get('content', '')
+
+            elif reply_type == 'text_and_link':
+                # 发送文字 + 链接
+                response = get_response_url_for_channel(product, channel_id)
+                return f"{custom_reply.get('content', '')}\n{response}".strip()
+
+            elif reply_type == 'text':
+                # 只发送文字
+                return custom_reply.get('content', '')
+
+        # 默认行为：发送链接
+        return get_response_url_for_channel(product, channel_id)
+
+    def get_website_config_by_channel(self, channel_id):
+        """根据频道ID获取对应的网站配置"""
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+
+            # 查询频道绑定的网站配置
+            configs = db.get_website_configs()
+            for config in configs:
+                channels = config.get('channels', [])
+                if str(channel_id) in channels:
+                    return config
+            return None
+        except Exception as e:
+            logger.error(f"获取频道网站配置失败: {e}")
+            return None
+
+    async def get_website_config_by_channel_async(self, channel_id):
+        """异步版本：根据频道ID获取对应的网站配置"""
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+
+            # 异步查询频道绑定的网站配置
+            configs = await asyncio.get_event_loop().run_in_executor(None, db.get_website_configs)
+            for config in configs:
+                channels = config.get('channels', [])
+                if str(channel_id) in channels:
+                    return config
+            return None
+        except Exception as e:
+            logger.error(f"异步获取频道网站配置失败: {e}")
+            return None
 
     def _should_filter_message(self, message):
         """检查消息是否应该被过滤"""
@@ -12740,13 +13735,25 @@ class DiscordBotClient(discord.Client):
         if message.author.bot or message.webhook_id:
             return
 
-        # 如果配置了频道ID，只处理特定频道的消息；否则处理所有频道
-        if config.DISCORD_CHANNEL_ID and str(message.channel.id) != str(config.DISCORD_CHANNEL_ID):
+        # --- 新增过滤需求 ---
+
+        # 1. 忽略 @别人的信息 (Message Mentions)
+        # 如果消息中包含 mention，且 mention 的不是自己，则忽略
+        if message.mentions:
+            # 如果仅仅是不想回复 @别人的消息（不管是不是@自己），直接 return
             return
 
-        # 检查消息过滤规则
+        # 2. 忽略回复别人的信息 (Message Reference)
+        if message.reference is not None:
+            return
+
+        # 3. 触发消息过滤规则
         if self._should_filter_message(message):
             return
+
+        # 4. 角色过滤：纯 sender 账号不处理消息
+        if self.role == 'sender':
+            return  # 纯发送账号不监听消息
 
         logger.info(f'收到消息: {message.author.name} 在 #{message.channel.name}: "{message.content[:100]}{"..." if len(message.content) > 100 else ""}"')
 
@@ -12811,7 +13818,8 @@ class DiscordBotClient(discord.Client):
                             from database import db
                         except ImportError:
                             from .database import db
-                        user_settings = db.get_user_settings(self.user_id)
+                        # 异步获取用户设置
+                        user_settings = await asyncio.get_event_loop().run_in_executor(None, db.get_user_settings, self.user_id)
                         if user_settings and 'discord_similarity_threshold' in user_settings:
                             user_threshold = user_settings['discord_similarity_threshold']
                     except Exception as e:
@@ -12824,16 +13832,6 @@ class DiscordBotClient(discord.Client):
                     product = best_match.get('product', {})
                     logger.info(f'✅ 匹配成功! 相似度: {similarity:.2f} | 商品: {product.get("id")} | 频道: {message.channel.name}')
 
-                    # 模拟打字状态并延迟回复
-                    async with message.channel.typing():
-                        # === 修复延迟逻辑 ===
-                        # 直接读取配置，不设硬性下限，允许 0.1s
-                        min_d = max(0.1, float(config.GLOBAL_REPLY_MIN_DELAY))
-                        max_d = max(min_d, float(config.GLOBAL_REPLY_MAX_DELAY))
-
-                        delay = random.uniform(min_d, max_d)
-                        await asyncio.sleep(delay)
-
                     # 检查商品是否启用了自动回复规则
                     product_rule_enabled = product.get('ruleEnabled', True)
 
@@ -12841,37 +13839,8 @@ class DiscordBotClient(discord.Client):
                         # 使用全局自定义回复
                         custom_reply = self._get_custom_reply()
 
-                        if custom_reply:
-                            reply_type = custom_reply.get('reply_type')
-
-                            if reply_type == 'custom_only':
-                                # 只发送自定义内容，不发送链接
-                                if custom_reply.get('content'):
-                                    await message.reply(custom_reply['content'])
-                                if custom_reply.get('image_url'):
-                                    # 这里可以实现发送图片的逻辑
-                                    pass
-
-                            elif reply_type == 'text_and_link':
-                                # 发送文字 + 链接
-                                response = get_response_url_for_channel(product, message.channel.id)
-                                full_reply = f"{custom_reply.get('content', '')}\n{response}".strip()
-                                await message.reply(full_reply)
-
-                            elif reply_type == 'text':
-                                # 只发送文字
-                                if custom_reply.get('content'):
-                                    await message.reply(custom_reply['content'])
-
-                            elif reply_type == 'image':
-                                # 发送图片（如果设置了的话）
-                                if custom_reply.get('image_url'):
-                                    # 这里可以实现发送图片的逻辑
-                                    pass
-                        else:
-                            # 默认行为：发送链接
-                            response = get_response_url_for_channel(product, message.channel.id)
-                            await message.reply(response)
+                        # 使用调度机制回复，而不是直接回复
+                        await self.schedule_reply(message, product, custom_reply)
                     else:
                         # 商品级自定义回复
                         custom_text = product.get('custom_reply_text', '').strip()
@@ -12912,7 +13881,7 @@ class DiscordBotClient(discord.Client):
                         elif image_source == 'custom' and custom_image_urls and len(custom_image_urls) > 0:
                             # 发送自定义图片链接
                             try:
-                                import aiohttp
+                                # aiohttp already imported at module level
                                 for url in custom_image_urls[:10]:  # 最多发送10张图片
                                     try:
                                         async with aiohttp.ClientSession() as session:
@@ -13112,7 +14081,8 @@ class DiscordBotClient(discord.Client):
                             from database import db
                         except ImportError:
                             from .database import db
-                        user_settings = db.get_user_settings(self.user_id)
+                        # 异步获取用户设置
+                        user_settings = await asyncio.get_event_loop().run_in_executor(None, db.get_user_settings, self.user_id)
                         if user_settings and 'discord_similarity_threshold' in user_settings:
                             api_threshold = user_settings['discord_similarity_threshold']
                     except Exception as e:
@@ -13254,6 +14224,9 @@ if __name__ == '__main__':
 
 --- File: ./backend/feature_extractor.py ---
 import os
+import warnings
+# 抑制NNPACK不支持硬件的警告
+warnings.filterwarnings("ignore", message="Could not initialize NNPACK")
 import torch
 import numpy as np
 import threading
@@ -14955,6 +15928,18 @@ def search_similar():
                             cursor.execute("SELECT image_index FROM product_images WHERE product_id = ? ORDER BY image_index", (result['id'],))
                             actual_images = [f"/api/image/{result['id']}/{row[0]}" for row in cursor.fetchall()]
 
+                    # 生成所有网站的链接
+                    weidian_id = None
+                    if product_info and product_info.get('product_url'):
+                        import re
+                        match = re.search(r'itemID=(\d+)', product_info['product_url'])
+                        if match:
+                            weidian_id = match.group(1)
+
+                    website_urls = []
+                    if weidian_id:
+                        website_urls = db.generate_website_urls(weidian_id)
+
                     result_data = {
                         'rank': i + 1,
                         'similarity': float(result['similarity']),
@@ -14968,7 +15953,8 @@ def search_similar():
                             'cnfansUrl': product_info.get('cnfans_url', ''),
                             'acbuyUrl': product_info.get('acbuy_url', ''),
                             'ruleEnabled': product_info.get('ruleEnabled', True) if product_info else True,
-                            'images': actual_images if actual_images else [f"/api/image/{result['id']}/{result['image_index']}"]  # 使用实际图片列表
+                            'images': actual_images if actual_images else [f"/api/image/{result['id']}/{result['image_index']}"],  # 使用实际图片列表
+                            'websiteUrls': website_urls  # 添加所有网站的链接
                         }
                     }
                     processed_results.append(result_data)
@@ -15398,9 +16384,15 @@ def reset_user_password(user_id):
 # === 新增：网站配置管理API ===
 @app.route('/api/websites', methods=['GET'])
 def get_website_configs():
-    """获取所有网站配置及其频道绑定（优化版本，避免N+1查询）"""
+    """获取所有网站配置及其频道绑定和账号绑定"""
     try:
         configs = db.get_website_configs()
+
+        # 为每个配置添加账号绑定信息
+        for config in configs:
+            config_id = config['id']
+            config['accounts'] = db.get_website_account_bindings(config_id)
+
         return jsonify({'websites': configs})
     except Exception as e:
         logger.error(f"获取网站配置失败: {e}")
@@ -15509,6 +16501,141 @@ def remove_website_channel(config_id, channel_id):
             return jsonify({'error': '移除失败'}), 500
     except Exception as e:
         logger.error(f"移除网站频道绑定失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# ===== 网站账号绑定API =====
+
+@app.route('/api/websites/<int:config_id>/accounts', methods=['GET'])
+def get_website_accounts(config_id):
+    """获取网站绑定的账号"""
+    try:
+        accounts = db.get_website_account_bindings(config_id)
+        return jsonify({'accounts': accounts})
+    except Exception as e:
+        logger.error(f"获取网站账号绑定失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/websites/<int:config_id>/accounts', methods=['POST'])
+def add_website_account(config_id):
+    """为网站绑定账号"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        data = request.get_json()
+        account_id = data.get('account_id')
+        role = data.get('role', 'both')  # 'listener', 'sender', 'both'
+
+        if not account_id or role not in ['listener', 'sender', 'both']:
+            return jsonify({'error': '无效的账号ID或角色'}), 400
+
+        if db.add_website_account_binding(config_id, account_id, role):
+            return jsonify({'success': True, 'message': f'账号绑定成功，角色: {role}'})
+        else:
+            return jsonify({'error': '绑定失败'}), 500
+    except Exception as e:
+        logger.error(f"添加网站账号绑定失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/websites/<int:config_id>/accounts/<int:account_id>', methods=['DELETE'])
+def remove_website_account(config_id, account_id):
+    """移除网站账号绑定"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        if db.remove_website_account_binding(config_id, account_id):
+            return jsonify({'success': True, 'message': '账号绑定已移除'})
+        else:
+            return jsonify({'error': '移除失败'}), 500
+    except Exception as e:
+        logger.error(f"移除网站账号绑定失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/websites/<int:config_id>/rotation', methods=['PUT'])
+def update_website_rotation(config_id):
+    """更新网站轮换配置（间隔和启用状态）"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        data = request.get_json()
+        updates = []
+        messages = []
+
+        # 更新轮换间隔
+        if 'rotation_interval' in data:
+            rotation_interval = data['rotation_interval']
+            if rotation_interval <= 0:
+                return jsonify({'error': '轮换间隔必须大于0秒'}), 400
+
+            if db.update_website_config_rotation(config_id, rotation_interval):
+                updates.append(True)
+                messages.append(f'轮换间隔已设置为 {rotation_interval} 秒')
+            else:
+                updates.append(False)
+
+        # 更新轮换启用状态
+        if 'rotation_enabled' in data:
+            rotation_enabled = data['rotation_enabled']
+            if rotation_enabled not in [0, 1]:
+                return jsonify({'error': '轮换启用状态必须是0或1'}), 400
+
+            if db.update_website_config_rotation_enabled(config_id, rotation_enabled):
+                updates.append(True)
+                status_text = '启用' if rotation_enabled else '禁用'
+                messages.append(f'轮换功能已{status_text}')
+            else:
+                updates.append(False)
+
+        if all(updates):
+            return jsonify({'success': True, 'message': '; '.join(messages)})
+        else:
+            return jsonify({'error': '部分更新失败'}), 500
+    except Exception as e:
+        logger.error(f"更新网站轮换配置失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/websites/<int:config_id>/filters', methods=['GET'])
+def get_website_filters(config_id):
+    """获取网站的消息过滤条件"""
+    try:
+        configs = db.get_website_configs()
+        config = next((c for c in configs if c['id'] == config_id), None)
+        if not config:
+            return jsonify({'error': '网站配置不存在'}), 404
+
+        import json
+        filters = json.loads(config.get('message_filters', '[]'))
+        return jsonify({'filters': filters})
+    except Exception as e:
+        logger.error(f"获取网站过滤条件失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/websites/<int:config_id>/filters', methods=['PUT'])
+def update_website_filters(config_id):
+    """更新网站的消息过滤条件"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        data = request.get_json()
+        filters = data.get('filters', [])
+
+        # 验证过滤条件格式
+        for filter_item in filters:
+            if not isinstance(filter_item, dict) or 'filter_type' not in filter_item or 'filter_value' not in filter_item:
+                return jsonify({'error': '过滤条件格式无效'}), 400
+
+        import json
+        filters_json = json.dumps(filters)
+
+        if db.update_website_message_filters(config_id, filters_json):
+            return jsonify({'success': True, 'message': f'已更新 {len(filters)} 个过滤条件'})
+        else:
+            return jsonify({'error': '更新失败'}), 500
+    except Exception as e:
+        logger.error(f"更新网站过滤条件失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/products/<int:product_id>/urls', methods=['GET'])
@@ -16271,12 +17398,35 @@ def add_account():
 
         with db.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO discord_accounts (username, token, status, user_id)
-                VALUES (?, ?, 'offline', ?)
-            """, (username, token, current_user['id']))
-            account_id = cursor.lastrowid
 
+            # 首先检查token是否已存在
+            cursor.execute("SELECT id, username, user_id FROM discord_accounts WHERE token = ?", (token,))
+            existing_account = cursor.fetchone()
+
+            if existing_account:
+                # 如果token已存在，检查是否属于当前用户
+                if existing_account[2] == current_user['id']:
+                    # 属于当前用户，更新信息
+                    cursor.execute("""
+                        UPDATE discord_accounts
+                        SET username = ?, status = 'offline', updated_at = CURRENT_TIMESTAMP
+                        WHERE token = ?
+                    """, (username, token))
+                    account_id = existing_account[0]
+                    logger.info(f"更新现有账号: {username} (用户ID: {current_user['id']})")
+                else:
+                    # 属于其他用户，返回错误
+                    return jsonify({'error': '此Discord token已被其他用户使用'}), 400
+            else:
+                # token不存在，插入新记录
+                cursor.execute("""
+                    INSERT INTO discord_accounts (username, token, status, user_id)
+                    VALUES (?, ?, 'offline', ?)
+                """, (username, token, current_user['id']))
+                account_id = cursor.lastrowid
+                logger.info(f"添加新账号: {username} (用户ID: {current_user['id']})")
+
+            # 获取账号信息
             cursor.execute("SELECT id, username, token, status, last_active, user_id FROM discord_accounts WHERE id = ?", (account_id,))
             account = cursor.fetchone()
             conn.commit()
@@ -17456,10 +18606,28 @@ def start_discord_bot(user_id=None):
                 if user:
                     user_shops = user.get('shops', [])
 
-            logger.info(f"正在启动机器人账号: {username} (用户ID: {user_id}, 管理店铺: {user_shops})")
+            # 确定账号角色：检查是否绑定了任何网站配置
+            account_bindings = db.get_account_website_bindings(account_id)
+            if account_bindings:
+                # 检查账号是否有发送或监听角色
+                has_sender = any(b['role'] in ['sender', 'both'] for b in account_bindings)
+                has_listener = any(b['role'] in ['listener', 'both'] for b in account_bindings)
 
-            # 创建机器人实例
-            client = DiscordBotClient(account_id=account_id, user_id=user_id, user_shops=user_shops)
+                if has_sender and has_listener:
+                    role = 'both'
+                elif has_sender:
+                    role = 'sender'
+                elif has_listener:
+                    role = 'listener'
+                else:
+                    role = 'both'  # 默认
+            else:
+                role = 'both'  # 未绑定的账号默认为both
+
+            logger.info(f"正在启动机器人账号: {username} (用户ID: {user_id}, 管理店铺: {user_shops}, 角色: {role})")
+
+            # 创建机器人实例，传入角色参数
+            client = DiscordBotClient(account_id=account_id, user_id=user_id, user_shops=user_shops, role=role)
 
             # 启动机器人
             try:
@@ -17575,6 +18743,22 @@ def stop_bot():
     except Exception as e:
         logger.error(f"停止机器人失败: {e}")
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/bot/status', methods=['GET'])
+def get_bot_status():
+    """获取Discord机器人全局运行状态"""
+    try:
+        # 通过检查数据库中是否有账号状态为online来确定机器人是否在运行
+        # 这样可以避免依赖内存中的全局变量，在多进程环境下更可靠
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM discord_accounts WHERE status = 'online'")
+            online_count = cursor.fetchone()[0]
+            is_running = online_count > 0
+        return jsonify({'running': is_running})
+    except Exception as e:
+        logger.error(f"获取机器人状态失败: {e}")
+        return jsonify({'running': False}), 500
 
 @app.route('/api/shop-info', methods=['GET'])
 def get_shop_info():
