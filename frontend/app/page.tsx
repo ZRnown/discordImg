@@ -37,7 +37,7 @@ export default function Page() {
     // 检查锁，防止重复请求
     if (!hasFetchedUser.current) {
       hasFetchedUser.current = true // 立即上锁
-      checkLoginStatus()
+    checkLoginStatus()
       fetchBotStatus()
     }
   }, [])

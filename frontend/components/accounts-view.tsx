@@ -75,7 +75,7 @@ export function AccountsView() {
       const websites = data.websites || []
 
       // 后端已包含channels和accounts信息
-      const channels: {[key: number]: string[]} = {}
+        const channels: {[key: number]: string[]} = {}
       const accounts: {[key: number]: any[]} = {}
       const filters: {[key: number]: any[]} = {}
 
@@ -103,7 +103,7 @@ export function AccountsView() {
       await Promise.all(filterPromises)
 
       setWebsites(websites)
-      setWebsiteChannels(channels)
+        setWebsiteChannels(channels)
       setWebsiteAccounts(accounts)
       setWebsiteFilters(filters)
     } catch (e) {
