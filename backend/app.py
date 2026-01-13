@@ -4225,7 +4225,15 @@ def scrape_shop_products(shop_id):
 
                 data = response.json()
                 if data.get('status', {}).get('code') != 0:
-                    logger.warning(f'API响应状态码不为0: {data.get("status", {})}')
+                    error_code = data.get('status', {}).get('code')
+                    error_message = data.get('status', {}).get('message', '')
+                    logger.warning(f'API响应状态码不为0: 代码={error_code}, 消息={error_message}')
+
+                    # 如果是参数错误（code=1000），可能是达到分页上限，停止抓取
+                    if error_code == 1000:
+                        logger.info(f'检测到参数错误(code=1000)，可能是达到微店API分页上限({offset})，停止抓取')
+                        break
+
                     break
 
                 result = data.get('result', {})

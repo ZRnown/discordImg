@@ -23,14 +23,35 @@ account_last_sent = {}
 
 def is_account_on_cooldown(account_id, channel_id, interval):
     """检查账号在指定频道是否在冷却中"""
-    key = (account_id, channel_id)
+    key = (account_id, str(channel_id))  # 确保channel_id是字符串
     last = account_last_sent.get(key, 0)
-    return (time.time() - last) < interval
+    logger.debug(f"检查冷却 - 账号:{account_id}, 频道:{channel_id} -> 键:{key}, 上次发送:{last}, 冷却字典大小:{len(account_last_sent)}")
+    is_cooldown = (time.time() - last) < interval
+    if is_cooldown:
+        logger.debug(f"账号 {account_id} 在频道 {channel_id} 冷却中，还需等待 {interval - (time.time() - last):.1f} 秒")
+    return is_cooldown
 
 def set_account_cooldown(account_id, channel_id):
     """设置账号在指定频道的冷却时间"""
-    key = (account_id, channel_id)
+    key = (account_id, str(channel_id))  # 确保channel_id是字符串
     account_last_sent[key] = time.time()
+    logger.debug(f"设置冷却 - 账号:{account_id}, 频道:{channel_id} -> {key}")
+
+def cleanup_expired_cooldowns():
+    """清理过期的冷却状态"""
+    current_time = time.time()
+    expired_keys = []
+    for key, last_sent in account_last_sent.items():
+        # 如果冷却时间超过24小时，清理掉（防止内存泄漏）
+        if current_time - last_sent > 86400:  # 24小时
+            expired_keys.append(key)
+
+    for key in expired_keys:
+        del account_last_sent[key]
+        logger.debug(f"清理过期冷却: {key}")
+
+    if expired_keys:
+        logger.info(f"清理了 {len(expired_keys)} 个过期的冷却状态")
 
 def mark_message_as_processed(message_id):
     """检查消息是否已处理（原子操作）"""
@@ -188,6 +209,8 @@ class DiscordBotClient(discord.Client):
     async def schedule_reply(self, message, product, custom_reply=None):
         """调度回复到合适的发送账号 (增强版：带在线检查和兜底机制)"""
         try:
+            # 清理过期的冷却状态
+            cleanup_expired_cooldowns()
             try:
                 from database import db
             except ImportError:
