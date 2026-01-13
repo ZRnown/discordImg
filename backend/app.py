@@ -4,6 +4,7 @@ import os
 import logging
 import sys
 from datetime import datetime
+from threading import Lock
 
 # 自动加载.env文件
 try:
@@ -168,13 +169,13 @@ def process_and_save_image_core(product_id, image_url_or_file, index, existing_f
             os.remove(save_path)
             return {'success': False, 'error': 'Feature extraction failed'}
 
-        # 4. 查重逻辑
+        # 4. 查重逻辑 (99.5%相似度)
         if existing_features:
-            is_dup, score = check_duplicate_image(features, existing_features)
+            is_dup, score = check_duplicate_image(features, existing_features, threshold=0.995)
             if is_dup:
                 os.remove(save_path)
-                logger.info(f"图片重复 (相似度: {score:.2f})，已删除: {filename}")
-                return {'success': False, 'error': 'Duplicate image'}
+                logger.info(f"🚫 图片高度相似 (相似度: {score:.4f})，已跳过: {filename}")
+                return {'success': True, 'skipped': True}  # 标记为成功但跳过，以免报错
 
         # 5. 入库 (SQLite)
         img_db_id = db.insert_image_record(product_id, save_path, index, features)
@@ -183,10 +184,13 @@ def process_and_save_image_core(product_id, image_url_or_file, index, existing_f
         try:
             from vector_engine import get_vector_engine
             engine = get_vector_engine()
-            engine.add_vector(img_db_id, features)
-            # 性能优化：单张上传时立即保存，批量处理时延迟保存
-            if save_faiss_immediately:
-                engine.save()
+
+            # === FAISS 线程安全锁 ===
+            with faiss_lock:  # 加锁，确保同一时间只有一个线程写入 FAISS
+                engine.add_vector(img_db_id, features)
+                # 性能优化：单张上传时立即保存，批量处理时延迟保存
+                if save_faiss_immediately:
+                    engine.save()
         except Exception as faiss_err:
             logger.error(f"FAISS 入库失败: {faiss_err}")
             # FAISS失败时删除数据库记录和文件，回滚操作
@@ -198,7 +202,11 @@ def process_and_save_image_core(product_id, image_url_or_file, index, existing_f
                 os.remove(save_path)
             return {'success': False, 'error': f'FAISS error: {faiss_err}'}
 
-        # 7. 完成
+        # 7. 更新对比列表，确保下一张图能跟这张比
+        if existing_features is not None:
+            existing_features.append(features)  # 关键：实时加入列表
+
+        # 8. 完成
         return {
             'success': True,
             'image_path': save_path,
@@ -232,18 +240,33 @@ load_system_config()
 # 线程管理：跟踪当前运行的抓取线程
 current_scrape_thread = None
 scrape_thread_lock = threading.Lock()
+scrape_stop_event = threading.Event()  # 抓取停止事件，用于线程间通信
+
+# FAISS 线程安全锁：防止多线程同时写入向量索引导致崩溃
+faiss_lock = Lock()
 
 # 全局关闭事件，用于优雅关闭
 shutdown_event = None
 
 # 配置日志
-logging.basicConfig(level=logging.INFO)
+# 1. 获取根日志记录器
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
 
-# 创建日志队列用于实时流式传输
+# 2. 清除现有的所有处理器（防止 Flask 或 basicConfig 自动添加的导致重复）
+if root_logger.handlers:
+    root_logger.handlers = []
+
+# 3. 创建控制台处理器
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(console_formatter)
+root_logger.addHandler(console_handler)
+
+# 4. 创建队列日志处理器 (用于前端 SSE)
 log_queue = queue.Queue()
 log_clients = []
-
-# 存储所有日志的列表，用于API查询
 all_logs = []
 
 class QueueHandler(logging.Handler):
@@ -317,17 +340,12 @@ class QueueHandler(logging.Handler):
 
         return False
 
-# 创建队列处理器并添加到根日志器
+# 5. 添加队列处理器
 queue_handler = QueueHandler()
 queue_handler.setLevel(logging.INFO)
-logging.getLogger().addHandler(queue_handler)
+root_logger.addHandler(queue_handler)
 
-# 确保控制台输出不受QueueHandler过滤影响
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-console_handler.setFormatter(console_formatter)
-logging.getLogger().addHandler(console_handler)
+# 控制台处理器已在上面配置完成
 
 # 1. 设置 werkzeug 日志级别为 WARNING，屏蔽 HTTP 请求刷屏
 logging.getLogger('werkzeug').setLevel(logging.WARNING)
@@ -776,7 +794,8 @@ def scrape_product():
                         continue
 
                     # 插入FAISS向量索引
-                    success = engine.add_vector(image_db_id, features)
+                    with faiss_lock:  # FAISS 线程安全锁
+                        success = engine.add_vector(image_db_id, features)
                     if success:
                         indexed_images.append(f"{i}.jpg")
                         logger.info(f"图片 {i} 索引建立成功")
@@ -3420,14 +3439,16 @@ def control_shop_scrape():
     action = request.json.get('action')
     shop_id = request.json.get('shopId')  # 可选参数
 
-    global current_scrape_thread, scrape_thread_lock
+    global current_scrape_thread, scrape_thread_lock, scrape_stop_event
 
     # 获取当前状态
     current_status = db.get_scrape_status()
     logger.info(f"收到抓取控制请求: action={action}, shop_id={shop_id}, 当前状态: is_scraping={current_status.get('is_scraping')}, stop_signal={current_status.get('stop_signal')}")
 
     if action == 'stop':
-        # 立即停止 - 不等待当前商品完成，直接设置状态为停止
+        # 立即停止 - 设置停止事件和数据库状态
+        scrape_stop_event.set()  # 设置停止事件，通知线程停止
+
         success = db.update_scrape_status(
             is_scraping=False,
             stop_signal=True,
@@ -3439,11 +3460,13 @@ def control_shop_scrape():
         if success:
             logger.info("✅ 抓取任务已强制停止")
 
-            # 终止当前线程（如果存在）
+            # 等待线程终止（最多等待10秒）
             with scrape_thread_lock:
                 if current_scrape_thread and current_scrape_thread.is_alive():
-                    logger.info("终止抓取线程")
-                    # 设置线程停止信号，但不强制终止
+                    logger.info("等待抓取线程终止...")
+                    current_scrape_thread.join(timeout=10.0)
+                    if current_scrape_thread.is_alive():
+                        logger.warning("抓取线程未能在10秒内终止")
                     current_scrape_thread = None
 
             updated_status = db.get_scrape_status()
@@ -3459,6 +3482,9 @@ def control_shop_scrape():
         with scrape_thread_lock:
             if current_scrape_thread and current_scrape_thread.is_alive():
                 return jsonify({'error': '已有线程在运行'}), 400
+
+        # 清除停止事件，为新任务做准备
+        scrape_stop_event.clear()
 
         # 重置状态
         success = db.update_scrape_status(
@@ -3819,8 +3845,11 @@ def scrape_shop_products(shop_id):
     except:
         max_threads = 2
 
+    # 导入全局停止事件
+    global scrape_stop_event
+
     scraper = get_weidian_scraper()
-    all_product_tasks = []  # 收集所有商品任务
+    unique_product_tasks = {}  # 使用字典去重：item_id -> product_info
     offset = 0
     limit = 20
     page_count = 0
@@ -3846,7 +3875,11 @@ def scrape_shop_products(shop_id):
 
     # 第一阶段：收集所有商品信息（单线程，避免API压力）
     while True:
-        # 检查停止信号
+        # 检查停止事件或停止信号
+        if scrape_stop_event.is_set():
+            logger.info("🔴 停止事件触发，退出收集")
+            break
+
         current_status = db.get_scrape_status()
         if current_status.get('stop_signal', False):
             logger.info("🔴 停止信号触发，退出收集")
@@ -3878,20 +3911,30 @@ def scrape_shop_products(shop_id):
                 logger.info('商品列表为空，收集完成')
                 break
 
-            # 收集当前页的商品任务
-            page_tasks = []
+            # 收集当前页的商品任务 (内存去重)
+            page_new_count = 0
             for item in items:
                 item_id = item.get('itemId', '')
-                if item_id:
-                    product_info = {
-                        'item_id': item_id,
-                        'item_url': item.get('itemUrl', ''),
-                        'shop_name': shop_name
-                    }
-                    page_tasks.append(product_info)
+                if item_id and item_id not in unique_product_tasks:  # 内存去重
+                    # 再次检查数据库是否已存在 (避免处理已抓过的)
+                    if not db.get_product_by_item_id(item_id):
+                        product_info = {
+                            'item_id': item_id,
+                            'item_url': item.get('itemUrl', ''),
+                            'shop_name': shop_name
+                        }
+                        unique_product_tasks[item_id] = product_info
+                        page_new_count += 1
 
-            all_product_tasks.extend(page_tasks)
-            logger.info(f'第 {page_count + 1} 页收集了 {len(page_tasks)} 个商品，总计 {len(all_product_tasks)} 个')
+            # === 新增：实时更新收集进度到数据库，让前端能看到 ===
+            current_total = len(unique_product_tasks)
+            db.update_scrape_status(
+                total=current_total,
+                message=f'正在收集商品... 第{page_count + 1}页，已找到 {current_total} 个新商品'
+            )
+            # =================================================
+
+            logger.info(f'第 {page_count + 1} 页收集了 {len(items)} 个商品，其中 {page_new_count} 个新商品，总计 {len(unique_product_tasks)} 个待处理商品')
 
             page_count += 1
             offset += limit
@@ -3901,13 +3944,16 @@ def scrape_shop_products(shop_id):
             logger.error(f'收集商品列表出错: {e}')
             break
 
+    # 转回列表用于处理
+    all_product_tasks = list(unique_product_tasks.values())
     total_products = len(all_product_tasks)
-    logger.info(f"✅ 商品收集完成，总计 {total_products} 个商品，准备使用 {max_threads} 个线程并发处理")
+    logger.info(f"✅ 商品收集完成，去重后待处理 {total_products} 个商品，准备使用 {max_threads} 个线程并发处理")
 
     # 更新状态：开始处理
     db.update_scrape_status(
         total=total_products,
-        message=f'开始处理 {total_products} 个商品...'
+        progress=0, # 重置进度条为0，开始第二阶段
+        message=f'收集完成，准备并发处理 {total_products} 个商品...'
     )
 
     # 第二阶段：使用全局线程池并发处理所有商品
@@ -3924,9 +3970,9 @@ def scrape_shop_products(shop_id):
 
             # 处理完成的任务
             for future in concurrent.futures.as_completed(future_to_product):
-                # 检查停止信号
-                if db.get_scrape_status().get('stop_signal', False):
-                    logger.info("🔴 检测到停止信号，正在取消剩余任务...")
+                # 检查停止事件或停止信号
+                if scrape_stop_event.is_set() or db.get_scrape_status().get('stop_signal', False):
+                    logger.info("🔴 检测到停止事件/信号，正在取消剩余任务...")
                     # 取消所有待处理的任务
                     for f in future_to_product:
                         if not f.done():
@@ -3941,14 +3987,15 @@ def scrape_shop_products(shop_id):
                     if success:
                         success_count += 1
 
-                    # 每处理10个商品或最后一批更新一次状态
-                    if processed_count % 10 == 0 or processed_count == total_products:
-                        progress = int((processed_count / total_products) * 100)
+                    # 改为每5个更新一次，反馈更及时
+                    if processed_count % 5 == 0 or processed_count == total_products:
+                        # 计算进度 (避免除以0)
+                        progress = int((processed_count / total_products) * 100) if total_products > 0 else 100
                         db.update_scrape_status(
                             processed=processed_count,
                             success=success_count,
                             progress=progress,
-                            message=f'正在处理商品... ({processed_count}/{total_products})'
+                            message=f'正在抓取详情与图片... ({processed_count}/{total_products})'
                         )
                         logger.info(f'已处理 {processed_count}/{total_products} 个商品，成功 {success_count} 个')
 
@@ -3976,7 +4023,12 @@ def process_and_save_single_product_sync(product_info):
     try:
         item_id = product_info.get('item_id', '')
 
-        # === 检查停止信号 ===
+        # === 检查停止事件或停止信号 ===
+        global scrape_stop_event
+        if scrape_stop_event.is_set():
+            logger.info(f"🔴 处理商品前检测到停止事件，取消处理商品 {item_id}")
+            return False
+
         current_status = db.get_scrape_status()
         if current_status.get('stop_signal', False):
             logger.info(f"🔴 处理商品前检测到停止信号，取消处理商品 {item_id}")
@@ -4159,6 +4211,12 @@ def process_single_product(product_info):
         item_id = product_info['item_id']
         item_url = product_info['item_url']
         shop_name = product_info['shop_name']
+
+        # 检查停止事件
+        global scrape_stop_event
+        if scrape_stop_event.is_set():
+            logger.info(f"🔴 处理商品 {item_id} 时检测到停止事件，中止处理")
+            return None
 
         # 获取商品详细信息
         product_details = scrape_product_info(item_url)

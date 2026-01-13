@@ -241,41 +241,7 @@ class WeidianScraper:
                 if title:
                     return {'title': title, 'sku_info': result}
 
-            # 如果API获取失败，尝试从页面HTML中提取商品标题
-            logger.info("API获取标题失败，尝试从页面HTML提取")
-            try:
-                page_response = requests.get(url, timeout=10, proxies={'http': None, 'https': None}, headers={
-                    'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-                    'accept-language': 'en-US,en;q=0.9,zh-HK;q=0.8,zh-CN;q=0.7,zh;q=0.6',
-                    'cache-control': 'max-age=0',
-                    'referer': 'https://weidian.com/?userid=1713062461&wfr=c&source=home_shop&ifr=itemdetail&sfr=app&tabType=all',
-                    'sec-ch-ua': '"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
-                    'sec-ch-ua-mobile': '?0',
-                    'sec-ch-ua-platform': '"macOS"',
-                    'sec-fetch-dest': 'document',
-                    'sec-fetch-mode': 'navigate',
-                    'sec-fetch-site': 'same-origin',
-                    'sec-fetch-user': '?1',
-                    'upgrade-insecure-requests': '1',
-                    'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
-                }, cookies={
-                    'wdtoken': '8ea9315c',
-                    '__spider__visitorid': '0dcf6a5b878847ec',
-                    'visitor_id': '4d36e980-4128-451c-8178-a976b6303114',
-                    'v-components/cpn-coupon-dialog@nologinshop': '10',
-                    '__spider__sessionid': 'e55c6458ac1fdba4'
-                })
-
-                if page_response.status_code == 200:
-                    # 从页面HTML中提取商品标题
-                    title_pattern = r'<span[^>]*class="[^"]*item-name[^"]*"[^>]*>([^<]+)</span>'
-                    match = re.search(title_pattern, page_response.text, re.DOTALL | re.IGNORECASE)
-                    if match:
-                        title = match.group(1).strip()
-                        logger.info(f"✅ 从页面HTML获取到商品标题: {title}")
-                        return {'title': title, 'sku_info': {}}
-            except Exception as e:
-                logger.warning(f"从页面HTML提取标题失败: {e}")
+            # API调用失败，记录警告但不尝试HTML fallback
 
             return None
 

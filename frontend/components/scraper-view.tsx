@@ -70,6 +70,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     fetchIndexedIds()
     fetchAvailableShops()
     fetchProductsCount()
+    fetchScrapeStatus() // 初始化时检查抓取状态，恢复进度显示
   }, []) // 静态数据只加载一次
 
   useEffect(() => {
@@ -556,7 +557,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     // ==========================================
     setIsShopScraping(true)
     setShopScrapeProgress(0)
-    setScrapeStatus(prev => ({
+    setScrapeStatus((prev: any) => ({
        ...prev,
        message: '正在发送抓取请求...'
     }))
@@ -579,7 +580,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         // 只有请求失败时，才把状态改回去
         setIsShopScraping(false)
       }
-    } catch (error) {
+    } catch (error: any) {
       toast.error("网络错误，无法连接服务器")
       setIsShopScraping(false)
     }
@@ -657,7 +658,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
       setTimeout(() => fetchScrapeStatus(), 100)
 
       setBatchIds('')
-    } catch(e) {
+    } catch(e: any) {
       console.error('批量上传出现错误:', e)
       if (e.name === 'TimeoutError') {
         toast.error("批量上传超时，请减少商品数量或稍后重试")
@@ -755,6 +756,28 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                 取消抓取
                               </Button>
                             )}
+
+                            {/* Shop Scrape Status - 显示在抓取过程中的状态信息 */}
+                            {isShopScraping && scrapeStatus && (
+                              <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                                <div className="flex items-center gap-2 mb-2">
+                                  <Loader2 className="h-4 w-4 animate-spin text-amber-600" />
+                                  <span className="text-sm font-medium text-amber-800">
+                                    {scrapeStatus.message || '正在处理中...'}
+                                  </span>
+                                </div>
+                                <div className="grid grid-cols-2 gap-2 text-xs">
+                                  <div className="text-center">
+                                    <div className="font-semibold text-green-700">{scrapeStatus.success || 0}</div>
+                                    <div className="text-muted-foreground">成功</div>
+                                  </div>
+                                  <div className="text-center">
+                                    <div className="font-semibold text-red-600">{(scrapeStatus.processed || 0) - (scrapeStatus.success || 0)}</div>
+                                    <div className="text-muted-foreground">剩余</div>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
               </div>
             </div>
           </CardContent>
@@ -792,13 +815,14 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         </div>
       )}
 
-      {/* Progress Bar - 只显示批量抓取进度 */}
+      {/* Progress Bar - 批量抓取进度 */}
       {isBatchScraping && (
         <div className="space-y-3">
           <Progress value={batchProgress} className="h-3" />
           <p className="text-center text-sm text-muted-foreground">{batchProgress.toFixed(1)}%</p>
         </div>
       )}
+
 
       {/* Product List */}
       <div className="space-y-4">
