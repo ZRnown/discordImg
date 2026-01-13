@@ -2768,6 +2768,10 @@ export default function Page() {
         // 强制重新获取状态以确认
         setTimeout(() => fetchBotStatus(), 100)
         toast.success("Discord账号已启动")
+        // 强制刷新账号状态
+        if (window.location.pathname === '/accounts') {
+          setTimeout(() => window.location.reload(), 200)
+        }
       } else {
         const error = await response.json()
         console.log('启动失败，错误:', error)
@@ -2786,12 +2790,17 @@ export default function Page() {
     try {
       const response = await fetch('/api/bot/stop', {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         credentials: 'include'
       })
 
       if (response.ok) {
         setBotStatus('stopped')
         toast.success("Discord账号已停止")
+        // 强制刷新账号状态
+        if (window.location.pathname === '/accounts') {
+          window.location.reload()
+        }
       } else {
         setBotStatus('running')
         toast.error("停止账号失败")
@@ -2934,7 +2943,7 @@ export default function Page() {
 --- File: ./frontend/next-env.d.ts ---
 /// <reference types="next" />
 /// <reference types="next/image-types/global" />
-import "./.next/dev/types/routes.d.ts";
+import "./.next/types/routes.d.ts";
 
 // NOTE: This file should not be edited
 // see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
@@ -3029,8 +3038,13 @@ export function AccountsView() {
   })
 
 
-  const fetchWebsites = async () => {
+  const fetchWebsites = async (forceRefresh = false) => {
     try {
+      const cacheKey = '/api/websites'
+      if (forceRefresh) {
+        // 强制刷新：清除缓存
+        sessionStorage.removeItem(`cache_${cacheKey}`)
+      }
       const data = await cachedFetch('/api/websites', { credentials: 'include' })
       const websites = data.websites || []
 
@@ -3103,8 +3117,15 @@ export function AccountsView() {
     };
     init();
     fetchSettings();
-    fetchWebsites();
+    fetchWebsites(true); // 强制刷新，清除旧的缓存数据
     fetchMessageFilters();
+
+    // 每30秒刷新一次账号状态
+    const statusInterval = setInterval(() => {
+      fetchAccounts(true); // 强制刷新，清除缓存
+    }, 30000);
+
+    return () => clearInterval(statusInterval);
   }, [])
 
   const fetchSettings = async (usePreload: boolean = true) => {
@@ -3186,9 +3207,14 @@ export function AccountsView() {
     }
   }
 
-  const fetchAccounts = async () => {
+  const fetchAccounts = async (forceRefresh = false) => {
           try {
       console.log('获取账号列表...')
+      const cacheKey = '/api/accounts'
+      if (forceRefresh) {
+        // 强制刷新：清除缓存
+        sessionStorage.removeItem(`cache_${cacheKey}`)
+      }
       const data = await cachedFetch('/api/accounts', { credentials: 'include' })
             setAccounts(data.accounts || [])
     } catch (error) {
@@ -3941,18 +3967,20 @@ export function AccountsView() {
           </Card>
         )}
 
-        {/* 网站配置区域 */}
+        {/* 网站配置区域 - 只对管理员可见 */}
         {currentUser?.role === 'admin' && (
-          <Card className="mt-6">
-            <CardHeader>
-              <div className="flex justify-between items-center">
-                <div>
-                  <CardTitle className="text-lg flex items-center">
-                    <Globe className="w-5 h-5 mr-2" />
-                    网站配置
-                  </CardTitle>
-                  <CardDescription>管理支持的购物网站和频道绑定</CardDescription>
-                </div>
+        <Card className="mt-6">
+          <CardHeader>
+            <div className="flex justify-between items-center">
+              <div>
+                <CardTitle className="text-lg flex items-center">
+                  <Globe className="w-5 h-5 mr-2" />
+                  网站配置
+                </CardTitle>
+                <CardDescription>管理支持的购物网站和频道绑定</CardDescription>
+              </div>
+              {/* 只有管理员可以添加新网站 */}
+              {currentUser?.role === 'admin' && (
                 <Dialog open={showAddWebsite} onOpenChange={setShowAddWebsite}>
                   <DialogTrigger asChild>
                     <Button size="sm">
@@ -4021,8 +4049,9 @@ export function AccountsView() {
                     </DialogFooter>
                   </DialogContent>
                 </Dialog>
-              </div>
-            </CardHeader>
+              )}
+            </div>
+          </CardHeader>
             <CardContent>
               <div className="space-y-4">
                 {websites.map((website: any) => (
@@ -4041,22 +4070,25 @@ export function AccountsView() {
                         </span>
                         <span className="text-sm font-medium">{website.name}</span>
                       </div>
-                      <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setEditingWebsite(website)}
-                        >
-                          <Edit className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleDeleteWebsite(website)}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </div>
+                      {/* 只有管理员可以编辑/删除网站定义 */}
+                      {currentUser?.role === 'admin' && (
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setEditingWebsite(website)}
+                          >
+                            <Edit className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleDeleteWebsite(website)}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      )}
                     </div>
 
                     <div className="text-xs text-muted-foreground mb-3">
@@ -4208,78 +4240,81 @@ export function AccountsView() {
                       </div>
                     </div>
 
-                    {/* 账号轮换设置 */}
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <Settings className="w-4 h-4" />
-                        <span className="text-sm font-medium">轮换设置</span>
-                      </div>
+                    {/* 账号轮换设置 - 建议仅允许管理员修改全局策略，或者如果这属于用户级配置，需要数据库支持。
+                        根据需求"普通用户不能更改网站的设置"，这里应该隐藏或禁用 */}
+                    {currentUser?.role === 'admin' && (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Settings className="w-4 h-4" />
+                          <span className="text-sm font-medium">轮换设置 (全局)</span>
+                        </div>
 
-                      {/* 轮换启用开关 */}
-                      <div className="flex items-center gap-2">
-                        <Label className="text-xs">启用轮换:</Label>
-                        <Switch
-                          checked={rotationEnabled[website.id] ?? (website.rotation_enabled !== 0)}
-                          onCheckedChange={(checked) => {
-                            setRotationEnabled(prev => ({ ...prev, [website.id]: checked }))
-                            // 发送API请求更新轮换启用状态
-                            fetch(`/api/websites/${website.id}/rotation`, {
-                              method: 'PUT',
-                              headers: { 'Content-Type': 'application/json' },
-                              credentials: 'include',
-                              body: JSON.stringify({ rotation_enabled: checked ? 1 : 0 })
-                            }).then(response => {
-                              if (response.ok) {
-                                toast.success(`轮换功能已${checked ? '启用' : '禁用'}`)
-                              } else {
-                                toast.error('更新失败')
+                        {/* 轮换启用开关 */}
+                        <div className="flex items-center gap-2">
+                          <Label className="text-xs">启用轮换:</Label>
+                          <Switch
+                            checked={rotationEnabled[website.id] ?? (website.rotation_enabled !== 0)}
+                            onCheckedChange={(checked) => {
+                              setRotationEnabled(prev => ({ ...prev, [website.id]: checked }))
+                              // 发送API请求更新轮换启用状态
+                              fetch(`/api/websites/${website.id}/rotation`, {
+                                method: 'PUT',
+                                headers: { 'Content-Type': 'application/json' },
+                                credentials: 'include',
+                                body: JSON.stringify({ rotation_enabled: checked ? 1 : 0 })
+                              }).then(response => {
+                                if (response.ok) {
+                                  toast.success(`轮换功能已${checked ? '启用' : '禁用'}`)
+                                } else {
+                                  toast.error('更新失败')
+                                  // 恢复开关状态
+                                  setRotationEnabled(prev => ({ ...prev, [website.id]: !checked }))
+                                }
+                              }).catch(() => {
+                                toast.error('网络错误')
                                 // 恢复开关状态
                                 setRotationEnabled(prev => ({ ...prev, [website.id]: !checked }))
+                              })
+                            }}
+                          />
+                        </div>
+
+                        {/* 轮换间隔设置 */}
+                        <div className="flex items-center gap-2">
+                          <Label className="text-xs">轮换间隔(秒):</Label>
+                          <Input
+                            type="number"
+                            value={rotationIntervals[website.id] ?? website.rotation_interval ?? 180}
+                            className="w-20 h-7 text-xs"
+                            disabled={!(rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))}
+                            onChange={(e) => {
+                              const value = parseInt(e.target.value) || 180
+                              setRotationIntervals(prev => ({ ...prev, [website.id]: value }))
+                            }}
+                            onBlur={(e) => {
+                              const value = rotationIntervals[website.id] ?? website.rotation_interval ?? 180
+                              if (value > 0 && value !== website.rotation_interval) {
+                                handleUpdateRotation(website.id, value)
+                              } else if (value <= 0) {
+                                toast.error('轮换间隔必须大于0秒')
+                                setRotationIntervals(prev => ({ ...prev, [website.id]: website.rotation_interval ?? 180 }))
                               }
-                            }).catch(() => {
-                              toast.error('网络错误')
-                              // 恢复开关状态
-                              setRotationEnabled(prev => ({ ...prev, [website.id]: !checked }))
-                            })
-                          }}
-                        />
-                      </div>
+                            }}
+                          />
+                          <span className="text-xs text-muted-foreground">
+                            ({Math.floor((rotationIntervals[website.id] ?? website.rotation_interval ?? 180) / 60)}分{(rotationIntervals[website.id] ?? website.rotation_interval ?? 180) % 60}秒)
+                          </span>
+                        </div>
 
-                      {/* 轮换间隔设置 */}
-                      <div className="flex items-center gap-2">
-                        <Label className="text-xs">轮换间隔(秒):</Label>
-                        <Input
-                          type="number"
-                          value={rotationIntervals[website.id] ?? website.rotation_interval ?? 180}
-                          className="w-20 h-7 text-xs"
-                          disabled={!(rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))}
-                          onChange={(e) => {
-                            const value = parseInt(e.target.value) || 180
-                            setRotationIntervals(prev => ({ ...prev, [website.id]: value }))
-                          }}
-                          onBlur={(e) => {
-                            const value = rotationIntervals[website.id] ?? website.rotation_interval ?? 180
-                            if (value > 0 && value !== website.rotation_interval) {
-                              handleUpdateRotation(website.id, value)
-                            } else if (value <= 0) {
-                              toast.error('轮换间隔必须大于0秒')
-                              setRotationIntervals(prev => ({ ...prev, [website.id]: website.rotation_interval ?? 180 }))
-                            }
-                          }}
-                        />
-                        <span className="text-xs text-muted-foreground">
-                          ({Math.floor((rotationIntervals[website.id] ?? website.rotation_interval ?? 180) / 60)}分{(rotationIntervals[website.id] ?? website.rotation_interval ?? 180) % 60}秒)
-                        </span>
+                        {/* 状态说明 */}
+                        <div className="text-xs text-muted-foreground">
+                          {(rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))
+                            ? '轮换已启用，将在账号间自动切换'
+                            : '轮换已禁用，将使用固定账号发送'
+                          }
+                        </div>
                       </div>
-
-                      {/* 状态说明 */}
-                      <div className="text-xs text-muted-foreground">
-                        {(rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))
-                          ? '轮换已启用，将在账号间自动切换'
-                          : '轮换已禁用，将使用固定账号发送'
-                        }
-                      </div>
-                    </div>
+                    )}
 
                     {/* 消息过滤规则 */}
                     <div className="space-y-2">
@@ -10371,6 +10406,7 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     website_id INTEGER NOT NULL,
                     account_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
                     role TEXT NOT NULL CHECK (role IN ('listener', 'sender', 'both')),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE,
@@ -10479,6 +10515,31 @@ class Database:
                 logger.info("已为缺少店铺名称的商品设置默认值")
             except Exception as e:
                 logger.warning(f"设置默认店铺名称失败: {e}")
+
+            # 为 website_account_bindings 表添加 user_id 字段并迁移数据
+            try:
+                # 检查是否已有 user_id 字段
+                cursor.execute("PRAGMA table_info(website_account_bindings)")
+                columns = cursor.fetchall()
+                has_user_id = any(col['name'] == 'user_id' for col in columns)
+
+                if not has_user_id:
+                    # 添加 user_id 字段
+                    cursor.execute('ALTER TABLE website_account_bindings ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0')
+
+                    # 为现有记录设置 user_id（从 discord_accounts 表获取）
+                    cursor.execute('''
+                        UPDATE website_account_bindings
+                        SET user_id = (
+                            SELECT da.user_id
+                            FROM discord_accounts da
+                            WHERE da.id = website_account_bindings.account_id
+                        )
+                        WHERE user_id = 0
+                    ''')
+                    logger.info("已为 website_account_bindings 表添加 user_id 字段并迁移数据")
+            except Exception as e:
+                logger.warning(f"为 website_account_bindings 添加 user_id 字段失败: {e}")
 
             conn.commit()
 
@@ -11325,6 +11386,8 @@ class Database:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 # 首先删除用户的所有相关数据
+                # 删除用户的网站账号绑定
+                cursor.execute('DELETE FROM website_account_bindings WHERE user_id = ?', (user_id,))
                 # 删除用户的Discord账号
                 cursor.execute('DELETE FROM discord_accounts WHERE user_id = ?', (user_id,))
                 # 删除用户的设置
@@ -11429,45 +11492,52 @@ class Database:
             logger.error(f"删除网站配置失败: {e}")
             return False
 
-    def get_website_channel_bindings(self, website_id: int) -> List[str]:
-        """获取网站绑定的频道列表"""
+    def get_website_channel_bindings(self, website_id: int, user_id: int = None) -> List[str]:
+        """获取网站绑定的频道列表（可选按用户过滤）"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute('''
-                    SELECT channel_id FROM website_channel_bindings
-                    WHERE website_id = ?
-                    ORDER BY created_at
-                ''', (website_id,))
+                if user_id:
+                    cursor.execute('''
+                        SELECT channel_id FROM website_channel_bindings
+                        WHERE website_id = ? AND user_id = ?
+                        ORDER BY created_at
+                    ''', (website_id, user_id))
+                else:
+                    cursor.execute('''
+                        SELECT channel_id FROM website_channel_bindings
+                        WHERE website_id = ?
+                        ORDER BY created_at
+                    ''', (website_id,))
                 return [row[0] for row in cursor.fetchall()]
         except Exception as e:
             logger.error(f"获取网站频道绑定失败: {e}")
             return []
 
-    def add_website_channel_binding(self, website_id: int, channel_id: str) -> bool:
+    def add_website_channel_binding(self, website_id: int, channel_id: str, user_id: int) -> bool:
         """添加网站频道绑定"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    INSERT OR IGNORE INTO website_channel_bindings (website_id, channel_id)
-                    VALUES (?, ?)
-                ''', (website_id, channel_id))
+                    INSERT OR IGNORE INTO website_channel_bindings (website_id, channel_id, user_id)
+                    VALUES (?, ?, ?)
+                ''', (website_id, channel_id, user_id))
                 conn.commit()
                 return cursor.rowcount > 0
         except Exception as e:
             logger.error(f"添加网站频道绑定失败: {e}")
             return False
 
-    def remove_website_channel_binding(self, website_id: int, channel_id: str) -> bool:
-        """移除网站频道绑定"""
+    def remove_website_channel_binding(self, website_id: int, channel_id: str, user_id: int) -> bool:
+        """移除网站频道绑定（按用户过滤）"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     DELETE FROM website_channel_bindings
-                    WHERE website_id = ? AND channel_id = ?
-                ''', (website_id, channel_id))
+                    WHERE website_id = ? AND channel_id = ? AND (user_id = ? OR user_id IS NULL)
+                ''', (website_id, channel_id, user_id))
                 conn.commit()
                 return cursor.rowcount > 0
         except Exception as e:
@@ -11501,50 +11571,60 @@ class Database:
 
     # ===== 网站账号绑定方法 =====
 
-    def add_website_account_binding(self, website_id: int, account_id: int, role: str) -> bool:
+    def add_website_account_binding(self, website_id: int, account_id: int, role: str, user_id: int) -> bool:
         """添加网站账号绑定"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT OR REPLACE INTO website_account_bindings
-                    (website_id, account_id, role)
-                    VALUES (?, ?, ?)
-                ''', (website_id, account_id, role))
+                    (website_id, account_id, role, user_id)
+                    VALUES (?, ?, ?, ?)
+                ''', (website_id, account_id, role, user_id))
                 conn.commit()
                 return True
         except Exception as e:
             logger.error(f"添加网站账号绑定失败: {e}")
             return False
 
-    def remove_website_account_binding(self, website_id: int, account_id: int) -> bool:
-        """移除网站账号绑定"""
+    def remove_website_account_binding(self, website_id: int, account_id: int, user_id: int) -> bool:
+        """移除网站账号绑定（按用户过滤）"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     DELETE FROM website_account_bindings
-                    WHERE website_id = ? AND account_id = ?
-                ''', (website_id, account_id))
+                    WHERE website_id = ? AND account_id = ? AND (user_id = ? OR user_id IS NULL)
+                ''', (website_id, account_id, user_id))
                 conn.commit()
                 return cursor.rowcount > 0
         except Exception as e:
             logger.error(f"移除网站账号绑定失败: {e}")
             return False
 
-    def get_website_account_bindings(self, website_id: int) -> List[Dict]:
-        """获取网站的所有账号绑定"""
+    def get_website_account_bindings(self, website_id: int, user_id: int = None) -> List[Dict]:
+        """获取网站的所有账号绑定（可选按用户过滤）"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute('''
-                    SELECT wab.id, wab.account_id, wab.role, wab.created_at,
-                           da.username, da.token, da.status
-                    FROM website_account_bindings wab
-                    JOIN discord_accounts da ON wab.account_id = da.id
-                    WHERE wab.website_id = ?
-                    ORDER BY wab.created_at
-                ''', (website_id,))
+                if user_id:
+                    cursor.execute('''
+                        SELECT wab.id, wab.account_id, wab.role, wab.created_at,
+                               da.username, da.token, da.status
+                        FROM website_account_bindings wab
+                        JOIN discord_accounts da ON wab.account_id = da.id
+                        WHERE wab.website_id = ? AND wab.user_id = ?
+                        ORDER BY wab.created_at
+                    ''', (website_id, user_id))
+                else:
+                    cursor.execute('''
+                        SELECT wab.id, wab.account_id, wab.role, wab.created_at,
+                               da.username, da.token, da.status
+                        FROM website_account_bindings wab
+                        JOIN discord_accounts da ON wab.account_id = da.id
+                        WHERE wab.website_id = ?
+                        ORDER BY wab.created_at
+                    ''', (website_id,))
                 return [dict(row) for row in cursor.fetchall()]
         except Exception as e:
             logger.error(f"获取网站账号绑定失败: {e}")
@@ -13373,6 +13453,11 @@ class DiscordBotClient(discord.Client):
             except ImportError:
                 from .database import db
 
+            # 获取用户设置以确定延迟时间
+            user_settings = await asyncio.get_event_loop().run_in_executor(None, db.get_user_settings, self.user_id)
+            min_delay = user_settings.get('global_reply_min_delay', 3.0)
+            max_delay = user_settings.get('global_reply_max_delay', 8.0)
+
             # 生成回复内容
             response_content = self._generate_reply_content(product, message.channel.id, custom_reply)
 
@@ -13432,10 +13517,16 @@ class DiscordBotClient(discord.Client):
 
                     if target_channel:
                         async with target_channel.typing():
-                            await asyncio.sleep(random.uniform(config.GLOBAL_REPLY_MIN_DELAY, config.GLOBAL_REPLY_MAX_DELAY))
+                            await asyncio.sleep(random.uniform(min_delay, max_delay))
 
-                        await target_channel.send(response_content)
-                        logger.info(f"✅ [回复成功] 账号: {target_client.user.name} | 商品ID: {product.get('id')}")
+                        # 总是尝试回复原消息，而不是直接发送
+                        try:
+                            await message.reply(response_content)
+                            logger.info(f"✅ [回复成功] 账号: {target_client.user.name} | 商品ID: {product.get('id')}")
+                        except Exception as reply_error:
+                            logger.warning(f"回复消息失败，改用直接发送: {reply_error}")
+                            await target_channel.send(response_content)
+                            logger.info(f"✅ [发送成功] 账号: {target_client.user.name} | 商品ID: {product.get('id')}")
                     else:
                         # 这种情况是：选中的机器人不在这个频道/服务器里
                         logger.warning(f"❌ 选中的账号 {target_client.user.name} 无法访问频道，回退到直接回复")
@@ -16303,14 +16394,20 @@ def reset_user_password(user_id):
 # === 新增：网站配置管理API ===
 @app.route('/api/websites', methods=['GET'])
 def get_website_configs():
-    """获取所有网站配置及其频道绑定和账号绑定"""
+    """获取所有网站配置及其用户相关的频道绑定和账号绑定"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
     try:
+        current_user = get_current_user()
         configs = db.get_website_configs()
 
-        # 为每个配置添加账号绑定信息
+        # 为每个配置添加当前用户的绑定信息
         for config in configs:
             config_id = config['id']
-            config['accounts'] = db.get_website_account_bindings(config_id)
+            # 只获取当前用户的绑定关系
+            config['accounts'] = db.get_website_account_bindings(config_id, current_user['id'])
+            config['channels'] = db.get_website_channel_bindings(config_id, current_user['id'])
 
         return jsonify({'websites': configs})
     except Exception as e:
@@ -16384,9 +16481,13 @@ def delete_website_config(config_id):
 
 @app.route('/api/websites/<int:config_id>/channels', methods=['GET'])
 def get_website_channels(config_id):
-    """获取网站绑定的频道"""
+    """获取网站绑定的频道（按用户过滤）"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
     try:
-        channels = db.get_website_channel_bindings(config_id)
+        current_user = get_current_user()
+        channels = db.get_website_channel_bindings(config_id, current_user['id'])
         return jsonify({'channels': channels})
     except Exception as e:
         logger.error(f"获取网站频道失败: {e}")
@@ -16402,7 +16503,8 @@ def add_website_channel(config_id):
         if not channel_id:
             return jsonify({'error': '频道ID不能为空'}), 400
 
-        if db.add_website_channel_binding(config_id, channel_id):
+        current_user = get_current_user()
+        if db.add_website_channel_binding(config_id, channel_id, current_user['id']):
             return jsonify({'success': True, 'message': '频道绑定已添加'})
         else:
             return jsonify({'error': '添加失败'}), 500
@@ -16414,7 +16516,8 @@ def add_website_channel(config_id):
 def remove_website_channel(config_id, channel_id):
     """移除网站频道绑定"""
     try:
-        if db.remove_website_channel_binding(config_id, channel_id):
+        current_user = get_current_user()
+        if db.remove_website_channel_binding(config_id, channel_id, current_user['id']):
             return jsonify({'success': True, 'message': '频道绑定已移除'})
         else:
             return jsonify({'error': '移除失败'}), 500
@@ -16426,9 +16529,13 @@ def remove_website_channel(config_id, channel_id):
 
 @app.route('/api/websites/<int:config_id>/accounts', methods=['GET'])
 def get_website_accounts(config_id):
-    """获取网站绑定的账号"""
+    """获取网站绑定的账号（按用户过滤）"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
     try:
-        accounts = db.get_website_account_bindings(config_id)
+        current_user = get_current_user()
+        accounts = db.get_website_account_bindings(config_id, current_user['id'])
         return jsonify({'accounts': accounts})
     except Exception as e:
         logger.error(f"获取网站账号绑定失败: {e}")
@@ -16437,8 +16544,9 @@ def get_website_accounts(config_id):
 @app.route('/api/websites/<int:config_id>/accounts', methods=['POST'])
 def add_website_account(config_id):
     """为网站绑定账号"""
-    if not require_admin():
-        return jsonify({'error': '需要管理员权限'}), 403
+    # 移除 require_admin，允许普通用户操作
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
 
     try:
         data = request.get_json()
@@ -16448,7 +16556,23 @@ def add_website_account(config_id):
         if not account_id or role not in ['listener', 'sender', 'both']:
             return jsonify({'error': '无效的账号ID或角色'}), 400
 
-        if db.add_website_account_binding(config_id, account_id, role):
+        # 权限检查：确保该账号属于当前用户
+        current_user = get_current_user()
+        # 获取该账号的详情
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT user_id FROM discord_accounts WHERE id = ?", (account_id,))
+            row = cursor.fetchone()
+            if not row:
+                return jsonify({'error': '账号不存在'}), 404
+
+            account_owner_id = row[0]
+
+            # 如果不是管理员，且账号不属于当前用户，拒绝
+            if current_user['role'] != 'admin' and account_owner_id != current_user['id']:
+                return jsonify({'error': '您无权操作此账号'}), 403
+
+        if db.add_website_account_binding(config_id, account_id, role, current_user['id']):
             return jsonify({'success': True, 'message': f'账号绑定成功，角色: {role}'})
         else:
             return jsonify({'error': '绑定失败'}), 500
@@ -16459,11 +16583,23 @@ def add_website_account(config_id):
 @app.route('/api/websites/<int:config_id>/accounts/<int:account_id>', methods=['DELETE'])
 def remove_website_account(config_id, account_id):
     """移除网站账号绑定"""
-    if not require_admin():
-        return jsonify({'error': '需要管理员权限'}), 403
+    # 移除 require_admin
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
 
     try:
-        if db.remove_website_account_binding(config_id, account_id):
+        # 权限检查：确保该账号属于当前用户
+        current_user = get_current_user()
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT user_id FROM discord_accounts WHERE id = ?", (account_id,))
+            row = cursor.fetchone()
+            if row:
+                account_owner_id = row[0]
+                if current_user['role'] != 'admin' and account_owner_id != current_user['id']:
+                    return jsonify({'error': '您无权操作此账号'}), 403
+
+        if db.remove_website_account_binding(config_id, account_id, current_user['id']):
             return jsonify({'success': True, 'message': '账号绑定已移除'})
         else:
             return jsonify({'error': '移除失败'}), 500
@@ -17338,11 +17474,11 @@ def add_account():
                     return jsonify({'error': '此Discord token已被其他用户使用'}), 400
             else:
                 # token不存在，插入新记录
-            cursor.execute("""
-                INSERT INTO discord_accounts (username, token, status, user_id)
-                VALUES (?, ?, 'offline', ?)
-            """, (username, token, current_user['id']))
-            account_id = cursor.lastrowid
+                cursor.execute("""
+                    INSERT INTO discord_accounts (username, token, status, user_id)
+                    VALUES (?, ?, 'offline', ?)
+                """, (username, token, current_user['id']))
+                account_id = cursor.lastrowid
                 logger.info(f"添加新账号: {username} (用户ID: {current_user['id']})")
 
             # 获取账号信息
@@ -17512,7 +17648,10 @@ def verify_all_accounts():
 
 @app.route('/api/accounts/bulk-status', methods=['POST'])
 def bulk_update_status():
-    """批量开启或停止所有账号"""
+    """批量开启或停止用户自己的账号"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
     try:
         data = request.get_json()
         if data is None:
@@ -17522,6 +17661,8 @@ def bulk_update_status():
         if new_status not in ['online', 'offline']:
             return jsonify({'error': 'Invalid status. Must be "online" or "offline"'}), 400
 
+        current_user = get_current_user()
+
         with db.get_connection() as conn:
             cursor = conn.cursor()
 
@@ -17529,12 +17670,14 @@ def bulk_update_status():
                 cursor.execute("""
                     UPDATE discord_accounts
                     SET status = 'online', last_active = ?
-                """, (datetime.now(),))
+                    WHERE user_id = ?
+                """, (datetime.now(), current_user['id']))
             else:
                 cursor.execute("""
                     UPDATE discord_accounts
                     SET status = 'offline'
-                """)
+                    WHERE user_id = ?
+                """, (current_user['id'],))
 
             updated_count = cursor.rowcount
             conn.commit()
@@ -18575,47 +18718,71 @@ def start_discord_bot(user_id=None):
         logger.error(f"Discord机器人启动失败: {e}")
         logger.info("Flask应用将继续运行，但机器人功能不可用")
 
-def stop_discord_bot():
-    """停止Discord机器人"""
+def stop_discord_bot(user_id=None):
+    """停止Discord机器人 (支持按用户停止)"""
     global bot_clients, bot_tasks, bot_running
 
-    if not bot_running:
-        logger.info("机器人未在运行")
+    # 如果没有客户端，直接返回
+    if not bot_clients:
+        logger.info("没有正在运行的机器人")
+        bot_running = False
         return
 
-    if bot_clients:
-        logger.info(f"正在停止 {len(bot_clients)} 个Discord机器人...")
+    logger.info(f"正在停止机器人... {'(特定用户: ' + str(user_id) + ')' if user_id else '(所有用户)'}")
+
+    try:
+        import asyncio
+        # 获取当前的事件循环，如果是在 Flask 线程中可能需要处理
         try:
-            import asyncio
-            # 创建任务来停止所有机器人
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
-            for i, client in enumerate(bot_clients):
-                try:
-                    if client and not client.is_closed():
-                        # 更新账号状态为offline
-                        if hasattr(client, 'account_id') and client.account_id:
-                            db.update_account_status(client.account_id, 'offline')
-                            logger.info(f"账号 {client.account_id} 状态已更新为离线")
-                        loop.run_until_complete(client.close())
-                        logger.info(f"Discord机器人 {i+1} 已停止")
-                except Exception as e:
-                    logger.error(f"停止机器人 {i+1} 时出错: {e}")
+        # 筛选需要停止的客户端索引
+        indices_to_remove = []
 
-            logger.info("所有Discord机器人已停止")
-        except Exception as e:
-            logger.error(f"停止机器人时出错: {e}")
+        for i, client in enumerate(bot_clients):
+            # 如果指定了 user_id，只停止该用户的机器人
+            # client.user_id 是我们在 DiscordBotClient 初始化时传入的
+            if user_id is not None and getattr(client, 'user_id', None) != user_id:
+                continue
 
-    # 取消所有任务
-    for task in bot_tasks:
-        if task and not task.done():
-            task.cancel()
+            try:
+                if client and not client.is_closed():
+                    # 更新账号状态为offline
+                    if hasattr(client, 'account_id') and client.account_id:
+                        db.update_account_status(client.account_id, 'offline')
+                        logger.info(f"账号 {client.account_id} 状态已更新为离线")
 
-    # 清空机器人列表
-    bot_clients.clear()
-    bot_tasks.clear()
-    bot_running = False
+                    # 停止机器人
+                    asyncio.run_coroutine_threadsafe(client.close(), loop)
+                    logger.info(f"Discord机器人 {i} (用户 {getattr(client, 'user_id', 'unknown')}) 已停止信号发送")
+            except Exception as e:
+                logger.error(f"停止机器人 {i} 时出错: {e}")
+
+            indices_to_remove.append(i)
+
+        # 从列表中移除已停止的机器人和任务
+        # 从后往前删，避免索引偏移
+        for i in sorted(indices_to_remove, reverse=True):
+            if i < len(bot_clients):
+                bot_clients.pop(i)
+            if i < len(bot_tasks):
+                # 尝试取消任务
+                task = bot_tasks[i]
+                if task and not task.done():
+                    task.cancel()
+                bot_tasks.pop(i)
+
+        if not bot_clients:
+            bot_running = False
+            logger.info("所有机器人已停止")
+        else:
+            logger.info(f"剩余 {len(bot_clients)} 个机器人仍在运行")
+
+    except Exception as e:
+        logger.error(f"停止机器人流程出错: {e}")
 
 # ===== 机器人控制API =====
 
@@ -18654,9 +18821,20 @@ def start_bot():
 @app.route('/api/bot/stop', methods=['POST'])
 def stop_bot():
     """停止Discord机器人"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
     try:
-        stop_discord_bot()
-        logger.info("机器人停止成功")
+        current_user = get_current_user()
+
+        # 如果是管理员，且请求中包含 targetUserId，则停止指定用户的
+        # 否则停止当前用户的
+        # 这里简化逻辑：用户只能停止自己的
+        user_id = current_user['id']
+
+        stop_discord_bot(user_id)
+
+        logger.info(f"用户 {user_id} 的机器人已停止")
         return jsonify({'message': '机器人停止成功'})
 
     except Exception as e:
@@ -18744,10 +18922,25 @@ def get_shop_info():
 
 @app.route('/api/shops', methods=['GET'])
 def get_shops():
-    """获取所有店铺列表"""
+    """获取店铺列表（根据用户权限过滤）"""
     try:
-        shops = db.get_all_shops()
-        return jsonify({'shops': shops})
+        # 获取所有店铺
+        all_shops = db.get_all_shops()
+
+        current_user = get_current_user()
+        if not current_user:
+            # 如果未登录，返回空
+            return jsonify({'shops': []})
+
+        # 如果是管理员，返回所有
+        if current_user['role'] == 'admin':
+            return jsonify({'shops': all_shops})
+
+        # 如果是普通用户，只筛选出他有权限的店铺
+        user_permitted_shop_ids = current_user.get('shops', [])
+        filtered_shops = [s for s in all_shops if s['shop_id'] in user_permitted_shop_ids]
+
+        return jsonify({'shops': filtered_shops})
     except Exception as e:
         logger.error(f'获取店铺列表失败: {e}')
         return jsonify({'error': '获取店铺列表失败'}), 500

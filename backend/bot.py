@@ -219,13 +219,18 @@ class DiscordBotClient(discord.Client):
                 rotation_enabled = website_config.get('rotation_enabled', 1)
                 rotation_interval = website_config.get('rotation_interval', 180)
 
+                # 调试信息：检查轮换配置
+                logger.info(f"账号轮换配置 - 启用:{rotation_enabled}, 间隔:{rotation_interval}秒, 频道:{message.channel.id}")
+                logger.info(f"可用发送账号: {len(available_senders) if 'available_senders' in locals() else 0} 个")
+
                 available_senders = []
                 if rotation_enabled:
                     # 筛选非冷却的
                     available_senders = [uid for uid in valid_senders if not is_account_on_cooldown(uid, rotation_interval)]
-                    # 如果都在冷却，为了保证回复，忽略冷却，从在线的中选一个
-                    if not available_senders and valid_senders:
-                        available_senders = valid_senders
+                    # 如果都在冷却，不发送消息（根据用户要求）
+                    if not available_senders:
+                        logger.info(f"所有账号都在{rotation_interval}秒冷却期内，跳过发送")
+                        return  # 不发送消息，直接返回
                 else:
                     available_senders = valid_senders
 
