@@ -74,8 +74,13 @@ export function AccountsView() {
   })
 
 
-  const fetchWebsites = async () => {
+  const fetchWebsites = async (forceRefresh = false) => {
     try {
+      const cacheKey = '/api/websites'
+      if (forceRefresh) {
+        // 强制刷新：清除缓存
+        sessionStorage.removeItem(`cache_${cacheKey}`)
+      }
       const data = await cachedFetch('/api/websites', { credentials: 'include' })
       const websites = data.websites || []
 
@@ -148,8 +153,15 @@ export function AccountsView() {
     };
     init();
     fetchSettings();
-    fetchWebsites();
+    fetchWebsites(true); // 强制刷新，清除旧的缓存数据
     fetchMessageFilters();
+
+    // 每30秒刷新一次账号状态
+    const statusInterval = setInterval(() => {
+      fetchAccounts(true); // 强制刷新，清除缓存
+    }, 30000);
+
+    return () => clearInterval(statusInterval);
   }, [])
 
   const fetchSettings = async (usePreload: boolean = true) => {
@@ -231,9 +243,14 @@ export function AccountsView() {
     }
   }
 
-  const fetchAccounts = async () => {
+  const fetchAccounts = async (forceRefresh = false) => {
           try {
       console.log('获取账号列表...')
+      const cacheKey = '/api/accounts'
+      if (forceRefresh) {
+        // 强制刷新：清除缓存
+        sessionStorage.removeItem(`cache_${cacheKey}`)
+      }
       const data = await cachedFetch('/api/accounts', { credentials: 'include' })
             setAccounts(data.accounts || [])
     } catch (error) {
@@ -986,7 +1003,8 @@ export function AccountsView() {
           </Card>
         )}
 
-        {/* 网站配置区域 - 移除最外层的 admin 检查，改为内部细粒度控制 */}
+        {/* 网站配置区域 - 只对管理员可见 */}
+        {currentUser?.role === 'admin' && (
         <Card className="mt-6">
           <CardHeader>
             <div className="flex justify-between items-center">
@@ -1420,6 +1438,7 @@ export function AccountsView() {
               </div>
             </CardContent>
           </Card>
+        )}
 
         {/* 编辑消息过滤对话框 */}
         {editingFilter && (

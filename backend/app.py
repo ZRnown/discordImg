@@ -1043,14 +1043,20 @@ def reset_user_password(user_id):
 # === 新增：网站配置管理API ===
 @app.route('/api/websites', methods=['GET'])
 def get_website_configs():
-    """获取所有网站配置及其频道绑定和账号绑定"""
+    """获取所有网站配置及其用户相关的频道绑定和账号绑定"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
     try:
+        current_user = get_current_user()
         configs = db.get_website_configs()
 
-        # 为每个配置添加账号绑定信息
+        # 为每个配置添加当前用户的绑定信息
         for config in configs:
             config_id = config['id']
-            config['accounts'] = db.get_website_account_bindings(config_id)
+            # 只获取当前用户的绑定关系
+            config['accounts'] = db.get_website_account_bindings(config_id, current_user['id'])
+            config['channels'] = db.get_website_channel_bindings(config_id, current_user['id'])
 
         return jsonify({'websites': configs})
     except Exception as e:

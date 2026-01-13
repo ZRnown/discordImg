@@ -1323,6 +1323,8 @@ class Database:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 # 首先删除用户的所有相关数据
+                # 删除用户的网站账号绑定
+                cursor.execute('DELETE FROM website_account_bindings WHERE user_id = ?', (user_id,))
                 # 删除用户的Discord账号
                 cursor.execute('DELETE FROM discord_accounts WHERE user_id = ?', (user_id,))
                 # 删除用户的设置
