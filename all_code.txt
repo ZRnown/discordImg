@@ -1,149 +1,3 @@
---- File: ./validate_fixes.py ---
-#!/usr/bin/env python3
-"""
-系统修复验证脚本
-测试所有关键修复是否生效
-"""
-
-import os
-import sys
-import time
-
-def test_config():
-    """测试配置系统"""
-    print("🔧 1. 测试配置系统...")
-    try:
-        sys.path.insert(0, 'backend')
-        from config import config
-        
-        checks = [
-            ('SECRET_KEY', hasattr(config, 'SECRET_KEY') and config.SECRET_KEY),
-            ('HOST', config.HOST == '0.0.0.0'),
-            ('PORT', config.PORT == 5001),
-            ('DEBUG', config.DEBUG == False),
-            ('SCRAPE_THREADS', config.SCRAPE_THREADS == 2),
-            ('CORS_ORIGINS', config.CORS_ORIGINS == ["*"]),
-        ]
-        
-        for name, passed in checks:
-            status = "✅" if passed else "❌"
-            print(f"  {status} {name}: {'通过' if passed else '失败'}")
-        
-        return all(passed for _, passed in checks)
-    except Exception as e:
-        print(f"  ❌ 配置测试失败: {e}")
-        return False
-
-def test_database_reset():
-    """测试数据库状态重置"""
-    print("\n💾 2. 测试数据库状态重置...")
-    try:
-        from backend.database import db
-        
-        # 设置为运行状态
-        db.update_scrape_status(is_scraping=True, message='测试')
-        status1 = db.get_scrape_status()
-        
-        # 重置状态
-        db.update_scrape_status(is_scraping=False, stop_signal=False, message='重置测试')
-        status2 = db.get_scrape_status()
-        
-        reset_worked = not status2.get('is_scraping', True)
-        
-        print(f"  ✅ 设置运行状态: {status1.get('is_scraping', False)}")
-        print(f"  ✅ 重置后状态: {status2.get('is_scraping', True)}")
-        print(f"  ✅ 重置功能: {'正常' if reset_worked else '异常'}")
-        
-        return reset_worked
-    except Exception as e:
-        print(f"  ❌ 数据库测试失败: {e}")
-        return False
-
-def test_singleton_pattern():
-    """测试单例模式"""
-    print("\n🔄 3. 测试单例模式...")
-    try:
-        import threading
-        
-        class TestSingleton:
-            _instance = None
-            _lock = threading.Lock()
-            _init_count = 0
-            
-            @classmethod
-            def get_instance(cls):
-                if cls._instance is not None:
-                    return cls._instance
-                    
-                with cls._lock:
-                    if cls._instance is None:
-                        time.sleep(0.01)  # 模拟初始化耗时
-                        cls._instance = object()
-                        cls._init_count += 1
-                return cls._instance
-        
-        def worker():
-            return TestSingleton.get_instance()
-        
-        # 启动10个线程
-        threads = []
-        for i in range(10):
-            t = threading.Thread(target=worker)
-            threads.append(t)
-            t.start()
-        
-        for t in threads:
-            t.join()
-        
-        singleton_worked = TestSingleton._init_count == 1
-        print(f"  ✅ 初始化次数: {TestSingleton._init_count} (应为1)")
-        print(f"  ✅ 单例模式: {'正常' if singleton_worked else '异常'}")
-        
-        return singleton_worked
-    except Exception as e:
-        print(f"  ❌ 单例测试失败: {e}")
-        return False
-
-def main():
-    """主测试函数"""
-    print("🎯 系统修复验证")
-    print("=" * 50)
-    
-    tests = [
-        ("配置系统", test_config),
-        ("数据库重置", test_database_reset), 
-        ("单例模式", test_singleton_pattern),
-    ]
-    
-    results = []
-    for name, test_func in tests:
-        try:
-            result = test_func()
-            results.append(result)
-        except Exception as e:
-            print(f"❌ {name} 测试异常: {e}")
-            results.append(False)
-    
-    print("\n" + "=" * 50)
-    print("📊 测试结果:")
-    
-    all_passed = all(results)
-    for i, (name, _) in enumerate(tests):
-        status = "✅ 通过" if results[i] else "❌ 失败"
-        print(f"  {status} - {name}")
-    
-    print(f"\n🎉 总体结果: {'所有测试通过！系统修复成功' if all_passed else '部分测试失败，需要检查'}")
-    
-    if all_passed:
-        print("\n🚀 现在可以安全启动系统:")
-        print("  cd backend && python app.py")
-        print("  # 前端: npm run dev")
-    
-    return 0 if all_passed else 1
-
-if __name__ == '__main__':
-    sys.exit(main())
-
 --- File: ./frontend/app/layout.tsx ---
 import type React from "react"
 import type { Metadata } from "next"
@@ -3080,7 +2934,7 @@ export default function Page() {
 --- File: ./frontend/next-env.d.ts ---
 /// <reference types="next" />
 /// <reference types="next/image-types/global" />
-import "./.next/types/routes.d.ts";
+import "./.next/dev/types/routes.d.ts";
 
 // NOTE: This file should not be edited
 // see https://nextjs.org/docs/app/api-reference/config/typescript for more information.
@@ -8046,7 +7900,7 @@ export function AppSidebar({
           <SidebarGroupContent>
             <SidebarMenu>
               {baseMenuItems
-                .filter(item => item.id !== 'shops' || currentUser?.role === 'admin' || (currentUser?.shops && currentUser.shops.length > 0))
+                .filter(item => item.id !== 'shops' || currentUser?.role === 'admin')
                 .map((item) => (
                 <SidebarMenuItem key={item.id}>
                   <SidebarMenuButton onClick={() => setCurrentView(item.id)} isActive={currentView === item.id}>
@@ -10460,7 +10314,13 @@ class Database:
             try:
                 cursor.execute('ALTER TABLE website_configs ADD COLUMN rotation_enabled INTEGER DEFAULT 1')
             except sqlite3.OperationalError:
-                pass  # 字段已存在
+                pass
+
+    def cleanup_processed_messages(self):
+        """清理旧的消息处理记录，只保留最近1小时的记录"""
+        with self.get_connection() as conn:
+            conn.execute("DELETE FROM processed_messages WHERE processed_at < datetime('now', '-1 hour')")
+            conn.commit()  # 字段已存在
 
             # 创建网站配置表
             cursor.execute('''
@@ -10478,12 +10338,27 @@ class Database:
                 )
             ''')
 
+            # 1. 消息处理去重表（防止多个Bot回复同一条消息）
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS processed_messages (
+                    message_id TEXT PRIMARY KEY,
+                    processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            # 2. 修改频道绑定表，增加 user_id 实现用户隔离
+            try:
+                cursor.execute('ALTER TABLE website_channel_bindings ADD COLUMN user_id INTEGER')
+            except sqlite3.OperationalError:
+                pass
+
             # 创建网站频道绑定表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS website_channel_bindings (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     website_id INTEGER NOT NULL,
                     channel_id TEXT NOT NULL,
+                    user_id INTEGER,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE,
                     UNIQUE(website_id, channel_id)
@@ -13314,6 +13189,7 @@ import random
 import os
 import json
 import io
+import sqlite3
 from datetime import datetime
 try:
     from config import config
@@ -13335,6 +13211,18 @@ def is_account_on_cooldown(account_id, interval):
 def set_account_cooldown(account_id):
     """设置账号冷却时间"""
     account_last_sent[account_id] = time.time()
+
+def mark_message_as_processed(message_id):
+    """检查消息是否已处理（原子操作）"""
+    try:
+        from database import db
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO processed_messages (message_id) VALUES (?)", (str(message_id),))
+            conn.commit()
+        return True  # 抢锁成功
+    except sqlite3.IntegrityError:
+        return False  # 已经被其他Bot抢锁
 
 def get_response_url_for_channel(product, channel_id):
     """根据频道ID决定发送哪个链接"""
@@ -17450,11 +17338,11 @@ def add_account():
                     return jsonify({'error': '此Discord token已被其他用户使用'}), 400
             else:
                 # token不存在，插入新记录
-                cursor.execute("""
-                    INSERT INTO discord_accounts (username, token, status, user_id)
-                    VALUES (?, ?, 'offline', ?)
-                """, (username, token, current_user['id']))
-                account_id = cursor.lastrowid
+            cursor.execute("""
+                INSERT INTO discord_accounts (username, token, status, user_id)
+                VALUES (?, ?, 'offline', ?)
+            """, (username, token, current_user['id']))
+            account_id = cursor.lastrowid
                 logger.info(f"添加新账号: {username} (用户ID: {current_user['id']})")
 
             # 获取账号信息
@@ -20080,111 +19968,4 @@ if __name__ == '__main__':
         signal_handler(signal.SIGINT, None)
     finally:
         print("👋 Flask API shutdown complete")
-
---- File: ./create_admin.py ---
-#!/usr/bin/env python3
-"""
-创建管理员账号脚本 - 项目根目录版本
-
-使用方法:
-python3 create_admin.py
-
-或者指定用户名和密码:
-python3 create_admin.py --username admin --password admin123
-"""
-
-import sys
-import os
-import getpass
-import argparse
-
-# 确保在正确的目录下运行
-script_dir = os.path.dirname(os.path.abspath(__file__))
-backend_dir = os.path.join(script_dir, 'backend')
-
-if not os.path.exists(backend_dir):
-    print("❌ 未找到 backend 目录，请确保在项目根目录运行此脚本")
-    sys.exit(1)
-
-# 添加 backend 目录到 Python 路径
-sys.path.insert(0, backend_dir)
-
-try:
-    from database import Database
-except ImportError as e:
-    print(f"❌ 导入数据库模块失败: {e}")
-    print("请确保项目结构完整")
-    sys.exit(1)
-
-from werkzeug.security import generate_password_hash
-
-def create_admin_user(username=None, password=None):
-    """创建管理员用户"""
-    db = Database()
-
-    # 如果没有提供参数，交互式输入
-    if not username:
-        username = input("请输入管理员用户名: ").strip()
-        if not username:
-            print("❌ 用户名不能为空")
-            return
-
-    if not password:
-        password = getpass.getpass("请输入管理员密码: ").strip()
-        if not password:
-            print("❌ 密码不能为空")
-            return
-
-        # 确认密码
-        confirm_password = getpass.getpass("请再次输入密码确认: ").strip()
-        if password != confirm_password:
-            print("❌ 两次输入的密码不一致")
-            return
-
-    try:
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-
-            # 检查用户名是否已存在
-            cursor.execute("SELECT id FROM users WHERE username = ?", (username,))
-            existing_user = cursor.fetchone()
-
-            if existing_user:
-                print(f"❌ 用户名 '{username}' 已存在")
-                return
-
-            # 创建管理员用户
-            hashed_password = generate_password_hash(password)
-            cursor.execute("""
-                INSERT INTO users (username, password_hash, role, created_at, updated_at)
-                VALUES (?, ?, 'admin', datetime('now'), datetime('now'))
-            """, (username, hashed_password))
-
-            user_id = cursor.lastrowid
-            conn.commit()
-
-            print("✅ 管理员账号创建成功！")
-            print(f"   用户名: {username}")
-            print(f"   角色: 管理员")
-            print(f"   用户ID: {user_id}")
-            print("\n🔐 请妥善保管账号信息")
-            print("\n🚀 现在可以使用此账号登录系统了")
-
-    except Exception as e:
-        print(f"❌ 创建管理员账号失败: {e}")
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='创建管理员账号')
-    parser.add_argument('--username', help='管理员用户名')
-    parser.add_argument('--password', help='管理员密码')
-
-    args = parser.parse_args()
-
-    print("🔧 Discord 商品营销系统 - 管理员账号创建工具")
-    print("=" * 50)
-
-    if args.username and args.password:
-        create_admin_user(args.username, args.password)
-    else:
-        create_admin_user()
 

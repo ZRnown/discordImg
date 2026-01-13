@@ -986,18 +986,19 @@ export function AccountsView() {
           </Card>
         )}
 
-        {/* 网站配置区域 */}
-        {currentUser?.role === 'admin' && (
-          <Card className="mt-6">
-            <CardHeader>
-              <div className="flex justify-between items-center">
-                <div>
-                  <CardTitle className="text-lg flex items-center">
-                    <Globe className="w-5 h-5 mr-2" />
-                    网站配置
-                  </CardTitle>
-                  <CardDescription>管理支持的购物网站和频道绑定</CardDescription>
-                </div>
+        {/* 网站配置区域 - 移除最外层的 admin 检查，改为内部细粒度控制 */}
+        <Card className="mt-6">
+          <CardHeader>
+            <div className="flex justify-between items-center">
+              <div>
+                <CardTitle className="text-lg flex items-center">
+                  <Globe className="w-5 h-5 mr-2" />
+                  网站配置
+                </CardTitle>
+                <CardDescription>管理支持的购物网站和频道绑定</CardDescription>
+              </div>
+              {/* 只有管理员可以添加新网站 */}
+              {currentUser?.role === 'admin' && (
                 <Dialog open={showAddWebsite} onOpenChange={setShowAddWebsite}>
                   <DialogTrigger asChild>
                     <Button size="sm">
@@ -1066,8 +1067,9 @@ export function AccountsView() {
                     </DialogFooter>
                   </DialogContent>
                 </Dialog>
-              </div>
-            </CardHeader>
+              )}
+            </div>
+          </CardHeader>
             <CardContent>
               <div className="space-y-4">
                 {websites.map((website: any) => (
@@ -1086,22 +1088,25 @@ export function AccountsView() {
                         </span>
                         <span className="text-sm font-medium">{website.name}</span>
                       </div>
-                      <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setEditingWebsite(website)}
-                        >
-                          <Edit className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleDeleteWebsite(website)}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </div>
+                      {/* 只有管理员可以编辑/删除网站定义 */}
+                      {currentUser?.role === 'admin' && (
+                        <div className="flex gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => setEditingWebsite(website)}
+                          >
+                            <Edit className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleDeleteWebsite(website)}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </Button>
+                        </div>
+                      )}
                     </div>
 
                     <div className="text-xs text-muted-foreground mb-3">
@@ -1253,78 +1258,81 @@ export function AccountsView() {
                       </div>
                     </div>
 
-                    {/* 账号轮换设置 */}
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <Settings className="w-4 h-4" />
-                        <span className="text-sm font-medium">轮换设置</span>
-                      </div>
+                    {/* 账号轮换设置 - 建议仅允许管理员修改全局策略，或者如果这属于用户级配置，需要数据库支持。
+                        根据需求"普通用户不能更改网站的设置"，这里应该隐藏或禁用 */}
+                    {currentUser?.role === 'admin' && (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Settings className="w-4 h-4" />
+                          <span className="text-sm font-medium">轮换设置 (全局)</span>
+                        </div>
 
-                      {/* 轮换启用开关 */}
-                      <div className="flex items-center gap-2">
-                        <Label className="text-xs">启用轮换:</Label>
-                        <Switch
-                          checked={rotationEnabled[website.id] ?? (website.rotation_enabled !== 0)}
-                          onCheckedChange={(checked) => {
-                            setRotationEnabled(prev => ({ ...prev, [website.id]: checked }))
-                            // 发送API请求更新轮换启用状态
-                            fetch(`/api/websites/${website.id}/rotation`, {
-                              method: 'PUT',
-                              headers: { 'Content-Type': 'application/json' },
-                              credentials: 'include',
-                              body: JSON.stringify({ rotation_enabled: checked ? 1 : 0 })
-                            }).then(response => {
-                              if (response.ok) {
-                                toast.success(`轮换功能已${checked ? '启用' : '禁用'}`)
-                              } else {
-                                toast.error('更新失败')
+                        {/* 轮换启用开关 */}
+                        <div className="flex items-center gap-2">
+                          <Label className="text-xs">启用轮换:</Label>
+                          <Switch
+                            checked={rotationEnabled[website.id] ?? (website.rotation_enabled !== 0)}
+                            onCheckedChange={(checked) => {
+                              setRotationEnabled(prev => ({ ...prev, [website.id]: checked }))
+                              // 发送API请求更新轮换启用状态
+                              fetch(`/api/websites/${website.id}/rotation`, {
+                                method: 'PUT',
+                                headers: { 'Content-Type': 'application/json' },
+                                credentials: 'include',
+                                body: JSON.stringify({ rotation_enabled: checked ? 1 : 0 })
+                              }).then(response => {
+                                if (response.ok) {
+                                  toast.success(`轮换功能已${checked ? '启用' : '禁用'}`)
+                                } else {
+                                  toast.error('更新失败')
+                                  // 恢复开关状态
+                                  setRotationEnabled(prev => ({ ...prev, [website.id]: !checked }))
+                                }
+                              }).catch(() => {
+                                toast.error('网络错误')
                                 // 恢复开关状态
                                 setRotationEnabled(prev => ({ ...prev, [website.id]: !checked }))
+                              })
+                            }}
+                          />
+                        </div>
+
+                        {/* 轮换间隔设置 */}
+                        <div className="flex items-center gap-2">
+                          <Label className="text-xs">轮换间隔(秒):</Label>
+                          <Input
+                            type="number"
+                            value={rotationIntervals[website.id] ?? website.rotation_interval ?? 180}
+                            className="w-20 h-7 text-xs"
+                            disabled={!(rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))}
+                            onChange={(e) => {
+                              const value = parseInt(e.target.value) || 180
+                              setRotationIntervals(prev => ({ ...prev, [website.id]: value }))
+                            }}
+                            onBlur={(e) => {
+                              const value = rotationIntervals[website.id] ?? website.rotation_interval ?? 180
+                              if (value > 0 && value !== website.rotation_interval) {
+                                handleUpdateRotation(website.id, value)
+                              } else if (value <= 0) {
+                                toast.error('轮换间隔必须大于0秒')
+                                setRotationIntervals(prev => ({ ...prev, [website.id]: website.rotation_interval ?? 180 }))
                               }
-                            }).catch(() => {
-                              toast.error('网络错误')
-                              // 恢复开关状态
-                              setRotationEnabled(prev => ({ ...prev, [website.id]: !checked }))
-                            })
-                          }}
-                        />
-                      </div>
+                            }}
+                          />
+                          <span className="text-xs text-muted-foreground">
+                            ({Math.floor((rotationIntervals[website.id] ?? website.rotation_interval ?? 180) / 60)}分{(rotationIntervals[website.id] ?? website.rotation_interval ?? 180) % 60}秒)
+                          </span>
+                        </div>
 
-                      {/* 轮换间隔设置 */}
-                      <div className="flex items-center gap-2">
-                        <Label className="text-xs">轮换间隔(秒):</Label>
-                        <Input
-                          type="number"
-                          value={rotationIntervals[website.id] ?? website.rotation_interval ?? 180}
-                          className="w-20 h-7 text-xs"
-                          disabled={!(rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))}
-                          onChange={(e) => {
-                            const value = parseInt(e.target.value) || 180
-                            setRotationIntervals(prev => ({ ...prev, [website.id]: value }))
-                          }}
-                          onBlur={(e) => {
-                            const value = rotationIntervals[website.id] ?? website.rotation_interval ?? 180
-                            if (value > 0 && value !== website.rotation_interval) {
-                              handleUpdateRotation(website.id, value)
-                            } else if (value <= 0) {
-                              toast.error('轮换间隔必须大于0秒')
-                              setRotationIntervals(prev => ({ ...prev, [website.id]: website.rotation_interval ?? 180 }))
-                            }
-                          }}
-                        />
-                        <span className="text-xs text-muted-foreground">
-                          ({Math.floor((rotationIntervals[website.id] ?? website.rotation_interval ?? 180) / 60)}分{(rotationIntervals[website.id] ?? website.rotation_interval ?? 180) % 60}秒)
-                        </span>
+                        {/* 状态说明 */}
+                        <div className="text-xs text-muted-foreground">
+                          {(rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))
+                            ? '轮换已启用，将在账号间自动切换'
+                            : '轮换已禁用，将使用固定账号发送'
+                          }
+                        </div>
                       </div>
-
-                      {/* 状态说明 */}
-                      <div className="text-xs text-muted-foreground">
-                        {(rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))
-                          ? '轮换已启用，将在账号间自动切换'
-                          : '轮换已禁用，将使用固定账号发送'
-                        }
-                      </div>
-                    </div>
+                    )}
 
                     {/* 消息过滤规则 */}
                     <div className="space-y-2">
@@ -1412,7 +1420,6 @@ export function AccountsView() {
               </div>
             </CardContent>
           </Card>
-        )}
 
         {/* 编辑消息过滤对话框 */}
         {editingFilter && (

@@ -1177,8 +1177,9 @@ def get_website_accounts(config_id):
 @app.route('/api/websites/<int:config_id>/accounts', methods=['POST'])
 def add_website_account(config_id):
     """为网站绑定账号"""
-    if not require_admin():
-        return jsonify({'error': '需要管理员权限'}), 403
+    # 移除 require_admin，允许普通用户操作
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
 
     try:
         data = request.get_json()
@@ -1187,6 +1188,22 @@ def add_website_account(config_id):
 
         if not account_id or role not in ['listener', 'sender', 'both']:
             return jsonify({'error': '无效的账号ID或角色'}), 400
+
+        # 权限检查：确保该账号属于当前用户
+        current_user = get_current_user()
+        # 获取该账号的详情
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT user_id FROM discord_accounts WHERE id = ?", (account_id,))
+            row = cursor.fetchone()
+            if not row:
+                return jsonify({'error': '账号不存在'}), 404
+
+            account_owner_id = row[0]
+
+            # 如果不是管理员，且账号不属于当前用户，拒绝
+            if current_user['role'] != 'admin' and account_owner_id != current_user['id']:
+                return jsonify({'error': '您无权操作此账号'}), 403
 
         if db.add_website_account_binding(config_id, account_id, role):
             return jsonify({'success': True, 'message': f'账号绑定成功，角色: {role}'})
@@ -1199,10 +1216,22 @@ def add_website_account(config_id):
 @app.route('/api/websites/<int:config_id>/accounts/<int:account_id>', methods=['DELETE'])
 def remove_website_account(config_id, account_id):
     """移除网站账号绑定"""
-    if not require_admin():
-        return jsonify({'error': '需要管理员权限'}), 403
+    # 移除 require_admin
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
 
     try:
+        # 权限检查：确保该账号属于当前用户
+        current_user = get_current_user()
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT user_id FROM discord_accounts WHERE id = ?", (account_id,))
+            row = cursor.fetchone()
+            if row:
+                account_owner_id = row[0]
+                if current_user['role'] != 'admin' and account_owner_id != current_user['id']:
+                    return jsonify({'error': '您无权操作此账号'}), 403
+
         if db.remove_website_account_binding(config_id, account_id):
             return jsonify({'success': True, 'message': '账号绑定已移除'})
         else:
@@ -2078,11 +2107,11 @@ def add_account():
                     return jsonify({'error': '此Discord token已被其他用户使用'}), 400
             else:
                 # token不存在，插入新记录
-                cursor.execute("""
-                    INSERT INTO discord_accounts (username, token, status, user_id)
-                    VALUES (?, ?, 'offline', ?)
-                """, (username, token, current_user['id']))
-                account_id = cursor.lastrowid
+            cursor.execute("""
+                INSERT INTO discord_accounts (username, token, status, user_id)
+                VALUES (?, ?, 'offline', ?)
+            """, (username, token, current_user['id']))
+            account_id = cursor.lastrowid
                 logger.info(f"添加新账号: {username} (用户ID: {current_user['id']})")
 
             # 获取账号信息
@@ -3315,47 +3344,71 @@ def start_discord_bot(user_id=None):
         logger.error(f"Discord机器人启动失败: {e}")
         logger.info("Flask应用将继续运行，但机器人功能不可用")
 
-def stop_discord_bot():
-    """停止Discord机器人"""
+def stop_discord_bot(user_id=None):
+    """停止Discord机器人 (支持按用户停止)"""
     global bot_clients, bot_tasks, bot_running
 
-    if not bot_running:
-        logger.info("机器人未在运行")
+    # 如果没有客户端，直接返回
+    if not bot_clients:
+        logger.info("没有正在运行的机器人")
+        bot_running = False
         return
 
-    if bot_clients:
-        logger.info(f"正在停止 {len(bot_clients)} 个Discord机器人...")
+    logger.info(f"正在停止机器人... {'(特定用户: ' + str(user_id) + ')' if user_id else '(所有用户)'}")
+
+    try:
+        import asyncio
+        # 获取当前的事件循环，如果是在 Flask 线程中可能需要处理
         try:
-            import asyncio
-            # 创建任务来停止所有机器人
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
-            for i, client in enumerate(bot_clients):
-                try:
-                    if client and not client.is_closed():
-                        # 更新账号状态为offline
-                        if hasattr(client, 'account_id') and client.account_id:
-                            db.update_account_status(client.account_id, 'offline')
-                            logger.info(f"账号 {client.account_id} 状态已更新为离线")
-                        loop.run_until_complete(client.close())
-                        logger.info(f"Discord机器人 {i+1} 已停止")
-                except Exception as e:
-                    logger.error(f"停止机器人 {i+1} 时出错: {e}")
+        # 筛选需要停止的客户端索引
+        indices_to_remove = []
 
-            logger.info("所有Discord机器人已停止")
-        except Exception as e:
-            logger.error(f"停止机器人时出错: {e}")
+        for i, client in enumerate(bot_clients):
+            # 如果指定了 user_id，只停止该用户的机器人
+            # client.user_id 是我们在 DiscordBotClient 初始化时传入的
+            if user_id is not None and getattr(client, 'user_id', None) != user_id:
+                continue
 
-    # 取消所有任务
-    for task in bot_tasks:
-        if task and not task.done():
-            task.cancel()
+            try:
+                if client and not client.is_closed():
+                    # 更新账号状态为offline
+                    if hasattr(client, 'account_id') and client.account_id:
+                        db.update_account_status(client.account_id, 'offline')
+                        logger.info(f"账号 {client.account_id} 状态已更新为离线")
 
-    # 清空机器人列表
-    bot_clients.clear()
-    bot_tasks.clear()
-    bot_running = False
+                    # 停止机器人
+                    asyncio.run_coroutine_threadsafe(client.close(), loop)
+                    logger.info(f"Discord机器人 {i} (用户 {getattr(client, 'user_id', 'unknown')}) 已停止信号发送")
+            except Exception as e:
+                logger.error(f"停止机器人 {i} 时出错: {e}")
+
+            indices_to_remove.append(i)
+
+        # 从列表中移除已停止的机器人和任务
+        # 从后往前删，避免索引偏移
+        for i in sorted(indices_to_remove, reverse=True):
+            if i < len(bot_clients):
+                bot_clients.pop(i)
+            if i < len(bot_tasks):
+                # 尝试取消任务
+                task = bot_tasks[i]
+                if task and not task.done():
+                    task.cancel()
+                bot_tasks.pop(i)
+
+        if not bot_clients:
+            bot_running = False
+            logger.info("所有机器人已停止")
+        else:
+            logger.info(f"剩余 {len(bot_clients)} 个机器人仍在运行")
+
+    except Exception as e:
+        logger.error(f"停止机器人流程出错: {e}")
 
 # ===== 机器人控制API =====
 
@@ -3394,9 +3447,20 @@ def start_bot():
 @app.route('/api/bot/stop', methods=['POST'])
 def stop_bot():
     """停止Discord机器人"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
     try:
-        stop_discord_bot()
-        logger.info("机器人停止成功")
+        current_user = get_current_user()
+
+        # 如果是管理员，且请求中包含 targetUserId，则停止指定用户的
+        # 否则停止当前用户的
+        # 这里简化逻辑：用户只能停止自己的
+        user_id = current_user['id']
+
+        stop_discord_bot(user_id)
+
+        logger.info(f"用户 {user_id} 的机器人已停止")
         return jsonify({'message': '机器人停止成功'})
 
     except Exception as e:
@@ -3484,10 +3548,25 @@ def get_shop_info():
 
 @app.route('/api/shops', methods=['GET'])
 def get_shops():
-    """获取所有店铺列表"""
+    """获取店铺列表（根据用户权限过滤）"""
     try:
-        shops = db.get_all_shops()
-        return jsonify({'shops': shops})
+        # 获取所有店铺
+        all_shops = db.get_all_shops()
+
+        current_user = get_current_user()
+        if not current_user:
+            # 如果未登录，返回空
+            return jsonify({'shops': []})
+
+        # 如果是管理员，返回所有
+        if current_user['role'] == 'admin':
+            return jsonify({'shops': all_shops})
+
+        # 如果是普通用户，只筛选出他有权限的店铺
+        user_permitted_shop_ids = current_user.get('shops', [])
+        filtered_shops = [s for s in all_shops if s['shop_id'] in user_permitted_shop_ids]
+
+        return jsonify({'shops': filtered_shops})
     except Exception as e:
         logger.error(f'获取店铺列表失败: {e}')
         return jsonify({'error': '获取店铺列表失败'}), 500
