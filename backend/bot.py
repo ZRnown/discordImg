@@ -188,16 +188,26 @@ class DiscordBotClient(discord.Client):
             # 2. 获取该配置下的可用 Sender 账号 (异步执行)
             sender_account_ids = await asyncio.get_event_loop().run_in_executor(None, db.get_website_senders, website_config['id'])
 
-            # 3. 筛选非冷却中的账号
-            rotation_interval = website_config.get('rotation_interval', 180)
-            available_senders = [
-                uid for uid in sender_account_ids
-                if not is_account_on_cooldown(uid, rotation_interval)
-            ]
+            # 3. 检查轮换功能是否启用
+            rotation_enabled = website_config.get('rotation_enabled', 1)  # 默认启用
 
-            if not available_senders:
-                logger.info("所有发送账号均在冷却中，跳过回复")
-                return
+            if rotation_enabled:
+                # 轮换功能启用：筛选非冷却中的账号
+                rotation_interval = website_config.get('rotation_interval', 180)
+                available_senders = [
+                    uid for uid in sender_account_ids
+                    if not is_account_on_cooldown(uid, rotation_interval)
+                ]
+
+                if not available_senders:
+                    logger.info("所有发送账号均在冷却中，跳过回复")
+                    return
+            else:
+                # 轮换功能禁用：使用所有可用的发送账号
+                available_senders = sender_account_ids
+                if not available_senders:
+                    logger.info("没有可用的发送账号，跳过回复")
+                    return
 
             # 4. 选择一个账号 (随机 或 轮询)
             selected_account_id = random.choice(available_senders)

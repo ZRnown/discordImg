@@ -42,6 +42,11 @@ export default function Page() {
     }
   }, [])
 
+  // 调试：监听状态变化
+  useEffect(() => {
+    console.log('BotStatus changed to:', botStatus)
+  }, [botStatus])
+
   const checkLoginStatus = async () => {
     try {
       const response = await fetch('/api/auth/me', {
@@ -104,6 +109,7 @@ export default function Page() {
       return
     }
 
+    console.log('开始启动机器人...')
     setBotStatus('starting')
     try {
       // 调用后端启动账号的API
@@ -114,15 +120,22 @@ export default function Page() {
         body: JSON.stringify({ userId: currentUser.id })
       })
 
+      console.log('启动API响应:', response.status, response.ok)
+
       if (response.ok) {
+        console.log('设置状态为running')
         setBotStatus('running')
+        // 强制重新获取状态以确认
+        setTimeout(() => fetchBotStatus(), 100)
         toast.success("Discord账号已启动")
       } else {
         const error = await response.json()
+        console.log('启动失败，错误:', error)
         setBotStatus('stopped')
         toast.error(error.error || "启动账号失败")
       }
     } catch (error) {
+      console.log('网络错误:', error)
       setBotStatus('stopped')
       toast.error("网络错误，无法启动账号")
     }
@@ -197,6 +210,10 @@ export default function Page() {
                    botStatus === 'starting' ? '启动中' :
                    botStatus === 'stopping' ? '停止中' :
                    '已停止'}
+                </span>
+                {/* 调试信息 */}
+                <span className="text-[10px] text-gray-500 ml-2">
+                  (状态: {botStatus})
                 </span>
               </div>
 

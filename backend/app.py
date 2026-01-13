@@ -1213,23 +1213,46 @@ def remove_website_account(config_id, account_id):
 
 @app.route('/api/websites/<int:config_id>/rotation', methods=['PUT'])
 def update_website_rotation(config_id):
-    """更新网站轮换间隔"""
+    """更新网站轮换配置（间隔和启用状态）"""
     if not require_admin():
         return jsonify({'error': '需要管理员权限'}), 403
 
     try:
         data = request.get_json()
-        rotation_interval = data.get('rotation_interval', 180)
+        updates = []
+        messages = []
 
-        if rotation_interval < 30 or rotation_interval > 3600:
-            return jsonify({'error': '轮换间隔必须在30-3600秒之间'}), 400
+        # 更新轮换间隔
+        if 'rotation_interval' in data:
+            rotation_interval = data['rotation_interval']
+        if rotation_interval <= 0:
+            return jsonify({'error': '轮换间隔必须大于0秒'}), 400
 
-        if db.update_website_config_rotation(config_id, rotation_interval):
-            return jsonify({'success': True, 'message': f'轮换间隔已设置为 {rotation_interval} 秒'})
+            if db.update_website_config_rotation(config_id, rotation_interval):
+                updates.append(True)
+                messages.append(f'轮换间隔已设置为 {rotation_interval} 秒')
+            else:
+                updates.append(False)
+
+        # 更新轮换启用状态
+        if 'rotation_enabled' in data:
+            rotation_enabled = data['rotation_enabled']
+            if rotation_enabled not in [0, 1]:
+                return jsonify({'error': '轮换启用状态必须是0或1'}), 400
+
+            if db.update_website_config_rotation_enabled(config_id, rotation_enabled):
+                updates.append(True)
+                status_text = '启用' if rotation_enabled else '禁用'
+                messages.append(f'轮换功能已{status_text}')
+            else:
+                updates.append(False)
+
+        if all(updates):
+            return jsonify({'success': True, 'message': '; '.join(messages)})
         else:
-            return jsonify({'error': '更新失败'}), 500
+            return jsonify({'error': '部分更新失败'}), 500
     except Exception as e:
-        logger.error(f"更新网站轮换间隔失败: {e}")
+        logger.error(f"更新网站轮换配置失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/websites/<int:config_id>/filters', methods=['GET'])
@@ -2034,12 +2057,35 @@ def add_account():
 
         with db.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                INSERT INTO discord_accounts (username, token, status, user_id)
-                VALUES (?, ?, 'offline', ?)
-            """, (username, token, current_user['id']))
-            account_id = cursor.lastrowid
 
+            # 首先检查token是否已存在
+            cursor.execute("SELECT id, username, user_id FROM discord_accounts WHERE token = ?", (token,))
+            existing_account = cursor.fetchone()
+
+            if existing_account:
+                # 如果token已存在，检查是否属于当前用户
+                if existing_account[2] == current_user['id']:
+                    # 属于当前用户，更新信息
+                    cursor.execute("""
+                        UPDATE discord_accounts
+                        SET username = ?, status = 'offline', updated_at = CURRENT_TIMESTAMP
+                        WHERE token = ?
+                    """, (username, token))
+                    account_id = existing_account[0]
+                    logger.info(f"更新现有账号: {username} (用户ID: {current_user['id']})")
+                else:
+                    # 属于其他用户，返回错误
+                    return jsonify({'error': '此Discord token已被其他用户使用'}), 400
+            else:
+                # token不存在，插入新记录
+                cursor.execute("""
+                    INSERT INTO discord_accounts (username, token, status, user_id)
+                    VALUES (?, ?, 'offline', ?)
+                """, (username, token, current_user['id']))
+                account_id = cursor.lastrowid
+                logger.info(f"添加新账号: {username} (用户ID: {current_user['id']})")
+
+            # 获取账号信息
             cursor.execute("SELECT id, username, token, status, last_active, user_id FROM discord_accounts WHERE id = ?", (account_id,))
             account = cursor.fetchone()
             conn.commit()
@@ -3361,8 +3407,13 @@ def stop_bot():
 def get_bot_status():
     """获取Discord机器人全局运行状态"""
     try:
-        # 通过检查是否有活跃的机器人客户端来确定状态，而不依赖内存变量
-        is_running = len(bot_clients) > 0 and any(client.running for client in bot_clients)
+        # 通过检查数据库中是否有账号状态为online来确定机器人是否在运行
+        # 这样可以避免依赖内存中的全局变量，在多进程环境下更可靠
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM discord_accounts WHERE status = 'online'")
+            online_count = cursor.fetchone()[0]
+            is_running = online_count > 0
         return jsonify({'running': is_running})
     except Exception as e:
         logger.error(f"获取机器人状态失败: {e}")

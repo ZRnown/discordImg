@@ -282,6 +282,12 @@ class Database:
             except sqlite3.OperationalError:
                 pass  # 字段已存在
 
+            # 为website_configs表添加rotation_enabled字段
+            try:
+                cursor.execute('ALTER TABLE website_configs ADD COLUMN rotation_enabled INTEGER DEFAULT 1')
+            except sqlite3.OperationalError:
+                pass  # 字段已存在
+
             # 创建网站配置表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS website_configs (
@@ -292,6 +298,7 @@ class Database:
                     id_pattern TEXT NOT NULL,
                     badge_color TEXT DEFAULT 'blue',
                     rotation_interval INTEGER DEFAULT 180,
+                    rotation_enabled INTEGER DEFAULT 1,  -- 是否启用轮换功能 (1=启用, 0=禁用)
                     message_filters TEXT DEFAULT '[]',  -- JSON格式存储过滤条件数组
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
@@ -1307,11 +1314,11 @@ class Database:
                 cursor.execute('''
                     SELECT
                         wc.id, wc.name, wc.display_name, wc.url_template,
-                        wc.id_pattern, wc.badge_color, wc.rotation_interval, wc.message_filters, wc.created_at,
+                        wc.id_pattern, wc.badge_color, wc.rotation_interval, wc.rotation_enabled, wc.message_filters, wc.created_at,
                         GROUP_CONCAT(wcb.channel_id) as channels
                     FROM website_configs wc
                     LEFT JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
-                    GROUP BY wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.rotation_interval, wc.message_filters, wc.created_at
+                    GROUP BY wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.rotation_interval, wc.rotation_enabled, wc.message_filters, wc.created_at
                     ORDER BY wc.created_at
                 ''')
 
@@ -1330,31 +1337,31 @@ class Database:
             logger.error(f"获取网站配置失败: {e}")
             return []
 
-    def add_website_config(self, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str = 'blue', rotation_interval: int = 180, message_filters: str = '[]') -> bool:
+    def add_website_config(self, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str = 'blue', rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> bool:
         """添加网站配置"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    INSERT INTO website_configs (name, display_name, url_template, id_pattern, badge_color, rotation_interval, message_filters)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                ''', (name, display_name, url_template, id_pattern, badge_color, rotation_interval, message_filters))
+                    INSERT INTO website_configs (name, display_name, url_template, id_pattern, badge_color, rotation_interval, rotation_enabled, message_filters)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (name, display_name, url_template, id_pattern, badge_color, rotation_interval, rotation_enabled, message_filters))
                 conn.commit()
                 return True
         except Exception as e:
             logger.error(f"添加网站配置失败: {e}")
             return False
 
-    def update_website_config(self, config_id: int, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str, rotation_interval: int = 180, message_filters: str = '[]') -> bool:
+    def update_website_config(self, config_id: int, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str, rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> bool:
         """更新网站配置"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     UPDATE website_configs
-                    SET name = ?, display_name = ?, url_template = ?, id_pattern = ?, badge_color = ?, rotation_interval = ?, message_filters = ?
+                    SET name = ?, display_name = ?, url_template = ?, id_pattern = ?, badge_color = ?, rotation_interval = ?, rotation_enabled = ?, message_filters = ?
                     WHERE id = ?
-                ''', (name, display_name, url_template, id_pattern, badge_color, rotation_interval, message_filters, config_id))
+                ''', (name, display_name, url_template, id_pattern, badge_color, rotation_interval, rotation_enabled, message_filters, config_id))
                 conn.commit()
                 return cursor.rowcount > 0
         except Exception as e:
@@ -1554,6 +1561,22 @@ class Database:
                 return cursor.rowcount > 0
         except Exception as e:
             logger.error(f"更新网站轮换间隔失败: {e}")
+            return False
+
+    def update_website_config_rotation_enabled(self, config_id: int, rotation_enabled: int) -> bool:
+        """更新网站配置的轮换启用状态"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE website_configs
+                    SET rotation_enabled = ?
+                    WHERE id = ?
+                ''', (rotation_enabled, config_id))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"更新网站配置轮换启用状态失败: {e}")
             return False
 
     def update_website_message_filters(self, config_id: int, message_filters: str) -> bool:
@@ -2049,21 +2072,25 @@ class Database:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT discord_similarity_threshold, global_reply_min_delay, global_reply_max_delay,
-                           user_blacklist, keyword_filters
+                    SELECT download_threads, feature_extract_threads, discord_similarity_threshold,
+                           global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters
                     FROM user_settings WHERE user_id = ?
                 ''', (user_id,))
                 row = cursor.fetchone()
                 if row:
                     return {
-                        'discord_similarity_threshold': row[0] or 0.6,
-                        'global_reply_min_delay': row[1] or 3.0,
-                        'global_reply_max_delay': row[2] or 8.0,
-                        'user_blacklist': row[3] or '',
-                        'keyword_filters': row[4] or '',
+                        'download_threads': row[0] or 4,
+                        'feature_extract_threads': row[1] or 4,
+                        'discord_similarity_threshold': row[2] or 0.6,
+                        'global_reply_min_delay': row[3] or 3.0,
+                        'global_reply_max_delay': row[4] or 8.0,
+                        'user_blacklist': row[5] or '',
+                        'keyword_filters': row[6] or '',
                     }
                 # 如果用户没有设置，返回默认值
                 return {
+                    'download_threads': 4,
+                    'feature_extract_threads': 4,
                     'discord_similarity_threshold': 0.6,
                     'global_reply_min_delay': 3.0,
                     'global_reply_max_delay': 8.0,
@@ -2082,7 +2109,8 @@ class Database:
                 'keyword_filters': '',
             }
 
-    def update_user_settings(self, user_id: int, discord_similarity_threshold: float = None,
+    def update_user_settings(self, user_id: int, download_threads: int = None,
+                           feature_extract_threads: int = None, discord_similarity_threshold: float = None,
                            global_reply_min_delay: float = None, global_reply_max_delay: float = None,
                            user_blacklist: str = None, keyword_filters: str = None) -> bool:
         """更新用户个性化设置"""
@@ -2099,6 +2127,13 @@ class Database:
                     update_fields = []
                     params = []
 
+                    if download_threads is not None:
+                        update_fields.append('download_threads = ?')
+                        params.append(download_threads)
+
+                    if feature_extract_threads is not None:
+                        update_fields.append('feature_extract_threads = ?')
+                        params.append(feature_extract_threads)
 
                     if discord_similarity_threshold is not None:
                         update_fields.append('discord_similarity_threshold = ?')
@@ -2129,11 +2164,13 @@ class Database:
                     # 插入新设置
                     cursor.execute('''
                         INSERT INTO user_settings
-                        (user_id, discord_similarity_threshold, global_reply_min_delay, global_reply_max_delay,
-                         user_blacklist, keyword_filters)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        (user_id, download_threads, feature_extract_threads, discord_similarity_threshold,
+                         global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         user_id,
+                        download_threads or 4,
+                        feature_extract_threads or 4,
                         discord_similarity_threshold or 0.6,
                         global_reply_min_delay or 3.0,
                         global_reply_max_delay or 8.0,

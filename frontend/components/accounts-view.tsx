@@ -5,9 +5,11 @@ import { useApiCache } from "@/hooks/use-api-cache"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit } from "lucide-react"
@@ -46,6 +48,9 @@ export function AccountsView() {
     badge_color: 'blue'
   })
   const [websiteChannels, setWebsiteChannels] = useState<{[key: number]: string[]}>({})
+  const [channelInputs, setChannelInputs] = useState<{[key: number]: string}>({})
+  const [rotationEnabled, setRotationEnabled] = useState<{[key: number]: boolean}>({})
+  const [rotationIntervals, setRotationIntervals] = useState<{[key: number]: number}>({})
 
   // 网站账号绑定相关状态
   const [websiteAccounts, setWebsiteAccounts] = useState<{[key: number]: any[]}>({})
@@ -387,7 +392,11 @@ export function AccountsView() {
       })
       if (res.ok) {
         toast.success('频道绑定已添加')
-        fetchWebsites()
+        // 立即更新前端状态，而不是重新获取所有数据
+        setWebsiteChannels(prev => ({
+          ...prev,
+          [websiteId]: [...(prev[websiteId] || []), channelId.trim()]
+        }))
       } else {
         toast.error('添加失败')
       }
@@ -404,7 +413,11 @@ export function AccountsView() {
       })
       if (res.ok) {
         toast.success('频道绑定已移除')
-        fetchWebsites()
+        // 立即更新前端状态，而不是重新获取所有数据
+        setWebsiteChannels(prev => ({
+          ...prev,
+          [websiteId]: prev[websiteId]?.filter(id => id !== channelId) || []
+        }))
       } else {
         toast.error('移除失败')
       }
@@ -425,8 +438,23 @@ export function AccountsView() {
       if (res.ok) {
         toast.success('账号绑定成功')
         setShowBindAccount(null)
+
+        // 获取绑定的账号信息
+        const boundAccount = accounts.find(acc => acc.id.toString() === newAccountBinding.account_id)
+        if (boundAccount) {
+          // 立即更新前端状态，而不是重新获取所有数据
+          setWebsiteAccounts(prev => ({
+            ...prev,
+            [websiteId]: [...(prev[websiteId] || []), {
+              id: Date.now(), // 临时ID，后端会返回真实ID
+              account_id: parseInt(newAccountBinding.account_id),
+              username: boundAccount.username,
+              role: newAccountBinding.role
+            }]
+          }))
+        }
+
         setNewAccountBinding({ account_id: '', role: 'both' })
-        fetchWebsites()
       } else {
         const error = await res.json()
         toast.error(error.error || '绑定失败')
@@ -444,7 +472,11 @@ export function AccountsView() {
       })
       if (res.ok) {
         toast.success('账号解绑成功')
-        fetchWebsites()
+        // 立即更新前端状态，而不是重新获取所有数据
+        setWebsiteAccounts(prev => ({
+          ...prev,
+          [websiteId]: prev[websiteId]?.filter(binding => binding.account_id !== accountId) || []
+        }))
       } else {
         toast.error('解绑失败')
       }
@@ -464,7 +496,14 @@ export function AccountsView() {
       })
       if (res.ok) {
         toast.success('轮换间隔已更新')
-        fetchWebsites()
+        // 立即更新前端状态，而不是重新获取所有数据
+        setWebsites(prev => prev.map(website =>
+          website.id === websiteId
+            ? { ...website, rotation_interval: rotationInterval }
+            : website
+        ))
+        // 同步更新本地输入框状态
+        setRotationIntervals(prev => ({ ...prev, [websiteId]: rotationInterval }))
       } else {
         toast.error('更新失败')
       }
@@ -504,7 +543,12 @@ export function AccountsView() {
         toast.success('过滤规则已添加')
         setNewFilter({ filter_type: 'contains', filter_value: '' })
         setShowAddWebsiteFilter(null)
-        fetchWebsites()
+
+        // 立即更新前端状态，而不是重新获取所有数据
+        setWebsiteFilters(prev => ({
+          ...prev,
+          [websiteId]: newFilters
+        }))
       } else {
         toast.error('添加过滤规则失败')
       }
@@ -531,7 +575,11 @@ export function AccountsView() {
 
       if (updateRes.ok) {
         toast.success('过滤规则已删除')
-        fetchWebsites()
+        // 立即更新前端状态，而不是重新获取所有数据
+        setWebsiteFilters(prev => ({
+          ...prev,
+          [websiteId]: newFilters
+        }))
       } else {
         toast.error('删除过滤规则失败')
       }
@@ -1083,24 +1131,25 @@ export function AccountsView() {
                                 <Label>频道ID</Label>
                                 <Input
                                   placeholder="例如: 1234567890123456789"
+                                  value={channelInputs[website.id] || ''}
+                                  onChange={(e) => setChannelInputs(prev => ({ ...prev, [website.id]: e.target.value }))}
                                   onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                      handleAddChannel(website.id, (e.target as HTMLInputElement).value)
-                                      ;(e.target as HTMLInputElement).value = ''
+                                    if (e.key === 'Enter' && channelInputs[website.id]?.trim()) {
+                                      handleAddChannel(website.id, channelInputs[website.id].trim())
+                                      setChannelInputs(prev => ({ ...prev, [website.id]: '' }))
                                     }
                                   }}
                                 />
                               </div>
                             </div>
                             <DialogFooter>
-                              <Button variant="outline" onClick={() => {}}>取消</Button>
+                              <Button variant="outline" onClick={() => setChannelInputs(prev => ({ ...prev, [website.id]: '' }))}>取消</Button>
                               <Button onClick={() => {
-                                const input = document.querySelector('input[placeholder*="频道ID"]') as HTMLInputElement
-                                if (input?.value) {
-                                  handleAddChannel(website.id, input.value)
-                                  input.value = ''
+                                if (channelInputs[website.id]?.trim()) {
+                                  handleAddChannel(website.id, channelInputs[website.id].trim())
+                                  setChannelInputs(prev => ({ ...prev, [website.id]: '' }))
                                 }
-                              }}>添加</Button>
+                              }} disabled={!channelInputs[website.id]?.trim()}>添加</Button>
                             </DialogFooter>
                           </DialogContent>
                         </Dialog>
@@ -1210,25 +1259,70 @@ export function AccountsView() {
                         <Settings className="w-4 h-4" />
                         <span className="text-sm font-medium">轮换设置</span>
                       </div>
+
+                      {/* 轮换启用开关 */}
+                      <div className="flex items-center gap-2">
+                        <Label className="text-xs">启用轮换:</Label>
+                        <Switch
+                          checked={rotationEnabled[website.id] ?? (website.rotation_enabled !== 0)}
+                          onCheckedChange={(checked) => {
+                            setRotationEnabled(prev => ({ ...prev, [website.id]: checked }))
+                            // 发送API请求更新轮换启用状态
+                            fetch(`/api/websites/${website.id}/rotation`, {
+                              method: 'PUT',
+                              headers: { 'Content-Type': 'application/json' },
+                              credentials: 'include',
+                              body: JSON.stringify({ rotation_enabled: checked ? 1 : 0 })
+                            }).then(response => {
+                              if (response.ok) {
+                                toast.success(`轮换功能已${checked ? '启用' : '禁用'}`)
+                              } else {
+                                toast.error('更新失败')
+                                // 恢复开关状态
+                                setRotationEnabled(prev => ({ ...prev, [website.id]: !checked }))
+                              }
+                            }).catch(() => {
+                              toast.error('网络错误')
+                              // 恢复开关状态
+                              setRotationEnabled(prev => ({ ...prev, [website.id]: !checked }))
+                            })
+                          }}
+                        />
+                      </div>
+
+                      {/* 轮换间隔设置 */}
                       <div className="flex items-center gap-2">
                         <Label className="text-xs">轮换间隔(秒):</Label>
                         <Input
                           type="number"
-                          defaultValue={website.rotation_interval || 180}
+                          value={rotationIntervals[website.id] ?? website.rotation_interval ?? 180}
                           className="w-20 h-7 text-xs"
+                          disabled={!(rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))}
+                          onChange={(e) => {
+                            const value = parseInt(e.target.value) || 180
+                            setRotationIntervals(prev => ({ ...prev, [website.id]: value }))
+                          }}
                           onBlur={(e) => {
-                            const value = parseInt(e.target.value)
-                            if (value >= 30 && value <= 3600 && value !== website.rotation_interval) {
+                            const value = rotationIntervals[website.id] ?? website.rotation_interval ?? 180
+                            if (value > 0 && value !== website.rotation_interval) {
                               handleUpdateRotation(website.id, value)
-                            } else if (value < 30 || value > 3600) {
-                              toast.error('轮换间隔必须在30-3600秒之间')
-                              e.target.value = website.rotation_interval?.toString() || '180'
+                            } else if (value <= 0) {
+                              toast.error('轮换间隔必须大于0秒')
+                              setRotationIntervals(prev => ({ ...prev, [website.id]: website.rotation_interval ?? 180 }))
                             }
                           }}
                         />
                         <span className="text-xs text-muted-foreground">
-                          ({Math.floor((website.rotation_interval || 180) / 60)}分{(website.rotation_interval || 180) % 60}秒)
+                          ({Math.floor((rotationIntervals[website.id] ?? website.rotation_interval ?? 180) / 60)}分{(rotationIntervals[website.id] ?? website.rotation_interval ?? 180) % 60}秒)
                         </span>
+                      </div>
+
+                      {/* 状态说明 */}
+                      <div className="text-xs text-muted-foreground">
+                        {(rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))
+                          ? '轮换已启用，将在账号间自动切换'
+                          : '轮换已禁用，将使用固定账号发送'
+                        }
                       </div>
                     </div>
 
