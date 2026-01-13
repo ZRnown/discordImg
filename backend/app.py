@@ -587,6 +587,18 @@ def search_similar():
                             cursor.execute("SELECT image_index FROM product_images WHERE product_id = ? ORDER BY image_index", (result['id'],))
                             actual_images = [f"/api/image/{result['id']}/{row[0]}" for row in cursor.fetchall()]
 
+                    # 生成所有网站的链接
+                    weidian_id = None
+                    if product_info and product_info.get('product_url'):
+                        import re
+                        match = re.search(r'itemID=(\d+)', product_info['product_url'])
+                        if match:
+                            weidian_id = match.group(1)
+
+                    website_urls = []
+                    if weidian_id:
+                        website_urls = db.generate_website_urls(weidian_id)
+
                     result_data = {
                         'rank': i + 1,
                         'similarity': float(result['similarity']),
@@ -600,7 +612,8 @@ def search_similar():
                             'cnfansUrl': product_info.get('cnfans_url', ''),
                             'acbuyUrl': product_info.get('acbuy_url', ''),
                             'ruleEnabled': product_info.get('ruleEnabled', True) if product_info else True,
-                            'images': actual_images if actual_images else [f"/api/image/{result['id']}/{result['image_index']}"]  # 使用实际图片列表
+                            'images': actual_images if actual_images else [f"/api/image/{result['id']}/{result['image_index']}]",  # 使用实际图片列表
+                            'websiteUrls': website_urls  # 添加所有网站的链接
                         }
                     }
                     processed_results.append(result_data)
@@ -1217,6 +1230,48 @@ def update_website_rotation(config_id):
             return jsonify({'error': '更新失败'}), 500
     except Exception as e:
         logger.error(f"更新网站轮换间隔失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/websites/<int:config_id>/filters', methods=['GET'])
+def get_website_filters(config_id):
+    """获取网站的消息过滤条件"""
+    try:
+        configs = db.get_website_configs()
+        config = next((c for c in configs if c['id'] == config_id), None)
+        if not config:
+            return jsonify({'error': '网站配置不存在'}), 404
+
+        import json
+        filters = json.loads(config.get('message_filters', '[]'))
+        return jsonify({'filters': filters})
+    except Exception as e:
+        logger.error(f"获取网站过滤条件失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/websites/<int:config_id>/filters', methods=['PUT'])
+def update_website_filters(config_id):
+    """更新网站的消息过滤条件"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        data = request.get_json()
+        filters = data.get('filters', [])
+
+        # 验证过滤条件格式
+        for filter_item in filters:
+            if not isinstance(filter_item, dict) or 'filter_type' not in filter_item or 'filter_value' not in filter_item:
+                return jsonify({'error': '过滤条件格式无效'}), 400
+
+        import json
+        filters_json = json.dumps(filters)
+
+        if db.update_website_message_filters(config_id, filters_json):
+            return jsonify({'success': True, 'message': f'已更新 {len(filters)} 个过滤条件'})
+        else:
+            return jsonify({'error': '更新失败'}), 500
+    except Exception as e:
+        logger.error(f"更新网站过滤条件失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/products/<int:product_id>/urls', methods=['GET'])
@@ -3306,8 +3361,9 @@ def stop_bot():
 def get_bot_status():
     """获取Discord机器人全局运行状态"""
     try:
-        # 返回全局机器人运行状态
-        return jsonify({'running': bot_running})
+        # 通过检查是否有活跃的机器人客户端来确定状态，而不依赖内存变量
+        is_running = len(bot_clients) > 0 and any(client.running for client in bot_clients)
+        return jsonify({'running': is_running})
     except Exception as e:
         logger.error(f"获取机器人状态失败: {e}")
         return jsonify({'running': False}), 500

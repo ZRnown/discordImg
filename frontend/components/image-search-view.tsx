@@ -412,53 +412,46 @@ export function ImageSearchView() {
                       </div>
                     </div>
 
-                    {/* 链接显示区域 */}
-                    <div className="flex items-center gap-4">
-                      <div className="flex flex-col gap-1 min-w-[300px]">
-                        <div className="flex items-center gap-1.5">
-                          <Badge className="text-[9px] px-1 py-0 h-4 border-none w-12 justify-center shrink-0 text-white bg-gray-600">
-                            微店
-                          </Badge>
-                          <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
-                            <a href={result.product.weidianUrl} target="_blank" className="font-mono truncate hover:underline text-muted-foreground">
-                              {result.product.weidianUrl}
-                            </a>
-                            <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(result.product.weidianUrl); toast.success("Copied")}}>
-                              <Copy className="h-2.5 w-2.5"/>
-                            </Button>
-                          </div>
-                        </div>
-                        {result.product.cnfansUrl && (
-                          <div className="flex items-center gap-1.5">
-                            <Badge className="text-[9px] px-1 py-0 h-4 border-none w-12 justify-center shrink-0 text-white bg-blue-600">
-                              CNFans
+                    {/* 网站链接网格显示区域 */}
+                    <div className="w-full">
+                      <div className="grid grid-cols-2 gap-1 max-w-md">
+                        {(result.product.websiteUrls || []).slice(0, 8).map((site: any, index: number) => (
+                          <div key={index} className="flex items-center gap-1">
+                            <Badge
+                              className="text-[8px] px-1 py-0 h-3 border-none min-w-[40px] justify-center shrink-0 text-white"
+                              style={{ backgroundColor: site.badge_color || '#6b7280' }}
+                            >
+                              {site.display_name}
                             </Badge>
-                            <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
-                              <a href={result.product.cnfansUrl} target="_blank" className="font-mono truncate hover:underline text-blue-500">
-                                {result.product.cnfansUrl}
+                            <div className="flex-1 bg-muted/30 p-0.5 px-1.5 rounded border text-[9px] flex items-center justify-between overflow-hidden min-w-0">
+                              <a
+                                href={site.url}
+                                target="_blank"
+                                className="truncate hover:underline"
+                                style={{ color: site.badge_color || '#6b7280' }}
+                              >
+                                {site.url}
                               </a>
-                              <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(result.product.cnfansUrl); toast.success("Copied")}}>
-                                <Copy className="h-2.5 w-2.5"/>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-3 w-3 shrink-0"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(site.url)
+                                  toast.success("已复制链接")
+                                }}
+                              >
+                                <Copy className="h-2 w-2"/>
                               </Button>
                             </div>
                           </div>
-                        )}
-                        {result.product.acbuyUrl && (
-                          <div className="flex items-center gap-1.5">
-                            <Badge className="text-[9px] px-1 py-0 h-4 border-none w-12 justify-center shrink-0 text-white bg-purple-600">
-                              ACBuy
-                            </Badge>
-                            <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
-                              <a href={result.product.acbuyUrl} target="_blank" className="font-mono truncate hover:underline text-purple-500">
-                                {result.product.acbuyUrl}
-                              </a>
-                              <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(result.product.acbuyUrl); toast.success("Copied")}}>
-                                <Copy className="h-2.5 w-2.5"/>
-                              </Button>
-                            </div>
-                          </div>
-                        )}
+                        ))}
                       </div>
+                      {(result.product.websiteUrls || []).length > 8 && (
+                        <div className="mt-2 text-xs text-muted-foreground">
+                          还有 {(result.product.websiteUrls || []).length - 8} 个网站链接...
+                        </div>
+                      )}
                     </div>
                   </div>
                 ))}
