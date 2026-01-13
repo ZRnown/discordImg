@@ -612,7 +612,7 @@ def search_similar():
                             'cnfansUrl': product_info.get('cnfans_url', ''),
                             'acbuyUrl': product_info.get('acbuy_url', ''),
                             'ruleEnabled': product_info.get('ruleEnabled', True) if product_info else True,
-                            'images': actual_images if actual_images else [f"/api/image/{result['id']}/{result['image_index']}]",  # 使用实际图片列表
+                            'images': actual_images if actual_images else [f"/api/image/{result['id']}/{result['image_index']}"],  # 使用实际图片列表
                             'websiteUrls': website_urls  # 添加所有网站的链接
                         }
                     }
