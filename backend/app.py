@@ -63,8 +63,8 @@ def load_system_config():
             os.environ['DISCORD_CHANNEL_ID'] = discord_channel_id
 
         func_logger.info("系统配置已从数据库加载")
-        func_logger.info(f"下载线程: {DOWNLOAD_THREADS}")
-        func_logger.info(f"特征提取线程: {FEATURE_EXTRACT_THREADS}")
+        func_logger.info(f"下载线程: {config.DOWNLOAD_THREADS}")
+        func_logger.info(f"特征提取线程: {config.FEATURE_EXTRACT_THREADS}")
         func_logger.info(f"Discord相似度阈值: {config.DISCORD_SIMILARITY_THRESHOLD} ({config.DISCORD_SIMILARITY_THRESHOLD*100:.0f}%)")
         func_logger.info(f"全局回复延迟设置为: {config.GLOBAL_REPLY_MIN_DELAY}-{config.GLOBAL_REPLY_MAX_DELAY}秒")
         func_logger.info(f"Discord频道ID: {discord_channel_id or '未设置(监听所有频道)'}")
@@ -737,7 +737,7 @@ def scrape_product():
             # 第一步：多线程特征提取
             logger.info("开始多线程特征提取...")
             features_list = []
-            max_workers = min(FEATURE_EXTRACT_THREADS, len(saved_image_paths))
+            max_workers = min(config.FEATURE_EXTRACT_THREADS, len(saved_image_paths))
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
                 # 提交特征提取任务
@@ -3498,10 +3498,16 @@ def control_shop_scrape():
 @app.route('/api/scrape/batch', methods=['POST'])
 def batch_scrape_products():
     """批量抓取多个商品（高性能多线程版本）"""
-    logger.info("🚀 batch_scrape_products 函数被调用")
+    # 在函数开始就导入所有需要的模块，避免变量作用域问题
+    import concurrent.futures
+    import time
+    import threading
+
+    # 确保threading变量在函数作用域内可用
+    threading = threading
+
     try:
         data = request.get_json()
-        logger.info(f"📦 接收到的数据: {data}")
         if not data or not data.get('productIds'):
             return jsonify({'error': '缺少productIds参数'}), 400
 
@@ -3510,22 +3516,14 @@ def batch_scrape_products():
             return jsonify({'error': 'productIds必须是非空数组'}), 400
 
         # ====================================================
-        # 修复：这里之前直接使用了未定义的 SCRAPE_THREADS，改为从 config 获取
+        # 修复：确保SCRAPE_THREADS从config正确获取
         # ====================================================
-        try:
-            max_threads = config.SCRAPE_THREADS
-        except AttributeError:
-            max_threads = 5 # 默认兜底值
+        max_threads = getattr(config, 'SCRAPE_THREADS', 10)
 
         # 创建停止事件用于优雅关闭
         shutdown_event = threading.Event()
 
-        logger.info(f"开始批量抓取 {len(product_ids)} 个商品，使用 {max_threads} 个线程")
-
-        # 创建批量处理任务
-        import concurrent.futures
-        import time
-        import threading
+        logger.info(f"✅ 开始批量抓取 {len(product_ids)} 个商品，使用 {max_threads} 个线程")
 
         results = {
             'total': len(product_ids),
@@ -3682,9 +3680,9 @@ def batch_scrape_products():
 
     except Exception as e:
         logger.error(f"批量抓取失败: {e}")
+        logger.error(f"错误发生在: {e.__class__.__name__}")
         import traceback
-        logger.error(f"详细错误信息: {traceback.format_exc()}")
-        logger.error(f"错误类型: {type(e).__name__}")
+        logger.error(f"完整堆栈:\n{traceback.format_exc()}")
         return jsonify({'error': f'批量抓取失败: {str(e)}'}), 500
 
 @app.route('/api/scrape/shop/status', methods=['GET'])
@@ -4193,7 +4191,7 @@ def process_products_multithreaded(products_list):
     processed_products = []
 
     # 获取配置的线程数
-    max_workers = DOWNLOAD_THREADS
+    max_workers = config.DOWNLOAD_THREADS
 
     logger.info(f'开始多线程处理 {len(products_list)} 个商品，使用 {max_workers} 个线程')
 
@@ -4226,7 +4224,7 @@ def process_page_multithreaded(products_list, page_num):
     processed_count = 0
 
     # 获取配置的线程数
-    max_workers = DOWNLOAD_THREADS
+    max_workers = config.DOWNLOAD_THREADS
 
     logger.info(f'第 {page_num} 页开始多线程处理 {len(products_list)} 个商品')
 
@@ -4283,240 +4281,23 @@ def process_page_multithreaded(products_list, page_num):
     return processed_count
 
 def save_product_images(product_id, image_urls):
-    """保存商品图片并提取特征向量（优化版本 - 减少并发避免内存爆炸）"""
-    try:
-        # 使用线程池而不是进程池，避免YOLO模型重复加载
-        # 降低并发数，从4个减少到2个，避免内存爆炸
-        import concurrent.futures
-
-        max_workers = min(2, len(image_urls))  # 最多2个并发线程
-        logger.info(f"开始处理 {len(image_urls)} 张图片，使用 {max_workers} 个线程")
-
-        def process_single_image(args):
-            """处理单张图片：下载 -> 保存 -> 提取特征 -> 索引"""
-            index, image_url = args
-            try:
-                # 下载图片（使用更短的超时时间）
-                response = requests.get(image_url, timeout=5, proxies={'http': None, 'https': None})
-                if response.status_code != 200:
-                    return None
-
-                # 生成唯一文件名，避免并发冲突
-                timestamp = int(time.time() * 1000000)  # 微秒级时间戳
-                image_filename = f"{product_id}_{index}_{timestamp}.jpg"
-                image_path = os.path.join('data', 'images', image_filename)
-
-                # 确保目录存在
-                os.makedirs(os.path.dirname(image_path), exist_ok=True)
-
-                # 直接写入文件，避免内存占用过多
-                with open(image_path, 'wb') as f:
-                    f.write(response.content)
-
-                # 验证图片完整性
-                if os.path.getsize(image_path) == 0:
-                    os.remove(image_path)
-                    return None
-
-                # 提取特征（这里会调用YOLO裁剪和DINOv2特征提取）
-                extractor = get_global_feature_extractor()
-                if extractor is None:
-                    logger.error("特征提取器未初始化")
-                    return None
-                features = extractor.extract_feature(image_path)
-
-                if features is None:
-                    # 特征提取失败，删除文件
-                    os.remove(image_path)
-                    return None
-
-                # === 新增：向量去重检查 ===
-                # 检查与该商品现有图片的相似度
-                if existing_features:
-                    import numpy as np
-                    for existing_feature_json in existing_features:
-                        try:
-                            # 反序列化现有向量
-                            existing_features_array = json.loads(existing_feature_json)
-                            existing_features_array = np.array(existing_features_array, dtype='float32')
-
-                            # 计算余弦相似度
-                            dot_product = np.dot(features, existing_features_array)
-                            norm_new = np.linalg.norm(features)
-                            norm_existing = np.linalg.norm(existing_features_array)
-
-                            if norm_new > 0 and norm_existing > 0:
-                                similarity = dot_product / (norm_new * norm_existing)
-                                if similarity > 0.95:  # 相似度阈值95%
-                                    logger.info(f'检测到重复图片 (相似度: {similarity:.3f})，跳过: {os.path.basename(image_path)}')
-                                    os.remove(image_path)
-                                    return None
-                        except (json.JSONDecodeError, ValueError, TypeError) as e:
-                            logger.warning(f"解析现有向量失败: {e}")
-                            continue
-
-                # 返回处理结果，让主进程统一处理数据库操作
-                return {
-                    'image_path': image_path,
-                    'features': features,
-                    'index': index
-                }
-
-            except Exception as e:
-                logger.error(f'处理图片失败 {image_url}: {e}')
-                return None
-
-        # 获取该商品已有的图片向量，用于去重
-        existing_features = []
-        try:
-            existing_images = db.get_product_images(product_id)
-            for img_record in existing_images:
-                if img_record.get('features'):
-                    existing_features.append(img_record['features'])
-            logger.info(f'商品 {product_id} 已存在 {len(existing_features)} 张图片的向量数据')
-        except Exception as e:
-            logger.warning(f'获取商品现有向量失败: {e}')
-
-        # 使用线程池处理图片下载和特征提取（单例YOLO避免重复加载）
-        # 降低并发数避免内存爆炸
-        max_workers = min(2, len(image_urls))  # 最多2个并发线程
-
-        logger.info(f'商品 {product_id} 开始多线程处理 {len(image_urls)} 张图片，使用 {max_workers} 个线程')
-
-        def process_single_image_with_deduplication(args):
-            """处理单张图片：下载 -> 保存 -> 提取特征 -> 向量去重"""
-            index, image_url = args
-            try:
-                # 下载图片（使用更短的超时时间）
-                response = requests.get(image_url, timeout=5, proxies={'http': None, 'https': None})
-                if response.status_code != 200:
-                    return None
-
-                # 生成唯一文件名，避免并发冲突
-                timestamp = int(time.time() * 1000000)  # 微秒级时间戳
-                image_filename = f"{product_id}_{index}_{timestamp}.jpg"
-                image_path = os.path.join('data', 'images', image_filename)
-
-                # 确保目录存在
-                os.makedirs(os.path.dirname(image_path), exist_ok=True)
-
-                # 直接写入文件，避免内存占用过多
-                with open(image_path, 'wb') as f:
-                    f.write(response.content)
-
-                # 验证图片完整性
-                if os.path.getsize(image_path) == 0:
-                    os.remove(image_path)
-                    return None
-
-                # 提取特征（这里会调用YOLO裁剪和DINOv2特征提取）
-                extractor = get_global_feature_extractor()
-                if extractor is None:
-                    logger.error("特征提取器未初始化")
-                    return None
-                features = extractor.extract_feature(image_path)
-
-                if features is None:
-                    # 特征提取失败，删除文件
-                    os.remove(image_path)
-                    return None
-
-                # 向量去重：检查与该商品现有图片的相似度
-                if existing_features:
-                    import numpy as np
-                    for existing_feature in existing_features:
-                        # 计算余弦相似度
-                        similarity = np.dot(features, existing_feature) / (np.linalg.norm(features) * np.linalg.norm(existing_feature))
-                        if similarity > 0.95:  # 相似度阈值95%
-                            logger.info(f'检测到重复图片 (相似度: {similarity:.3f})，跳过: {os.path.basename(image_path)}')
-                            os.remove(image_path)
-                            return None
-
-                # 返回处理结果，让主进程统一处理数据库操作
-                return {
-                    'image_path': image_path,
-                    'features': features,
-                    'index': index
-                }
-
-            except Exception as e:
-                logger.error(f'处理图片失败 {image_url}: {e}')
-                return None
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # 提交任务 - 移除图片数量限制
-            image_tasks = [(index, url) for index, url in enumerate(image_urls) if url]
-            futures = [executor.submit(process_single_image_with_deduplication, task) for task in image_tasks]
-
-            # 收集结果，支持优雅关闭
-            processed_results = []
-        try:
-            for future in concurrent.futures.as_completed(futures, timeout=30):  # 30秒超时
-                # 检查是否收到关闭信号
-                if shutdown_event and shutdown_event.is_set():
-                    logger.info("检测到关闭信号，停止图片处理...")
-                    executor.shutdown(wait=False)
-                    break
-
-                result = future.result()
-                if result is not None:
-                    processed_results.append(result)
-        except concurrent.futures.TimeoutError:
-            logger.warning("图片处理超时，强制关闭线程池")
-            executor.shutdown(wait=False)
-        except Exception as e:
-            logger.error(f"图片处理过程中出错: {e}")
-            executor.shutdown(wait=False)
-
-        # 在主进程中统一处理数据库操作，避免进程间数据库连接问题
-        processed_images = 0
-        for result in processed_results:
-            try:
-                # 插入图片记录到数据库（包含特征向量）
-                img_db_id = db.insert_image_record(product_id, result['image_path'], result['index'], result['features'])
-
-                # 添加到FAISS索引
-                try:
-                    from vector_engine import get_vector_engine
-                except ImportError:
-                    from .vector_engine import get_vector_engine
-                engine = get_vector_engine()
-                engine.add_vector(img_db_id, result['features'])
-
-                processed_images += 1
-                logger.debug(f'图片入库完成: {os.path.basename(result["image_path"])} (ID: {img_db_id})')
-
-            except Exception as e:
-                logger.error(f'图片入库失败 {result["image_path"]}: {e}')
-                # 清理失败的文件
-                try:
-                    os.remove(result['image_path'])
-                except:
-                    pass
-
-        # 保存FAISS索引（批量保存更高效）
-        if processed_images > 0:
-            try:
-                from vector_engine import get_vector_engine
-            except ImportError:
-                from .vector_engine import get_vector_engine
-            engine = get_vector_engine()
-            engine.save()
-
-        logger.info(f'商品 {product_id} 图片处理完成，共处理 {processed_images}/{len(image_urls)} 张图片')
-
-    except Exception as e:
-        logger.error(f'保存商品图片失败: {e}')
+    """
+    统一的图片保存入口（向后兼容的别名）
+    实际调用 save_product_images_unified
+    """
+    return save_product_images_unified(product_id, image_urls)
 
 def save_product_images_unified(product_id, image_urls, max_workers=None, shutdown_event=None):
-    """统一的批量图片处理函数（优化版：延迟FAISS保存，提高性能）"""
+    """
+    统一的批量图片处理函数（优化版：延迟FAISS保存，提高性能）
+    """
     if not image_urls:
         return 0
 
     try:
         import concurrent.futures
 
-        # 动态决定线程数
+        # 动态决定线程数 (默认使用配置，但允许覆盖)
         if max_workers is None:
             max_workers = min(config.DOWNLOAD_THREADS, len(image_urls))
 
@@ -4529,7 +4310,7 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
         processed_images = 0
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # 提交任务（批量处理时不立即保存FAISS，延迟到最后）
+            # 提交任务：注意这里 save_faiss_immediately=False，因为我们要批量保存
             futures = [executor.submit(process_and_save_image_core, product_id, url, idx, existing_feats, save_faiss_immediately=False)
                        for idx, url in enumerate(image_urls)]
 
@@ -4543,19 +4324,21 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
                         break
 
                     result = future.result()
-                    if result and result['success']:
+                    if result and result.get('success'):
                         processed_images += 1  # 计数成功处理的图片
 
                 except Exception as e:
                     logger.error(f'一个图片处理失败: {e}')
 
-        # 批量操作结束后统一保存 FAISS（性能优化）
-        try:
-            from vector_engine import get_vector_engine
-            get_vector_engine().save()
-            logger.info(f"FAISS索引已保存，共处理 {processed_images} 张图片")
-        except Exception as faiss_err:
-            logger.error(f"FAISS保存失败: {faiss_err}")
+        # 批量操作结束后统一保存 FAISS（性能极大提升）
+        if processed_images > 0:
+            try:
+                from vector_engine import get_vector_engine
+                get_vector_engine().save()
+                logger.info(f"FAISS索引已批量保存，本次新增 {processed_images} 张图片")
+
+            except Exception as faiss_err:
+                logger.error(f"FAISS保存失败: {faiss_err}")
 
         logger.info(f"商品 {product_id} 成功处理 {processed_images}/{len(image_urls)} 张图片")
         return processed_images
@@ -4564,13 +4347,8 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
         logger.error(f"批量保存商品 {product_id} 图片失败: {e}")
         return 0
 
-# 向后兼容的别名
-def save_product_images(product_id, image_urls):
-    """向后兼容的函数名"""
-    return save_product_images_unified(product_id, image_urls)
-
 def save_product_images_multithreaded(product_id, image_urls):
-    """多线程版本的图片保存函数（向后兼容）"""
+    """向后兼容的别名"""
     return save_product_images_unified(product_id, image_urls)
 
 if __name__ == '__main__':

@@ -399,8 +399,13 @@ class Database:
         """获取 SQLite 数据库连接的上下文管理器"""
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row  # 启用行工厂
+            conn = sqlite3.connect(self.db_path, timeout=30.0) # 增加超时时间
+            conn.row_factory = sqlite3.Row
+
+            # 关键优化：开启 WAL 模式
+            conn.execute('PRAGMA journal_mode=WAL;')
+            conn.execute('PRAGMA synchronous=NORMAL;') # 稍微降低安全性以换取性能
+
             yield conn
         except Exception as e:
             logger.error("数据库连接失败: %s", str(e))

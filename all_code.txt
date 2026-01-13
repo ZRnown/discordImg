@@ -9456,10 +9456,11 @@ class Config:
     YOLO_MODEL_PATH = 'yolov8s-world.pt'
     USE_YOLO_CROP = True
 
-    # === 多线程 ===
-    SCRAPE_THREADS = 10  # 提高并发数
-    DOWNLOAD_THREADS = 8  # 图片下载线程
-    FEATURE_EXTRACT_THREADS = 4  # AI 线程 (不要太大，否则 CPU 爆满)
+    # === 多线程配置 (修改这里) ===
+    # 既然你要求起码10线程，这里直接设为10
+    SCRAPE_THREADS = int(os.getenv('SCRAPE_THREADS', '10'))
+    DOWNLOAD_THREADS = int(os.getenv('DOWNLOAD_THREADS', '8'))
+    FEATURE_EXTRACT_THREADS = int(os.getenv('FEATURE_EXTRACT_THREADS', '4'))
 
     # === FAISS ===
     FAISS_HNSW_M = 64
@@ -17880,6 +17881,14 @@ def control_shop_scrape():
 @app.route('/api/scrape/batch', methods=['POST'])
 def batch_scrape_products():
     """批量抓取多个商品（高性能多线程版本）"""
+    # 在函数开始就导入所有需要的模块，避免变量作用域问题
+    import concurrent.futures
+    import time
+    import threading
+
+    # 确保threading变量在函数作用域内可用
+    threading = threading
+
     try:
         data = request.get_json()
         if not data or not data.get('productIds'):
@@ -17889,22 +17898,15 @@ def batch_scrape_products():
         if not isinstance(product_ids, list) or len(product_ids) == 0:
             return jsonify({'error': 'productIds必须是非空数组'}), 400
 
-        # 使用环境变量配置的线程数
-        try:
-            from config import config
-            max_threads = config.SCRAPE_THREADS
-        except:
-            max_threads = 2
+        # ====================================================
+        # 修复：确保SCRAPE_THREADS从config正确获取
+        # ====================================================
+        max_threads = getattr(config, 'SCRAPE_THREADS', 10)
 
         # 创建停止事件用于优雅关闭
         shutdown_event = threading.Event()
 
-        logger.info(f"开始批量抓取 {len(product_ids)} 个商品，使用 {max_threads} 个线程")
-
-        # 创建批量处理任务
-        import concurrent.futures
-        import time
-        import threading
+        logger.info(f"✅ 开始批量抓取 {len(product_ids)} 个商品，使用 {max_threads} 个线程")
 
         results = {
             'total': len(product_ids),
@@ -18061,8 +18063,9 @@ def batch_scrape_products():
 
     except Exception as e:
         logger.error(f"批量抓取失败: {e}")
+        logger.error(f"错误发生在: {e.__class__.__name__}")
         import traceback
-        logger.error(f"详细错误信息: {traceback.format_exc()}")
+        logger.error(f"完整堆栈:\n{traceback.format_exc()}")
         return jsonify({'error': f'批量抓取失败: {str(e)}'}), 500
 
 @app.route('/api/scrape/shop/status', methods=['GET'])

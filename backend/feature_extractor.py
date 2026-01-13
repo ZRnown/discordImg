@@ -17,34 +17,9 @@ import hashlib
 
 logger = logging.getLogger(__name__)
 
-# === 关键修改：更严格的单例模式 ===
-class FeatureExtractorSingleton:
-    _instance = None
-    _lock = threading.Lock()
-    _init_done = False  # 标记是否初始化完成
-
-    @classmethod
-    def get_instance(cls):
-        # 第一重检查：如果已经有实例，直接返回，不加锁，速度快
-        if cls._instance is not None:
-            return cls._instance
-        # 加锁进行初始化
-        with cls._lock:
-            # 第二重检查：防止多个线程同时通过了第一重检查
-            if cls._instance is None:
-                logger.info("🚀 [系统] 正在初始化 AI 模型 (全局单例)...")
-                try:
-                    instance = DINOv2FeatureExtractor()
-                    cls._instance = instance
-                    cls._init_done = True
-                    logger.info("✅ [系统] AI 模型初始化完成")
-                except Exception as e:
-                    logger.error(f"❌ [系统] AI 模型初始化失败: {e}")
-                    cls._instance = None
-        return cls._instance
-
-def get_feature_extractor():
-    return FeatureExtractorSingleton.get_instance()
+# 全局单例变量
+_global_extractor = None
+_extractor_lock = threading.Lock()
 
 class DINOv2FeatureExtractor:
     """
@@ -504,11 +479,21 @@ class FeatureExtractor(DINOv2FeatureExtractor):
     """向后兼容的别名"""
     pass
 
-# 单例模式获取实例
-_feature_extractor = None
+def get_feature_extractor() -> 'DINOv2FeatureExtractor':
+    """全局获取特征提取器实例（线程安全单例）"""
+    global _global_extractor
 
-def get_feature_extractor() -> DINOv2FeatureExtractor:
-    global _feature_extractor
-    if _feature_extractor is None:
-        _feature_extractor = DINOv2FeatureExtractor()
-    return _feature_extractor
+    if _global_extractor is not None:
+        return _global_extractor
+
+    with _extractor_lock:
+        # 双重检查锁定
+        if _global_extractor is None:
+            logger.info("🚀 [系统] 初始化 AI 模型 (DINOv2 + YOLO)...")
+            try:
+                _global_extractor = DINOv2FeatureExtractor()
+                logger.info("✅ [系统] AI 模型初始化完成")
+            except Exception as e:
+                logger.error(f"❌ [系统] AI 模型初始化失败: {e}")
+                raise e
+        return _global_extractor
