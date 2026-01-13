@@ -1124,9 +1124,13 @@ def delete_website_config(config_id):
 
 @app.route('/api/websites/<int:config_id>/channels', methods=['GET'])
 def get_website_channels(config_id):
-    """获取网站绑定的频道"""
+    """获取网站绑定的频道（按用户过滤）"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
     try:
-        channels = db.get_website_channel_bindings(config_id)
+        current_user = get_current_user()
+        channels = db.get_website_channel_bindings(config_id, current_user['id'])
         return jsonify({'channels': channels})
     except Exception as e:
         logger.error(f"获取网站频道失败: {e}")
@@ -1142,7 +1146,8 @@ def add_website_channel(config_id):
         if not channel_id:
             return jsonify({'error': '频道ID不能为空'}), 400
 
-        if db.add_website_channel_binding(config_id, channel_id):
+        current_user = get_current_user()
+        if db.add_website_channel_binding(config_id, channel_id, current_user['id']):
             return jsonify({'success': True, 'message': '频道绑定已添加'})
         else:
             return jsonify({'error': '添加失败'}), 500
@@ -1154,7 +1159,8 @@ def add_website_channel(config_id):
 def remove_website_channel(config_id, channel_id):
     """移除网站频道绑定"""
     try:
-        if db.remove_website_channel_binding(config_id, channel_id):
+        current_user = get_current_user()
+        if db.remove_website_channel_binding(config_id, channel_id, current_user['id']):
             return jsonify({'success': True, 'message': '频道绑定已移除'})
         else:
             return jsonify({'error': '移除失败'}), 500
@@ -1166,9 +1172,13 @@ def remove_website_channel(config_id, channel_id):
 
 @app.route('/api/websites/<int:config_id>/accounts', methods=['GET'])
 def get_website_accounts(config_id):
-    """获取网站绑定的账号"""
+    """获取网站绑定的账号（按用户过滤）"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
     try:
-        accounts = db.get_website_account_bindings(config_id)
+        current_user = get_current_user()
+        accounts = db.get_website_account_bindings(config_id, current_user['id'])
         return jsonify({'accounts': accounts})
     except Exception as e:
         logger.error(f"获取网站账号绑定失败: {e}")
@@ -1205,7 +1215,7 @@ def add_website_account(config_id):
             if current_user['role'] != 'admin' and account_owner_id != current_user['id']:
                 return jsonify({'error': '您无权操作此账号'}), 403
 
-        if db.add_website_account_binding(config_id, account_id, role):
+        if db.add_website_account_binding(config_id, account_id, role, current_user['id']):
             return jsonify({'success': True, 'message': f'账号绑定成功，角色: {role}'})
         else:
             return jsonify({'error': '绑定失败'}), 500
@@ -1232,7 +1242,7 @@ def remove_website_account(config_id, account_id):
                 if current_user['role'] != 'admin' and account_owner_id != current_user['id']:
                     return jsonify({'error': '您无权操作此账号'}), 403
 
-        if db.remove_website_account_binding(config_id, account_id):
+        if db.remove_website_account_binding(config_id, account_id, current_user['id']):
             return jsonify({'success': True, 'message': '账号绑定已移除'})
         else:
             return jsonify({'error': '移除失败'}), 500
@@ -2281,7 +2291,10 @@ def verify_all_accounts():
 
 @app.route('/api/accounts/bulk-status', methods=['POST'])
 def bulk_update_status():
-    """批量开启或停止所有账号"""
+    """批量开启或停止用户自己的账号"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
     try:
         data = request.get_json()
         if data is None:
@@ -2291,6 +2304,8 @@ def bulk_update_status():
         if new_status not in ['online', 'offline']:
             return jsonify({'error': 'Invalid status. Must be "online" or "offline"'}), 400
 
+        current_user = get_current_user()
+
         with db.get_connection() as conn:
             cursor = conn.cursor()
 
@@ -2298,12 +2313,14 @@ def bulk_update_status():
                 cursor.execute("""
                     UPDATE discord_accounts
                     SET status = 'online', last_active = ?
-                """, (datetime.now(),))
+                    WHERE user_id = ?
+                """, (datetime.now(), current_user['id']))
             else:
                 cursor.execute("""
                     UPDATE discord_accounts
                     SET status = 'offline'
-                """)
+                    WHERE user_id = ?
+                """, (current_user['id'],))
 
             updated_count = cursor.rowcount
             conn.commit()

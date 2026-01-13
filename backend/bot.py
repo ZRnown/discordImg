@@ -191,6 +191,11 @@ class DiscordBotClient(discord.Client):
             except ImportError:
                 from .database import db
 
+            # 获取用户设置以确定延迟时间
+            user_settings = await asyncio.get_event_loop().run_in_executor(None, db.get_user_settings, self.user_id)
+            min_delay = user_settings.get('global_reply_min_delay', 3.0)
+            max_delay = user_settings.get('global_reply_max_delay', 8.0)
+
             # 生成回复内容
             response_content = self._generate_reply_content(product, message.channel.id, custom_reply)
 
@@ -250,10 +255,16 @@ class DiscordBotClient(discord.Client):
 
                     if target_channel:
                         async with target_channel.typing():
-                            await asyncio.sleep(random.uniform(config.GLOBAL_REPLY_MIN_DELAY, config.GLOBAL_REPLY_MAX_DELAY))
+                            await asyncio.sleep(random.uniform(min_delay, max_delay))
 
-                        await target_channel.send(response_content)
-                        logger.info(f"✅ [回复成功] 账号: {target_client.user.name} | 商品ID: {product.get('id')}")
+                        # 总是尝试回复原消息，而不是直接发送
+                        try:
+                            await message.reply(response_content)
+                            logger.info(f"✅ [回复成功] 账号: {target_client.user.name} | 商品ID: {product.get('id')}")
+                        except Exception as reply_error:
+                            logger.warning(f"回复消息失败，改用直接发送: {reply_error}")
+                            await target_channel.send(response_content)
+                            logger.info(f"✅ [发送成功] 账号: {target_client.user.name} | 商品ID: {product.get('id')}")
                     else:
                         # 这种情况是：选中的机器人不在这个频道/服务器里
                         logger.warning(f"❌ 选中的账号 {target_client.user.name} 无法访问频道，回退到直接回复")

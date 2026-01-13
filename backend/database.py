@@ -343,6 +343,7 @@ class Database:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     website_id INTEGER NOT NULL,
                     account_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
                     role TEXT NOT NULL CHECK (role IN ('listener', 'sender', 'both')),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE,
@@ -451,6 +452,31 @@ class Database:
                 logger.info("已为缺少店铺名称的商品设置默认值")
             except Exception as e:
                 logger.warning(f"设置默认店铺名称失败: {e}")
+
+            # 为 website_account_bindings 表添加 user_id 字段并迁移数据
+            try:
+                # 检查是否已有 user_id 字段
+                cursor.execute("PRAGMA table_info(website_account_bindings)")
+                columns = cursor.fetchall()
+                has_user_id = any(col['name'] == 'user_id' for col in columns)
+
+                if not has_user_id:
+                    # 添加 user_id 字段
+                    cursor.execute('ALTER TABLE website_account_bindings ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0')
+
+                    # 为现有记录设置 user_id（从 discord_accounts 表获取）
+                    cursor.execute('''
+                        UPDATE website_account_bindings
+                        SET user_id = (
+                            SELECT da.user_id
+                            FROM discord_accounts da
+                            WHERE da.id = website_account_bindings.account_id
+                        )
+                        WHERE user_id = 0
+                    ''')
+                    logger.info("已为 website_account_bindings 表添加 user_id 字段并迁移数据")
+            except Exception as e:
+                logger.warning(f"为 website_account_bindings 添加 user_id 字段失败: {e}")
 
             conn.commit()
 
@@ -1401,45 +1427,52 @@ class Database:
             logger.error(f"删除网站配置失败: {e}")
             return False
 
-    def get_website_channel_bindings(self, website_id: int) -> List[str]:
-        """获取网站绑定的频道列表"""
+    def get_website_channel_bindings(self, website_id: int, user_id: int = None) -> List[str]:
+        """获取网站绑定的频道列表（可选按用户过滤）"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute('''
-                    SELECT channel_id FROM website_channel_bindings
-                    WHERE website_id = ?
-                    ORDER BY created_at
-                ''', (website_id,))
+                if user_id:
+                    cursor.execute('''
+                        SELECT channel_id FROM website_channel_bindings
+                        WHERE website_id = ? AND user_id = ?
+                        ORDER BY created_at
+                    ''', (website_id, user_id))
+                else:
+                    cursor.execute('''
+                        SELECT channel_id FROM website_channel_bindings
+                        WHERE website_id = ?
+                        ORDER BY created_at
+                    ''', (website_id,))
                 return [row[0] for row in cursor.fetchall()]
         except Exception as e:
             logger.error(f"获取网站频道绑定失败: {e}")
             return []
 
-    def add_website_channel_binding(self, website_id: int, channel_id: str) -> bool:
+    def add_website_channel_binding(self, website_id: int, channel_id: str, user_id: int) -> bool:
         """添加网站频道绑定"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    INSERT OR IGNORE INTO website_channel_bindings (website_id, channel_id)
-                    VALUES (?, ?)
-                ''', (website_id, channel_id))
+                    INSERT OR IGNORE INTO website_channel_bindings (website_id, channel_id, user_id)
+                    VALUES (?, ?, ?)
+                ''', (website_id, channel_id, user_id))
                 conn.commit()
                 return cursor.rowcount > 0
         except Exception as e:
             logger.error(f"添加网站频道绑定失败: {e}")
             return False
 
-    def remove_website_channel_binding(self, website_id: int, channel_id: str) -> bool:
-        """移除网站频道绑定"""
+    def remove_website_channel_binding(self, website_id: int, channel_id: str, user_id: int) -> bool:
+        """移除网站频道绑定（按用户过滤）"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     DELETE FROM website_channel_bindings
-                    WHERE website_id = ? AND channel_id = ?
-                ''', (website_id, channel_id))
+                    WHERE website_id = ? AND channel_id = ? AND user_id = ?
+                ''', (website_id, channel_id, user_id))
                 conn.commit()
                 return cursor.rowcount > 0
         except Exception as e:
@@ -1473,50 +1506,60 @@ class Database:
 
     # ===== 网站账号绑定方法 =====
 
-    def add_website_account_binding(self, website_id: int, account_id: int, role: str) -> bool:
+    def add_website_account_binding(self, website_id: int, account_id: int, role: str, user_id: int) -> bool:
         """添加网站账号绑定"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT OR REPLACE INTO website_account_bindings
-                    (website_id, account_id, role)
-                    VALUES (?, ?, ?)
-                ''', (website_id, account_id, role))
+                    (website_id, account_id, role, user_id)
+                    VALUES (?, ?, ?, ?)
+                ''', (website_id, account_id, role, user_id))
                 conn.commit()
                 return True
         except Exception as e:
             logger.error(f"添加网站账号绑定失败: {e}")
             return False
 
-    def remove_website_account_binding(self, website_id: int, account_id: int) -> bool:
-        """移除网站账号绑定"""
+    def remove_website_account_binding(self, website_id: int, account_id: int, user_id: int) -> bool:
+        """移除网站账号绑定（按用户过滤）"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     DELETE FROM website_account_bindings
-                    WHERE website_id = ? AND account_id = ?
-                ''', (website_id, account_id))
+                    WHERE website_id = ? AND account_id = ? AND user_id = ?
+                ''', (website_id, account_id, user_id))
                 conn.commit()
                 return cursor.rowcount > 0
         except Exception as e:
             logger.error(f"移除网站账号绑定失败: {e}")
             return False
 
-    def get_website_account_bindings(self, website_id: int) -> List[Dict]:
-        """获取网站的所有账号绑定"""
+    def get_website_account_bindings(self, website_id: int, user_id: int = None) -> List[Dict]:
+        """获取网站的所有账号绑定（可选按用户过滤）"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute('''
-                    SELECT wab.id, wab.account_id, wab.role, wab.created_at,
-                           da.username, da.token, da.status
-                    FROM website_account_bindings wab
-                    JOIN discord_accounts da ON wab.account_id = da.id
-                    WHERE wab.website_id = ?
-                    ORDER BY wab.created_at
-                ''', (website_id,))
+                if user_id:
+                    cursor.execute('''
+                        SELECT wab.id, wab.account_id, wab.role, wab.created_at,
+                               da.username, da.token, da.status
+                        FROM website_account_bindings wab
+                        JOIN discord_accounts da ON wab.account_id = da.id
+                        WHERE wab.website_id = ? AND wab.user_id = ?
+                        ORDER BY wab.created_at
+                    ''', (website_id, user_id))
+                else:
+                    cursor.execute('''
+                        SELECT wab.id, wab.account_id, wab.role, wab.created_at,
+                               da.username, da.token, da.status
+                        FROM website_account_bindings wab
+                        JOIN discord_accounts da ON wab.account_id = da.id
+                        WHERE wab.website_id = ?
+                        ORDER BY wab.created_at
+                    ''', (website_id,))
                 return [dict(row) for row in cursor.fetchall()]
         except Exception as e:
             logger.error(f"获取网站账号绑定失败: {e}")
