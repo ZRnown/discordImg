@@ -4212,7 +4212,9 @@ def scrape_shop_products(shop_id):
         try:
             # API 请求商品列表
             url = f"https://thor.weidian.com/decorate/shopDetail.tab.getItemList/1.0"
-                param_encoded = quote(f'{{"shopId":"{shop_id}","tabId":{tab_id},"sortOrder":"desc","offset":{offset},"limit":{limit},"from":"h5","showItemTag":true}}')
+            param_encoded = quote(
+                f'{{"shopId":"{shop_id}","tabId":{tab_id},"sortOrder":"desc","offset":{offset},"limit":{limit},"from":"h5","showItemTag":true}}'
+            )
             full_url = f"{url}?param={param_encoded}&wdtoken=8ea9315c&_={int(time.time()*1000)}"
 
             response = scraper.session.get(full_url, timeout=10)
@@ -4222,14 +4224,14 @@ def scrape_shop_products(shop_id):
 
             data = response.json()
             if data.get('status', {}).get('code') != 0:
-                    error_code = data.get('status', {}).get('code')
-                    error_message = data.get('status', {}).get('message', '')
-                    logger.warning(f'API响应状态码不为0: 代码={error_code}, 消息={error_message}')
+                error_code = data.get('status', {}).get('code')
+                error_message = data.get('status', {}).get('message', '')
+                logger.warning(f'API响应状态码不为0: 代码={error_code}, 消息={error_message}')
 
-                    # 如果是参数错误（code=1000），可能是达到分页上限，停止抓取
-                    if error_code == 1000:
-                        logger.info(f'检测到参数错误(code=1000)，可能是达到微店API分页上限({offset})，停止抓取')
-                        break
+                # 如果是参数错误（code=1000），可能是达到分页上限，停止抓取
+                if error_code == 1000:
+                    logger.info(f'检测到参数错误(code=1000)，可能是达到微店API分页上限({offset})，停止抓取')
+                    break
 
                 break
 
@@ -4243,40 +4245,40 @@ def scrape_shop_products(shop_id):
                 logger.info('商品列表为空，收集完成')
                 break
 
-                # 添加调试信息，查看API响应详情
-                logger.info(f'API响应调试 - tab:{tab_id}, 页码:{page_count + 1}, offset:{offset}, hasData:{result.get("hasData")}, totalItems:{len(items)}')
-                if 'totalCount' in result:
-                    logger.info(f'API响应调试 - 服务器报告总数: {result.get("totalCount")}')
-                if len(items) > 0:
-                    logger.info(f'API响应调试 - 第一商品ID: {items[0].get("itemId", "unknown")}')
+            # 添加调试信息，查看API响应详情
+            logger.info(f'API响应调试 - tab:{tab_id}, 页码:{page_count + 1}, offset:{offset}, hasData:{result.get("hasData")}, totalItems:{len(items)}')
+            if 'totalCount' in result:
+                logger.info(f'API响应调试 - 服务器报告总数: {result.get("totalCount")}')
+            if len(items) > 0:
+                logger.info(f'API响应调试 - 第一商品ID: {items[0].get("itemId", "unknown")}')
 
-                # 收集当前页的商品任务 (内存去重 + 数据库去重)
+            # 收集当前页的商品任务 (内存去重 + 数据库去重)
             page_new_count = 0
             for item in items:
                 item_id = item.get('itemId', '')
                 if item_id and item_id not in unique_product_tasks:  # 内存去重
-                        # 检查数据库是否已存在该商品，如果存在则跳过不进行任何抓取
-                        if db.get_product_by_item_id(item_id):
-                            logger.debug(f'商品 {item_id} 已存在于数据库中，跳过')
-                            continue
+                    # 检查数据库是否已存在该商品，如果存在则跳过不进行任何抓取
+                    if db.get_product_by_item_id(item_id):
+                        logger.debug(f'商品 {item_id} 已存在于数据库中，跳过')
+                        continue
 
-                        product_info = {
-                            'item_id': item_id,
-                            'item_url': item.get('itemUrl', ''),
-                            'shop_name': shop_name
-                        }
-                        unique_product_tasks[item_id] = product_info
-                        page_new_count += 1
+                    product_info = {
+                        'item_id': item_id,
+                        'item_url': item.get('itemUrl', ''),
+                        'shop_name': shop_name
+                    }
+                    unique_product_tasks[item_id] = product_info
+                    page_new_count += 1
 
             # === 新增：实时更新收集进度到数据库，让前端能看到 ===
             current_total = len(unique_product_tasks)
             db.update_scrape_status(
                 total=current_total,
-                    message=f'正在收集商品... tab{tab_id}第{page_count + 1}页，已找到 {current_total} 个新商品'
+                message=f'正在收集商品... tab{tab_id}第{page_count + 1}页，已找到 {current_total} 个新商品'
             )
             # =================================================
 
-                logger.info(f'tab{tab_id}第 {page_count + 1} 页收集了 {len(items)} 个商品，其中 {page_new_count} 个新商品，总计 {len(unique_product_tasks)} 个待处理商品')
+            logger.info(f'tab{tab_id}第 {page_count + 1} 页收集了 {len(items)} 个商品，其中 {page_new_count} 个新商品，总计 {len(unique_product_tasks)} 个待处理商品')
 
             page_count += 1
             offset += limit
@@ -4284,7 +4286,7 @@ def scrape_shop_products(shop_id):
 
         except Exception as e:
             logger.error(f'收集商品列表出错: {e}')
-                break
+            break
 
         # 检查是否还有其他tab需要处理，如果没有更多数据就退出
         if not result.get('hasData', False):
