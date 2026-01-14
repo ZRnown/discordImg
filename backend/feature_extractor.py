@@ -1,10 +1,32 @@
 import os
-# === 添加这一行 ===
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
+# === 性能优化配置 ===
+# 允许底层计算库每个任务使用少量核心。
+# 配合上层有限并发（例如 3 个并发任务），在 10 核 CPU 上更容易吃满但不打架。
+# 可通过环境变量 AI_INTRA_THREADS 调整。
+try:
+    from .config import config as _cfg
+except Exception:
+    try:
+        from config import config as _cfg
+    except Exception:
+        _cfg = None
+
+_intra_threads = None
+try:
+    if _cfg is not None and hasattr(_cfg, 'AI_INTRA_THREADS'):
+        _intra_threads = int(_cfg.AI_INTRA_THREADS)
+except Exception:
+    _intra_threads = None
+
+if not _intra_threads or _intra_threads <= 0:
+    _intra_threads = int(os.getenv('AI_INTRA_THREADS', '3'))
+
+os.environ["OMP_NUM_THREADS"] = str(_intra_threads)
+os.environ["MKL_NUM_THREADS"] = str(_intra_threads)
+os.environ["OPENBLAS_NUM_THREADS"] = str(_intra_threads)
+os.environ["VECLIB_MAXIMUM_THREADS"] = str(_intra_threads)
+os.environ["NUMEXPR_NUM_THREADS"] = str(_intra_threads)
 
 import warnings
 warnings.filterwarnings("ignore", message="Could not initialize NNPACK")

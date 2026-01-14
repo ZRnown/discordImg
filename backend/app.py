@@ -4695,63 +4695,173 @@ def save_product_images(product_id, image_urls):
 
 def save_product_images_unified(product_id, image_urls, max_workers=None, shutdown_event=None):
     """
-    统一的批量图片处理函数（优化版：延迟FAISS保存，提高性能）
+    【性能优化版】统一的批量图片处理函数
+
+    策略：多线程并发下载 -> 有限并发 AI 特征提取 -> 批量数据库/FAISS 写入
+    解决 CPU 争抢和 GIL 锁导致的假死/卡顿问题。
+
+    - 下载阶段：IO 密集，允许高并发
+    - AI 阶段：CPU 密集，使用有限并发（并发数建议与 config.AI_MAX_WORKERS 对齐）
+    - FAISS：一个商品只写入/保存一次，减少锁竞争
     """
     if not image_urls:
         return 0
 
-    try:
-        import concurrent.futures
+    import os
+    import time
+    import requests
+    import concurrent.futures
+    import threading
 
-        # 动态决定线程数 (默认使用配置，但允许覆盖)
-        if max_workers is None:
-            max_workers = min(config.DOWNLOAD_THREADS, len(image_urls))
+    # 1. 准备目录
+    save_dir = os.path.join(config.IMAGE_SAVE_DIR, str(product_id))
+    os.makedirs(save_dir, exist_ok=True)
 
-        # 获取现有特征向量用于查重
-        existing_images = db.get_product_images(product_id)
-        existing_feats = [img['features'] for img in existing_images if img['features']]
-        logger.info(f'商品 {product_id} 已存在 {len(existing_feats)} 张图片的向量数据')
+    # 动态决定下载线程数 (IO密集型，可以多开)
+    download_workers = min(getattr(config, 'DOWNLOAD_THREADS', 8), len(image_urls))
 
-        # 处理结果计数
-        processed_images = 0
+    downloaded_images = []  # (index, save_path)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # 提交任务：注意这里 save_faiss_immediately=False，因为我们要批量保存
-            futures = [executor.submit(process_and_save_image_core, product_id, url, idx, existing_feats, save_faiss_immediately=False)
-                       for idx, url in enumerate(image_urls)]
+    logger.info(f"🚀 [商品 {product_id}] 阶段1: 开始并发下载 {len(image_urls)} 张图片...")
 
-            # 等待完成 (支持优雅关闭)
-            for future in concurrent.futures.as_completed(futures):
+    def download_task(index, url):
+        try:
+            if shutdown_event and shutdown_event.is_set():
+                return None
+
+            timestamp = int(time.time() * 1000000)
+            filename = f"{product_id}_{index}_{timestamp}.jpg"
+            save_path = os.path.join(save_dir, filename)
+
+            resp = requests.get(url, timeout=config.REQUEST_TIMEOUT, proxies={'http': None, 'https': None})
+            if resp.status_code != 200:
+                return None
+
+            with open(save_path, 'wb') as f:
+                f.write(resp.content)
+
+            if os.path.getsize(save_path) == 0:
                 try:
-                    # 检查停止信号
-                    if shutdown_event and shutdown_event.is_set():
-                        logger.info("检测到停止信号，正在等待图片处理完成...")
-                        executor.shutdown(wait=True, timeout=15.0)
-                        break
+                    os.remove(save_path)
+                except Exception:
+                    pass
+                return None
 
-                    result = future.result()
-                    if result and result.get('success'):
-                        processed_images += 1  # 计数成功处理的图片
+            return (index, save_path)
 
-                except Exception as e:
-                    logger.error(f'一个图片处理失败: {e}')
+        except Exception as e:
+            logger.warning(f"下载失败 {url}: {e}")
+            return None
 
-        # 批量操作结束后统一保存 FAISS（性能极大提升）
-        if processed_images > 0:
-            try:
-                from vector_engine import get_vector_engine
-                get_vector_engine().save()
-                logger.info(f"FAISS索引已批量保存，本次新增 {processed_images} 张图片")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=download_workers) as executor:
+        futures = [executor.submit(download_task, i, url) for i, url in enumerate(image_urls)]
+        for future in concurrent.futures.as_completed(futures):
+            res = future.result()
+            if res:
+                downloaded_images.append(res)
 
-            except Exception as faiss_err:
-                logger.error(f"FAISS保存失败: {faiss_err}")
-
-        logger.info(f"商品 {product_id} 成功处理 {processed_images}/{len(image_urls)} 张图片")
-        return processed_images
-
-    except Exception as e:
-        logger.error(f"批量保存商品 {product_id} 图片失败: {e}")
+    if not downloaded_images:
+        logger.warning(f"⚠️ [商品 {product_id}] 没有成功下载任何图片")
         return 0
+
+    downloaded_images.sort(key=lambda x: x[0])
+    logger.info(f"✅ [商品 {product_id}] 下载完成，准备处理 {len(downloaded_images)} 张图片")
+
+    # --- 阶段 2: 有限并发 AI 特征提取 (CPU 密集) ---
+    extractor = get_global_feature_extractor()
+    if extractor is None:
+        logger.error("特征提取器未初始化")
+        return 0
+
+    existing_images = db.get_product_images(product_id)
+    existing_feats = [img['features'] for img in existing_images if img['features']]
+
+    processed_count = 0
+    vectors_to_add = []  # (db_id, features)
+
+    # AI 并发数优先级：显式参数 > config.AI_MAX_WORKERS > 默认 3
+    ai_max_workers = getattr(config, 'AI_MAX_WORKERS', 3)
+    if max_workers is not None:
+        try:
+            ai_max_workers = max(1, int(max_workers))
+        except Exception:
+            ai_max_workers = getattr(config, 'AI_MAX_WORKERS', 3)
+
+    # 保护：不要超过待处理数量
+    ai_max_workers = min(ai_max_workers, len(downloaded_images)) if downloaded_images else 1
+
+    results_lock = threading.Lock()
+
+    logger.info(f"🧠 [商品 {product_id}] 阶段2: 启动 {ai_max_workers} 个 AI 线程进行特征提取...")
+
+    def process_image_task(args):
+        index, save_path = args
+
+        if shutdown_event and shutdown_event.is_set():
+            return None
+
+        try:
+            features = extractor.extract_feature(save_path)
+            if features is None:
+                try:
+                    os.remove(save_path)
+                except Exception:
+                    pass
+                return None
+
+            # 查重：必须加锁同步读写 existing_feats
+            with results_lock:
+                is_dup, score = check_duplicate_image(features, existing_feats, threshold=0.995)
+                if not is_dup:
+                    existing_feats.append(features)
+
+            if is_dup:
+                logger.info(f"♻️ [商品 {product_id}] 图片重复 (相似度 {score:.3f})，跳过")
+                try:
+                    os.remove(save_path)
+                except Exception:
+                    pass
+                return None
+
+            img_db_id = db.insert_image_record(product_id, save_path, index, features)
+            if img_db_id:
+                logger.info(f"📸 [商品 {product_id}] 图片 {index} 处理完毕 (ID: {img_db_id})")
+                return (img_db_id, features)
+
+            return None
+
+        except Exception as e:
+            logger.error(f"处理图片异常: {e}")
+            return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=ai_max_workers) as ai_executor:
+        future_to_img = {ai_executor.submit(process_image_task, item): item for item in downloaded_images}
+
+        for future in concurrent.futures.as_completed(future_to_img):
+            result = future.result()
+            if result:
+                db_id, feats = result
+                vectors_to_add.append((db_id, feats))
+                processed_count += 1
+
+    # --- 阶段 3: 批量写入 FAISS (内存/磁盘操作) ---
+    if vectors_to_add:
+        try:
+            from vector_engine import get_vector_engine
+            engine = get_vector_engine()
+
+            with faiss_lock:
+                for img_id, feats in vectors_to_add:
+                    engine.add_vector(img_id, feats)
+                engine.save()
+
+            logger.info(f"💾 [商品 {product_id}] FAISS 索引已更新，新增 {len(vectors_to_add)} 个向量")
+
+        except Exception as e:
+            logger.error(f"FAISS 批量写入失败: {e}")
+
+    logger.info(f"商品 {product_id} 成功处理 {processed_count}/{len(image_urls)} 张图片")
+    return processed_count
 
 def save_product_images_multithreaded(product_id, image_urls):
     """向后兼容的别名"""

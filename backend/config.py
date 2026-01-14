@@ -51,11 +51,21 @@ class Config:
     YOLO_MODEL_PATH = 'yolov8s-world.pt'
     USE_YOLO_CROP = True
 
-    # === 多线程配置 (修改这里) ===
-    # 既然你要求起码10线程，这里直接设为10
-    SCRAPE_THREADS = int(os.getenv('SCRAPE_THREADS', '10'))
+    # === 多线程配置 ===
+    # 性能建议：AI推理是CPU瓶颈，入口并发过高会导致上下文切换爆炸。
+    # 这里默认降低商品并发，图片下载仍可保持较高并发。
+    SCRAPE_THREADS = int(os.getenv('SCRAPE_THREADS', '2'))
     DOWNLOAD_THREADS = int(os.getenv('DOWNLOAD_THREADS', '8'))
-    FEATURE_EXTRACT_THREADS = int(os.getenv('FEATURE_EXTRACT_THREADS', '4'))
+
+    # AI 推理的并发控制：
+    # - AI_INTRA_THREADS：单个推理任务内部使用的 CPU 核心数（OpenMP/MKL 线程数）
+    # - AI_MAX_WORKERS：同时跑多少个“图片特征提取任务”
+    # 推荐（10核CPU）：AI_INTRA_THREADS=3, AI_MAX_WORKERS=3
+    AI_INTRA_THREADS = int(os.getenv('AI_INTRA_THREADS', '3'))
+    AI_MAX_WORKERS = int(os.getenv('AI_MAX_WORKERS', '3'))
+
+    # 新的 save_product_images_unified 已不依赖该参数做图片特征线程池，保留字段主要用于兼容旧逻辑。
+    FEATURE_EXTRACT_THREADS = int(os.getenv('FEATURE_EXTRACT_THREADS', '1'))
 
     # === FAISS ===
     FAISS_HNSW_M = 64
