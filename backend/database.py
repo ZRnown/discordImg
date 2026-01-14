@@ -270,30 +270,6 @@ class Database:
             except sqlite3.OperationalError:
                 pass  # 字段已存在
 
-            # 为website_configs表添加rotation_interval字段
-            try:
-                cursor.execute('ALTER TABLE website_configs ADD COLUMN rotation_interval INTEGER DEFAULT 180')
-            except sqlite3.OperationalError:
-                pass  # 字段已存在
-
-            # 为website_configs表添加message_filters字段
-            try:
-                cursor.execute('ALTER TABLE website_configs ADD COLUMN message_filters TEXT DEFAULT \'[]\'')
-            except sqlite3.OperationalError:
-                pass  # 字段已存在
-
-            # 为website_configs表添加rotation_enabled字段
-            try:
-                cursor.execute('ALTER TABLE website_configs ADD COLUMN rotation_enabled INTEGER DEFAULT 1')
-            except sqlite3.OperationalError:
-                pass
-
-    def cleanup_processed_messages(self):
-        """清理旧的消息处理记录，只保留最近1小时的记录"""
-        with self.get_connection() as conn:
-            conn.execute("DELETE FROM processed_messages WHERE processed_at < datetime('now', '-1 hour')")
-            conn.commit()  # 字段已存在
-
             # 创建网站配置表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS website_configs (
@@ -310,11 +286,42 @@ class Database:
                 )
             ''')
 
+            # 为website_configs表添加rotation_interval字段
+            try:
+                cursor.execute('ALTER TABLE website_configs ADD COLUMN rotation_interval INTEGER DEFAULT 180')
+            except sqlite3.OperationalError:
+                pass
+
+            # 为website_configs表添加message_filters字段
+            try:
+                cursor.execute('ALTER TABLE website_configs ADD COLUMN message_filters TEXT DEFAULT \'[]\'')
+            except sqlite3.OperationalError:
+                pass
+
+            # 为website_configs表添加rotation_enabled字段
+            try:
+                cursor.execute('ALTER TABLE website_configs ADD COLUMN rotation_enabled INTEGER DEFAULT 1')
+            except sqlite3.OperationalError:
+                pass
+
             # 1. 消息处理去重表（防止多个Bot回复同一条消息）
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS processed_messages (
                     message_id TEXT PRIMARY KEY,
                     processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            # 创建自定义回复内容表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS custom_replies (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    reply_type TEXT NOT NULL, -- 'text', 'image', 'text_and_link', 'custom_only'
+                    content TEXT, -- 文字内容或图片URL
+                    image_url TEXT, -- 如果是图片回复
+                    is_active BOOLEAN DEFAULT 1,
+                    priority INTEGER DEFAULT 0, -- 优先级，数字越大优先级越高
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
 
@@ -375,28 +382,6 @@ class Database:
                 )
             ''')
 
-            # 创建自定义回复内容表
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS custom_replies (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    reply_type TEXT NOT NULL, -- 'text', 'image', 'text_and_link', 'custom_only'
-                    content TEXT, -- 文字内容或图片URL
-                    image_url TEXT, -- 如果是图片回复
-                    is_active BOOLEAN DEFAULT 1,
-                    priority INTEGER DEFAULT 0, -- 优先级，数字越大优先级越高
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-
-            # 插入默认网站配置
-            cursor.execute('''
-                INSERT OR IGNORE INTO website_configs (name, display_name, url_template, id_pattern, badge_color)
-                VALUES
-                    ('cnfans', 'CNFans', 'https://cnfans.com/product?id={id}&platform=WEIDIAN', '{id}', 'blue'),
-                    ('acbuy', 'AcBuy', 'https://www.acbuy.com/product?url=https%3A%2F%2Fweidian.com%2Fitem.html%3FitemID%3D{id}&id={id}&source=WD', '{id}', 'orange'),
-                    ('weidian', '微店', 'https://weidian.com/item.html?itemID={id}', '{id}', 'gray')
-            ''')
-
             # 创建用户设置表（每个用户的个性化设置）
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS user_settings (
@@ -434,6 +419,15 @@ class Database:
                 )
             ''')
 
+            # 插入默认网站配置
+            cursor.execute('''
+                INSERT OR IGNORE INTO website_configs (name, display_name, url_template, id_pattern, badge_color)
+                VALUES
+                    ('cnfans', 'CNFans', 'https://cnfans.com/product?id={id}&platform=WEIDIAN', '{id}', 'blue'),
+                    ('acbuy', 'AcBuy', 'https://www.acbuy.com/product?url=https%3A%2F%2Fweidian.com%2Fitem.html%3FitemID%3D{id}&id={id}&source=WD', '{id}', 'orange'),
+                    ('weidian', '微店', 'https://weidian.com/item.html?itemID={id}', '{id}', 'gray')
+            ''')
+
             # 插入默认状态记录
             cursor.execute('''
                 INSERT OR IGNORE INTO scrape_status (id, is_scraping, stop_signal, message)
@@ -446,39 +440,16 @@ class Database:
                 VALUES (1, 3.0, 8.0)
             ''')
 
-            # 为现有商品设置默认店铺名称
-            try:
-                cursor.execute('UPDATE products SET shop_name = ? WHERE shop_name IS NULL OR shop_name = ?', ('未知店铺', ''))
-                logger.info("已为缺少店铺名称的商品设置默认值")
-            except Exception as e:
-                logger.warning(f"设置默认店铺名称失败: {e}")
-
-            # 为 website_account_bindings 表添加 user_id 字段并迁移数据
-            try:
-                # 检查是否已有 user_id 字段
-                cursor.execute("PRAGMA table_info(website_account_bindings)")
-                columns = cursor.fetchall()
-                has_user_id = any(col['name'] == 'user_id' for col in columns)
-
-                if not has_user_id:
-                    # 添加 user_id 字段
-                    cursor.execute('ALTER TABLE website_account_bindings ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0')
-
-                    # 为现有记录设置 user_id（从 discord_accounts 表获取）
-                    cursor.execute('''
-                        UPDATE website_account_bindings
-                        SET user_id = (
-                            SELECT da.user_id
-                            FROM discord_accounts da
-                            WHERE da.id = website_account_bindings.account_id
-                        )
-                        WHERE user_id = 0
-                    ''')
-                    logger.info("已为 website_account_bindings 表添加 user_id 字段并迁移数据")
-            except Exception as e:
-                logger.warning(f"为 website_account_bindings 添加 user_id 字段失败: {e}")
-
             conn.commit()
+
+    def cleanup_processed_messages(self):
+        """清理旧的消息处理记录，只保留最近1小时的记录"""
+        try:
+            with self.get_connection() as conn:
+                conn.execute("DELETE FROM processed_messages WHERE processed_at < datetime('now', '-1 hour')")
+                conn.commit()
+        except Exception as e:
+            logger.error(f"清理消息记录失败: {e}")
 
 
     @contextmanager
@@ -834,19 +805,7 @@ class Database:
                 cursor.execute("DELETE FROM product_images WHERE product_id = ? AND image_index = ?",
                              (product_id, image_index))
 
-                # --- 删除重新排序的代码 ---
-                # 重新排序会导致前端 React key 冲突和浏览器缓存问题
-                # 让图片索引保持固定，删除中间图片后索引不变
-                # cursor.execute("SELECT id, image_index FROM product_images WHERE product_id = ? ORDER BY image_index",
-                #              (product_id,))
-                # remaining_images = cursor.fetchall()
-                #
-                # # 更新索引，从0开始重新编号
-                # for new_index, (img_id, old_index) in enumerate(remaining_images):
-                #     if new_index != old_index:
-                #         cursor.execute("UPDATE product_images SET image_index = ? WHERE id = ?",
-                #                      (new_index, img_id))
-
+               
                 conn.commit()
 
             logger.info(f"图片删除成功: product_id={product_id}, image_index={image_index}")
@@ -1109,14 +1068,11 @@ class Database:
             logger.error(f"用户认证失败: {e}")
             return None
 
-    def create_user(self, username: str, password: str, role: str = 'user') -> bool:
-        """创建新用户"""
+    def create_user(self, username: str, password_hash: str, role: str = 'user') -> bool:
+        """创建新用户（password_hash 由上层生成）"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                # 简单的密码哈希（生产环境应该使用bcrypt）
-                import hashlib
-                password_hash = f"hashed_{password}"  # 简化版，实际应该用bcrypt
 
                 cursor.execute('''
                     INSERT INTO users (username, password_hash, role, is_active)

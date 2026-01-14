@@ -7785,7 +7785,12 @@ export function SettingsView() {
                       min="0.1"
                       max="30"
                       value={settings.global_reply_min_delay}
-                      onChange={(e) => setSettings(prev => ({ ...prev, global_reply_min_delay: parseFloat(e.target.value) }))}
+                      onChange={(e) => {
+                        const value = parseFloat(e.target.value);
+                        if (!isNaN(value) && value >= 0.1 && value <= 30) {
+                          setSettings(prev => ({ ...prev, global_reply_min_delay: value }));
+                        }
+                      }}
                       className="w-16 h-9 text-center"
                     />
                     <span className="text-sm text-muted-foreground">-</span>
@@ -7796,7 +7801,12 @@ export function SettingsView() {
                       min="1"
                       max="60"
                       value={settings.global_reply_max_delay}
-                      onChange={(e) => setSettings(prev => ({ ...prev, global_reply_max_delay: parseFloat(e.target.value) }))}
+                      onChange={(e) => {
+                        const value = parseFloat(e.target.value);
+                        if (!isNaN(value) && value >= 1 && value <= 60) {
+                          setSettings(prev => ({ ...prev, global_reply_max_delay: value }));
+                        }
+                      }}
                       className="w-16 h-9 text-center"
                     />
                   </div>
@@ -10333,30 +10343,6 @@ class Database:
             except sqlite3.OperationalError:
                 pass  # 字段已存在
 
-            # 为website_configs表添加rotation_interval字段
-            try:
-                cursor.execute('ALTER TABLE website_configs ADD COLUMN rotation_interval INTEGER DEFAULT 180')
-            except sqlite3.OperationalError:
-                pass  # 字段已存在
-
-            # 为website_configs表添加message_filters字段
-            try:
-                cursor.execute('ALTER TABLE website_configs ADD COLUMN message_filters TEXT DEFAULT \'[]\'')
-            except sqlite3.OperationalError:
-                pass  # 字段已存在
-
-            # 为website_configs表添加rotation_enabled字段
-            try:
-                cursor.execute('ALTER TABLE website_configs ADD COLUMN rotation_enabled INTEGER DEFAULT 1')
-            except sqlite3.OperationalError:
-                pass
-
-    def cleanup_processed_messages(self):
-        """清理旧的消息处理记录，只保留最近1小时的记录"""
-        with self.get_connection() as conn:
-            conn.execute("DELETE FROM processed_messages WHERE processed_at < datetime('now', '-1 hour')")
-            conn.commit()  # 字段已存在
-
             # 创建网站配置表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS website_configs (
@@ -10373,11 +10359,42 @@ class Database:
                 )
             ''')
 
+            # 为website_configs表添加rotation_interval字段
+            try:
+                cursor.execute('ALTER TABLE website_configs ADD COLUMN rotation_interval INTEGER DEFAULT 180')
+            except sqlite3.OperationalError:
+                pass
+
+            # 为website_configs表添加message_filters字段
+            try:
+                cursor.execute('ALTER TABLE website_configs ADD COLUMN message_filters TEXT DEFAULT \'[]\'')
+            except sqlite3.OperationalError:
+                pass
+
+            # 为website_configs表添加rotation_enabled字段
+            try:
+                cursor.execute('ALTER TABLE website_configs ADD COLUMN rotation_enabled INTEGER DEFAULT 1')
+            except sqlite3.OperationalError:
+                pass
+
             # 1. 消息处理去重表（防止多个Bot回复同一条消息）
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS processed_messages (
                     message_id TEXT PRIMARY KEY,
                     processed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            # 创建自定义回复内容表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS custom_replies (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    reply_type TEXT NOT NULL, -- 'text', 'image', 'text_and_link', 'custom_only'
+                    content TEXT, -- 文字内容或图片URL
+                    image_url TEXT, -- 如果是图片回复
+                    is_active BOOLEAN DEFAULT 1,
+                    priority INTEGER DEFAULT 0, -- 优先级，数字越大优先级越高
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
 
@@ -10438,28 +10455,6 @@ class Database:
                 )
             ''')
 
-            # 创建自定义回复内容表
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS custom_replies (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    reply_type TEXT NOT NULL, -- 'text', 'image', 'text_and_link', 'custom_only'
-                    content TEXT, -- 文字内容或图片URL
-                    image_url TEXT, -- 如果是图片回复
-                    is_active BOOLEAN DEFAULT 1,
-                    priority INTEGER DEFAULT 0, -- 优先级，数字越大优先级越高
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            ''')
-
-            # 插入默认网站配置
-            cursor.execute('''
-                INSERT OR IGNORE INTO website_configs (name, display_name, url_template, id_pattern, badge_color)
-                VALUES
-                    ('cnfans', 'CNFans', 'https://cnfans.com/product?id={id}&platform=WEIDIAN', '{id}', 'blue'),
-                    ('acbuy', 'AcBuy', 'https://www.acbuy.com/product?url=https%3A%2F%2Fweidian.com%2Fitem.html%3FitemID%3D{id}&id={id}&source=WD', '{id}', 'orange'),
-                    ('weidian', '微店', 'https://weidian.com/item.html?itemID={id}', '{id}', 'gray')
-            ''')
-
             # 创建用户设置表（每个用户的个性化设置）
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS user_settings (
@@ -10497,6 +10492,15 @@ class Database:
                 )
             ''')
 
+            # 插入默认网站配置
+            cursor.execute('''
+                INSERT OR IGNORE INTO website_configs (name, display_name, url_template, id_pattern, badge_color)
+                VALUES
+                    ('cnfans', 'CNFans', 'https://cnfans.com/product?id={id}&platform=WEIDIAN', '{id}', 'blue'),
+                    ('acbuy', 'AcBuy', 'https://www.acbuy.com/product?url=https%3A%2F%2Fweidian.com%2Fitem.html%3FitemID%3D{id}&id={id}&source=WD', '{id}', 'orange'),
+                    ('weidian', '微店', 'https://weidian.com/item.html?itemID={id}', '{id}', 'gray')
+            ''')
+
             # 插入默认状态记录
             cursor.execute('''
                 INSERT OR IGNORE INTO scrape_status (id, is_scraping, stop_signal, message)
@@ -10509,39 +10513,16 @@ class Database:
                 VALUES (1, 3.0, 8.0)
             ''')
 
-            # 为现有商品设置默认店铺名称
-            try:
-                cursor.execute('UPDATE products SET shop_name = ? WHERE shop_name IS NULL OR shop_name = ?', ('未知店铺', ''))
-                logger.info("已为缺少店铺名称的商品设置默认值")
-            except Exception as e:
-                logger.warning(f"设置默认店铺名称失败: {e}")
-
-            # 为 website_account_bindings 表添加 user_id 字段并迁移数据
-            try:
-                # 检查是否已有 user_id 字段
-                cursor.execute("PRAGMA table_info(website_account_bindings)")
-                columns = cursor.fetchall()
-                has_user_id = any(col['name'] == 'user_id' for col in columns)
-
-                if not has_user_id:
-                    # 添加 user_id 字段
-                    cursor.execute('ALTER TABLE website_account_bindings ADD COLUMN user_id INTEGER NOT NULL DEFAULT 0')
-
-                    # 为现有记录设置 user_id（从 discord_accounts 表获取）
-                    cursor.execute('''
-                        UPDATE website_account_bindings
-                        SET user_id = (
-                            SELECT da.user_id
-                            FROM discord_accounts da
-                            WHERE da.id = website_account_bindings.account_id
-                        )
-                        WHERE user_id = 0
-                    ''')
-                    logger.info("已为 website_account_bindings 表添加 user_id 字段并迁移数据")
-            except Exception as e:
-                logger.warning(f"为 website_account_bindings 添加 user_id 字段失败: {e}")
-
             conn.commit()
+
+    def cleanup_processed_messages(self):
+        """清理旧的消息处理记录，只保留最近1小时的记录"""
+        try:
+            with self.get_connection() as conn:
+                conn.execute("DELETE FROM processed_messages WHERE processed_at < datetime('now', '-1 hour')")
+                conn.commit()
+        except Exception as e:
+            logger.error(f"清理消息记录失败: {e}")
 
 
     @contextmanager
@@ -10897,19 +10878,7 @@ class Database:
                 cursor.execute("DELETE FROM product_images WHERE product_id = ? AND image_index = ?",
                              (product_id, image_index))
 
-                # --- 删除重新排序的代码 ---
-                # 重新排序会导致前端 React key 冲突和浏览器缓存问题
-                # 让图片索引保持固定，删除中间图片后索引不变
-                # cursor.execute("SELECT id, image_index FROM product_images WHERE product_id = ? ORDER BY image_index",
-                #              (product_id,))
-                # remaining_images = cursor.fetchall()
-                #
-                # # 更新索引，从0开始重新编号
-                # for new_index, (img_id, old_index) in enumerate(remaining_images):
-                #     if new_index != old_index:
-                #         cursor.execute("UPDATE product_images SET image_index = ? WHERE id = ?",
-                #                      (new_index, img_id))
-
+               
                 conn.commit()
 
             logger.info(f"图片删除成功: product_id={product_id}, image_index={image_index}")
@@ -11172,14 +11141,11 @@ class Database:
             logger.error(f"用户认证失败: {e}")
             return None
 
-    def create_user(self, username: str, password: str, role: str = 'user') -> bool:
-        """创建新用户"""
+    def create_user(self, username: str, password_hash: str, role: str = 'user') -> bool:
+        """创建新用户（password_hash 由上层生成）"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                # 简单的密码哈希（生产环境应该使用bcrypt）
-                import hashlib
-                password_hash = f"hashed_{password}"  # 简化版，实际应该用bcrypt
 
                 cursor.execute('''
                     INSERT INTO users (username, password_hash, role, is_active)
@@ -13280,17 +13246,40 @@ except ImportError:
 bot_clients = []
 bot_tasks = []
 
-# 全局冷却管理器：account_id -> timestamp (上次发送时间)
+# 全局冷却管理器：(account_id, channel_id) -> timestamp (上次发送时间)
 account_last_sent = {}
 
-def is_account_on_cooldown(account_id, interval):
-    """检查账号是否在冷却中"""
-    last = account_last_sent.get(account_id, 0)
-    return (time.time() - last) < interval
+def is_account_on_cooldown(account_id, channel_id, interval):
+    """检查账号在指定频道是否在冷却中"""
+    key = (account_id, str(channel_id))  # 确保channel_id是字符串
+    last = account_last_sent.get(key, 0)
+    logger.debug(f"检查冷却 - 账号:{account_id}, 频道:{channel_id} -> 键:{key}, 上次发送:{last}, 冷却字典大小:{len(account_last_sent)}")
+    is_cooldown = (time.time() - last) < interval
+    if is_cooldown:
+        logger.debug(f"账号 {account_id} 在频道 {channel_id} 冷却中，还需等待 {interval - (time.time() - last):.1f} 秒")
+    return is_cooldown
 
-def set_account_cooldown(account_id):
-    """设置账号冷却时间"""
-    account_last_sent[account_id] = time.time()
+def set_account_cooldown(account_id, channel_id):
+    """设置账号在指定频道的冷却时间"""
+    key = (account_id, str(channel_id))  # 确保channel_id是字符串
+    account_last_sent[key] = time.time()
+    logger.debug(f"设置冷却 - 账号:{account_id}, 频道:{channel_id} -> {key}")
+
+def cleanup_expired_cooldowns():
+    """清理过期的冷却状态"""
+    current_time = time.time()
+    expired_keys = []
+    for key, last_sent in account_last_sent.items():
+        # 如果冷却时间超过24小时，清理掉（防止内存泄漏）
+        if current_time - last_sent > 86400:  # 24小时
+            expired_keys.append(key)
+
+    for key in expired_keys:
+        del account_last_sent[key]
+        logger.debug(f"清理过期冷却: {key}")
+
+    if expired_keys:
+        logger.info(f"清理了 {len(expired_keys)} 个过期的冷却状态")
 
 def mark_message_as_processed(message_id):
     """检查消息是否已处理（原子操作）"""
@@ -13448,6 +13437,8 @@ class DiscordBotClient(discord.Client):
     async def schedule_reply(self, message, product, custom_reply=None):
         """调度回复到合适的发送账号 (增强版：带在线检查和兜底机制)"""
         try:
+            # 清理过期的冷却状态
+            cleanup_expired_cooldowns()
             try:
                 from database import db
             except ImportError:
@@ -13461,8 +13452,12 @@ class DiscordBotClient(discord.Client):
             # 生成回复内容
             response_content = self._generate_reply_content(product, message.channel.id, custom_reply)
 
-            # 1. 尝试获取网站配置
+            # 1. 尝试获取网站配置（必须绑定，否则不回复）
             website_config = await self.get_website_config_by_channel_async(message.channel.id)
+
+            if not website_config:
+                logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过回复")
+                return
 
             target_client = None
 
@@ -13482,12 +13477,16 @@ class DiscordBotClient(discord.Client):
                 rotation_interval = website_config.get('rotation_interval', 180)
 
                 available_senders = []
+
+                # 调试信息：检查轮换配置
+                logger.info(f"账号轮换配置 - 启用:{rotation_enabled}, 间隔:{rotation_interval}秒, 频道:{message.channel.id}")
                 if rotation_enabled:
-                    # 筛选非冷却的
-                    available_senders = [uid for uid in valid_senders if not is_account_on_cooldown(uid, rotation_interval)]
-                    # 如果都在冷却，为了保证回复，忽略冷却，从在线的中选一个
-                    if not available_senders and valid_senders:
-                        available_senders = valid_senders
+                    # 筛选非冷却的（按频道区分冷却）
+                    available_senders = [uid for uid in valid_senders if not is_account_on_cooldown(uid, message.channel.id, rotation_interval)]
+                    # 如果都在冷却，不发送消息（根据用户要求）
+                    if not available_senders:
+                        logger.info(f"所有账号在频道{message.channel.id}的{rotation_interval}秒冷却期内，跳过发送")
+                        return  # 不发送消息，直接返回
                 else:
                     available_senders = valid_senders
 
@@ -13496,20 +13495,17 @@ class DiscordBotClient(discord.Client):
                     selected_id = random.choice(available_senders)
                     # 从全局列表中找到这个实例
                     target_client = next((c for c in bot_clients if c.account_id == selected_id), None)
+                    logger.info(f"本次选中发送账号: {selected_id} | 可用账号数: {len(available_senders)}")
+                else:
+                    logger.info(f"本次可用发送账号数: 0 | valid_senders数: {len(valid_senders)}")
 
-            # === 兜底逻辑 (最重要的一步) ===
-            # 如果上面一顿操作猛如虎，最后没找到人（比如配置错误、没在线、列表为空）
-            # 或者当前账号本身就是"Both"角色，且上面随机没随到自己，但为了稳妥
+            # 如果没有可用发送账号，直接跳过（不允许兜底回复）
             if not target_client:
-                logger.warning(f"调度失败或未配置，启用兜底机制：使用当前接收账号回复")
-                target_client = self  # <--- 强制使用自己，保证消息一定能发出去
+                logger.info(f"频道 {message.channel.id} 没有可用的发送账号(可能都离线或在冷却)，跳过回复")
+                return
 
             # 5. 执行发送
             if target_client:
-                # 记录冷却
-                if hasattr(target_client, 'account_id') and target_client.account_id:
-                    set_account_cooldown(target_client.account_id)
-
                 try:
                     # 只有当 target_client 和 message 在同一个服务器时，get_channel 才有效
                     # 如果是用别的号回复，那个号也必须在这个服务器里
@@ -13522,15 +13518,19 @@ class DiscordBotClient(discord.Client):
                         # 总是尝试回复原消息，而不是直接发送
                         try:
                             await message.reply(response_content)
+                            if hasattr(target_client, 'account_id') and target_client.account_id:
+                                set_account_cooldown(target_client.account_id, message.channel.id)
                             logger.info(f"✅ [回复成功] 账号: {target_client.user.name} | 商品ID: {product.get('id')}")
                         except Exception as reply_error:
                             logger.warning(f"回复消息失败，改用直接发送: {reply_error}")
                             await target_channel.send(response_content)
+                            if hasattr(target_client, 'account_id') and target_client.account_id:
+                                set_account_cooldown(target_client.account_id, message.channel.id)
                             logger.info(f"✅ [发送成功] 账号: {target_client.user.name} | 商品ID: {product.get('id')}")
                     else:
                         # 这种情况是：选中的机器人不在这个频道/服务器里
-                        logger.warning(f"❌ 选中的账号 {target_client.user.name} 无法访问频道，回退到直接回复")
-                        await message.reply(response_content)
+                        logger.warning(f"❌ 选中的账号 {target_client.user.name} 无法访问频道，跳过发送")
+                        return
 
                 except Exception as e:
                     logger.error(f"❌ 发送异常，尝试最后一次回退: {e}")
@@ -13755,6 +13755,15 @@ class DiscordBotClient(discord.Client):
         if self.role == 'sender':
             return  # 纯发送账号不监听消息
 
+        # 多Bot并发控制：同一条消息只允许一个Bot处理
+        # 如果这个消息已经被别的Bot抢锁处理了，我就退出
+        try:
+            if not mark_message_as_processed(message.id):
+                return
+        except Exception as e:
+            logger.error(f"消息去重检查失败: {e}")
+            return
+
         logger.info(f'收到消息: {message.author.name} 在 #{message.channel.name}: "{message.content[:100]}{"..." if len(message.content) > 100 else ""}"')
 
         # 处理关键词消息转发
@@ -13827,8 +13836,8 @@ class DiscordBotClient(discord.Client):
 
                 logger.info(f'最佳匹配相似度: {similarity:.4f}, 用户阈值: {user_threshold:.4f}')
 
-                # 检查相似度是否超过用户设置的阈值，或者是否为高质量匹配（相似度>0.8）
-                if similarity >= user_threshold or similarity > 0.8:
+                # 严格执行用户设置的阈值
+                if similarity >= user_threshold:
                     product = best_match.get('product', {})
                     logger.info(f'✅ 匹配成功! 相似度: {similarity:.2f} | 商品: {product.get("id")} | 频道: {message.channel.name}')
 
@@ -14512,124 +14521,6 @@ class DINOv2FeatureExtractor:
             except:
                 pass
             return Image.open(image_path).convert("RGB")
-        """使用YOLO-World精准裁剪鞋类主体"""
-        try:
-            if not config.USE_YOLO_CROP:
-                return Image.open(image_path).convert("RGB")
-
-            # 检查缓存
-            image_hash = self._get_image_hash(image_path)
-            if image_hash in self._detection_cache:
-                logger.debug("使用缓存的检测结果")
-                cached_result = self._detection_cache[image_hash]
-                if cached_result is None:
-                    # 缓存中表示未检测到鞋子
-                    return Image.open(image_path).convert("RGB")
-                # 返回缓存的裁剪结果
-                return cached_result
-
-            # 优化检测参数，提高准确率
-            # 使用更低的置信度但更高的质量阈值
-            results = self.detector(image_path, conf=0.05, iou=0.5, verbose=False)
-
-            if not results or len(results[0].boxes) == 0:
-                logger.info("未检测到通用商品，降级使用原图")
-                # 缓存未检测到商品的结果
-                self._detection_cache[image_hash] = None
-                return Image.open(image_path).convert("RGB")
-
-            boxes = results[0].boxes
-            img = Image.open(image_path).convert("RGB")
-            img_w, img_h = img.size
-            center_x, center_y = img_w / 2, img_h / 2
-
-            # --- 优化候选逻辑 (YOLO-World增强版) ---
-            # 多维度评分：面积、置信度、位置、长宽比
-
-            candidates = []
-            for box in boxes:
-                coords = box.xyxy[0].cpu().numpy()
-                conf = float(box.conf)
-                cls = int(box.cls)
-
-                w = coords[2] - coords[0]
-                h = coords[3] - coords[1]
-                area = w * h
-
-                # 过滤太小或太大bbox
-                if area < img_w * img_h * 0.01:  # 至少占图片面积1%
-                    continue
-                if area > img_w * img_h * 0.9:   # 最多占图片面积90%
-                    continue
-
-                # 计算长宽比 (过滤极端比例)
-                aspect_ratio = max(w/h, h/w)
-                if aspect_ratio > 5:  # 太细长
-                    continue
-
-                # 计算中心距离权重 (越靠近中心越好)
-                box_cx = coords[0] + w/2
-                box_cy = coords[1] + h/2
-                dist_from_center = ((box_cx - center_x)**2 + (box_cy - center_y)**2) ** 0.5
-                max_dist = ((img_w/2)**2 + (img_h/2)**2) ** 0.5
-                center_weight = 1 - (dist_from_center / max_dist)
-
-                # 计算类别权重 (鞋类和服装更高权重)
-                class_name = self.target_classes[cls] if cls < len(self.target_classes) else "unknown"
-                class_weight = 1.5 if any(keyword in class_name.lower() for keyword in ['shoe', 'shirt', 'pants', 'dress']) else 1.0
-
-                # 综合评分
-                score = area * conf * center_weight * class_weight
-
-                candidates.append({
-                    'coords': coords,
-                    'score': score,
-                    'conf': conf,
-                    'area': area,
-                    'class': class_name
-                })
-
-            # 选择最佳候选
-            if not candidates:
-                logger.info("未找到合适的商品框，使用原图")
-                return img
-
-            best_candidate = max(candidates, key=lambda x: x['score'])
-            best_box = best_candidate['coords']
-
-            logger.info(f"选择最佳检测框: {best_candidate['class']}, 置信度: {best_candidate['conf']:.3f}, 得分: {best_candidate['score']:.1f}")
-
-            if best_box is None:
-                logger.info("未找到合适的鞋子框，使用原图")
-                return img
-
-            # 裁剪选中的鞋子
-            x1, y1, x2, y2 = best_box
-
-            # 扩充5%的边缘，防止切掉边缘特征
-            pad_x = (x2 - x1) * 0.05
-            pad_y = (y2 - y1) * 0.05
-
-            crop_box = (
-                max(0, x1 - pad_x),
-                max(0, y1 - pad_y),
-                min(img_w, x2 + pad_x),
-                min(img_h, y2 + pad_y)
-            )
-
-            cropped_img = img.crop(crop_box)
-            logger.info(f"成功裁剪鞋子区域: {crop_box}")
-
-            # 缓存结果
-            self._detection_cache[image_hash] = cropped_img.copy()
-
-            return cropped_img
-
-        except Exception as e:
-            logger.warning(f"鞋子裁剪异常: {e}")
-            # 缓存失败结果
-            self._detection_cache[image_hash] = None
-            return Image.open(image_path).convert("RGB")
 
     def extract_feature(self, image_path: Union[str, Path]) -> Optional[np.ndarray]:
         """提取单张图片的特征向量 (384维或768维)"""
@@ -14742,6 +14633,7 @@ import numpy as np
 import os
 import pickle
 import logging
+import json
 from typing import List, Dict, Tuple
 try:
     from .config import config
@@ -14948,42 +14840,39 @@ class VectorEngine:
             return False
 
     def _rebuild_index_after_removal(self):
-        """删除向量后重建索引"""
+        """删除向量后重建索引（优化版：直接使用数据库中已存的 features，不重新跑模型）"""
         try:
-            # 获取所有未删除的向量数据
             try:
                 from database import db
             except ImportError:
                 from .database import db
+
             valid_vectors = []
+
+            # 只保留那些仍然“未被标记删除”的 db_id
+            alive_db_ids = {mapped_id for mapped_id in self.id_map if mapped_id is not None}
 
             with db.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT id, image_path FROM product_images WHERE id IS NOT NULL")
+                cursor.execute("SELECT id, features FROM product_images WHERE id IS NOT NULL AND features IS NOT NULL")
                 for row in cursor.fetchall():
                     img_id = row['id']
-                    # 检查这个向量是否在我们的id_map中且未被标记删除
-                    if img_id in self.id_map and self.id_map[self.id_map.index(img_id)] is not None:
-                        # 重新提取特征（或者从缓存中获取）
-                        # 这里为了简单，我们假设特征需要重新提取
-                        # 在生产环境中，应该缓存特征或定期重建
-                        try:
-                            # 这里需要导入特征提取器
-                            try:
-                                from feature_extractor import get_feature_extractor
-                            except ImportError:
-                                from .feature_extractor import get_feature_extractor
-                            extractor = get_feature_extractor()
-                            features = extractor.extract_feature(row['image_path'])
-                            if features is not None:
-                                valid_vectors.append((img_id, features))
-                        except Exception as e:
-                            logger.warning(f"重新提取特征失败 {row['image_path']}: {e}")
+                    if img_id not in alive_db_ids:
+                        continue
+
+                    features_str = row['features']
+                    try:
+                        vec = np.array(json.loads(features_str), dtype='float32')
+                        if vec.shape[0] != self.dimension:
+                            continue
+                        valid_vectors.append((img_id, vec))
+                    except Exception:
+                        continue
 
             # 重建索引
             self._create_new_index()
-            for img_id, features in valid_vectors:
-                self.add_vector(img_id, features)
+            for img_id, vec in valid_vectors:
+                self.add_vector(img_id, vec)
 
             self.save()
             logger.info(f"索引重建完成，包含 {len(valid_vectors)} 个向量")
@@ -15805,6 +15694,8 @@ def search_similar():
         # 处理图片来源
         import uuid
         import os
+        image_file = None  # 初始化变量，避免作用域问题
+
         if image_url:
             print(f"DEBUG: Processing image URL: {image_url}")
             # 验证URL格式
@@ -15855,18 +15746,18 @@ def search_similar():
             except Exception as e:
                 print(f"DEBUG: Failed to download image: {str(e)}")
                 return jsonify({'error': f'Failed to download image: {str(e)}'}), 400
-        else:
+        elif 'image' in request.files:
             print("DEBUG: No image_url provided, checking for uploaded file")
-            # 从上传的文件获取图片
-            if 'image' not in request.files:
-                print("DEBUG: No 'image' file found in request.files")
-                return jsonify({'error': 'No image provided'}), 400
-
             image_file = request.files['image']
             print(f"DEBUG: Found uploaded file: {image_file.filename if image_file else 'None'}")
-        temp_filename = f"{uuid.uuid4()}.jpg"
-        image_path = f"/tmp/{temp_filename}"
-        image_file.save(image_path)
+
+            temp_filename = f"{uuid.uuid4()}.jpg"
+            image_path = f"/tmp/{temp_filename}"
+            image_file.save(image_path)
+
+        else:
+            print("DEBUG: No image_url and no uploaded file")
+            return jsonify({'error': 'No image provided (url or file)'}), 400
 
         try:
             # 提取特征 (使用 DINOv2 + YOLOv8)
@@ -15903,12 +15794,8 @@ def search_similar():
                 print(f"DEBUG: Best low-threshold match similarity: {low_threshold_results[0]['similarity']}")
             print(f"DEBUG: Total indexed images: {db.get_total_indexed_images()}")
 
-            # 如果没有找到满足阈值的结果，但有高质量的低阈值匹配（相似度>0.8），也可以考虑使用
-            if not results and low_threshold_results and len(low_threshold_results) > 0:
-                best_low_match = low_threshold_results[0]
-                if best_low_match.get('similarity', 0) > 0.8:  # 高质量匹配
-                    print(f"DEBUG: Using high-quality low-threshold result (similarity: {best_low_match['similarity']:.4f})")
-                    results = [best_low_match]
+            # 严格执行阈值：如果没有满足阈值的结果，则返回空结果
+            # 不再使用任何硬编码阈值兜底（例如 >0.8）
 
             response_data = {
                 'success': True,
@@ -16322,7 +16209,8 @@ def create_user():
         shop_ids = data.get('shops', [])
 
         # 创建用户
-        password_hash = f"hashed_{password}"
+        from werkzeug.security import generate_password_hash
+        password_hash = generate_password_hash(password)
         if db.create_user(username, password_hash, role):
             # 获取新创建的用户ID
             user = db.authenticate_user(username, password_hash)
@@ -16379,8 +16267,8 @@ def reset_user_password(user_id):
         if not new_password:
             return jsonify({'error': '密码不能为空'}), 400
 
-        # 简单哈希 (生产环境请用 bcrypt)
-        password_hash = f"hashed_{new_password}"
+        from werkzeug.security import generate_password_hash
+        password_hash = generate_password_hash(new_password)
 
         with db.get_connection() as conn:
             cursor = conn.cursor()
@@ -17743,13 +17631,18 @@ def update_user_settings():
         if not data:
             return jsonify({'error': 'Invalid request body'}), 400
 
+        # 调试延迟设置
+        min_delay = data.get('global_reply_min_delay')
+        max_delay = data.get('global_reply_max_delay')
+        logger.info(f"用户设置延迟 - 最小: {min_delay}, 最大: {max_delay}")
+
         success = db.update_user_settings(
             user_id=user['id'],
             download_threads=data.get('download_threads'),
             feature_extract_threads=data.get('feature_extract_threads'),
             discord_similarity_threshold=data.get('discord_similarity_threshold'),
-            global_reply_min_delay=data.get('global_reply_min_delay'),
-            global_reply_max_delay=data.get('global_reply_max_delay'),
+            global_reply_min_delay=min_delay,
+            global_reply_max_delay=max_delay,
             user_blacklist=data.get('user_blacklist'),
             keyword_filters=data.get('keyword_filters')
         )
@@ -18465,17 +18358,17 @@ def search_similar_text():
         with db.get_connection() as conn:
             cursor = conn.cursor()
 
-            # 使用LIKE查询在标题和英文标题中搜索
+            # 只在英文标题中搜索（根据用户要求，不监听中文关键词）
             cursor.execute("""
                 SELECT id, product_url, title, english_title, description,
                        ruleEnabled, min_delay, max_delay, created_at,
                        cnfans_url
                 FROM products
-                WHERE (title LIKE ? OR english_title LIKE ? OR description LIKE ?)
+                WHERE english_title LIKE ?
                   AND ruleEnabled = 1
                 ORDER BY created_at DESC
                 LIMIT ?
-            """, (f'%{query}%', f'%{query}%', f'%{query}%', limit))
+            """, (f'%{query}%', limit))
 
             rows = cursor.fetchall()
 
@@ -19515,7 +19408,7 @@ def scrape_shop_products(shop_id):
     scraper = get_weidian_scraper()
     unique_product_tasks = {}  # 使用字典去重：item_id -> product_info
     offset = 0
-    limit = 20
+    limit = 50  # 增加每页商品数量，从20改为50
     page_count = 0
 
     # 初始化状态
@@ -19538,6 +19431,13 @@ def scrape_shop_products(shop_id):
     logger.info(f"开始收集商品列表，店铺: {shop_name}")
 
     # 第一阶段：收集所有商品信息（单线程，避免API压力）
+    # 尝试不同的tabId来获取更多商品（微店可能有多个商品分类）
+    all_tabs = [0]  # 默认从tab 0开始
+    for tab_id in all_tabs:
+        logger.info(f"开始收集tab {tab_id} 的商品")
+        offset = 0  # 每个tab重新开始
+        page_count = 0  # 每个tab重新开始
+
     while True:
         # 检查停止事件或停止信号
         if scrape_stop_event.is_set():
@@ -19552,7 +19452,7 @@ def scrape_shop_products(shop_id):
         try:
             # API 请求商品列表
             url = f"https://thor.weidian.com/decorate/shopDetail.tab.getItemList/1.0"
-            param_encoded = quote(f'{{"shopId":"{shop_id}","tabId":0,"sortOrder":"desc","offset":{offset},"limit":{limit},"from":"h5","showItemTag":true}}')
+                param_encoded = quote(f'{{"shopId":"{shop_id}","tabId":{tab_id},"sortOrder":"desc","offset":{offset},"limit":{limit},"from":"h5","showItemTag":true}}')
             full_url = f"{url}?param={param_encoded}&wdtoken=8ea9315c&_={int(time.time()*1000)}"
 
             response = scraper.session.get(full_url, timeout=10)
@@ -19562,7 +19462,15 @@ def scrape_shop_products(shop_id):
 
             data = response.json()
             if data.get('status', {}).get('code') != 0:
-                logger.warning('API响应状态码不为0')
+                    error_code = data.get('status', {}).get('code')
+                    error_message = data.get('status', {}).get('message', '')
+                    logger.warning(f'API响应状态码不为0: 代码={error_code}, 消息={error_message}')
+
+                    # 如果是参数错误（code=1000），可能是达到分页上限，停止抓取
+                    if error_code == 1000:
+                        logger.info(f'检测到参数错误(code=1000)，可能是达到微店API分页上限({offset})，停止抓取')
+                        break
+
                 break
 
             result = data.get('result', {})
@@ -19575,13 +19483,23 @@ def scrape_shop_products(shop_id):
                 logger.info('商品列表为空，收集完成')
                 break
 
-            # 收集当前页的商品任务 (内存去重)
+                # 添加调试信息，查看API响应详情
+                logger.info(f'API响应调试 - tab:{tab_id}, 页码:{page_count + 1}, offset:{offset}, hasData:{result.get("hasData")}, totalItems:{len(items)}')
+                if 'totalCount' in result:
+                    logger.info(f'API响应调试 - 服务器报告总数: {result.get("totalCount")}')
+                if len(items) > 0:
+                    logger.info(f'API响应调试 - 第一商品ID: {items[0].get("itemId", "unknown")}')
+
+                # 收集当前页的商品任务 (内存去重 + 数据库去重)
             page_new_count = 0
             for item in items:
                 item_id = item.get('itemId', '')
                 if item_id and item_id not in unique_product_tasks:  # 内存去重
-                    # 再次检查数据库是否已存在 (避免处理已抓过的)
-                    if not db.get_product_by_item_id(item_id):
+                        # 检查数据库是否已存在该商品，如果存在则跳过不进行任何抓取
+                        if db.get_product_by_item_id(item_id):
+                            logger.debug(f'商品 {item_id} 已存在于数据库中，跳过')
+                            continue
+
                         product_info = {
                             'item_id': item_id,
                             'item_url': item.get('itemUrl', ''),
@@ -19594,11 +19512,11 @@ def scrape_shop_products(shop_id):
             current_total = len(unique_product_tasks)
             db.update_scrape_status(
                 total=current_total,
-                message=f'正在收集商品... 第{page_count + 1}页，已找到 {current_total} 个新商品'
+                    message=f'正在收集商品... tab{tab_id}第{page_count + 1}页，已找到 {current_total} 个新商品'
             )
             # =================================================
 
-            logger.info(f'第 {page_count + 1} 页收集了 {len(items)} 个商品，其中 {page_new_count} 个新商品，总计 {len(unique_product_tasks)} 个待处理商品')
+                logger.info(f'tab{tab_id}第 {page_count + 1} 页收集了 {len(items)} 个商品，其中 {page_new_count} 个新商品，总计 {len(unique_product_tasks)} 个待处理商品')
 
             page_count += 1
             offset += limit
@@ -19606,6 +19524,10 @@ def scrape_shop_products(shop_id):
 
         except Exception as e:
             logger.error(f'收集商品列表出错: {e}')
+                break
+
+        # 检查是否还有其他tab需要处理，如果没有更多数据就退出
+        if not result.get('hasData', False):
             break
 
     # 转回列表用于处理
@@ -20073,6 +19995,29 @@ def save_product_images_multithreaded(product_id, image_urls):
     """向后兼容的别名"""
     return save_product_images_unified(product_id, image_urls)
 
+def run_cleanup_task():
+    """后台清理任务，定期清理数据库和内存中的过期记录"""
+    while True:
+        try:
+            # 每小时执行一次
+            time.sleep(3600)
+            logger.info("⚙️ 开始执行后台清理任务...")
+
+            # 1. 清理已处理的消息ID表
+            db.cleanup_processed_messages()
+            logger.info("✅ 已清理过期的消息ID记录")
+
+            # 2. 清理内存中的冷却记录
+            try:
+                from bot import cleanup_expired_cooldowns
+                cleanup_expired_cooldowns()
+                logger.info("✅ 已清理内存中过期的冷却状态")
+            except ImportError:
+                logger.warning("无法导入bot模块进行冷却清理，跳过")
+
+        except Exception as e:
+            logger.error(f"后台清理任务异常: {e}")
+
 if __name__ == '__main__':
     import atexit
     import threading
@@ -20122,6 +20067,11 @@ if __name__ == '__main__':
 
     # 注册退出时停止机器人的函数
     atexit.register(stop_discord_bot)
+
+    # 启动后台清理线程（定期清理 processed_messages / 冷却缓存）
+    cleanup_thread = threading.Thread(target=run_cleanup_task, daemon=True)
+    cleanup_thread.start()
+    logger.info("🚀 后台清理任务已启动，每小时运行一次")
 
     # ====================================================
     # 新增修复：启动时强制重置数据库抓取状态

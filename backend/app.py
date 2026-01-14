@@ -506,18 +506,18 @@ def search_similar():
             except Exception as e:
                 print(f"DEBUG: Failed to download image: {str(e)}")
                 return jsonify({'error': f'Failed to download image: {str(e)}'}), 400
-        else:
+        elif 'image' in request.files:
             print("DEBUG: No image_url provided, checking for uploaded file")
-            # 从上传的文件获取图片
-            if 'image' not in request.files:
-                print("DEBUG: No 'image' file found in request.files")
-                return jsonify({'error': 'No image provided'}), 400
-
             image_file = request.files['image']
             print(f"DEBUG: Found uploaded file: {image_file.filename if image_file else 'None'}")
+
             temp_filename = f"{uuid.uuid4()}.jpg"
             image_path = f"/tmp/{temp_filename}"
             image_file.save(image_path)
+
+        else:
+            print("DEBUG: No image_url and no uploaded file")
+            return jsonify({'error': 'No image provided (url or file)'}), 400
 
         try:
             # 提取特征 (使用 DINOv2 + YOLOv8)
@@ -554,12 +554,8 @@ def search_similar():
                 print(f"DEBUG: Best low-threshold match similarity: {low_threshold_results[0]['similarity']}")
             print(f"DEBUG: Total indexed images: {db.get_total_indexed_images()}")
 
-            # 如果没有找到满足阈值的结果，但有高质量的低阈值匹配（相似度>0.8），也可以考虑使用
-            if not results and low_threshold_results and len(low_threshold_results) > 0:
-                best_low_match = low_threshold_results[0]
-                if best_low_match.get('similarity', 0) > 0.8:  # 高质量匹配
-                    print(f"DEBUG: Using high-quality low-threshold result (similarity: {best_low_match['similarity']:.4f})")
-                    results = [best_low_match]
+            # 严格执行阈值：如果没有满足阈值的结果，则返回空结果
+            # 不再使用任何硬编码阈值兜底（例如 >0.8）
 
             response_data = {
                 'success': True,
@@ -973,7 +969,8 @@ def create_user():
         shop_ids = data.get('shops', [])
 
         # 创建用户
-        password_hash = f"hashed_{password}"
+        from werkzeug.security import generate_password_hash
+        password_hash = generate_password_hash(password)
         if db.create_user(username, password_hash, role):
             # 获取新创建的用户ID
             user = db.authenticate_user(username, password_hash)
@@ -1030,8 +1027,8 @@ def reset_user_password(user_id):
         if not new_password:
             return jsonify({'error': '密码不能为空'}), 400
 
-        # 简单哈希 (生产环境请用 bcrypt)
-        password_hash = f"hashed_{new_password}"
+        from werkzeug.security import generate_password_hash
+        password_hash = generate_password_hash(new_password)
 
         with db.get_connection() as conn:
             cursor = conn.cursor()
@@ -4201,30 +4198,30 @@ def scrape_shop_products(shop_id):
         offset = 0  # 每个tab重新开始
         page_count = 0  # 每个tab重新开始
 
-        while True:
-            # 检查停止事件或停止信号
-            if scrape_stop_event.is_set():
-                logger.info("🔴 停止事件触发，退出收集")
-                break
+    while True:
+        # 检查停止事件或停止信号
+        if scrape_stop_event.is_set():
+            logger.info("🔴 停止事件触发，退出收集")
+            break
 
-            current_status = db.get_scrape_status()
-            if current_status.get('stop_signal', False):
-                logger.info("🔴 停止信号触发，退出收集")
-                break
+        current_status = db.get_scrape_status()
+        if current_status.get('stop_signal', False):
+            logger.info("🔴 停止信号触发，退出收集")
+            break
 
-            try:
-                # API 请求商品列表
-                url = f"https://thor.weidian.com/decorate/shopDetail.tab.getItemList/1.0"
+        try:
+            # API 请求商品列表
+            url = f"https://thor.weidian.com/decorate/shopDetail.tab.getItemList/1.0"
                 param_encoded = quote(f'{{"shopId":"{shop_id}","tabId":{tab_id},"sortOrder":"desc","offset":{offset},"limit":{limit},"from":"h5","showItemTag":true}}')
-                full_url = f"{url}?param={param_encoded}&wdtoken=8ea9315c&_={int(time.time()*1000)}"
+            full_url = f"{url}?param={param_encoded}&wdtoken=8ea9315c&_={int(time.time()*1000)}"
 
-                response = scraper.session.get(full_url, timeout=10)
-                if response.status_code != 200:
-                    logger.warning(f'API请求失败: {response.status_code}')
-                    break
+            response = scraper.session.get(full_url, timeout=10)
+            if response.status_code != 200:
+                logger.warning(f'API请求失败: {response.status_code}')
+                break
 
-                data = response.json()
-                if data.get('status', {}).get('code') != 0:
+            data = response.json()
+            if data.get('status', {}).get('code') != 0:
                     error_code = data.get('status', {}).get('code')
                     error_message = data.get('status', {}).get('message', '')
                     logger.warning(f'API响应状态码不为0: 代码={error_code}, 消息={error_message}')
@@ -4234,17 +4231,17 @@ def scrape_shop_products(shop_id):
                         logger.info(f'检测到参数错误(code=1000)，可能是达到微店API分页上限({offset})，停止抓取')
                         break
 
-                    break
+                break
 
-                result = data.get('result', {})
-                if not result.get('hasData', False):
-                    logger.info('没有更多数据，收集完成')
-                    break
+            result = data.get('result', {})
+            if not result.get('hasData', False):
+                logger.info('没有更多数据，收集完成')
+                break
 
-                items = result.get('itemList', [])
-                if not items:
-                    logger.info('商品列表为空，收集完成')
-                    break
+            items = result.get('itemList', [])
+            if not items:
+                logger.info('商品列表为空，收集完成')
+                break
 
                 # 添加调试信息，查看API响应详情
                 logger.info(f'API响应调试 - tab:{tab_id}, 页码:{page_count + 1}, offset:{offset}, hasData:{result.get("hasData")}, totalItems:{len(items)}')
@@ -4254,10 +4251,10 @@ def scrape_shop_products(shop_id):
                     logger.info(f'API响应调试 - 第一商品ID: {items[0].get("itemId", "unknown")}')
 
                 # 收集当前页的商品任务 (内存去重 + 数据库去重)
-                page_new_count = 0
-                for item in items:
-                    item_id = item.get('itemId', '')
-                    if item_id and item_id not in unique_product_tasks:  # 内存去重
+            page_new_count = 0
+            for item in items:
+                item_id = item.get('itemId', '')
+                if item_id and item_id not in unique_product_tasks:  # 内存去重
                         # 检查数据库是否已存在该商品，如果存在则跳过不进行任何抓取
                         if db.get_product_by_item_id(item_id):
                             logger.debug(f'商品 {item_id} 已存在于数据库中，跳过')
@@ -4271,22 +4268,22 @@ def scrape_shop_products(shop_id):
                         unique_product_tasks[item_id] = product_info
                         page_new_count += 1
 
-                # === 新增：实时更新收集进度到数据库，让前端能看到 ===
-                current_total = len(unique_product_tasks)
-                db.update_scrape_status(
-                    total=current_total,
+            # === 新增：实时更新收集进度到数据库，让前端能看到 ===
+            current_total = len(unique_product_tasks)
+            db.update_scrape_status(
+                total=current_total,
                     message=f'正在收集商品... tab{tab_id}第{page_count + 1}页，已找到 {current_total} 个新商品'
-                )
-                # =================================================
+            )
+            # =================================================
 
                 logger.info(f'tab{tab_id}第 {page_count + 1} 页收集了 {len(items)} 个商品，其中 {page_new_count} 个新商品，总计 {len(unique_product_tasks)} 个待处理商品')
 
-                page_count += 1
-                offset += limit
-                time.sleep(0.5)  # 稍微歇一下防止封IP
+            page_count += 1
+            offset += limit
+            time.sleep(0.5)  # 稍微歇一下防止封IP
 
-            except Exception as e:
-                logger.error(f'收集商品列表出错: {e}')
+        except Exception as e:
+            logger.error(f'收集商品列表出错: {e}')
                 break
 
         # 检查是否还有其他tab需要处理，如果没有更多数据就退出
@@ -4758,6 +4755,29 @@ def save_product_images_multithreaded(product_id, image_urls):
     """向后兼容的别名"""
     return save_product_images_unified(product_id, image_urls)
 
+def run_cleanup_task():
+    """后台清理任务，定期清理数据库和内存中的过期记录"""
+    while True:
+        try:
+            # 每小时执行一次
+            time.sleep(3600)
+            logger.info("⚙️ 开始执行后台清理任务...")
+
+            # 1. 清理已处理的消息ID表
+            db.cleanup_processed_messages()
+            logger.info("✅ 已清理过期的消息ID记录")
+
+            # 2. 清理内存中的冷却记录
+            try:
+                from bot import cleanup_expired_cooldowns
+                cleanup_expired_cooldowns()
+                logger.info("✅ 已清理内存中过期的冷却状态")
+            except ImportError:
+                logger.warning("无法导入bot模块进行冷却清理，跳过")
+
+        except Exception as e:
+            logger.error(f"后台清理任务异常: {e}")
+
 if __name__ == '__main__':
     import atexit
     import threading
@@ -4807,6 +4827,11 @@ if __name__ == '__main__':
 
     # 注册退出时停止机器人的函数
     atexit.register(stop_discord_bot)
+
+    # 启动后台清理线程（定期清理 processed_messages / 冷却缓存）
+    cleanup_thread = threading.Thread(target=run_cleanup_task, daemon=True)
+    cleanup_thread.start()
+    logger.info("🚀 后台清理任务已启动，每小时运行一次")
 
     # ====================================================
     # 新增修复：启动时强制重置数据库抓取状态

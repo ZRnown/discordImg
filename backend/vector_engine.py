@@ -3,6 +3,7 @@ import numpy as np
 import os
 import pickle
 import logging
+import json
 from typing import List, Dict, Tuple
 try:
     from .config import config
@@ -209,42 +210,39 @@ class VectorEngine:
             return False
 
     def _rebuild_index_after_removal(self):
-        """删除向量后重建索引"""
+        """删除向量后重建索引（优化版：直接使用数据库中已存的 features，不重新跑模型）"""
         try:
-            # 获取所有未删除的向量数据
             try:
                 from database import db
             except ImportError:
                 from .database import db
+
             valid_vectors = []
+
+            # 只保留那些仍然“未被标记删除”的 db_id
+            alive_db_ids = {mapped_id for mapped_id in self.id_map if mapped_id is not None}
 
             with db.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT id, image_path FROM product_images WHERE id IS NOT NULL")
+                cursor.execute("SELECT id, features FROM product_images WHERE id IS NOT NULL AND features IS NOT NULL")
                 for row in cursor.fetchall():
                     img_id = row['id']
-                    # 检查这个向量是否在我们的id_map中且未被标记删除
-                    if img_id in self.id_map and self.id_map[self.id_map.index(img_id)] is not None:
-                        # 重新提取特征（或者从缓存中获取）
-                        # 这里为了简单，我们假设特征需要重新提取
-                        # 在生产环境中，应该缓存特征或定期重建
-                        try:
-                            # 这里需要导入特征提取器
-                            try:
-                                from feature_extractor import get_feature_extractor
-                            except ImportError:
-                                from .feature_extractor import get_feature_extractor
-                            extractor = get_feature_extractor()
-                            features = extractor.extract_feature(row['image_path'])
-                            if features is not None:
-                                valid_vectors.append((img_id, features))
-                        except Exception as e:
-                            logger.warning(f"重新提取特征失败 {row['image_path']}: {e}")
+                    if img_id not in alive_db_ids:
+                        continue
+
+                    features_str = row['features']
+                    try:
+                        vec = np.array(json.loads(features_str), dtype='float32')
+                        if vec.shape[0] != self.dimension:
+                            continue
+                        valid_vectors.append((img_id, vec))
+                    except Exception:
+                        continue
 
             # 重建索引
             self._create_new_index()
-            for img_id, features in valid_vectors:
-                self.add_vector(img_id, features)
+            for img_id, vec in valid_vectors:
+                self.add_vector(img_id, vec)
 
             self.save()
             logger.info(f"索引重建完成，包含 {len(valid_vectors)} 个向量")

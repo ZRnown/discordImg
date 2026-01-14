@@ -224,8 +224,12 @@ class DiscordBotClient(discord.Client):
             # 生成回复内容
             response_content = self._generate_reply_content(product, message.channel.id, custom_reply)
 
-            # 1. 尝试获取网站配置
+            # 1. 尝试获取网站配置（必须绑定，否则不回复）
             website_config = await self.get_website_config_by_channel_async(message.channel.id)
+
+            if not website_config:
+                logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过回复")
+                return
 
             target_client = None
 
@@ -244,11 +248,10 @@ class DiscordBotClient(discord.Client):
                 rotation_enabled = website_config.get('rotation_enabled', 1)
                 rotation_interval = website_config.get('rotation_interval', 180)
 
+                available_senders = []
+
                 # 调试信息：检查轮换配置
                 logger.info(f"账号轮换配置 - 启用:{rotation_enabled}, 间隔:{rotation_interval}秒, 频道:{message.channel.id}")
-                logger.info(f"可用发送账号: {len(available_senders) if 'available_senders' in locals() else 0} 个")
-
-                available_senders = []
                 if rotation_enabled:
                     # 筛选非冷却的（按频道区分冷却）
                     available_senders = [uid for uid in valid_senders if not is_account_on_cooldown(uid, message.channel.id, rotation_interval)]
@@ -264,20 +267,17 @@ class DiscordBotClient(discord.Client):
                     selected_id = random.choice(available_senders)
                     # 从全局列表中找到这个实例
                     target_client = next((c for c in bot_clients if c.account_id == selected_id), None)
+                    logger.info(f"本次选中发送账号: {selected_id} | 可用账号数: {len(available_senders)}")
+                else:
+                    logger.info(f"本次可用发送账号数: 0 | valid_senders数: {len(valid_senders)}")
 
-            # === 兜底逻辑 (最重要的一步) ===
-            # 如果上面一顿操作猛如虎，最后没找到人（比如配置错误、没在线、列表为空）
-            # 或者当前账号本身就是"Both"角色，且上面随机没随到自己，但为了稳妥
+            # 如果没有可用发送账号，直接跳过（不允许兜底回复）
             if not target_client:
-                logger.warning(f"调度失败或未配置，启用兜底机制：使用当前接收账号回复")
-                target_client = self  # <--- 强制使用自己，保证消息一定能发出去
+                logger.info(f"频道 {message.channel.id} 没有可用的发送账号(可能都离线或在冷却)，跳过回复")
+                return
 
             # 5. 执行发送
             if target_client:
-                # 记录冷却（按频道区分）
-                if hasattr(target_client, 'account_id') and target_client.account_id:
-                    set_account_cooldown(target_client.account_id, message.channel.id)
-
                 try:
                     # 只有当 target_client 和 message 在同一个服务器时，get_channel 才有效
                     # 如果是用别的号回复，那个号也必须在这个服务器里
@@ -290,15 +290,19 @@ class DiscordBotClient(discord.Client):
                         # 总是尝试回复原消息，而不是直接发送
                         try:
                             await message.reply(response_content)
+                            if hasattr(target_client, 'account_id') and target_client.account_id:
+                                set_account_cooldown(target_client.account_id, message.channel.id)
                             logger.info(f"✅ [回复成功] 账号: {target_client.user.name} | 商品ID: {product.get('id')}")
                         except Exception as reply_error:
                             logger.warning(f"回复消息失败，改用直接发送: {reply_error}")
                             await target_channel.send(response_content)
+                            if hasattr(target_client, 'account_id') and target_client.account_id:
+                                set_account_cooldown(target_client.account_id, message.channel.id)
                             logger.info(f"✅ [发送成功] 账号: {target_client.user.name} | 商品ID: {product.get('id')}")
                     else:
                         # 这种情况是：选中的机器人不在这个频道/服务器里
-                        logger.warning(f"❌ 选中的账号 {target_client.user.name} 无法访问频道，回退到直接回复")
-                        await message.reply(response_content)
+                        logger.warning(f"❌ 选中的账号 {target_client.user.name} 无法访问频道，跳过发送")
+                        return
 
                 except Exception as e:
                     logger.error(f"❌ 发送异常，尝试最后一次回退: {e}")
@@ -523,6 +527,15 @@ class DiscordBotClient(discord.Client):
         if self.role == 'sender':
             return  # 纯发送账号不监听消息
 
+        # 多Bot并发控制：同一条消息只允许一个Bot处理
+        # 如果这个消息已经被别的Bot抢锁处理了，我就退出
+        try:
+            if not mark_message_as_processed(message.id):
+                return
+        except Exception as e:
+            logger.error(f"消息去重检查失败: {e}")
+            return
+
         logger.info(f'收到消息: {message.author.name} 在 #{message.channel.name}: "{message.content[:100]}{"..." if len(message.content) > 100 else ""}"')
 
         # 处理关键词消息转发
@@ -595,8 +608,8 @@ class DiscordBotClient(discord.Client):
 
                 logger.info(f'最佳匹配相似度: {similarity:.4f}, 用户阈值: {user_threshold:.4f}')
 
-                # 检查相似度是否超过用户设置的阈值，或者是否为高质量匹配（相似度>0.8）
-                if similarity >= user_threshold or similarity > 0.8:
+                # 严格执行用户设置的阈值
+                if similarity >= user_threshold:
                     product = best_match.get('product', {})
                     logger.info(f'✅ 匹配成功! 相似度: {similarity:.2f} | 商品: {product.get("id")} | 频道: {message.channel.name}')
 
