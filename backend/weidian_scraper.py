@@ -561,8 +561,31 @@ class WeidianScraper:
         try:
             logger.debug(f"开始获取店铺名称: {url}")
 
-            # 请求商品页面
-            response = self.session.get(url, timeout=10, proxies={'http': None, 'https': None})
+            # 使用专门的HTML请求headers（不同于API请求的headers）
+            html_headers = {
+                'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                'accept-language': 'en-US,en;q=0.9,zh-HK;q=0.8,zh-CN;q=0.7,zh;q=0.6',
+                'cache-control': 'max-age=0',
+                'sec-ch-ua': '"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
+                'sec-ch-ua-mobile': '?0',
+                'sec-ch-ua-platform': '"macOS"',
+                'sec-fetch-dest': 'document',
+                'sec-fetch-mode': 'navigate',
+                'sec-fetch-site': 'none',
+                'sec-fetch-user': '?1',
+                'upgrade-insecure-requests': '1',
+                'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
+            }
+
+            html_cookies = {
+                'wdtoken': '8ea9315c',
+                '__spider__visitorid': '0dcf6a5b878847ec',
+                'visitor_id': '4d36e980-4128-451c-8178-a976b6303114',
+                '__spider__sessionid': '4cb270eb969f316c'
+            }
+
+            # 请求商品页面（使用HTML专用headers）
+            response = requests.get(url, headers=html_headers, cookies=html_cookies, timeout=10, proxies={'http': None, 'https': None})
             response.raise_for_status()
 
             # 解码HTML实体（&#34; -> " 等）

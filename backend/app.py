@@ -1144,6 +1144,9 @@ def get_website_channels(config_id):
 @app.route('/api/websites/<int:config_id>/channels', methods=['POST'])
 def add_website_channel(config_id):
     """添加网站频道绑定"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
     try:
         data = request.get_json()
         channel_id = data.get('channel_id')
@@ -1163,6 +1166,9 @@ def add_website_channel(config_id):
 @app.route('/api/websites/<int:config_id>/channels/<channel_id>', methods=['DELETE'])
 def remove_website_channel(config_id, channel_id):
     """移除网站频道绑定"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
     try:
         current_user = get_current_user()
         if db.remove_website_channel_binding(config_id, channel_id, current_user['id']):
@@ -1192,9 +1198,8 @@ def get_website_accounts(config_id):
 @app.route('/api/websites/<int:config_id>/accounts', methods=['POST'])
 def add_website_account(config_id):
     """为网站绑定账号"""
-    # 移除 require_admin，允许普通用户操作
-    if not require_login():
-        return jsonify({'error': '需要登录'}), 401
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
 
     try:
         data = request.get_json()
@@ -1231,21 +1236,10 @@ def add_website_account(config_id):
 @app.route('/api/websites/<int:config_id>/accounts/<int:account_id>', methods=['DELETE'])
 def remove_website_account(config_id, account_id):
     """移除网站账号绑定"""
-    # 移除 require_admin
-    if not require_login():
-        return jsonify({'error': '需要登录'}), 401
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
 
     try:
-        # 权限检查：确保该账号属于当前用户
-        current_user = get_current_user()
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT user_id FROM discord_accounts WHERE id = ?", (account_id,))
-            row = cursor.fetchone()
-            if row:
-                account_owner_id = row[0]
-                if current_user['role'] != 'admin' and account_owner_id != current_user['id']:
-                    return jsonify({'error': '您无权操作此账号'}), 403
 
         if db.remove_website_account_binding(config_id, account_id, current_user['id']):
             return jsonify({'success': True, 'message': '账号绑定已移除'})

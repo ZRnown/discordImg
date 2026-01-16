@@ -305,21 +305,15 @@ class DiscordBotClient(discord.Client):
                         return
 
                 except Exception as e:
-                    logger.error(f"❌ 发送异常，尝试最后一次回退: {e}")
-                    # 最后的最后，直接用 message 对象回复
-                    await message.reply(response_content)
+                    logger.error(f"❌ 发送异常: {e}")
+                    # 发送失败时不设置冷却，让其他账号可以尝试
             else:
-                # 理论上不会走到这里，因为有 target_client = self
-                await message.reply(response_content)
+                # 理论上不会走到这里
+                pass
 
         except Exception as e:
             logger.error(f"❌ 严重错误: {e}")
-            # 无论发生什么错误，保证回复
-            try:
-                response_content = self._generate_reply_content(product, message.channel.id, custom_reply)
-                await message.reply(response_content)
-            except:
-                pass
+            # 发生严重错误时不尝试回复，避免无限循环
 
     def _generate_reply_content(self, product, channel_id, custom_reply=None):
         """生成回复内容"""
@@ -847,8 +841,8 @@ class DiscordBotClient(discord.Client):
 
     async def recognize_image(self, image_data, user_shops=None):
         try:
-            # 设置较短的超时时间，避免阻塞Discord网关
-            timeout = aiohttp.ClientTimeout(total=15)  # 15秒超时
+            # 增加超时时间，FAISS搜索可能需要更长时间
+            timeout = aiohttp.ClientTimeout(total=30)  # 30秒超时
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 # 准备图片数据
                 form_data = aiohttp.FormData()
@@ -885,8 +879,14 @@ class DiscordBotClient(discord.Client):
                         logger.error(f'PP-ShiTuV2 service error: {resp.status}')
                         return None
 
+        except asyncio.TimeoutError:
+            logger.error('Error recognizing image: Request timeout (30s)')
+            return None
+        except aiohttp.ClientError as e:
+            logger.error(f'Error recognizing image: Network error - {type(e).__name__}: {e}')
+            return None
         except Exception as e:
-            logger.error(f'Error recognizing image: {e}')
+            logger.error(f'Error recognizing image: {type(e).__name__}: {e}')
             return None
 
 async def get_all_accounts_from_backend():
