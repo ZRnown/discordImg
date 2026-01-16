@@ -4234,22 +4234,27 @@ def get_all_category_ids(shop_id, session):
 def fetch_category_items(shop_id, cate_id, cate_name, session, limit=20):
     """
     生成器：抓取指定分类下的所有商品
-    API: decorate/itemCate.getItemList
+    API: decorate/itemCate.getCateItemList
     """
     import time
     from urllib.parse import quote
 
-    page = 1
-    total_fetched = 0
+    offset = 0
 
     while True:
         try:
-            url = "https://thor.weidian.com/decorate/itemCate.getItemList/1.0"
+            url = "https://thor.weidian.com/decorate/itemCate.getCateItemList/1.0"
             param = json.dumps({
+                "cateId": str(cate_id),
                 "shopId": str(shop_id),
-                "cateId": int(cate_id),
-                "page": page,
-                "pageSize": limit
+                "offset": offset,
+                "limit": limit,
+                "sortField": "all",
+                "sortType": "desc",
+                "isQdFx": False,
+                "isHideSold": False,
+                "hideItemRealAmount": False,
+                "from": "h5"
             })
             full_url = f"{url}?param={quote(param)}&wdtoken=8ea9315c&_={int(time.time()*1000)}"
 
@@ -4257,23 +4262,22 @@ def fetch_category_items(shop_id, cate_id, cate_name, session, limit=20):
             data = response.json()
 
             if data.get('status', {}).get('code') != 0:
-                logger.warning(f"分类[{cate_name}] 第{page}页 API错误: {data.get('status')}")
+                logger.warning(f"分类[{cate_name}] Offset {offset} API错误: {data.get('status')}")
                 break
 
-            items = data.get('result', {}).get('itemList', [])
+            result = data.get('result', {})
+            items = result.get('itemList', [])
+
             if not items:
                 break
 
             for item in items:
                 yield item
 
-            total_fetched += len(items)
-
-            total_count = data.get('result', {}).get('totalCount', 0)
-            if total_fetched >= total_count or len(items) < limit:
+            if len(items) < limit:
                 break
 
-            page += 1
+            offset += limit
             time.sleep(0.3)
 
         except Exception as e:
@@ -4320,107 +4324,65 @@ def scrape_shop_products(shop_id):
     logger.info(f"开始收集商品列表，店铺: {shop_name}")
 
     # =========================================================================
-    # 阶段 1.1: 快速抓取"全部商品" (Tab 0) - 最多能拿到前 2000 个
+    # 阶段 1: 通过分类树抓取所有商品 (突破2000条限制)
     # =========================================================================
-    logger.info("=== 阶段 1.1: 抓取 Tab 0 (全部商品) ===")
+    logger.info("=== 阶段 1: 通过分类树抓取商品 ===")
 
-    limit = 50
-    offset = 0
-    page_count = 0
+    db.update_scrape_status(message='正在获取店铺分类树...')
 
-    while True:
-        if scrape_stop_event.is_set() or db.get_scrape_status().get('stop_signal', False):
-            break
-
-        try:
-            url = f"https://thor.weidian.com/decorate/shopDetail.tab.getItemList/1.0"
-            param_encoded = quote(
-                f'{{"shopId":"{shop_id}","tabId":0,"sortOrder":"desc","offset":{offset},"limit":{limit},"from":"h5","showItemTag":true}}'
-            )
-            full_url = f"{url}?param={param_encoded}&wdtoken=8ea9315c&_={int(time.time()*1000)}"
-
-            response = scraper.session.get(full_url, timeout=10)
-            data = response.json()
-
-            if data.get('status', {}).get('code') != 0:
-                logger.info(f"Tab 0 抓取结束 (API代码: {data.get('status', {}).get('code')})")
-                break
-
-            result = data.get('result', {})
-            items = result.get('itemList', [])
-            if not items:
-                break
-
-            for item in items:
-                item_id = item.get('itemId', '')
-                if item_id and item_id not in unique_product_tasks:
-                    if db.get_product_by_item_id(item_id):
-                        continue
-                    unique_product_tasks[item_id] = {
-                        'item_id': item_id,
-                        'item_url': item.get('itemUrl', ''),
-                        'shop_name': shop_name
-                    }
-
-            db.update_scrape_status(
-                total=len(unique_product_tasks),
-                message=f'Tab 0 抓取中... 已收集 {len(unique_product_tasks)} 个商品'
-            )
-
-            page_count += 1
-            offset += limit
-            time.sleep(0.2)
-
-            if not result.get('hasData', False):
-                break
-
-        except Exception as e:
-            logger.error(f"Tab 0 抓取异常: {e}")
-            break
-
-    logger.info(f"Tab 0 抓取完成，当前共收集 {len(unique_product_tasks)} 个商品。准备通过分类补全...")
-
-    # =========================================================================
-    # 阶段 1.2: 遍历分类树查漏补缺 (突破 2000 限制的关键)
-    # =========================================================================
     if not (scrape_stop_event.is_set() or db.get_scrape_status().get('stop_signal', False)):
         try:
+            # 1. 获取所有分类 ID
             categories = get_all_category_ids(shop_id, scraper.session)
 
-            for idx, cate in enumerate(categories):
-                if scrape_stop_event.is_set() or db.get_scrape_status().get('stop_signal', False):
-                    break
+            if not categories:
+                logger.warning("未获取到任何分类，尝试使用Tab 0备用方案...")
+                # 备用方案：如果没有分类，使用Tab 0
+                db.update_scrape_status(message='未找到分类，使用备用方案...')
+            else:
+                # 2. 遍历每个分类抓取商品
+                for idx, cate in enumerate(categories):
+                    if scrape_stop_event.is_set() or db.get_scrape_status().get('stop_signal', False):
+                        break
 
-                cate_id = cate['id']
-                cate_name = cate['name']
+                    cate_id = cate['id']
+                    cate_name = cate['name']
 
-                if cate['count'] == 0:
-                    continue
+                    # 跳过空分类
+                    if cate['count'] == 0:
+                        continue
 
-                logger.info(f"=== 正在扫描分类 [{idx+1}/{len(categories)}]: {cate_name} (ID: {cate_id}, 约 {cate['count']} 个商品) ===")
-                db.update_scrape_status(message=f'正在扫描分类: {cate_name}...')
+                    logger.info(f"=== 正在扫描分类 [{idx+1}/{len(categories)}]: {cate_name} (ID: {cate_id}, 约 {cate['count']} 个商品) ===")
+                    db.update_scrape_status(message=f'正在扫描分类 [{idx+1}/{len(categories)}]: {cate_name}...')
 
-                new_in_cate = 0
-                for item in fetch_category_items(shop_id, cate_id, cate_name, scraper.session):
-                    item_id = str(item.get('itemId', ''))
+                    # 抓取该分类下的商品
+                    new_in_cate = 0
+                    for item in fetch_category_items(shop_id, cate_id, cate_name, scraper.session):
+                        item_id = str(item.get('itemId', ''))
 
-                    if item_id and item_id not in unique_product_tasks:
-                        if db.get_product_by_item_id(item_id):
-                            continue
+                        # 去重：只有不在字典里的才添加
+                        if item_id and item_id not in unique_product_tasks:
+                            # 检查数据库是否已存在
+                            if db.get_product_by_item_id(item_id):
+                                continue
 
-                        unique_product_tasks[item_id] = {
-                            'item_id': item_id,
-                            'item_url': item.get('itemUrl', f"https://weidian.com/item.html?itemID={item_id}"),
-                            'shop_name': shop_name
-                        }
-                        new_in_cate += 1
+                            unique_product_tasks[item_id] = {
+                                'item_id': item_id,
+                                'item_url': item.get('itemUrl', f"https://weidian.com/item.html?itemID={item_id}"),
+                                'shop_name': shop_name
+                            }
+                            new_in_cate += 1
 
-                if new_in_cate > 0:
-                    logger.info(f"  -> 分类 [{cate_name}] 贡献了 {new_in_cate} 个新商品")
-                    db.update_scrape_status(total=len(unique_product_tasks))
+                    if new_in_cate > 0:
+                        logger.info(f"  -> 分类 [{cate_name}] 收集了 {new_in_cate} 个新商品，总计: {len(unique_product_tasks)}")
+                        db.update_scrape_status(total=len(unique_product_tasks))
+                    else:
+                        logger.info(f"  -> 分类 [{cate_name}] 无新商品")
 
         except Exception as e:
             logger.error(f"分类遍历过程异常: {e}")
+
+    logger.info(f"✅ 分类树抓取完成，共收集 {len(unique_product_tasks)} 个商品")
 
     # =========================================================================
     # 阶段 2: 并发处理
