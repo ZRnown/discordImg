@@ -93,11 +93,39 @@ def mark_message_as_processed(message_id):
     except sqlite3.IntegrityError:
         return False  # 已经被其他Bot抢锁
 
-def get_response_url_for_channel(product, channel_id):
-    """根据频道ID决定发送哪个链接"""
+def get_response_url_for_channel(product, channel_id, user_id=None):
+    """根据频道ID和网站配置决定发送哪个链接"""
+    import re
+    try:
+        from database import db
+    except ImportError:
+        from .database import db
+
     channel_id_str = str(channel_id)
 
-    # 如果是CNFans频道，优先发送CNFans链接
+    # 1. 首先尝试根据频道绑定获取网站配置
+    website_config = db.get_website_config_by_channel(channel_id_str, user_id)
+
+    if website_config and website_config.get('url_template'):
+        # 从商品URL中提取微店ID
+        weidian_url = product.get('weidianUrl') or product.get('product_url') or ''
+        weidian_id = None
+
+        # 尝试从URL中提取itemID
+        match = re.search(r'itemID=(\d+)', weidian_url)
+        if match:
+            weidian_id = match.group(1)
+        else:
+            # 尝试从weidianId字段获取
+            weidian_id = product.get('weidianId')
+
+        if weidian_id:
+            # 使用URL模板生成链接
+            url = website_config['url_template'].replace('{id}', weidian_id)
+            logger.info(f"使用网站配置 '{website_config['name']}' 的URL模板生成链接: {url[:50]}...")
+            return url
+
+    # 2. 回退到旧的硬编码逻辑（兼容性）
     if config.CNFANS_CHANNEL_ID and channel_id_str == config.CNFANS_CHANNEL_ID:
         if product.get('cnfansUrl'):
             return product['cnfansUrl']
@@ -106,7 +134,6 @@ def get_response_url_for_channel(product, channel_id):
         else:
             return product.get('weidianUrl', '未找到相关商品')
 
-    # 如果是AcBuy频道，优先发送AcBuy链接
     elif config.ACBUY_CHANNEL_ID and channel_id_str == config.ACBUY_CHANNEL_ID:
         if product.get('acbuyUrl'):
             return product['acbuyUrl']
@@ -115,7 +142,7 @@ def get_response_url_for_channel(product, channel_id):
         else:
             return product.get('weidianUrl', '未找到相关商品')
 
-    # 其他频道默认发送CNFans链接，如果没有则发送微店链接
+    # 3. 默认发送CNFans链接
     else:
         if product.get('cnfansUrl'):
             return product['cnfansUrl']
@@ -392,7 +419,7 @@ class DiscordBotClient(discord.Client):
 
             elif reply_type == 'text_and_link':
                 # 发送文字 + 链接
-                response = get_response_url_for_channel(product, channel_id)
+                response = get_response_url_for_channel(product, channel_id, self.user_id)
                 return f"{custom_reply.get('content', '')}\n{response}".strip()
 
             elif reply_type == 'text':
@@ -400,7 +427,7 @@ class DiscordBotClient(discord.Client):
                 return custom_reply.get('content', '')
 
         # 默认行为：发送链接
-        return get_response_url_for_channel(product, channel_id)
+        return get_response_url_for_channel(product, channel_id, self.user_id)
 
     def get_website_config_by_channel(self, channel_id):
         """根据频道ID获取对应的网站配置"""
@@ -782,7 +809,7 @@ class DiscordBotClient(discord.Client):
 
                         # 如果既没有文本也没有图片，则发送默认链接
                         if not custom_text and not images_sent:
-                            response = get_response_url_for_channel(product, message.channel.id)
+                            response = get_response_url_for_channel(product, message.channel.id, self.user_id)
                             await message.reply(response)
 
                     logger.info(f'图片识别成功，相似度: {similarity:.4f}')
@@ -890,7 +917,7 @@ class DiscordBotClient(discord.Client):
                 logger.info(f'关键词搜索成功: "{search_query}" -> 找到 {len(products)} 个商品')
                 # 根据频道决定发送哪个链接
                 product = products[0]
-                response = get_response_url_for_channel(product, message.channel.id)
+                response = get_response_url_for_channel(product, message.channel.id, self.user_id)
 
                 logger.info(f'关键词搜索完成，找到 {len(products)} 个商品')
 

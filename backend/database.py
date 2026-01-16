@@ -1476,6 +1476,35 @@ class Database:
             logger.error(f"移除网站频道绑定失败: {e}")
             return False
 
+    def get_website_config_by_channel(self, channel_id: str, user_id: int = None) -> Dict:
+        """根据频道ID获取绑定的网站配置"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                if user_id:
+                    cursor.execute('''
+                        SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color
+                        FROM website_configs wc
+                        JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
+                        WHERE wcb.channel_id = ? AND wcb.user_id = ?
+                        LIMIT 1
+                    ''', (str(channel_id), user_id))
+                else:
+                    cursor.execute('''
+                        SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color
+                        FROM website_configs wc
+                        JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
+                        WHERE wcb.channel_id = ?
+                        LIMIT 1
+                    ''', (str(channel_id),))
+                row = cursor.fetchone()
+                if row:
+                    return dict(row)
+                return None
+        except Exception as e:
+            logger.error(f"根据频道获取网站配置失败: {e}")
+            return None
+
     def generate_website_urls(self, weidian_id: str) -> List[Dict]:
         """根据微店ID生成所有网站的URL"""
         try:

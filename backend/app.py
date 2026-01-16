@@ -1087,6 +1087,11 @@ def get_website_configs():
             # 2) 频道绑定：只返回当前用户自己的绑定
             config['channels'] = db.get_website_channel_bindings(config_id, current_user['id'])
 
+            # 3) 用户级别的轮换设置
+            user_settings = db.get_user_website_settings(current_user['id'], config_id)
+            config['rotation_interval'] = user_settings.get('rotation_interval', 180)
+            config['rotation_enabled'] = user_settings.get('rotation_enabled', 1)
+
         return jsonify({'websites': configs})
     except Exception as e:
         logger.error(f"获取网站配置失败: {e}")
@@ -2443,6 +2448,14 @@ def update_user_settings():
         max_delay = data.get('global_reply_max_delay')
         logger.info(f"用户设置延迟 - 最小: {min_delay}, 最大: {max_delay}")
 
+        # 处理开关设置（boolean 转 integer）
+        keyword_reply = data.get('keyword_reply_enabled')
+        image_reply = data.get('image_reply_enabled')
+        if keyword_reply is not None:
+            keyword_reply = 1 if keyword_reply else 0
+        if image_reply is not None:
+            image_reply = 1 if image_reply else 0
+
         success = db.update_user_settings(
             user_id=user['id'],
             download_threads=data.get('download_threads'),
@@ -2452,8 +2465,8 @@ def update_user_settings():
             global_reply_max_delay=max_delay,
             user_blacklist=data.get('user_blacklist'),
             keyword_filters=data.get('keyword_filters'),
-            keyword_reply_enabled=data.get('keyword_reply_enabled'),
-            image_reply_enabled=data.get('image_reply_enabled')
+            keyword_reply_enabled=keyword_reply,
+            image_reply_enabled=image_reply
         )
 
         if success:
