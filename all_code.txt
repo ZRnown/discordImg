@@ -1648,67 +1648,62 @@ export async function GET(request: NextRequest) {
       throw new Error(`Backend API error: ${response.status}`)
     }
 
-    // 创建可读流
+    // 创建可读流，使用共享状态对象
+    const state = { isControllerClosed: false }
+    const reader = response.body?.getReader()
+
     const stream = new ReadableStream({
       start(controller) {
-        const reader = response.body?.getReader()
-        let isControllerClosed = false
-
         function push() {
           // 如果controller已关闭，直接返回
-          if (isControllerClosed) return
+          if (state.isControllerClosed) return
 
           reader?.read().then(({ done, value }) => {
             // 如果controller已关闭，停止处理
-            if (isControllerClosed) return
+            if (state.isControllerClosed) return
 
             if (done) {
               // 流结束，关闭controller
-              if (!isControllerClosed) {
-                isControllerClosed = true
+              if (!state.isControllerClosed) {
+                state.isControllerClosed = true
                 try {
                   controller.close()
-                } catch (closeError) {
-                  console.warn('Controller close error (already closed):', closeError.message)
+                } catch {
+                  // 忽略关闭错误
                 }
               }
               return
             }
 
             // 确保controller没有被关闭再enqueue
-            if (!isControllerClosed) {
+            if (!state.isControllerClosed) {
               try {
                 controller.enqueue(value)
-                // 只有在成功enqueue后才继续读取下一块数据
                 push()
-              } catch (enqueueError) {
-                // enqueue失败，可能是controller已关闭
-                console.error('Stream enqueue error:', enqueueError)
-                if (!isControllerClosed) {
-                  isControllerClosed = true
-                  try {
-                    controller.close()
-                  } catch (closeError) {
-                    console.warn('Controller close error after enqueue failure:', closeError.message)
-                  }
-                }
+              } catch {
+                // enqueue失败，静默处理
+                state.isControllerClosed = true
               }
             }
-          }).catch((error) => {
-            console.error('Stream read error:', error)
-            // 发生读取错误时也要关闭controller
-            if (!isControllerClosed) {
-              isControllerClosed = true
+          }).catch(() => {
+            // 发生读取错误时关闭controller
+            if (!state.isControllerClosed) {
+              state.isControllerClosed = true
               try {
                 controller.close()
-              } catch (closeError) {
-                console.warn('Controller close error after read failure:', closeError.message)
+              } catch {
+                // 忽略关闭错误
               }
             }
           })
         }
 
         push()
+      },
+      cancel() {
+        // 客户端断开连接时调用
+        state.isControllerClosed = true
+        reader?.cancel().catch(() => {})
       }
     })
 
@@ -2768,10 +2763,7 @@ export default function Page() {
         // 强制重新获取状态以确认
         setTimeout(() => fetchBotStatus(), 100)
         toast.success("Discord账号已启动")
-        // 强制刷新账号状态
-        if (window.location.pathname === '/accounts') {
-          setTimeout(() => window.location.reload(), 200)
-        }
+        window.dispatchEvent(new Event('bot-status-changed'))
       } else {
         const error = await response.json()
         console.log('启动失败，错误:', error)
@@ -2797,10 +2789,7 @@ export default function Page() {
       if (response.ok) {
         setBotStatus('stopped')
         toast.success("Discord账号已停止")
-        // 强制刷新账号状态
-        if (window.location.pathname === '/accounts') {
-          window.location.reload()
-        }
+        window.dispatchEvent(new Event('bot-status-changed'))
       } else {
         setBotStatus('running')
         toast.error("停止账号失败")
@@ -2976,7 +2965,17 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
-import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit } from "lucide-react"
+import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit, Clock } from "lucide-react"
+
+function CooldownTimer({ remaining }: { remaining: number }) {
+  if (remaining <= 0) return null
+  return (
+    <div className="flex items-center text-orange-600 text-xs gap-1 mt-1 bg-orange-50 px-2 py-0.5 rounded border border-orange-100">
+      <Clock className="w-3 h-3" />
+      <span className="font-mono">{Math.ceil(remaining)}s 冷却中</span>
+    </div>
+  )
+}
 
 export function AccountsView() {
   const [accounts, setAccounts] = useState<any[]>([])
@@ -3014,7 +3013,9 @@ export function AccountsView() {
   const [websiteChannels, setWebsiteChannels] = useState<{[key: number]: string[]}>({})
   const [channelInputs, setChannelInputs] = useState<{[key: number]: string}>({})
   const [rotationEnabled, setRotationEnabled] = useState<{[key: number]: boolean}>({})
-  const [rotationIntervals, setRotationIntervals] = useState<{[key: number]: number}>({})
+  const [rotationInputs, setRotationInputs] = useState<{[key: number]: string}>({})
+
+  const [cooldowns, setCooldowns] = useState<any[]>([])
 
   // 网站账号绑定相关状态
   const [websiteAccounts, setWebsiteAccounts] = useState<{[key: number]: any[]}>({})
@@ -3071,6 +3072,8 @@ export function AccountsView() {
       websites.forEach((website: any) => {
         channels[website.id] = website.channels || []
         accounts[website.id] = website.accounts || []
+        setRotationEnabled(prev => ({ ...prev, [website.id]: website.rotation_enabled !== 0 }))
+        setRotationInputs(prev => ({ ...prev, [website.id]: (website.rotation_interval || 180).toString() }))
       })
 
       // 等待所有过滤规则获取完成
@@ -3098,6 +3101,40 @@ export function AccountsView() {
   }
 
 
+  const fetchCooldowns = async () => {
+    try {
+      const res = await fetch('/api/bot/cooldowns', { credentials: 'include' })
+      if (res.ok) {
+        const data = await res.json()
+        setCooldowns(data.cooldowns || [])
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const getCooldownRemaining = (accountId: number, websiteId: number) => {
+    const website = websites.find(w => w.id === websiteId)
+    if (!website) return 0
+
+    const interval = website.rotation_interval || 180
+    const channels = websiteChannels[websiteId] || []
+
+    let maxRemaining = 0
+
+    for (const cd of cooldowns) {
+      if (cd.account_id === accountId && channels.includes(cd.channel_id)) {
+        const passed = Date.now() / 1000 - cd.last_sent
+        const remaining = interval - passed
+        if (remaining > maxRemaining) {
+          maxRemaining = remaining
+        }
+      }
+    }
+
+    return maxRemaining > 0 ? maxRemaining : 0
+  }
+
   useEffect(() => {
     // 先获取当前用户，再决定是否获取用户列表
     const init = async () => {
@@ -3119,13 +3156,28 @@ export function AccountsView() {
     fetchSettings();
     fetchWebsites(true); // 强制刷新，清除旧的缓存数据
     fetchMessageFilters();
+    fetchCooldowns();
 
-    // 每30秒刷新一次账号状态
+    // 每3秒刷新一次账号状态（准实时）
     const statusInterval = setInterval(() => {
       fetchAccounts(true); // 强制刷新，清除缓存
-    }, 30000);
+    }, 3000);
 
-    return () => clearInterval(statusInterval);
+    // 每秒刷新一次冷却状态
+    const cooldownInterval = setInterval(() => {
+      fetchCooldowns()
+    }, 1000)
+
+    const handleStatusChange = () => {
+      fetchAccounts(true)
+    }
+    window.addEventListener('bot-status-changed', handleStatusChange)
+
+    return () => {
+      clearInterval(statusInterval);
+      clearInterval(cooldownInterval);
+      window.removeEventListener('bot-status-changed', handleStatusChange)
+    }
   }, [])
 
   const fetchSettings = async (usePreload: boolean = true) => {
@@ -3484,7 +3536,7 @@ export function AccountsView() {
             : website
         ))
         // 同步更新本地输入框状态
-        setRotationIntervals(prev => ({ ...prev, [websiteId]: rotationInterval }))
+        setRotationInputs(prev => ({ ...prev, [websiteId]: rotationInterval.toString() }))
       } else {
         toast.error('更新失败')
       }
@@ -4221,22 +4273,28 @@ export function AccountsView() {
                       </div>
 
                       <div className="flex flex-wrap gap-2">
-                        {(websiteAccounts[website.id] || []).map((binding: any) => (
-                          <div key={binding.id} className="flex items-center gap-1 bg-muted rounded px-2 py-1">
-                            <span className="text-xs">{binding.username}</span>
-                            <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">
-                              {binding.role === 'listener' ? '监听' : binding.role === 'sender' ? '发送' : '两者'}
-                            </Badge>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-4 w-4 p-0"
-                              onClick={() => handleUnbindAccount(website.id, binding.account_id)}
-                            >
-                              <X className="w-3 h-3" />
-                            </Button>
-                          </div>
-                        ))}
+                        {(websiteAccounts[website.id] || []).map((binding: any) => {
+                          const remaining = getCooldownRemaining(binding.account_id, website.id)
+                          return (
+                            <div key={binding.id} className="flex flex-col items-start bg-muted rounded px-2 py-1 border">
+                              <div className="flex items-center gap-1">
+                                <span className="text-xs">{binding.username}</span>
+                                <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">
+                                  {binding.role === 'listener' ? '监听' : binding.role === 'sender' ? '发送' : '两者'}
+                                </Badge>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-4 w-4 p-0"
+                                  onClick={() => handleUnbindAccount(website.id, binding.account_id)}
+                                >
+                                  <X className="w-3 h-3" />
+                                </Button>
+                              </div>
+                              <CooldownTimer remaining={remaining} />
+                            </div>
+                          )
+                        })}
                       </div>
                     </div>
 
@@ -4284,7 +4342,7 @@ export function AccountsView() {
                           <Label className="text-xs">轮换间隔(秒):</Label>
                           <Input
                             type="number"
-                            value={rotationIntervals[website.id] ?? website.rotation_interval ?? 180}
+                            value={rotationInputs[website.id] ?? (website.rotation_interval ?? 180).toString()}
                             className="w-20 h-7 text-xs"
                             disabled={!(rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))}
                             onChange={(e) => {
@@ -4292,7 +4350,7 @@ export function AccountsView() {
                               setRotationIntervals(prev => ({ ...prev, [website.id]: value }))
                             }}
                             onBlur={(e) => {
-                              const value = rotationIntervals[website.id] ?? website.rotation_interval ?? 180
+                              const value = parseInt(rotationInputs[website.id] ?? (website.rotation_interval ?? 180).toString())
                               if (value > 0 && value !== website.rotation_interval) {
                                 handleUpdateRotation(website.id, value)
                               } else if (value <= 0) {
@@ -4302,7 +4360,11 @@ export function AccountsView() {
                             }}
                           />
                           <span className="text-xs text-muted-foreground">
-                            ({Math.floor((rotationIntervals[website.id] ?? website.rotation_interval ?? 180) / 60)}分{(rotationIntervals[website.id] ?? website.rotation_interval ?? 180) % 60}秒)
+                            ({(() => {
+                              const v = parseInt(rotationInputs[website.id] ?? (website.rotation_interval ?? 180).toString())
+                              const sec = Number.isFinite(v) ? v : (website.rotation_interval ?? 180)
+                              return `${Math.floor(sec / 60)}分${sec % 60}秒`
+                            })()})
                           </span>
                         </div>
 
@@ -5187,7 +5249,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   const [batchUploading, setBatchUploading] = useState(false)
 
   // 使用API缓存hook
-  const { cachedFetch } = useApiCache()
+  const { cachedFetch, invalidateCache } = useApiCache()
 
   // 抓取相关状态
   const [shopId, setShopId] = useState('')
@@ -5207,6 +5269,17 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     fetchProductsCount()
     fetchScrapeStatus() // 初始化时检查抓取状态，恢复进度显示
   }, []) // 静态数据只加载一次
+
+  // 监听店铺更新事件，实时刷新店铺列表
+  useEffect(() => {
+    const handleShopsUpdated = () => {
+      // 清除店铺缓存并重新获取
+      invalidateCache('/api/shops')
+      fetchAvailableShops()
+    }
+    window.addEventListener('shops-updated', handleShopsUpdated)
+    return () => window.removeEventListener('shops-updated', handleShopsUpdated)
+  }, [invalidateCache])
 
   useEffect(() => {
     fetchProducts(currentPage)
@@ -8894,6 +8967,8 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
         toast.success("店铺添加成功")
         setNewShopId('')
         fetchShops()
+        // 触发自定义事件通知其他组件刷新店铺列表
+        window.dispatchEvent(new CustomEvent('shops-updated'))
       } else {
         toast.error(data.error || "添加店铺失败")
       }
@@ -8913,6 +8988,8 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
       if (res.ok) {
         toast.success("店铺删除成功")
         fetchShops()
+        // 触发自定义事件通知其他组件刷新店铺列表
+        window.dispatchEvent(new CustomEvent('shops-updated'))
         // 移除选中状态
         setSelectedShopIds(prev => prev.filter(id => id !== shopId))
       } else {
@@ -9982,6 +10059,28 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+export function formatDate(dateString: string | undefined | null): string {
+  if (!dateString) return '未知时间'
+
+  try {
+    const date = new Date(dateString)
+    if (isNaN(date.getTime())) return '无效时间'
+
+    return new Intl.DateTimeFormat('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+      timeZone: 'Asia/Shanghai'
+    }).format(date)
+  } catch {
+    return '时间格式错误'
+  }
+}
+
 --- File: ./backend/config.py ---
 import os
 from dotenv import load_dotenv
@@ -10036,11 +10135,21 @@ class Config:
     YOLO_MODEL_PATH = 'yolov8s-world.pt'
     USE_YOLO_CROP = True
 
-    # === 多线程配置 (修改这里) ===
-    # 既然你要求起码10线程，这里直接设为10
-    SCRAPE_THREADS = int(os.getenv('SCRAPE_THREADS', '10'))
+    # === 多线程配置 ===
+    # 性能建议：AI推理是CPU瓶颈，入口并发过高会导致上下文切换爆炸。
+    # 这里默认降低商品并发，图片下载仍可保持较高并发。
+    SCRAPE_THREADS = int(os.getenv('SCRAPE_THREADS', '2'))
     DOWNLOAD_THREADS = int(os.getenv('DOWNLOAD_THREADS', '8'))
-    FEATURE_EXTRACT_THREADS = int(os.getenv('FEATURE_EXTRACT_THREADS', '4'))
+
+    # AI 推理的并发控制：
+    # - AI_INTRA_THREADS：单个推理任务内部使用的 CPU 核心数（OpenMP/MKL 线程数）
+    # - AI_MAX_WORKERS：同时跑多少个“图片特征提取任务”
+    # 推荐（10核CPU）：AI_INTRA_THREADS=3, AI_MAX_WORKERS=3
+    AI_INTRA_THREADS = int(os.getenv('AI_INTRA_THREADS', '3'))
+    AI_MAX_WORKERS = int(os.getenv('AI_MAX_WORKERS', '3'))
+
+    # 新的 save_product_images_unified 已不依赖该参数做图片特征线程池，保留字段主要用于兼容旧逻辑。
+    FEATURE_EXTRACT_THREADS = int(os.getenv('FEATURE_EXTRACT_THREADS', '1'))
 
     # === FAISS ===
     FAISS_HNSW_M = 64
@@ -10608,18 +10717,27 @@ class Database:
     def search_similar_images(self, query_vector: np.ndarray, limit: int = 1,
                              threshold: float = 0.6, user_shops: Optional[List[str]] = None) -> List[Dict]:
         """使用FAISS搜索相似图像"""
+        import time
+        start_time = time.time()
+
         try:
             try:
                 from vector_engine import get_vector_engine
             except ImportError:
                 from .vector_engine import get_vector_engine
+
+            logger.info(f"开始获取FAISS引擎...")
+            engine_start = time.time()
             engine = get_vector_engine()
+            logger.info(f"获取FAISS引擎耗时: {time.time() - engine_start:.3f}秒")
 
             print(f"DEBUG DB: Starting FAISS search, threshold: {threshold}, limit: {limit}")
             print(f"DEBUG DB: Query vector length: {len(query_vector) if hasattr(query_vector, '__len__') else 'unknown'}")
 
-            # 执行FAISS搜索 - 请求更多结果以应对被删除的向量
-            faiss_results = engine.search(query_vector, top_k=min(limit * 3, 50))  # 请求更多候选结果
+            # 执行FAISS搜索
+            faiss_start = time.time()
+            faiss_results = engine.search(query_vector, top_k=min(limit * 3, 50))
+            logger.info(f"FAISS搜索耗时: {time.time() - faiss_start:.3f}秒")
             print(f"DEBUG DB: FAISS search returned {len(faiss_results)} results")
 
             matched_results = []
@@ -13120,8 +13238,31 @@ class WeidianScraper:
         try:
             logger.debug(f"开始获取店铺名称: {url}")
 
-            # 请求商品页面
-            response = self.session.get(url, timeout=10, proxies={'http': None, 'https': None})
+            # 使用专门的HTML请求headers（不同于API请求的headers）
+            html_headers = {
+                'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                'accept-language': 'en-US,en;q=0.9,zh-HK;q=0.8,zh-CN;q=0.7,zh;q=0.6',
+                'cache-control': 'max-age=0',
+                'sec-ch-ua': '"Google Chrome";v="143", "Chromium";v="143", "Not A(Brand";v="24"',
+                'sec-ch-ua-mobile': '?0',
+                'sec-ch-ua-platform': '"macOS"',
+                'sec-fetch-dest': 'document',
+                'sec-fetch-mode': 'navigate',
+                'sec-fetch-site': 'none',
+                'sec-fetch-user': '?1',
+                'upgrade-insecure-requests': '1',
+                'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'
+            }
+
+            html_cookies = {
+                'wdtoken': '8ea9315c',
+                '__spider__visitorid': '0dcf6a5b878847ec',
+                'visitor_id': '4d36e980-4128-451c-8178-a976b6303114',
+                '__spider__sessionid': '4cb270eb969f316c'
+            }
+
+            # 请求商品页面（使用HTML专用headers）
+            response = requests.get(url, headers=html_headers, cookies=html_cookies, timeout=10, proxies={'http': None, 'https': None})
             response.raise_for_status()
 
             # 解码HTML实体（&#34; -> " 等）
@@ -13225,6 +13366,114 @@ class Config:
 
 config = Config()
 
+--- File: ./backend/fix_index.py ---
+import os
+import sys
+import json
+import time
+import shutil
+import logging
+import numpy as np
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Ensure local imports work
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from database import db
+from vector_engine import VectorEngine
+from config import config
+
+
+def _backup_file(path: str) -> None:
+    if not os.path.exists(path):
+        return
+    ts = time.strftime('%Y%m%d-%H%M%S')
+    backup_path = f"{path}.bak.{ts}"
+    shutil.copy2(path, backup_path)
+    logger.info(f"Backed up {path} -> {backup_path}")
+
+
+def fix_index() -> None:
+    logger.info("=" * 50)
+    logger.info("🚀 Starting fast FAISS rebuild from DB features")
+    logger.info("=" * 50)
+
+    index_file = config.FAISS_INDEX_FILE
+    id_map_file = config.FAISS_ID_MAP_FILE
+
+    # Backup existing files first (safer than rm)
+    _backup_file(index_file)
+    _backup_file(id_map_file)
+
+    # Remove old files (if any)
+    for p in (index_file, id_map_file):
+        try:
+            if os.path.exists(p):
+                os.remove(p)
+                logger.info(f"Removed old index file: {p}")
+        except Exception as e:
+            logger.warning(f"Failed to remove {p}: {e}")
+
+    # Create a fresh engine (will create new empty index)
+    engine = VectorEngine()
+
+    # Read all rows with features
+    logger.info("Reading features from SQLite...")
+    with db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, features FROM product_images WHERE features IS NOT NULL AND features != ''"
+        )
+        rows = cursor.fetchall()
+
+    total_count = len(rows)
+    logger.info(f"Found {total_count} feature rows")
+    if total_count == 0:
+        logger.warning("No feature data in DB. Cannot rebuild.")
+        return
+
+    ok = 0
+    bad = 0
+    start = time.time()
+
+    for i, row in enumerate(rows, start=1):
+        db_id = row['id']
+        features_json = row['features']
+
+        try:
+            vec = np.array(json.loads(features_json), dtype='float32')
+            if vec.ndim != 1 or vec.shape[0] != config.VECTOR_DIMENSION:
+                bad += 1
+                continue
+
+            engine.add_vector(int(db_id), vec)
+            ok += 1
+
+            if i % 5000 == 0:
+                logger.info(f"Progress: {i}/{total_count} (ok={ok}, bad={bad})")
+
+        except Exception:
+            bad += 1
+
+    logger.info("Saving FAISS index...")
+    engine.save()
+
+    dur = time.time() - start
+    logger.info("=" * 50)
+    logger.info("✅ Rebuild complete")
+    logger.info(f"Time: {dur:.2f}s")
+    logger.info(f"Success: {ok}")
+    logger.info(f"Failed: {bad}")
+    logger.info(f"Index total: {engine.count()}")
+    logger.info("=" * 50)
+
+
+if __name__ == '__main__':
+    fix_index()
+
+
 --- File: ./backend/bot.py ---
 import discord
 import aiohttp
@@ -13249,21 +13498,49 @@ bot_tasks = []
 # 全局冷却管理器：(account_id, channel_id) -> timestamp (上次发送时间)
 account_last_sent = {}
 
+
+def get_all_cooldowns():
+    """获取所有活跃的冷却状态（供 API 查询）"""
+    current_time = time.time()
+    cooldowns = []
+
+    snapshot = account_last_sent.copy()
+
+    for key, last_sent in snapshot.items():
+        try:
+            acc_id, ch_id = key
+            time_passed = current_time - last_sent
+
+            if time_passed < 86400:
+                cooldowns.append({
+                    'account_id': int(acc_id),
+                    'channel_id': str(ch_id),
+                    'last_sent': last_sent,
+                    'time_passed': time_passed
+                })
+        except Exception:
+            continue
+
+    return cooldowns
+
 def is_account_on_cooldown(account_id, channel_id, interval):
     """检查账号在指定频道是否在冷却中"""
-    key = (account_id, str(channel_id))  # 确保channel_id是字符串
+    key = (int(account_id), str(channel_id))
+
     last = account_last_sent.get(key, 0)
-    logger.debug(f"检查冷却 - 账号:{account_id}, 频道:{channel_id} -> 键:{key}, 上次发送:{last}, 冷却字典大小:{len(account_last_sent)}")
-    is_cooldown = (time.time() - last) < interval
+    time_passed = time.time() - last
+    is_cooldown = time_passed < interval
+
     if is_cooldown:
-        logger.debug(f"账号 {account_id} 在频道 {channel_id} 冷却中，还需等待 {interval - (time.time() - last):.1f} 秒")
+        logger.info(f"❄️ [冷却中] 账号ID:{account_id} 频道:{channel_id} | 剩余: {interval - time_passed:.1f}秒")
+
     return is_cooldown
 
 def set_account_cooldown(account_id, channel_id):
     """设置账号在指定频道的冷却时间"""
-    key = (account_id, str(channel_id))  # 确保channel_id是字符串
+    key = (int(account_id), str(channel_id))
     account_last_sent[key] = time.time()
-    logger.debug(f"设置冷却 - 账号:{account_id}, 频道:{channel_id} -> {key}")
+    logger.info(f"🔥 [设置冷却] 账号ID:{account_id} 频道:{channel_id} | Key: {key}")
 
 def cleanup_expired_cooldowns():
     """清理过期的冷却状态"""
@@ -13366,7 +13643,7 @@ class HTTPLogHandler(logging.Handler):
         try:
             import requests
             response = requests.post('http://localhost:5001/api/logs/add',
-                                   json=log_data, timeout=2)
+                                   json=log_data, timeout=2, proxies={'http': None, 'https': None, 'all': None})
             if response.status_code != 200:
                 print(f"同步发送日志失败: {response.status_code}")
         except Exception as e:
@@ -13384,7 +13661,7 @@ class HTTPLogHandler(logging.Handler):
                 log_data = self.pending_logs.pop(0)
 
                 try:
-                    async with aiohttp.ClientSession() as session:
+                    async with aiohttp.ClientSession(trust_env=False) as session:
                         async with session.post('http://localhost:5001/api/logs/add',
                                               json=log_data, timeout=aiohttp.ClientTimeout(total=2)) as resp:
                             if resp.status != 200:
@@ -13435,10 +13712,12 @@ class DiscordBotClient(discord.Client):
         self.role = role  # 'listener', 'sender', 'both' - 账号角色
 
     async def schedule_reply(self, message, product, custom_reply=None):
-        """调度回复到合适的发送账号 (增强版：带在线检查和兜底机制)"""
+        """调度回复到合适的发送账号 (增强版：带详细状态诊断)"""
+
         try:
             # 清理过期的冷却状态
             cleanup_expired_cooldowns()
+
             try:
                 from database import db
             except ImportError:
@@ -13461,54 +13740,68 @@ class DiscordBotClient(discord.Client):
 
             target_client = None
 
-            if website_config:
-                # 2. 获取数据库配置的发送者 ID
-                db_sender_ids = await asyncio.get_event_loop().run_in_executor(None, db.get_website_senders, website_config['id'])
+            # 2. 获取数据库配置的发送者 ID
+            db_sender_ids = await asyncio.get_event_loop().run_in_executor(
+                None, db.get_website_senders, website_config['id']
+            )
 
-                # === 关键修复：获取当前真正"活着"的机器人 ID ===
-                # bot_clients 是全局变量，存着当前内存里的机器人实例
-                online_client_ids = [c.account_id for c in bot_clients if c.is_ready() and not c.is_closed()]
+            if not db_sender_ids:
+                logger.warning(
+                    f"❌ [配置错误] 网站配置 '{website_config.get('name')}' 未绑定任何【发送】账号。请在网站配置中绑定账号。"
+                )
+                return
 
-                # 取交集：既在数据库配置了，又是当前在线的
-                valid_senders = [uid for uid in db_sender_ids if uid in online_client_ids]
+            # === 获取当前真正在线的机器人账号 ID ===
+            online_client_ids = [c.account_id for c in bot_clients if c.is_ready() and not c.is_closed()]
 
-                # 3. 轮换/冷却逻辑
-                rotation_enabled = website_config.get('rotation_enabled', 1)
-                rotation_interval = website_config.get('rotation_interval', 180)
+            # 调试信息：打印当前状态
+            logger.info(f"配置账号ID: {db_sender_ids} | 在线账号ID: {online_client_ids}")
 
-                available_senders = []
+            # 取交集：既在数据库配置了，又是当前在线的
+            valid_senders = [uid for uid in db_sender_ids if uid in online_client_ids]
 
-                # 调试信息：检查轮换配置
-                logger.info(f"账号轮换配置 - 启用:{rotation_enabled}, 间隔:{rotation_interval}秒, 频道:{message.channel.id}")
-                if rotation_enabled:
-                    # 筛选非冷却的（按频道区分冷却）
-                    available_senders = [uid for uid in valid_senders if not is_account_on_cooldown(uid, message.channel.id, rotation_interval)]
-                    # 如果都在冷却，不发送消息（根据用户要求）
-                    if not available_senders:
-                        logger.info(f"所有账号在频道{message.channel.id}的{rotation_interval}秒冷却期内，跳过发送")
-                        return  # 不发送消息，直接返回
-                else:
-                    available_senders = valid_senders
+            if not valid_senders:
+                logger.warning("❌ [状态错误] 配置的发送账号均不在线。请检查 Discord 账号连接状态。")
+                return
 
-                # 4. 选中一个 ID
-                if available_senders:
-                    selected_id = random.choice(available_senders)
-                    # 从全局列表中找到这个实例
-                    target_client = next((c for c in bot_clients if c.account_id == selected_id), None)
-                    logger.info(f"本次选中发送账号: {selected_id} | 可用账号数: {len(available_senders)}")
-                else:
-                    logger.info(f"本次可用发送账号数: 0 | valid_senders数: {len(valid_senders)}")
+            # 3. 轮换/冷却逻辑
+            rotation_enabled = website_config.get('rotation_enabled', 1)
+            rotation_interval = website_config.get('rotation_interval', 180)
 
-            # 如果没有可用发送账号，直接跳过（不允许兜底回复）
-            if not target_client:
-                logger.info(f"频道 {message.channel.id} 没有可用的发送账号(可能都离线或在冷却)，跳过回复")
+            available_senders = []
+
+            if rotation_enabled:
+                # 筛选非冷却的（按频道区分冷却）
+                available_senders = [
+                    uid for uid in valid_senders
+                    if not is_account_on_cooldown(uid, message.channel.id, rotation_interval)
+                ]
+
+                # 只有 valid_senders 有值但 available_senders 为空，才是真正的“冷却中”
+                if not available_senders:
+                    logger.info(
+                        f"⏳ [冷却中] 频道 {message.channel.id} 所有在线账号 ({len(valid_senders)}个) "
+                        f"均处于 {rotation_interval}秒 冷却期内，跳过发送"
+                    )
+                    return
+
+            else:
+                available_senders = valid_senders
+
+            # 4. 选中一个 ID
+            if available_senders:
+                selected_id = random.choice(available_senders)
+                target_client = next((c for c in bot_clients if c.account_id == selected_id), None)
+                logger.info(
+                    f"✅ 本次选中发送账号: {target_client.user.name if target_client else selected_id} (ID: {selected_id})"
+                )
+            else:
+                logger.warning("❌ 逻辑异常：有 valid_senders 但无可用发送账号")
                 return
 
             # 5. 执行发送
             if target_client:
                 try:
-                    # 只有当 target_client 和 message 在同一个服务器时，get_channel 才有效
-                    # 如果是用别的号回复，那个号也必须在这个服务器里
                     target_channel = target_client.get_channel(message.channel.id)
 
                     if target_channel:
@@ -13520,34 +13813,29 @@ class DiscordBotClient(discord.Client):
                             await message.reply(response_content)
                             if hasattr(target_client, 'account_id') and target_client.account_id:
                                 set_account_cooldown(target_client.account_id, message.channel.id)
-                            logger.info(f"✅ [回复成功] 账号: {target_client.user.name} | 商品ID: {product.get('id')}")
+                            logger.info(
+                                f"✅ [回复成功] 账号: {target_client.user.name} | 商品ID: {product.get('id')}"
+                            )
                         except Exception as reply_error:
                             logger.warning(f"回复消息失败，改用直接发送: {reply_error}")
                             await target_channel.send(response_content)
                             if hasattr(target_client, 'account_id') and target_client.account_id:
                                 set_account_cooldown(target_client.account_id, message.channel.id)
-                            logger.info(f"✅ [发送成功] 账号: {target_client.user.name} | 商品ID: {product.get('id')}")
+                            logger.info(
+                                f"✅ [发送成功] 账号: {target_client.user.name} | 商品ID: {product.get('id')}"
+                            )
+
                     else:
-                        # 这种情况是：选中的机器人不在这个频道/服务器里
-                        logger.warning(f"❌ 选中的账号 {target_client.user.name} 无法访问频道，跳过发送")
+                        logger.warning(
+                            f"❌ 选中的账号 {target_client.user.name} 无法访问频道 {message.channel.id} (可能不在该服务器)"
+                        )
                         return
 
                 except Exception as e:
-                    logger.error(f"❌ 发送异常，尝试最后一次回退: {e}")
-                    # 最后的最后，直接用 message 对象回复
-                    await message.reply(response_content)
-            else:
-                # 理论上不会走到这里，因为有 target_client = self
-                await message.reply(response_content)
+                    logger.error(f"❌ 发送异常: {e}")
 
         except Exception as e:
             logger.error(f"❌ 严重错误: {e}")
-            # 无论发生什么错误，保证回复
-            try:
-                response_content = self._generate_reply_content(product, message.channel.id, custom_reply)
-                await message.reply(response_content)
-            except:
-                pass
 
     def _generate_reply_content(self, product, channel_id, custom_reply=None):
         """生成回复内容"""
@@ -13789,7 +14077,7 @@ class DiscordBotClient(discord.Client):
             for attempt in range(3):
                 try:
                     logger.info(f"下载Discord图片 (尝试 {attempt + 1}/3): {attachment.filename}")
-                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
                         async with session.get(attachment.url) as resp:
                             if resp.status == 200:
                                 image_data = await resp.read()
@@ -13893,7 +14181,7 @@ class DiscordBotClient(discord.Client):
                                 # aiohttp already imported at module level
                                 for url in custom_image_urls[:10]:  # 最多发送10张图片
                                     try:
-                                        async with aiohttp.ClientSession() as session:
+                                        async with aiohttp.ClientSession(trust_env=False) as session:
                                             async with session.get(url.strip()) as resp:
                                                 if resp.status == 200:
                                                     image_data = await resp.read()
@@ -14075,8 +14363,8 @@ class DiscordBotClient(discord.Client):
 
     async def recognize_image(self, image_data, user_shops=None):
         try:
-            # 设置较短的超时时间，避免阻塞Discord网关
-            timeout = aiohttp.ClientTimeout(total=15)  # 15秒超时
+            # 增加超时时间，FAISS搜索可能需要更长时间
+            timeout = aiohttp.ClientTimeout(total=30)  # 30秒超时
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 # 准备图片数据
                 form_data = aiohttp.FormData()
@@ -14113,8 +14401,14 @@ class DiscordBotClient(discord.Client):
                         logger.error(f'PP-ShiTuV2 service error: {resp.status}')
                         return None
 
+        except asyncio.TimeoutError:
+            logger.error('Error recognizing image: Request timeout (30s)')
+            return None
+        except aiohttp.ClientError as e:
+            logger.error(f'Error recognizing image: Network error - {type(e).__name__}: {e}')
+            return None
         except Exception as e:
-            logger.error(f'Error recognizing image: {e}')
+            logger.error(f'Error recognizing image: {type(e).__name__}: {e}')
             return None
 
 async def get_all_accounts_from_backend():
@@ -14233,12 +14527,34 @@ if __name__ == '__main__':
 
 --- File: ./backend/feature_extractor.py ---
 import os
-# === 添加这一行 ===
-os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["MKL_NUM_THREADS"] = "1"
-os.environ["OPENBLAS_NUM_THREADS"] = "1"
-os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
+# === 性能优化配置 ===
+# 允许底层计算库每个任务使用少量核心。
+# 配合上层有限并发（例如 3 个并发任务），在 10 核 CPU 上更容易吃满但不打架。
+# 可通过环境变量 AI_INTRA_THREADS 调整。
+try:
+    from .config import config as _cfg
+except Exception:
+    try:
+        from config import config as _cfg
+    except Exception:
+        _cfg = None
+
+_intra_threads = None
+try:
+    if _cfg is not None and hasattr(_cfg, 'AI_INTRA_THREADS'):
+        _intra_threads = int(_cfg.AI_INTRA_THREADS)
+except Exception:
+    _intra_threads = None
+
+if not _intra_threads or _intra_threads <= 0:
+    _intra_threads = int(os.getenv('AI_INTRA_THREADS', '3'))
+
+os.environ["OMP_NUM_THREADS"] = str(_intra_threads)
+os.environ["MKL_NUM_THREADS"] = str(_intra_threads)
+os.environ["OPENBLAS_NUM_THREADS"] = str(_intra_threads)
+os.environ["VECLIB_MAXIMUM_THREADS"] = str(_intra_threads)
+os.environ["NUMEXPR_NUM_THREADS"] = str(_intra_threads)
 
 import warnings
 warnings.filterwarnings("ignore", message="Could not initialize NNPACK")
@@ -14773,7 +15089,11 @@ class VectorEngine:
 
     def search(self, query_vector: np.ndarray, top_k: int = 1) -> List[Dict]:
         """搜索最相似的向量"""
+        import time
+        start_time = time.time()
+
         if self.index.ntotal == 0:
+            logger.info("FAISS索引为空，跳过搜索")
             return []
 
         try:
@@ -14785,10 +15105,15 @@ class VectorEngine:
 
             query_vector = query_vector.reshape(1, -1)
 
+            logger.info(f"开始FAISS搜索，索引大小: {self.index.ntotal}, top_k: {top_k}")
+
             # 执行搜索
-            # distances: 相似度分数 (因为是内积且归一化了，范围-1到1)
-            # indices: FAISS内部的ID
+            # 强制使用单线程进行搜索，防止在 Flask/MacOS 环境下发生 OpenMP 死锁
+            faiss.omp_set_num_threads(1)
+            search_start = time.time()
             distances, indices = self.index.search(query_vector, top_k)
+            search_time = time.time() - search_start
+            logger.info(f"FAISS搜索完成，耗时: {search_time:.3f}秒")
 
             results = []
             for i in range(min(top_k, len(indices[0]))):
@@ -14798,10 +15123,12 @@ class VectorEngine:
                 if faiss_id != -1 and faiss_id < len(self.id_map) and self.id_map[faiss_id] is not None:
                     db_id = self.id_map[faiss_id]
                     results.append({
-                        'db_id': db_id,  # 数据库中的ID
-                        'score': float(score)  # 相似度分数
+                        'db_id': db_id,
+                        'score': float(score)
                     })
 
+            total_time = time.time() - start_time
+            logger.info(f"搜索总耗时: {total_time:.3f}秒, 返回{len(results)}个结果")
             return results
 
         except Exception as e:
@@ -15242,9 +15569,19 @@ if __name__ == '__main__':
         create_admin_user()
 
 --- File: ./backend/app.py ---
+# ============================================================
+# 重要：必须在所有其他导入之前设置线程限制环境变量
+# 防止 FAISS/OpenMP 在 Flask 多线程环境下发生死锁
+# ============================================================
+import os
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 from flask import Flask, request, jsonify, Response, session
 import numpy as np
-import os
 import logging
 import sys
 from datetime import datetime
@@ -15602,8 +15939,8 @@ logging.getLogger('ultralytics').setLevel(logging.WARNING)  # 屏蔽 YOLO 日志
 logger = logging.getLogger(__name__)
 
 # 机器人相关变量
-bot_clients = []
-bot_tasks = []
+# [修改] 从 bot 模块导入列表，确保 app.py 和 bot.py 操作同一个列表对象
+from bot import bot_clients, bot_tasks, get_all_cooldowns
 bot_running = False  # 标记机器人是否正在运行
 
 # 全局特征提取器实例（在应用启动时创建）
@@ -16141,6 +16478,19 @@ def require_login():
         return True
     return get_current_user() is not None
 
+@app.route('/api/bot/cooldowns', methods=['GET'])
+def get_bot_cooldowns():
+    """获取当前所有账号的冷却状态"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        cooldowns = get_all_cooldowns()
+        return jsonify({'cooldowns': cooldowns})
+    except Exception as e:
+        logger.error(f"获取冷却状态失败: {e}")
+        return jsonify({'cooldowns': []}), 500
+
 @app.route('/api/auth/login', methods=['POST'])
 def login():
     """用户登录"""
@@ -16207,28 +16557,32 @@ def create_user():
         if not data or not data.get('username') or not data.get('password'):
             return jsonify({'error': '用户名和密码不能为空'}), 400
 
-        username = data['username']
-        password = data['password']
+        username = data['username'].strip()
+        password = data['password'].strip()
         role = data.get('role', 'user')
         shop_ids = data.get('shops', [])
 
-        # 创建用户
+        if len(password) < 6:
+            return jsonify({'error': '密码长度至少6位'}), 400
+
         from werkzeug.security import generate_password_hash
         password_hash = generate_password_hash(password)
-        if db.create_user(username, password_hash, role):
-            # 获取新创建的用户ID
-            user = db.authenticate_user(username, password_hash)
-            if user:
-                # 设置店铺权限
-                if shop_ids:
-                    db.update_user_shops(user['id'], shop_ids)
 
-                user_info = {k: v for k, v in user.items() if k != 'password_hash'}
-                return jsonify({'user': user_info, 'message': '用户创建成功'})
+        if db.create_user(username, password_hash, role):
+            with db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT id, username, role, is_active, created_at FROM users WHERE username = ?", (username,))
+                user = cursor.fetchone()
+
+            if user:
+                user_dict = dict(user)
+                if shop_ids:
+                    db.update_user_shops(user_dict['id'], shop_ids)
+                return jsonify({'user': user_dict, 'message': '用户创建成功'})
             else:
-                return jsonify({'error': '用户创建失败'}), 500
+                return jsonify({'error': '用户创建后无法检索信息'}), 500
         else:
-            return jsonify({'error': '用户名已存在或创建失败'}), 400
+            return jsonify({'error': '用户名已存在或数据库错误'}), 400
     except Exception as e:
         logger.error(f"创建用户失败: {e}")
         return jsonify({'error': str(e)}), 500
@@ -16294,12 +16648,22 @@ def get_website_configs():
         current_user = get_current_user()
         configs = db.get_website_configs()
 
-        # 为每个配置添加当前用户的绑定信息
+        # 为每个配置添加绑定信息
         for config in configs:
             config_id = config['id']
-            # 只获取当前用户的绑定关系
+
+            # 1) 账号绑定：只返回当前用户自己的绑定（账号是个人的）
             config['accounts'] = db.get_website_account_bindings(config_id, current_user['id'])
-            config['channels'] = db.get_website_channel_bindings(config_id, current_user['id'])
+
+            # 2) 频道绑定：所有用户可见（读取全局频道绑定）
+            with db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT channel_id FROM website_channel_bindings
+                    WHERE website_id = ?
+                    ORDER BY created_at
+                ''', (config_id,))
+                config['channels'] = [row[0] for row in cursor.fetchall()]
 
         return jsonify({'websites': configs})
     except Exception as e:
@@ -16388,6 +16752,9 @@ def get_website_channels(config_id):
 @app.route('/api/websites/<int:config_id>/channels', methods=['POST'])
 def add_website_channel(config_id):
     """添加网站频道绑定"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
     try:
         data = request.get_json()
         channel_id = data.get('channel_id')
@@ -16407,6 +16774,9 @@ def add_website_channel(config_id):
 @app.route('/api/websites/<int:config_id>/channels/<channel_id>', methods=['DELETE'])
 def remove_website_channel(config_id, channel_id):
     """移除网站频道绑定"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
     try:
         current_user = get_current_user()
         if db.remove_website_channel_binding(config_id, channel_id, current_user['id']):
@@ -16436,9 +16806,8 @@ def get_website_accounts(config_id):
 @app.route('/api/websites/<int:config_id>/accounts', methods=['POST'])
 def add_website_account(config_id):
     """为网站绑定账号"""
-    # 移除 require_admin，允许普通用户操作
-    if not require_login():
-        return jsonify({'error': '需要登录'}), 401
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
 
     try:
         data = request.get_json()
@@ -16475,21 +16844,10 @@ def add_website_account(config_id):
 @app.route('/api/websites/<int:config_id>/accounts/<int:account_id>', methods=['DELETE'])
 def remove_website_account(config_id, account_id):
     """移除网站账号绑定"""
-    # 移除 require_admin
-    if not require_login():
-        return jsonify({'error': '需要登录'}), 401
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
 
     try:
-        # 权限检查：确保该账号属于当前用户
-        current_user = get_current_user()
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT user_id FROM discord_accounts WHERE id = ?", (account_id,))
-            row = cursor.fetchone()
-            if row:
-                account_owner_id = row[0]
-                if current_user['role'] != 'admin' and account_owner_id != current_user['id']:
-                    return jsonify({'error': '您无权操作此账号'}), 403
 
         if db.remove_website_account_binding(config_id, account_id, current_user['id']):
             return jsonify({'success': True, 'message': '账号绑定已移除'})
@@ -18522,7 +18880,7 @@ def add_external_log():
 
 def start_discord_bot(user_id=None):
     """启动Discord机器人 - 支持多账号"""
-    global bot_clients, bot_tasks, bot_running
+    global bot_running
 
     if bot_running:
         logger.warning("机器人已经在运行中")
@@ -18617,7 +18975,7 @@ def start_discord_bot(user_id=None):
 
 def stop_discord_bot(user_id=None):
     """停止Discord机器人 (支持按用户停止)"""
-    global bot_clients, bot_tasks, bot_running
+    global bot_running
 
     # 如果没有客户端，直接返回
     if not bot_clients:
@@ -19817,6 +20175,9 @@ def process_single_product(product_info):
             # 生成英文标题
             english_title = generate_english_title(product_details.get('title', ''))
 
+            # 优先使用从商品详情中获取的店铺名称，如果没有则使用传入的
+            actual_shop_name = product_details.get('shop_name', '') or shop_name
+
             return {
                 'product_url': item_url,
                 'title': product_details.get('title', ''),
@@ -19824,7 +20185,7 @@ def process_single_product(product_info):
                 'english_title': english_title,
                 'cnfans_url': generate_cnfans_url(item_id),
                 'acbuy_url': generate_acbuy_url(item_url),
-                'shop_name': shop_name,
+                'shop_name': actual_shop_name,
                 'images': product_details.get('images', []),
                 'ruleEnabled': True
             }
@@ -19939,63 +20300,173 @@ def save_product_images(product_id, image_urls):
 
 def save_product_images_unified(product_id, image_urls, max_workers=None, shutdown_event=None):
     """
-    统一的批量图片处理函数（优化版：延迟FAISS保存，提高性能）
+    【性能优化版】统一的批量图片处理函数
+
+    策略：多线程并发下载 -> 有限并发 AI 特征提取 -> 批量数据库/FAISS 写入
+    解决 CPU 争抢和 GIL 锁导致的假死/卡顿问题。
+
+    - 下载阶段：IO 密集，允许高并发
+    - AI 阶段：CPU 密集，使用有限并发（并发数建议与 config.AI_MAX_WORKERS 对齐）
+    - FAISS：一个商品只写入/保存一次，减少锁竞争
     """
     if not image_urls:
         return 0
 
-    try:
-        import concurrent.futures
+    import os
+    import time
+    import requests
+    import concurrent.futures
+    import threading
 
-        # 动态决定线程数 (默认使用配置，但允许覆盖)
-        if max_workers is None:
-            max_workers = min(config.DOWNLOAD_THREADS, len(image_urls))
+    # 1. 准备目录
+    save_dir = os.path.join(config.IMAGE_SAVE_DIR, str(product_id))
+    os.makedirs(save_dir, exist_ok=True)
 
-        # 获取现有特征向量用于查重
-        existing_images = db.get_product_images(product_id)
-        existing_feats = [img['features'] for img in existing_images if img['features']]
-        logger.info(f'商品 {product_id} 已存在 {len(existing_feats)} 张图片的向量数据')
+    # 动态决定下载线程数 (IO密集型，可以多开)
+    download_workers = min(getattr(config, 'DOWNLOAD_THREADS', 8), len(image_urls))
 
-        # 处理结果计数
-        processed_images = 0
+    downloaded_images = []  # (index, save_path)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            # 提交任务：注意这里 save_faiss_immediately=False，因为我们要批量保存
-            futures = [executor.submit(process_and_save_image_core, product_id, url, idx, existing_feats, save_faiss_immediately=False)
-                       for idx, url in enumerate(image_urls)]
+    logger.info(f"🚀 [商品 {product_id}] 阶段1: 开始并发下载 {len(image_urls)} 张图片...")
 
-            # 等待完成 (支持优雅关闭)
-            for future in concurrent.futures.as_completed(futures):
+    def download_task(index, url):
+        try:
+            if shutdown_event and shutdown_event.is_set():
+                return None
+
+            timestamp = int(time.time() * 1000000)
+            filename = f"{product_id}_{index}_{timestamp}.jpg"
+            save_path = os.path.join(save_dir, filename)
+
+            resp = requests.get(url, timeout=config.REQUEST_TIMEOUT, proxies={'http': None, 'https': None})
+            if resp.status_code != 200:
+                return None
+
+            with open(save_path, 'wb') as f:
+                f.write(resp.content)
+
+            if os.path.getsize(save_path) == 0:
                 try:
-                    # 检查停止信号
-                    if shutdown_event and shutdown_event.is_set():
-                        logger.info("检测到停止信号，正在等待图片处理完成...")
-                        executor.shutdown(wait=True, timeout=15.0)
-                        break
+                    os.remove(save_path)
+                except Exception:
+                    pass
+                return None
 
-                    result = future.result()
-                    if result and result.get('success'):
-                        processed_images += 1  # 计数成功处理的图片
+            return (index, save_path)
 
-                except Exception as e:
-                    logger.error(f'一个图片处理失败: {e}')
+        except Exception as e:
+            logger.warning(f"下载失败 {url}: {e}")
+            return None
 
-        # 批量操作结束后统一保存 FAISS（性能极大提升）
-        if processed_images > 0:
-            try:
-                from vector_engine import get_vector_engine
-                get_vector_engine().save()
-                logger.info(f"FAISS索引已批量保存，本次新增 {processed_images} 张图片")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=download_workers) as executor:
+        futures = [executor.submit(download_task, i, url) for i, url in enumerate(image_urls)]
+        for future in concurrent.futures.as_completed(futures):
+            res = future.result()
+            if res:
+                downloaded_images.append(res)
 
-            except Exception as faiss_err:
-                logger.error(f"FAISS保存失败: {faiss_err}")
-
-        logger.info(f"商品 {product_id} 成功处理 {processed_images}/{len(image_urls)} 张图片")
-        return processed_images
-
-    except Exception as e:
-        logger.error(f"批量保存商品 {product_id} 图片失败: {e}")
+    if not downloaded_images:
+        logger.warning(f"⚠️ [商品 {product_id}] 没有成功下载任何图片")
         return 0
+
+    downloaded_images.sort(key=lambda x: x[0])
+    logger.info(f"✅ [商品 {product_id}] 下载完成，准备处理 {len(downloaded_images)} 张图片")
+
+    # --- 阶段 2: 有限并发 AI 特征提取 (CPU 密集) ---
+    extractor = get_global_feature_extractor()
+    if extractor is None:
+        logger.error("特征提取器未初始化")
+        return 0
+
+    existing_images = db.get_product_images(product_id)
+    existing_feats = [img['features'] for img in existing_images if img['features']]
+
+    processed_count = 0
+    vectors_to_add = []  # (db_id, features)
+
+    # AI 并发数优先级：显式参数 > config.AI_MAX_WORKERS > 默认 3
+    ai_max_workers = getattr(config, 'AI_MAX_WORKERS', 3)
+    if max_workers is not None:
+        try:
+            ai_max_workers = max(1, int(max_workers))
+        except Exception:
+            ai_max_workers = getattr(config, 'AI_MAX_WORKERS', 3)
+
+    # 保护：不要超过待处理数量
+    ai_max_workers = min(ai_max_workers, len(downloaded_images)) if downloaded_images else 1
+
+    results_lock = threading.Lock()
+
+    logger.info(f"🧠 [商品 {product_id}] 阶段2: 启动 {ai_max_workers} 个 AI 线程进行特征提取...")
+
+    def process_image_task(args):
+        index, save_path = args
+
+        if shutdown_event and shutdown_event.is_set():
+            return None
+
+        try:
+            features = extractor.extract_feature(save_path)
+            if features is None:
+                try:
+                    os.remove(save_path)
+                except Exception:
+                    pass
+                return None
+
+            # 查重：必须加锁同步读写 existing_feats
+            with results_lock:
+                is_dup, score = check_duplicate_image(features, existing_feats, threshold=0.995)
+                if not is_dup:
+                    existing_feats.append(features)
+
+            if is_dup:
+                logger.info(f"♻️ [商品 {product_id}] 图片重复 (相似度 {score:.3f})，跳过")
+                try:
+                    os.remove(save_path)
+                except Exception:
+                    pass
+                return None
+
+            img_db_id = db.insert_image_record(product_id, save_path, index, features)
+            if img_db_id:
+                logger.info(f"📸 [商品 {product_id}] 图片 {index} 处理完毕 (ID: {img_db_id})")
+                return (img_db_id, features)
+
+            return None
+
+        except Exception as e:
+            logger.error(f"处理图片异常: {e}")
+            return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=ai_max_workers) as ai_executor:
+        future_to_img = {ai_executor.submit(process_image_task, item): item for item in downloaded_images}
+
+        for future in concurrent.futures.as_completed(future_to_img):
+            result = future.result()
+            if result:
+                db_id, feats = result
+                vectors_to_add.append((db_id, feats))
+                processed_count += 1
+
+    # --- 阶段 3: 批量写入 FAISS (内存/磁盘操作) ---
+    if vectors_to_add:
+        try:
+            from vector_engine import get_vector_engine
+            engine = get_vector_engine()
+
+            with faiss_lock:
+                for img_id, feats in vectors_to_add:
+                    engine.add_vector(img_id, feats)
+                engine.save()
+
+            logger.info(f"💾 [商品 {product_id}] FAISS 索引已更新，新增 {len(vectors_to_add)} 个向量")
+
+        except Exception as e:
+            logger.error(f"FAISS 批量写入失败: {e}")
+
+    logger.info(f"商品 {product_id} 成功处理 {processed_count}/{len(image_urls)} 张图片")
+    return processed_count
 
 def save_product_images_multithreaded(product_id, image_urls):
     """向后兼容的别名"""
@@ -20093,6 +20564,20 @@ if __name__ == '__main__':
         print("✅ [系统] 抓取状态已重置，随时可以开始新任务")
     except Exception as e:
         print(f"⚠️ [系统] 状态重置失败 (可能是第一次运行数据库未初始化): {e}")
+
+    # ====================================================
+    # 新增修复：启动时重置所有Discord账号状态为offline
+    # ====================================================
+    print("🧹 [系统] 正在重置Discord账号状态...")
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE discord_accounts SET status = 'offline'")
+            conn.commit()
+            affected = cursor.rowcount
+        print(f"✅ [系统] 已重置 {affected} 个Discord账号状态为offline")
+    except Exception as e:
+        print(f"⚠️ [系统] 账号状态重置失败: {e}")
 
     # 3. 在主线程预加载模型 (关键)
     print("🤖 [系统] 正在预热 AI 引擎，请稍候...")

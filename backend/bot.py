@@ -21,21 +21,49 @@ bot_tasks = []
 # 全局冷却管理器：(account_id, channel_id) -> timestamp (上次发送时间)
 account_last_sent = {}
 
+
+def get_all_cooldowns():
+    """获取所有活跃的冷却状态（供 API 查询）"""
+    current_time = time.time()
+    cooldowns = []
+
+    snapshot = account_last_sent.copy()
+
+    for key, last_sent in snapshot.items():
+        try:
+            acc_id, ch_id = key
+            time_passed = current_time - last_sent
+
+            if time_passed < 86400:
+                cooldowns.append({
+                    'account_id': int(acc_id),
+                    'channel_id': str(ch_id),
+                    'last_sent': last_sent,
+                    'time_passed': time_passed
+                })
+        except Exception:
+            continue
+
+    return cooldowns
+
 def is_account_on_cooldown(account_id, channel_id, interval):
     """检查账号在指定频道是否在冷却中"""
-    key = (account_id, str(channel_id))  # 确保channel_id是字符串
+    key = (int(account_id), str(channel_id))
+
     last = account_last_sent.get(key, 0)
-    logger.debug(f"检查冷却 - 账号:{account_id}, 频道:{channel_id} -> 键:{key}, 上次发送:{last}, 冷却字典大小:{len(account_last_sent)}")
-    is_cooldown = (time.time() - last) < interval
+    time_passed = time.time() - last
+    is_cooldown = time_passed < interval
+
     if is_cooldown:
-        logger.debug(f"账号 {account_id} 在频道 {channel_id} 冷却中，还需等待 {interval - (time.time() - last):.1f} 秒")
+        logger.info(f"❄️ [冷却中] 账号ID:{account_id} 频道:{channel_id} | 剩余: {interval - time_passed:.1f}秒")
+
     return is_cooldown
 
 def set_account_cooldown(account_id, channel_id):
     """设置账号在指定频道的冷却时间"""
-    key = (account_id, str(channel_id))  # 确保channel_id是字符串
+    key = (int(account_id), str(channel_id))
     account_last_sent[key] = time.time()
-    logger.debug(f"设置冷却 - 账号:{account_id}, 频道:{channel_id} -> {key}")
+    logger.info(f"🔥 [设置冷却] 账号ID:{account_id} 频道:{channel_id} | Key: {key}")
 
 def cleanup_expired_cooldowns():
     """清理过期的冷却状态"""
@@ -138,7 +166,7 @@ class HTTPLogHandler(logging.Handler):
         try:
             import requests
             response = requests.post('http://localhost:5001/api/logs/add',
-                                   json=log_data, timeout=2)
+                                   json=log_data, timeout=2, proxies={'http': None, 'https': None, 'all': None})
             if response.status_code != 200:
                 print(f"同步发送日志失败: {response.status_code}")
         except Exception as e:
@@ -156,7 +184,7 @@ class HTTPLogHandler(logging.Handler):
                 log_data = self.pending_logs.pop(0)
 
                 try:
-                    async with aiohttp.ClientSession() as session:
+                    async with aiohttp.ClientSession(trust_env=False) as session:
                         async with session.post('http://localhost:5001/api/logs/add',
                                               json=log_data, timeout=aiohttp.ClientTimeout(total=2)) as resp:
                             if resp.status != 200:
@@ -207,10 +235,12 @@ class DiscordBotClient(discord.Client):
         self.role = role  # 'listener', 'sender', 'both' - 账号角色
 
     async def schedule_reply(self, message, product, custom_reply=None):
-        """调度回复到合适的发送账号 (增强版：带在线检查和兜底机制)"""
+        """调度回复到合适的发送账号 (增强版：带详细状态诊断)"""
+
         try:
             # 清理过期的冷却状态
             cleanup_expired_cooldowns()
+
             try:
                 from database import db
             except ImportError:
@@ -233,87 +263,113 @@ class DiscordBotClient(discord.Client):
 
             target_client = None
 
-            if website_config:
-                # 2. 获取数据库配置的发送者 ID
-                db_sender_ids = await asyncio.get_event_loop().run_in_executor(None, db.get_website_senders, website_config['id'])
+            # 2. 获取数据库配置的发送者 ID
+            db_sender_ids = await asyncio.get_event_loop().run_in_executor(
+                None, db.get_website_senders, website_config['id']
+            )
 
-                # === 关键修复：获取当前真正"活着"的机器人 ID ===
-                # bot_clients 是全局变量，存着当前内存里的机器人实例
-                online_client_ids = [c.account_id for c in bot_clients if c.is_ready() and not c.is_closed()]
+            if not db_sender_ids:
+                logger.warning(
+                    f"❌ [配置错误] 网站配置 '{website_config.get('name')}' 未绑定任何【发送】账号。请在网站配置中绑定账号。"
+                )
+                return
 
-                # 取交集：既在数据库配置了，又是当前在线的
-                valid_senders = [uid for uid in db_sender_ids if uid in online_client_ids]
+            # === 获取当前真正在线的机器人账号 ID ===
+            online_client_ids = [c.account_id for c in bot_clients if c.is_ready() and not c.is_closed()]
 
-                # 3. 轮换/冷却逻辑
-                rotation_enabled = website_config.get('rotation_enabled', 1)
-                rotation_interval = website_config.get('rotation_interval', 180)
+            # 调试信息：打印当前状态
+            logger.info(f"配置账号ID: {db_sender_ids} | 在线账号ID: {online_client_ids}")
 
-                available_senders = []
+            # 取交集：既在数据库配置了，又是当前在线的
+            valid_senders = [uid for uid in db_sender_ids if uid in online_client_ids]
 
-                # 调试信息：检查轮换配置
-                logger.info(f"账号轮换配置 - 启用:{rotation_enabled}, 间隔:{rotation_interval}秒, 频道:{message.channel.id}")
-                if rotation_enabled:
-                    # 筛选非冷却的（按频道区分冷却）
-                    available_senders = [uid for uid in valid_senders if not is_account_on_cooldown(uid, message.channel.id, rotation_interval)]
-                    # 如果都在冷却，不发送消息（根据用户要求）
-                    if not available_senders:
-                        logger.info(f"所有账号在频道{message.channel.id}的{rotation_interval}秒冷却期内，跳过发送")
-                        return  # 不发送消息，直接返回
-                else:
-                    available_senders = valid_senders
+            if not valid_senders:
+                logger.warning("❌ [状态错误] 配置的发送账号均不在线。请检查 Discord 账号连接状态。")
+                return
 
-                # 4. 选中一个 ID
-                if available_senders:
-                    selected_id = random.choice(available_senders)
-                    # 从全局列表中找到这个实例
-                    target_client = next((c for c in bot_clients if c.account_id == selected_id), None)
-                    logger.info(f"本次选中发送账号: {selected_id} | 可用账号数: {len(available_senders)}")
-                else:
-                    logger.info(f"本次可用发送账号数: 0 | valid_senders数: {len(valid_senders)}")
+            # 3. 轮换/冷却逻辑
+            rotation_enabled = website_config.get('rotation_enabled', 1)
+            rotation_interval = website_config.get('rotation_interval', 180)
 
-            # 如果没有可用发送账号，直接跳过（不允许兜底回复）
-            if not target_client:
-                logger.info(f"频道 {message.channel.id} 没有可用的发送账号(可能都离线或在冷却)，跳过回复")
+            available_senders = []
+
+            if rotation_enabled:
+                # 筛选非冷却的（按频道区分冷却）
+                available_senders = [
+                    uid for uid in valid_senders
+                    if not is_account_on_cooldown(uid, message.channel.id, rotation_interval)
+                ]
+
+                # 只有 valid_senders 有值但 available_senders 为空，才是真正的“冷却中”
+                if not available_senders:
+                    logger.info(
+                        f"⏳ [冷却中] 频道 {message.channel.id} 所有在线账号 ({len(valid_senders)}个) "
+                        f"均处于 {rotation_interval}秒 冷却期内，跳过发送"
+                    )
+                    return
+
+            else:
+                available_senders = valid_senders
+
+            # 4. 选中一个 ID
+            if available_senders:
+                selected_id = random.choice(available_senders)
+                target_client = next((c for c in bot_clients if c.account_id == selected_id), None)
+                logger.info(
+                    f"✅ 本次选中发送账号: {target_client.user.name if target_client else selected_id} (ID: {selected_id})"
+                )
+            else:
+                logger.warning("❌ 逻辑异常：有 valid_senders 但无可用发送账号")
                 return
 
             # 5. 执行发送
             if target_client:
                 try:
-                    # 只有当 target_client 和 message 在同一个服务器时，get_channel 才有效
-                    # 如果是用别的号回复，那个号也必须在这个服务器里
                     target_channel = target_client.get_channel(message.channel.id)
 
                     if target_channel:
                         async with target_channel.typing():
                             await asyncio.sleep(random.uniform(min_delay, max_delay))
 
-                        # 总是尝试回复原消息，而不是直接发送
+                        # 【关键修复】
+                        # 不要使用 message.reply()，因为 message 绑定的是监听者(Listener)客户端
+                        # 必须用 target_channel.send(..., reference=message) 才会使用 target_client(Sender) 的 token
                         try:
-                            await message.reply(response_content)
+                            await target_channel.send(
+                                response_content,
+                                reference=message,
+                                mention_author=True
+                            )
+
                             if hasattr(target_client, 'account_id') and target_client.account_id:
                                 set_account_cooldown(target_client.account_id, message.channel.id)
-                            logger.info(f"✅ [回复成功] 账号: {target_client.user.name} | 商品ID: {product.get('id')}")
+
+                            logger.info(
+                                f"✅ [回复成功] 真实发送账号: {target_client.user.name} (ID: {target_client.account_id}) | 商品ID: {product.get('id')}"
+                            )
+
                         except Exception as reply_error:
-                            logger.warning(f"回复消息失败，改用直接发送: {reply_error}")
+                            logger.warning(f"回复失败，尝试直接发送: {reply_error}")
                             await target_channel.send(response_content)
+
                             if hasattr(target_client, 'account_id') and target_client.account_id:
                                 set_account_cooldown(target_client.account_id, message.channel.id)
-                            logger.info(f"✅ [发送成功] 账号: {target_client.user.name} | 商品ID: {product.get('id')}")
+
+                            logger.info(
+                                f"✅ [发送成功] 真实发送账号: {target_client.user.name} | 商品ID: {product.get('id')}"
+                            )
+
                     else:
-                        # 这种情况是：选中的机器人不在这个频道/服务器里
-                        logger.warning(f"❌ 选中的账号 {target_client.user.name} 无法访问频道，跳过发送")
+                        logger.warning(
+                            f"❌ 选中的账号 {target_client.user.name} 无法访问频道 {message.channel.id} (可能不在该服务器)"
+                        )
                         return
 
                 except Exception as e:
                     logger.error(f"❌ 发送异常: {e}")
-                    # 发送失败时不设置冷却，让其他账号可以尝试
-            else:
-                # 理论上不会走到这里
-                pass
 
         except Exception as e:
             logger.error(f"❌ 严重错误: {e}")
-            # 发生严重错误时不尝试回复，避免无限循环
 
     def _generate_reply_content(self, product, channel_id, custom_reply=None):
         """生成回复内容"""
@@ -555,7 +611,7 @@ class DiscordBotClient(discord.Client):
             for attempt in range(3):
                 try:
                     logger.info(f"下载Discord图片 (尝试 {attempt + 1}/3): {attachment.filename}")
-                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
                         async with session.get(attachment.url) as resp:
                             if resp.status == 200:
                                 image_data = await resp.read()
@@ -659,7 +715,7 @@ class DiscordBotClient(discord.Client):
                                 # aiohttp already imported at module level
                                 for url in custom_image_urls[:10]:  # 最多发送10张图片
                                     try:
-                                        async with aiohttp.ClientSession() as session:
+                                        async with aiohttp.ClientSession(trust_env=False) as session:
                                             async with session.get(url.strip()) as resp:
                                                 if resp.status == 200:
                                                     image_data = await resp.read()

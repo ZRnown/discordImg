@@ -1,6 +1,16 @@
+# ============================================================
+# 重要：必须在所有其他导入之前设置线程限制环境变量
+# 防止 FAISS/OpenMP 在 Flask 多线程环境下发生死锁
+# ============================================================
+import os
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["MKL_NUM_THREADS"] = "1"
+os.environ["OPENBLAS_NUM_THREADS"] = "1"
+os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
+os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
 from flask import Flask, request, jsonify, Response, session
 import numpy as np
-import os
 import logging
 import sys
 from datetime import datetime
@@ -358,8 +368,8 @@ logging.getLogger('ultralytics').setLevel(logging.WARNING)  # 屏蔽 YOLO 日志
 logger = logging.getLogger(__name__)
 
 # 机器人相关变量
-bot_clients = []
-bot_tasks = []
+# [修改] 从 bot 模块导入列表，确保 app.py 和 bot.py 操作同一个列表对象
+from bot import bot_clients, bot_tasks, get_all_cooldowns
 bot_running = False  # 标记机器人是否正在运行
 
 # 全局特征提取器实例（在应用启动时创建）
@@ -897,6 +907,19 @@ def require_login():
         return True
     return get_current_user() is not None
 
+@app.route('/api/bot/cooldowns', methods=['GET'])
+def get_bot_cooldowns():
+    """获取当前所有账号的冷却状态"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        cooldowns = get_all_cooldowns()
+        return jsonify({'cooldowns': cooldowns})
+    except Exception as e:
+        logger.error(f"获取冷却状态失败: {e}")
+        return jsonify({'cooldowns': []}), 500
+
 @app.route('/api/auth/login', methods=['POST'])
 def login():
     """用户登录"""
@@ -963,28 +986,32 @@ def create_user():
         if not data or not data.get('username') or not data.get('password'):
             return jsonify({'error': '用户名和密码不能为空'}), 400
 
-        username = data['username']
-        password = data['password']
+        username = data['username'].strip()
+        password = data['password'].strip()
         role = data.get('role', 'user')
         shop_ids = data.get('shops', [])
 
-        # 创建用户
+        if len(password) < 6:
+            return jsonify({'error': '密码长度至少6位'}), 400
+
         from werkzeug.security import generate_password_hash
         password_hash = generate_password_hash(password)
-        if db.create_user(username, password_hash, role):
-            # 获取新创建的用户ID
-            user = db.authenticate_user(username, password_hash)
-            if user:
-                # 设置店铺权限
-                if shop_ids:
-                    db.update_user_shops(user['id'], shop_ids)
 
-                user_info = {k: v for k, v in user.items() if k != 'password_hash'}
-                return jsonify({'user': user_info, 'message': '用户创建成功'})
+        if db.create_user(username, password_hash, role):
+            with db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT id, username, role, is_active, created_at FROM users WHERE username = ?", (username,))
+                user = cursor.fetchone()
+
+            if user:
+                user_dict = dict(user)
+                if shop_ids:
+                    db.update_user_shops(user_dict['id'], shop_ids)
+                return jsonify({'user': user_dict, 'message': '用户创建成功'})
             else:
-                return jsonify({'error': '用户创建失败'}), 500
+                return jsonify({'error': '用户创建后无法检索信息'}), 500
         else:
-            return jsonify({'error': '用户名已存在或创建失败'}), 400
+            return jsonify({'error': '用户名已存在或数据库错误'}), 400
     except Exception as e:
         logger.error(f"创建用户失败: {e}")
         return jsonify({'error': str(e)}), 500
@@ -1050,12 +1077,22 @@ def get_website_configs():
         current_user = get_current_user()
         configs = db.get_website_configs()
 
-        # 为每个配置添加当前用户的绑定信息
+        # 为每个配置添加绑定信息
         for config in configs:
             config_id = config['id']
-            # 只获取当前用户的绑定关系
+
+            # 1) 账号绑定：只返回当前用户自己的绑定（账号是个人的）
             config['accounts'] = db.get_website_account_bindings(config_id, current_user['id'])
-            config['channels'] = db.get_website_channel_bindings(config_id, current_user['id'])
+
+            # 2) 频道绑定：所有用户可见（读取全局频道绑定）
+            with db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT channel_id FROM website_channel_bindings
+                    WHERE website_id = ?
+                    ORDER BY created_at
+                ''', (config_id,))
+                config['channels'] = [row[0] for row in cursor.fetchall()]
 
         return jsonify({'websites': configs})
     except Exception as e:
@@ -3272,7 +3309,7 @@ def add_external_log():
 
 def start_discord_bot(user_id=None):
     """启动Discord机器人 - 支持多账号"""
-    global bot_clients, bot_tasks, bot_running
+    global bot_running
 
     if bot_running:
         logger.warning("机器人已经在运行中")
@@ -3367,7 +3404,7 @@ def start_discord_bot(user_id=None):
 
 def stop_discord_bot(user_id=None):
     """停止Discord机器人 (支持按用户停止)"""
-    global bot_clients, bot_tasks, bot_running
+    global bot_running
 
     # 如果没有客户端，直接返回
     if not bot_clients:
@@ -4567,6 +4604,9 @@ def process_single_product(product_info):
             # 生成英文标题
             english_title = generate_english_title(product_details.get('title', ''))
 
+            # 优先使用从商品详情中获取的店铺名称，如果没有则使用传入的
+            actual_shop_name = product_details.get('shop_name', '') or shop_name
+
             return {
                 'product_url': item_url,
                 'title': product_details.get('title', ''),
@@ -4574,7 +4614,7 @@ def process_single_product(product_info):
                 'english_title': english_title,
                 'cnfans_url': generate_cnfans_url(item_id),
                 'acbuy_url': generate_acbuy_url(item_url),
-                'shop_name': shop_name,
+                'shop_name': actual_shop_name,
                 'images': product_details.get('images', []),
                 'ruleEnabled': True
             }
@@ -4953,6 +4993,20 @@ if __name__ == '__main__':
         print("✅ [系统] 抓取状态已重置，随时可以开始新任务")
     except Exception as e:
         print(f"⚠️ [系统] 状态重置失败 (可能是第一次运行数据库未初始化): {e}")
+
+    # ====================================================
+    # 新增修复：启动时重置所有Discord账号状态为offline
+    # ====================================================
+    print("🧹 [系统] 正在重置Discord账号状态...")
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE discord_accounts SET status = 'offline'")
+            conn.commit()
+            affected = cursor.rowcount
+        print(f"✅ [系统] 已重置 {affected} 个Discord账号状态为offline")
+    except Exception as e:
+        print(f"⚠️ [系统] 账号状态重置失败: {e}")
 
     # 3. 在主线程预加载模型 (关键)
     print("🤖 [系统] 正在预热 AI 引擎，请稍候...")

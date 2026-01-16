@@ -93,6 +93,8 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
         toast.success("店铺添加成功")
         setNewShopId('')
         fetchShops()
+        // 触发自定义事件通知其他组件刷新店铺列表
+        window.dispatchEvent(new CustomEvent('shops-updated'))
       } else {
         toast.error(data.error || "添加店铺失败")
       }
@@ -112,6 +114,8 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
       if (res.ok) {
         toast.success("店铺删除成功")
         fetchShops()
+        // 触发自定义事件通知其他组件刷新店铺列表
+        window.dispatchEvent(new CustomEvent('shops-updated'))
         // 移除选中状态
         setSelectedShopIds(prev => prev.filter(id => id !== shopId))
       } else {

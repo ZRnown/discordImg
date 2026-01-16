@@ -12,7 +12,17 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
-import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit } from "lucide-react"
+import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit, Clock } from "lucide-react"
+
+function CooldownTimer({ remaining }: { remaining: number }) {
+  if (remaining <= 0) return null
+  return (
+    <div className="flex items-center text-orange-600 text-xs gap-1 mt-1 bg-orange-50 px-2 py-0.5 rounded border border-orange-100">
+      <Clock className="w-3 h-3" />
+      <span className="font-mono">{Math.ceil(remaining)}s 冷却中</span>
+    </div>
+  )
+}
 
 export function AccountsView() {
   const [accounts, setAccounts] = useState<any[]>([])
@@ -50,7 +60,9 @@ export function AccountsView() {
   const [websiteChannels, setWebsiteChannels] = useState<{[key: number]: string[]}>({})
   const [channelInputs, setChannelInputs] = useState<{[key: number]: string}>({})
   const [rotationEnabled, setRotationEnabled] = useState<{[key: number]: boolean}>({})
-  const [rotationIntervals, setRotationIntervals] = useState<{[key: number]: number}>({})
+  const [rotationInputs, setRotationInputs] = useState<{[key: number]: string}>({})
+
+  const [cooldowns, setCooldowns] = useState<any[]>([])
 
   // 网站账号绑定相关状态
   const [websiteAccounts, setWebsiteAccounts] = useState<{[key: number]: any[]}>({})
@@ -107,6 +119,8 @@ export function AccountsView() {
       websites.forEach((website: any) => {
         channels[website.id] = website.channels || []
         accounts[website.id] = website.accounts || []
+        setRotationEnabled(prev => ({ ...prev, [website.id]: website.rotation_enabled !== 0 }))
+        setRotationInputs(prev => ({ ...prev, [website.id]: (website.rotation_interval || 180).toString() }))
       })
 
       // 等待所有过滤规则获取完成
@@ -134,6 +148,40 @@ export function AccountsView() {
   }
 
 
+  const fetchCooldowns = async () => {
+    try {
+      const res = await fetch('/api/bot/cooldowns', { credentials: 'include' })
+      if (res.ok) {
+        const data = await res.json()
+        setCooldowns(data.cooldowns || [])
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const getCooldownRemaining = (accountId: number, websiteId: number) => {
+    const website = websites.find(w => w.id === websiteId)
+    if (!website) return 0
+
+    const interval = website.rotation_interval || 180
+    const channels = websiteChannels[websiteId] || []
+
+    let maxRemaining = 0
+
+    for (const cd of cooldowns) {
+      if (cd.account_id === accountId && channels.includes(cd.channel_id)) {
+        const passed = Date.now() / 1000 - cd.last_sent
+        const remaining = interval - passed
+        if (remaining > maxRemaining) {
+          maxRemaining = remaining
+        }
+      }
+    }
+
+    return maxRemaining > 0 ? maxRemaining : 0
+  }
+
   useEffect(() => {
     // 先获取当前用户，再决定是否获取用户列表
     const init = async () => {
@@ -155,13 +203,28 @@ export function AccountsView() {
     fetchSettings();
     fetchWebsites(true); // 强制刷新，清除旧的缓存数据
     fetchMessageFilters();
+    fetchCooldowns();
 
-    // 每30秒刷新一次账号状态
+    // 每3秒刷新一次账号状态（准实时）
     const statusInterval = setInterval(() => {
       fetchAccounts(true); // 强制刷新，清除缓存
-    }, 30000);
+    }, 3000);
 
-    return () => clearInterval(statusInterval);
+    // 每秒刷新一次冷却状态
+    const cooldownInterval = setInterval(() => {
+      fetchCooldowns()
+    }, 1000)
+
+    const handleStatusChange = () => {
+      fetchAccounts(true)
+    }
+    window.addEventListener('bot-status-changed', handleStatusChange)
+
+    return () => {
+      clearInterval(statusInterval);
+      clearInterval(cooldownInterval);
+      window.removeEventListener('bot-status-changed', handleStatusChange)
+    }
   }, [])
 
   const fetchSettings = async (usePreload: boolean = true) => {
@@ -520,7 +583,7 @@ export function AccountsView() {
             : website
         ))
         // 同步更新本地输入框状态
-        setRotationIntervals(prev => ({ ...prev, [websiteId]: rotationInterval }))
+        setRotationInputs(prev => ({ ...prev, [websiteId]: rotationInterval.toString() }))
       } else {
         toast.error('更新失败')
       }
@@ -1257,22 +1320,28 @@ export function AccountsView() {
                       </div>
 
                       <div className="flex flex-wrap gap-2">
-                        {(websiteAccounts[website.id] || []).map((binding: any) => (
-                          <div key={binding.id} className="flex items-center gap-1 bg-muted rounded px-2 py-1">
-                            <span className="text-xs">{binding.username}</span>
-                            <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">
-                              {binding.role === 'listener' ? '监听' : binding.role === 'sender' ? '发送' : '两者'}
-                            </Badge>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-4 w-4 p-0"
-                              onClick={() => handleUnbindAccount(website.id, binding.account_id)}
-                            >
-                              <X className="w-3 h-3" />
-                            </Button>
-                          </div>
-                        ))}
+                        {(websiteAccounts[website.id] || []).map((binding: any) => {
+                          const remaining = getCooldownRemaining(binding.account_id, website.id)
+                          return (
+                            <div key={binding.id} className="flex flex-col items-start bg-muted rounded px-2 py-1 border">
+                              <div className="flex items-center gap-1">
+                                <span className="text-xs">{binding.username}</span>
+                                <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">
+                                  {binding.role === 'listener' ? '监听' : binding.role === 'sender' ? '发送' : '两者'}
+                                </Badge>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-4 w-4 p-0"
+                                  onClick={() => handleUnbindAccount(website.id, binding.account_id)}
+                                >
+                                  <X className="w-3 h-3" />
+                                </Button>
+                              </div>
+                              <CooldownTimer remaining={remaining} />
+                            </div>
+                          )
+                        })}
                       </div>
                     </div>
 
@@ -1320,7 +1389,7 @@ export function AccountsView() {
                           <Label className="text-xs">轮换间隔(秒):</Label>
                           <Input
                             type="number"
-                            value={rotationIntervals[website.id] ?? website.rotation_interval ?? 180}
+                            value={rotationInputs[website.id] ?? (website.rotation_interval ?? 180).toString()}
                             className="w-20 h-7 text-xs"
                             disabled={!(rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))}
                             onChange={(e) => {
@@ -1328,7 +1397,7 @@ export function AccountsView() {
                               setRotationIntervals(prev => ({ ...prev, [website.id]: value }))
                             }}
                             onBlur={(e) => {
-                              const value = rotationIntervals[website.id] ?? website.rotation_interval ?? 180
+                              const value = parseInt(rotationInputs[website.id] ?? (website.rotation_interval ?? 180).toString())
                               if (value > 0 && value !== website.rotation_interval) {
                                 handleUpdateRotation(website.id, value)
                               } else if (value <= 0) {
@@ -1338,7 +1407,11 @@ export function AccountsView() {
                             }}
                           />
                           <span className="text-xs text-muted-foreground">
-                            ({Math.floor((rotationIntervals[website.id] ?? website.rotation_interval ?? 180) / 60)}分{(rotationIntervals[website.id] ?? website.rotation_interval ?? 180) % 60}秒)
+                            ({(() => {
+                              const v = parseInt(rotationInputs[website.id] ?? (website.rotation_interval ?? 180).toString())
+                              const sec = Number.isFinite(v) ? v : (website.rotation_interval ?? 180)
+                              return `${Math.floor(sec / 60)}分${sec % 60}秒`
+                            })()})
                           </span>
                         </div>
 

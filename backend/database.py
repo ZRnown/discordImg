@@ -535,18 +535,27 @@ class Database:
     def search_similar_images(self, query_vector: np.ndarray, limit: int = 1,
                              threshold: float = 0.6, user_shops: Optional[List[str]] = None) -> List[Dict]:
         """使用FAISS搜索相似图像"""
+        import time
+        start_time = time.time()
+
         try:
             try:
                 from vector_engine import get_vector_engine
             except ImportError:
                 from .vector_engine import get_vector_engine
+
+            logger.info(f"开始获取FAISS引擎...")
+            engine_start = time.time()
             engine = get_vector_engine()
+            logger.info(f"获取FAISS引擎耗时: {time.time() - engine_start:.3f}秒")
 
             print(f"DEBUG DB: Starting FAISS search, threshold: {threshold}, limit: {limit}")
             print(f"DEBUG DB: Query vector length: {len(query_vector) if hasattr(query_vector, '__len__') else 'unknown'}")
 
-            # 执行FAISS搜索 - 请求更多结果以应对被删除的向量
-            faiss_results = engine.search(query_vector, top_k=min(limit * 3, 50))  # 请求更多候选结果
+            # 执行FAISS搜索
+            faiss_start = time.time()
+            faiss_results = engine.search(query_vector, top_k=min(limit * 3, 50))
+            logger.info(f"FAISS搜索耗时: {time.time() - faiss_start:.3f}秒")
             print(f"DEBUG DB: FAISS search returned {len(faiss_results)} results")
 
             matched_results = []

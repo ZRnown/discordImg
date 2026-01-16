@@ -52,7 +52,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   const [batchUploading, setBatchUploading] = useState(false)
 
   // 使用API缓存hook
-  const { cachedFetch } = useApiCache()
+  const { cachedFetch, invalidateCache } = useApiCache()
 
   // 抓取相关状态
   const [shopId, setShopId] = useState('')
@@ -72,6 +72,17 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     fetchProductsCount()
     fetchScrapeStatus() // 初始化时检查抓取状态，恢复进度显示
   }, []) // 静态数据只加载一次
+
+  // 监听店铺更新事件，实时刷新店铺列表
+  useEffect(() => {
+    const handleShopsUpdated = () => {
+      // 清除店铺缓存并重新获取
+      invalidateCache('/api/shops')
+      fetchAvailableShops()
+    }
+    window.addEventListener('shops-updated', handleShopsUpdated)
+    return () => window.removeEventListener('shops-updated', handleShopsUpdated)
+  }, [invalidateCache])
 
   useEffect(() => {
     fetchProducts(currentPage)

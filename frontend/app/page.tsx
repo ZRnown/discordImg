@@ -128,10 +128,7 @@ export default function Page() {
         // 强制重新获取状态以确认
         setTimeout(() => fetchBotStatus(), 100)
         toast.success("Discord账号已启动")
-        // 强制刷新账号状态
-        if (window.location.pathname === '/accounts') {
-          setTimeout(() => window.location.reload(), 200)
-        }
+        window.dispatchEvent(new Event('bot-status-changed'))
       } else {
         const error = await response.json()
         console.log('启动失败，错误:', error)
@@ -157,10 +154,7 @@ export default function Page() {
       if (response.ok) {
         setBotStatus('stopped')
         toast.success("Discord账号已停止")
-        // 强制刷新账号状态
-        if (window.location.pathname === '/accounts') {
-          window.location.reload()
-        }
+        window.dispatchEvent(new Event('bot-status-changed'))
       } else {
         setBotStatus('running')
         toast.error("停止账号失败")

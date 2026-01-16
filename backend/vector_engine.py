@@ -139,7 +139,11 @@ class VectorEngine:
 
     def search(self, query_vector: np.ndarray, top_k: int = 1) -> List[Dict]:
         """搜索最相似的向量"""
+        import time
+        start_time = time.time()
+
         if self.index.ntotal == 0:
+            logger.info("FAISS索引为空，跳过搜索")
             return []
 
         try:
@@ -151,10 +155,15 @@ class VectorEngine:
 
             query_vector = query_vector.reshape(1, -1)
 
+            logger.info(f"开始FAISS搜索，索引大小: {self.index.ntotal}, top_k: {top_k}")
+
             # 执行搜索
-            # distances: 相似度分数 (因为是内积且归一化了，范围-1到1)
-            # indices: FAISS内部的ID
+            # 强制使用单线程进行搜索，防止在 Flask/MacOS 环境下发生 OpenMP 死锁
+            faiss.omp_set_num_threads(1)
+            search_start = time.time()
             distances, indices = self.index.search(query_vector, top_k)
+            search_time = time.time() - search_start
+            logger.info(f"FAISS搜索完成，耗时: {search_time:.3f}秒")
 
             results = []
             for i in range(min(top_k, len(indices[0]))):
@@ -164,10 +173,12 @@ class VectorEngine:
                 if faiss_id != -1 and faiss_id < len(self.id_map) and self.id_map[faiss_id] is not None:
                     db_id = self.id_map[faiss_id]
                     results.append({
-                        'db_id': db_id,  # 数据库中的ID
-                        'score': float(score)  # 相似度分数
+                        'db_id': db_id,
+                        'score': float(score)
                     })
 
+            total_time = time.time() - start_time
+            logger.info(f"搜索总耗时: {total_time:.3f}秒, 返回{len(results)}个结果")
             return results
 
         except Exception as e:
