@@ -287,9 +287,19 @@ class DiscordBotClient(discord.Client):
                 logger.warning("❌ [状态错误] 配置的发送账号均不在线。请检查 Discord 账号连接状态。")
                 return
 
-            # 3. 轮换/冷却逻辑
+            # 3. 轮换/冷却逻辑 - 使用用户级别设置
+            # 优先使用用户个性化设置，如果没有则使用全局配置
             rotation_enabled = website_config.get('rotation_enabled', 1)
             rotation_interval = website_config.get('rotation_interval', 180)
+
+            if self.user_id and website_config.get('id'):
+                user_website_settings = await asyncio.get_event_loop().run_in_executor(
+                    None, db.get_user_website_settings, self.user_id, website_config['id']
+                )
+                if user_website_settings:
+                    rotation_enabled = user_website_settings.get('rotation_enabled', rotation_enabled)
+                    rotation_interval = user_website_settings.get('rotation_interval', rotation_interval)
+                    logger.info(f"📋 使用用户级别设置: rotation_interval={rotation_interval}秒, rotation_enabled={rotation_enabled}")
 
             available_senders = []
 
@@ -588,14 +598,34 @@ class DiscordBotClient(discord.Client):
 
         logger.info(f'收到消息: {message.author.name} 在 #{message.channel.name}: "{message.content[:100]}{"..." if len(message.content) > 100 else ""}"')
 
+        # 获取用户设置，检查是否启用关键词和图片回复
+        keyword_reply_enabled = True
+        image_reply_enabled = True
+        if self.user_id:
+            try:
+                try:
+                    from database import db
+                except ImportError:
+                    from .database import db
+                user_settings = await asyncio.get_event_loop().run_in_executor(
+                    None, db.get_user_settings, self.user_id
+                )
+                keyword_reply_enabled = user_settings.get('keyword_reply_enabled', 1) == 1
+                image_reply_enabled = user_settings.get('image_reply_enabled', 1) == 1
+            except Exception as e:
+                logger.error(f'获取用户回复开关设置失败: {e}')
+
         # 处理关键词消息转发
         await self.handle_keyword_forward(message)
 
-        # 处理关键词搜索（文字消息）
-        await self.handle_keyword_search(message)
+        # 处理关键词搜索（文字消息）- 检查开关
+        if keyword_reply_enabled:
+            await self.handle_keyword_search(message)
+        else:
+            logger.debug(f'关键词回复已禁用，跳过关键词搜索')
 
-        # 检查消息是否包含图片（只处理图片，不处理文字）
-        if message.attachments:
+        # 检查消息是否包含图片（只处理图片，不处理文字）- 检查开关
+        if image_reply_enabled and message.attachments:
             for attachment in message.attachments:
                 if attachment.content_type and attachment.content_type.startswith('image/'):
                     await self.handle_image(message, attachment)
@@ -829,6 +859,23 @@ class DiscordBotClient(discord.Client):
 
             search_query = message.content.strip()
             if not search_query:
+                return
+
+            # 过滤太短的消息（至少需要2个字符）
+            if len(search_query) < 2:
+                return
+
+            # 过滤纯数字消息（如 "1", "2", "123"）
+            if search_query.isdigit():
+                return
+
+            # 过滤只包含数字和空格的消息（如 "1 2 3"）
+            if search_query.replace(' ', '').isdigit():
+                return
+
+            # 过滤常见的无意义短消息
+            meaningless_patterns = {'ok', 'no', 'yes', 'hi', 'hey', 'lol', 'lmao', 'wtf', 'omg', 'bruh'}
+            if search_query.lower() in meaningless_patterns:
                 return
 
             # 调用搜索API

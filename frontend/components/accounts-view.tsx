@@ -1392,8 +1392,8 @@ export function AccountsView() {
                             className="w-20 h-7 text-xs"
                             disabled={!(rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))}
                             onChange={(e) => {
-                              const value = parseInt(e.target.value) || 180
-                              setRotationIntervals(prev => ({ ...prev, [website.id]: value }))
+                              const value = e.target.value
+                              setRotationInputs(prev => ({ ...prev, [website.id]: value }))
                             }}
                             onBlur={(e) => {
                               const value = parseInt(rotationInputs[website.id] ?? (website.rotation_interval ?? 180).toString())
@@ -1401,7 +1401,7 @@ export function AccountsView() {
                                 handleUpdateRotation(website.id, value)
                               } else if (value <= 0) {
                                 toast.error('轮换间隔必须大于0秒')
-                                setRotationIntervals(prev => ({ ...prev, [website.id]: website.rotation_interval ?? 180 }))
+                                setRotationInputs(prev => ({ ...prev, [website.id]: (website.rotation_interval ?? 180).toString() }))
                               }
                             }}
                           />

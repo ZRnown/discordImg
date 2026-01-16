@@ -45,7 +45,16 @@ export function DashboardView({ currentUser }: { currentUser: any }) {
 
   useEffect(() => {
     fetchStats()
-      fetchAnnouncements()
+    fetchAnnouncements()
+
+    // 每10秒自动刷新统计数据
+    const statsInterval = setInterval(() => {
+      fetchStats()
+    }, 10000)
+
+    return () => {
+      clearInterval(statsInterval)
+    }
   }, [currentUser])
 
   const fetchStats = async () => {

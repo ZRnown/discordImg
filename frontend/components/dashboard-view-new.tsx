@@ -48,6 +48,15 @@ export function DashboardView({ currentUser }: { currentUser: any }) {
     if (currentUser?.role === 'admin') {
       fetchAnnouncements()
     }
+
+    // 每10秒自动刷新统计数据
+    const statsInterval = setInterval(() => {
+      fetchStats()
+    }, 10000)
+
+    return () => {
+      clearInterval(statsInterval)
+    }
   }, [currentUser])
 
   const fetchStats = async () => {

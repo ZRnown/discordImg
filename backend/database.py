@@ -394,12 +394,25 @@ class Database:
                     global_reply_max_delay REAL DEFAULT 8.0,
                     user_blacklist TEXT DEFAULT '',  -- 用户黑名单，逗号分隔
                     keyword_filters TEXT DEFAULT '',  -- 关键词过滤，逗号分隔
+                    keyword_reply_enabled INTEGER DEFAULT 1,  -- 是否启用关键词回复
+                    image_reply_enabled INTEGER DEFAULT 1,  -- 是否启用图片回复
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
                     UNIQUE(user_id)
                 )
             ''')
+
+            # 为 user_settings 表添加新字段（如果不存在）
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN keyword_reply_enabled INTEGER DEFAULT 1')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN image_reply_enabled INTEGER DEFAULT 1')
+            except sqlite3.OperationalError:
+                pass
 
             # 创建用户级别的网站设置表（轮换设置和消息过滤）
             cursor.execute('''
@@ -1747,8 +1760,11 @@ class Database:
                 cursor.execute("SELECT COUNT(*) FROM products")
                 product_count = cursor.fetchone()[0] or 0
 
-                # 获取图片数量
-                cursor.execute("SELECT COUNT(*) FROM product_images")
+                # 获取图片数量（只统计有对应商品的图片）
+                cursor.execute("""
+                    SELECT COUNT(*) FROM product_images
+                    WHERE product_id IN (SELECT id FROM products)
+                """)
                 image_count = cursor.fetchone()[0] or 0
 
                 # 获取用户数量
@@ -1764,6 +1780,25 @@ class Database:
         except Exception as e:
             logger.error(f"获取系统统计信息失败: {e}")
             return {'shop_count': 0, 'product_count': 0, 'image_count': 0, 'user_count': 0}
+
+    def cleanup_orphaned_images(self) -> int:
+        """清理孤立的图片记录（没有对应商品的图片）"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                # 删除没有对应商品的图片记录
+                cursor.execute("""
+                    DELETE FROM product_images
+                    WHERE product_id NOT IN (SELECT id FROM products)
+                """)
+                deleted_count = cursor.rowcount
+                conn.commit()
+                if deleted_count > 0:
+                    logger.info(f"清理了 {deleted_count} 条孤立的图片记录")
+                return deleted_count
+        except Exception as e:
+            logger.error(f"清理孤立图片记录失败: {e}")
+            return 0
 
     def get_active_announcements(self) -> List[Dict]:
         """获取活跃的系统公告"""
@@ -2211,7 +2246,8 @@ class Database:
                 cursor = conn.cursor()
                 cursor.execute('''
                     SELECT download_threads, feature_extract_threads, discord_similarity_threshold,
-                           global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters
+                           global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
+                           keyword_reply_enabled, image_reply_enabled
                     FROM user_settings WHERE user_id = ?
                 ''', (user_id,))
                 row = cursor.fetchone()
@@ -2224,6 +2260,8 @@ class Database:
                         'global_reply_max_delay': row[4] or 8.0,
                         'user_blacklist': row[5] or '',
                         'keyword_filters': row[6] or '',
+                        'keyword_reply_enabled': row[7] if row[7] is not None else 1,
+                        'image_reply_enabled': row[8] if row[8] is not None else 1,
                     }
                 # 如果用户没有设置，返回默认值
                 return {
@@ -2234,6 +2272,8 @@ class Database:
                     'global_reply_max_delay': 8.0,
                     'user_blacklist': '',
                     'keyword_filters': '',
+                    'keyword_reply_enabled': 1,
+                    'image_reply_enabled': 1,
                 }
         except Exception as e:
             logger.error(f"获取用户设置失败: {e}")
@@ -2245,12 +2285,15 @@ class Database:
                 'global_reply_max_delay': 8.0,
                 'user_blacklist': '',
                 'keyword_filters': '',
+                'keyword_reply_enabled': 1,
+                'image_reply_enabled': 1,
             }
 
     def update_user_settings(self, user_id: int, download_threads: int = None,
                            feature_extract_threads: int = None, discord_similarity_threshold: float = None,
                            global_reply_min_delay: float = None, global_reply_max_delay: float = None,
-                           user_blacklist: str = None, keyword_filters: str = None) -> bool:
+                           user_blacklist: str = None, keyword_filters: str = None,
+                           keyword_reply_enabled: int = None, image_reply_enabled: int = None) -> bool:
         """更新用户个性化设置"""
         try:
             with self.get_connection() as conn:
@@ -2293,6 +2336,14 @@ class Database:
                         update_fields.append('keyword_filters = ?')
                         params.append(keyword_filters)
 
+                    if keyword_reply_enabled is not None:
+                        update_fields.append('keyword_reply_enabled = ?')
+                        params.append(keyword_reply_enabled)
+
+                    if image_reply_enabled is not None:
+                        update_fields.append('image_reply_enabled = ?')
+                        params.append(image_reply_enabled)
+
                     if update_fields:
                         update_fields.append('updated_at = CURRENT_TIMESTAMP')
                         sql = f'UPDATE user_settings SET {", ".join(update_fields)} WHERE user_id = ?'
@@ -2303,8 +2354,9 @@ class Database:
                     cursor.execute('''
                         INSERT INTO user_settings
                         (user_id, download_threads, feature_extract_threads, discord_similarity_threshold,
-                         global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                         global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
+                         keyword_reply_enabled, image_reply_enabled)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         user_id,
                         download_threads or 4,
@@ -2313,7 +2365,9 @@ class Database:
                         global_reply_min_delay or 3.0,
                         global_reply_max_delay or 8.0,
                         user_blacklist or '',
-                        keyword_filters or ''
+                        keyword_filters or '',
+                        keyword_reply_enabled if keyword_reply_enabled is not None else 1,
+                        image_reply_enabled if image_reply_enabled is not None else 1
                     ))
 
                 conn.commit()

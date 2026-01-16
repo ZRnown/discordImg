@@ -1415,6 +1415,22 @@ def get_system_stats():
         logger.error(f"获取系统统计信息失败: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/system/cleanup-orphaned-images', methods=['POST'])
+def cleanup_orphaned_images():
+    """清理孤立的图片记录"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        deleted_count = db.cleanup_orphaned_images()
+        return jsonify({
+            'message': f'清理完成，删除了 {deleted_count} 条孤立记录',
+            'deleted_count': deleted_count
+        })
+    except Exception as e:
+        logger.error(f"清理孤立图片记录失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
 # === 新增：公告管理API ===
 @app.route('/api/announcements', methods=['GET'])
 def get_announcements():
@@ -1836,42 +1852,40 @@ def update_product():
     product_id = data['id']
 
     try:
-            # 检查权限
-        if current_user['role'] == 'admin':
-            pass
-        else:
+        # 检查权限
+        if current_user['role'] != 'admin':
             user_shops = current_user.get('shops', [])
             product = db.get_product_by_id(product_id)
             if not product or product.get('shop_name') not in user_shops:
                 return jsonify({'error': '无权限更新此商品'}), 403
 
-            # 构建更新数据
-            updates = {}
-            if 'title' in data:
-                updates['title'] = data['title']
-            if 'englishTitle' in data:
-                updates['english_title'] = data['englishTitle']
-            if 'ruleEnabled' in data:
-                updates['ruleEnabled'] = data['ruleEnabled']
-            if 'customReplyText' in data:
-                updates['custom_reply_text'] = data['customReplyText']
-            if 'selectedImageIndexes' in data:
-                updates['custom_reply_images'] = data['selectedImageIndexes']
-            if 'customImageUrls' in data:
-                updates['custom_image_urls'] = data['customImageUrls']
-            if 'imageSource' in data:
-                updates['image_source'] = data['imageSource']
+        # 构建更新数据
+        updates = {}
+        if 'title' in data:
+            updates['title'] = data['title']
+        if 'englishTitle' in data:
+            updates['english_title'] = data['englishTitle']
+        if 'ruleEnabled' in data:
+            updates['ruleEnabled'] = data['ruleEnabled']
+        if 'customReplyText' in data:
+            updates['custom_reply_text'] = data['customReplyText']
+        if 'selectedImageIndexes' in data:
+            updates['custom_reply_images'] = data['selectedImageIndexes']
+        if 'customImageUrls' in data:
+            updates['custom_image_urls'] = data['customImageUrls']
+        if 'imageSource' in data:
+            updates['image_source'] = data['imageSource']
 
-            # 执行更新
-            if updates:
-                success = db.update_product(product_id, updates)
-                if success:
-                    updated_product = db.get_product_by_id(product_id)
-                    return jsonify({'message': '商品更新成功', 'product': updated_product})
-                else:
-                    return jsonify({'error': '更新失败'}), 500
+        # 执行更新
+        if updates:
+            success = db.update_product(product_id, updates)
+            if success:
+                updated_product = db.get_product_by_id(product_id)
+                return jsonify({'message': '商品更新成功', 'product': updated_product})
             else:
-                return jsonify({'error': '没有要更新的字段'}), 400
+                return jsonify({'error': '更新失败'}), 500
+        else:
+            return jsonify({'error': '没有要更新的字段'}), 400
 
     except Exception as e:
         logger.error(f"更新商品失败: {e}")
@@ -2437,7 +2451,9 @@ def update_user_settings():
             global_reply_min_delay=min_delay,
             global_reply_max_delay=max_delay,
             user_blacklist=data.get('user_blacklist'),
-            keyword_filters=data.get('keyword_filters')
+            keyword_filters=data.get('keyword_filters'),
+            keyword_reply_enabled=data.get('keyword_reply_enabled'),
+            image_reply_enabled=data.get('image_reply_enabled')
         )
 
         if success:
@@ -3151,17 +3167,21 @@ def search_similar_text():
         with db.get_connection() as conn:
             cursor = conn.cursor()
 
-            # 只在英文标题中搜索（根据用户要求，不监听中文关键词）
+            # 使用 LOWER() 实现大小写不敏感搜索
+            # 同时检查 english_title 中是否包含搜索词（支持逗号分隔的多关键词）
+            # 例如：english_title = "DR Top,B30"，搜索 "b30" 或 "dr top" 都能匹配
+            query_lower = query.lower()
+
             cursor.execute("""
                 SELECT id, product_url, title, english_title, description,
                        ruleEnabled, min_delay, max_delay, created_at,
                        cnfans_url
                 FROM products
-                WHERE english_title LIKE ?
+                WHERE LOWER(english_title) LIKE ?
                   AND ruleEnabled = 1
                 ORDER BY created_at DESC
                 LIMIT ?
-            """, (f'%{query}%', limit))
+            """, (f'%{query_lower}%', limit))
 
             rows = cursor.fetchall()
 

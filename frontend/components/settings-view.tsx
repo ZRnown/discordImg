@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { toast } from "sonner"
 import { Settings, Save } from "lucide-react"
 
@@ -22,6 +23,8 @@ interface UserSettings {
   global_reply_max_delay: number
   user_blacklist: string
   keyword_filters: string
+  keyword_reply_enabled: boolean
+  image_reply_enabled: boolean
 }
 
 interface SystemSettings {
@@ -37,6 +40,8 @@ export function SettingsView() {
     global_reply_max_delay: 8.0,
     user_blacklist: '',
     keyword_filters: '',
+    keyword_reply_enabled: true,
+    image_reply_enabled: true,
   })
   const [systemSettings, setSystemSettings] = useState<SystemSettings>({
     scrape_threads: 2,
@@ -70,6 +75,8 @@ export function SettingsView() {
           global_reply_max_delay: data.global_reply_max_delay ?? 8.0,
           user_blacklist: data.user_blacklist ?? '',
           keyword_filters: data.keyword_filters ?? '',
+          keyword_reply_enabled: data.keyword_reply_enabled === 1 || data.keyword_reply_enabled === true,
+          image_reply_enabled: data.image_reply_enabled === 1 || data.image_reply_enabled === true,
         })
       } else {
         toast.error("获取设置失败")
@@ -442,6 +449,39 @@ export function SettingsView() {
                 <p className="text-xs text-muted-foreground">
                   每次回复随机延迟 {settings.global_reply_min_delay}-{settings.global_reply_max_delay} 秒
                 </p>
+              </div>
+            </div>
+          </div>
+
+          {/* 回复功能开关 */}
+          <div className="space-y-4">
+            <Label className="text-sm font-medium">回复功能开关</Label>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label htmlFor="keyword-reply" className="text-sm">关键词回复</Label>
+                  <p className="text-xs text-muted-foreground">
+                    启用后，机器人会根据文字关键词搜索商品并回复
+                  </p>
+                </div>
+                <Switch
+                  id="keyword-reply"
+                  checked={settings.keyword_reply_enabled}
+                  onCheckedChange={(checked) => setSettings(prev => ({ ...prev, keyword_reply_enabled: checked }))}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label htmlFor="image-reply" className="text-sm">图片回复</Label>
+                  <p className="text-xs text-muted-foreground">
+                    启用后，机器人会根据图片搜索相似商品并回复
+                  </p>
+                </div>
+                <Switch
+                  id="image-reply"
+                  checked={settings.image_reply_enabled}
+                  onCheckedChange={(checked) => setSettings(prev => ({ ...prev, image_reply_enabled: checked }))}
+                />
               </div>
             </div>
           </div>
