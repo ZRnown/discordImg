@@ -970,8 +970,8 @@ export function AccountsView() {
           </Dialog>
         )}
 
-        {/* 消息过滤设置 */}
-        {currentUser?.role === 'admin' && (
+        {/* 消息过滤设置 - 每个用户独立配置 */}
+        {currentUser && (
           <Card className="mt-6">
             <CardHeader>
               <div className="flex justify-between items-center">
@@ -1066,8 +1066,8 @@ export function AccountsView() {
           </Card>
         )}
 
-        {/* 网站配置区域 - 只对管理员可见 */}
-        {currentUser?.role === 'admin' && (
+        {/* 网站配置区域 - 所有登录用户可见 */}
+        {currentUser && (
         <Card className="mt-6">
           <CardHeader>
             <div className="flex justify-between items-center">
@@ -1345,9 +1345,8 @@ export function AccountsView() {
                       </div>
                     </div>
 
-                    {/* 账号轮换设置 - 建议仅允许管理员修改全局策略，或者如果这属于用户级配置，需要数据库支持。
-                        根据需求"普通用户不能更改网站的设置"，这里应该隐藏或禁用 */}
-                    {currentUser?.role === 'admin' && (
+                    {/* 账号轮换设置 - 每个用户独立配置 */}
+                    {currentUser && (
                       <div className="space-y-2">
                         <div className="flex items-center gap-2">
                           <Settings className="w-4 h-4" />

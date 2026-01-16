@@ -64,7 +64,7 @@ export function UsersView() {
       const response = await fetch('/api/users')
       if (response.ok) {
         const data = await response.json()
-        setUsers(data.users || [])
+        setUsers((data.users || []).map((u: any) => ({ ...u, shops: Array.isArray(u.shops) ? u.shops : [] })))
       }
     } catch (error) {
       console.error('Failed to fetch users:', error)
@@ -100,7 +100,7 @@ export function UsersView() {
 
       if (response.ok) {
         const data = await response.json()
-        setUsers([...users, data.user])
+        setUsers([...users, { ...data.user, shops: Array.isArray(data.user?.shops) ? data.user.shops : [] }])
         toast.success("用户创建成功")
         setIsDialogOpen(false)
         setNewUser({ username: "", password: "", role: "user", shops: [] })
@@ -176,8 +176,9 @@ export function UsersView() {
     }
   }
 
-  const getShopNames = (shopIds: string[]) => {
-    return shopIds.map(id => {
+  const getShopNames = (shopIds?: string[]) => {
+    const safeIds = Array.isArray(shopIds) ? shopIds : []
+    return safeIds.map(id => {
       const shop = shops.find(s => s.shop_id === id)
       return shop ? shop.name : id
     }).join(', ')

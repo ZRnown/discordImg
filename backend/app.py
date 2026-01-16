@@ -1081,18 +1081,11 @@ def get_website_configs():
         for config in configs:
             config_id = config['id']
 
-            # 1) 账号绑定：只返回当前用户自己的绑定（账号是个人的）
+            # 1) 账号绑定：只返回当前用户自己的绑定
             config['accounts'] = db.get_website_account_bindings(config_id, current_user['id'])
 
-            # 2) 频道绑定：所有用户可见（读取全局频道绑定）
-            with db.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    SELECT channel_id FROM website_channel_bindings
-                    WHERE website_id = ?
-                    ORDER BY created_at
-                ''', (config_id,))
-                config['channels'] = [row[0] for row in cursor.fetchall()]
+            # 2) 频道绑定：只返回当前用户自己的绑定
+            config['channels'] = db.get_website_channel_bindings(config_id, current_user['id'])
 
         return jsonify({'websites': configs})
     except Exception as e:
@@ -1181,8 +1174,8 @@ def get_website_channels(config_id):
 @app.route('/api/websites/<int:config_id>/channels', methods=['POST'])
 def add_website_channel(config_id):
     """添加网站频道绑定"""
-    if not require_admin():
-        return jsonify({'error': '需要管理员权限'}), 403
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
 
     try:
         data = request.get_json()
@@ -1203,8 +1196,8 @@ def add_website_channel(config_id):
 @app.route('/api/websites/<int:config_id>/channels/<channel_id>', methods=['DELETE'])
 def remove_website_channel(config_id, channel_id):
     """移除网站频道绑定"""
-    if not require_admin():
-        return jsonify({'error': '需要管理员权限'}), 403
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
 
     try:
         current_user = get_current_user()
@@ -1235,8 +1228,8 @@ def get_website_accounts(config_id):
 @app.route('/api/websites/<int:config_id>/accounts', methods=['POST'])
 def add_website_account(config_id):
     """为网站绑定账号"""
-    if not require_admin():
-        return jsonify({'error': '需要管理员权限'}), 403
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
 
     try:
         data = request.get_json()
@@ -1273,11 +1266,11 @@ def add_website_account(config_id):
 @app.route('/api/websites/<int:config_id>/accounts/<int:account_id>', methods=['DELETE'])
 def remove_website_account(config_id, account_id):
     """移除网站账号绑定"""
-    if not require_admin():
-        return jsonify({'error': '需要管理员权限'}), 403
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
 
     try:
-
+        current_user = get_current_user()
         if db.remove_website_account_binding(config_id, account_id, current_user['id']):
             return jsonify({'success': True, 'message': '账号绑定已移除'})
         else:
@@ -1286,61 +1279,69 @@ def remove_website_account(config_id, account_id):
         logger.error(f"移除网站账号绑定失败: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/websites/<int:config_id>/rotation', methods=['PUT'])
-def update_website_rotation(config_id):
-    """更新网站轮换配置（间隔和启用状态）"""
-    if not require_admin():
-        return jsonify({'error': '需要管理员权限'}), 403
+@app.route('/api/websites/<int:config_id>/rotation', methods=['GET'])
+def get_website_rotation(config_id):
+    """获取用户的网站轮换配置"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
 
     try:
+        current_user = get_current_user()
+        settings = db.get_user_website_settings(current_user['id'], config_id)
+        return jsonify({
+            'rotation_interval': settings['rotation_interval'],
+            'rotation_enabled': settings['rotation_enabled']
+        })
+    except Exception as e:
+        logger.error(f"获取网站轮换配置失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/websites/<int:config_id>/rotation', methods=['PUT'])
+def update_website_rotation(config_id):
+    """更新用户的网站轮换配置（间隔和启用状态）"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        current_user = get_current_user()
         data = request.get_json()
-        updates = []
         messages = []
 
-        # 更新轮换间隔
-        if 'rotation_interval' in data:
-            rotation_interval = data['rotation_interval']
-            if rotation_interval <= 0:
-                return jsonify({'error': '轮换间隔必须大于0秒'}), 400
+        rotation_interval = data.get('rotation_interval')
+        rotation_enabled = data.get('rotation_enabled')
 
-            if db.update_website_config_rotation(config_id, rotation_interval):
-                updates.append(True)
+        # 验证参数
+        if rotation_interval is not None and rotation_interval <= 0:
+            return jsonify({'error': '轮换间隔必须大于0秒'}), 400
+        if rotation_enabled is not None and rotation_enabled not in [0, 1]:
+            return jsonify({'error': '轮换启用状态必须是0或1'}), 400
+
+        # 使用用户级别的设置方法
+        if db.update_user_website_rotation(current_user['id'], config_id, rotation_interval, rotation_enabled):
+            if rotation_interval is not None:
                 messages.append(f'轮换间隔已设置为 {rotation_interval} 秒')
-            else:
-                updates.append(False)
-
-        # 更新轮换启用状态
-        if 'rotation_enabled' in data:
-            rotation_enabled = data['rotation_enabled']
-            if rotation_enabled not in [0, 1]:
-                return jsonify({'error': '轮换启用状态必须是0或1'}), 400
-
-            if db.update_website_config_rotation_enabled(config_id, rotation_enabled):
-                updates.append(True)
+            if rotation_enabled is not None:
                 status_text = '启用' if rotation_enabled else '禁用'
                 messages.append(f'轮换功能已{status_text}')
-            else:
-                updates.append(False)
-
-        if all(updates):
-            return jsonify({'success': True, 'message': '; '.join(messages)})
+            return jsonify({'success': True, 'message': '; '.join(messages) if messages else '设置已更新'})
         else:
-            return jsonify({'error': '部分更新失败'}), 500
+            return jsonify({'error': '更新失败'}), 500
     except Exception as e:
         logger.error(f"更新网站轮换配置失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/websites/<int:config_id>/filters', methods=['GET'])
 def get_website_filters(config_id):
-    """获取网站的消息过滤条件"""
+    """获取用户的网站消息过滤条件"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
     try:
-        configs = db.get_website_configs()
-        config = next((c for c in configs if c['id'] == config_id), None)
-        if not config:
-            return jsonify({'error': '网站配置不存在'}), 404
+        current_user = get_current_user()
+        settings = db.get_user_website_settings(current_user['id'], config_id)
 
         import json
-        filters = json.loads(config.get('message_filters', '[]'))
+        filters = json.loads(settings.get('message_filters', '[]'))
         return jsonify({'filters': filters})
     except Exception as e:
         logger.error(f"获取网站过滤条件失败: {e}")
@@ -1348,11 +1349,12 @@ def get_website_filters(config_id):
 
 @app.route('/api/websites/<int:config_id>/filters', methods=['PUT'])
 def update_website_filters(config_id):
-    """更新网站的消息过滤条件"""
-    if not require_admin():
-        return jsonify({'error': '需要管理员权限'}), 403
+    """更新用户的网站消息过滤条件"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
 
     try:
+        current_user = get_current_user()
         data = request.get_json()
         filters = data.get('filters', [])
 
@@ -1364,7 +1366,7 @@ def update_website_filters(config_id):
         import json
         filters_json = json.dumps(filters)
 
-        if db.update_website_message_filters(config_id, filters_json):
+        if db.update_user_website_filters(current_user['id'], config_id, filters_json):
             return jsonify({'success': True, 'message': f'已更新 {len(filters)} 个过滤条件'})
         else:
             return jsonify({'error': '更新失败'}), 500
@@ -4222,106 +4224,125 @@ def scrape_shop_products(shop_id):
     logger.info(f"开始收集商品列表，店铺: {shop_name}")
 
     # 第一阶段：收集所有商品信息（单线程，避免API压力）
-    # 尝试不同的tabId来获取更多商品（微店可能有多个商品分类）
+    # 使用"正向+反向"抓取策略，突破微店API的2000条限制
+    # 先用 sortOrder="desc" 抓取最新商品，如果超过2000条限制，再用 sortOrder="asc" 从另一端抓取
     all_tabs = [0]  # 默认从tab 0开始
     for tab_id in all_tabs:
         logger.info(f"开始收集tab {tab_id} 的商品")
-        offset = 0  # 每个tab重新开始
-        page_count = 0  # 每个tab重新开始
 
-    while True:
-        # 检查停止事件或停止信号
-        if scrape_stop_event.is_set():
-            logger.info("🔴 停止事件触发，退出收集")
-            break
+        # 支持两个方向的抓取: desc(降序，最新优先) 和 asc(升序，最旧优先)
+        sort_orders = ["desc", "asc"]
 
-        current_status = db.get_scrape_status()
-        if current_status.get('stop_signal', False):
-            logger.info("🔴 停止信号触发，退出收集")
-            break
+        for sort_order in sort_orders:
+            offset = 0  # 每个方向重新开始
+            page_count = 0
+            hit_limit = False  # 是否触发了2000条限制
 
-        try:
-            # API 请求商品列表
-            url = f"https://thor.weidian.com/decorate/shopDetail.tab.getItemList/1.0"
-            param_encoded = quote(
-                f'{{"shopId":"{shop_id}","tabId":{tab_id},"sortOrder":"desc","offset":{offset},"limit":{limit},"from":"h5","showItemTag":true}}'
-            )
-            full_url = f"{url}?param={param_encoded}&wdtoken=8ea9315c&_={int(time.time()*1000)}"
+            logger.info(f"开始 {sort_order} 方向抓取 (tab {tab_id})")
 
-            response = scraper.session.get(full_url, timeout=10)
-            if response.status_code != 200:
-                logger.warning(f'API请求失败: {response.status_code}')
-                break
-
-            data = response.json()
-            if data.get('status', {}).get('code') != 0:
-                error_code = data.get('status', {}).get('code')
-                error_message = data.get('status', {}).get('message', '')
-                logger.warning(f'API响应状态码不为0: 代码={error_code}, 消息={error_message}')
-
-                # 如果是参数错误（code=1000），可能是达到分页上限，停止抓取
-                if error_code == 1000:
-                    logger.info(f'检测到参数错误(code=1000)，可能是达到微店API分页上限({offset})，停止抓取')
+            while True:
+                # 检查停止事件或停止信号
+                if scrape_stop_event.is_set():
+                    logger.info("🔴 停止事件触发，退出收集")
                     break
 
+                current_status = db.get_scrape_status()
+                if current_status.get('stop_signal', False):
+                    logger.info("🔴 停止信号触发，退出收集")
+                    break
+
+                try:
+                    # API 请求商品列表
+                    url = f"https://thor.weidian.com/decorate/shopDetail.tab.getItemList/1.0"
+                    param_encoded = quote(
+                        f'{{"shopId":"{shop_id}","tabId":{tab_id},"sortOrder":"{sort_order}","offset":{offset},"limit":{limit},"from":"h5","showItemTag":true}}'
+                    )
+                    full_url = f"{url}?param={param_encoded}&wdtoken=8ea9315c&_={int(time.time()*1000)}"
+
+                    response = scraper.session.get(full_url, timeout=10)
+                    if response.status_code != 200:
+                        logger.warning(f'API请求失败: {response.status_code}')
+                        break
+
+                    data = response.json()
+                    if data.get('status', {}).get('code') != 0:
+                        error_code = data.get('status', {}).get('code')
+                        error_message = data.get('status', {}).get('message', '')
+                        logger.warning(f'API响应状态码不为0: 代码={error_code}, 消息={error_message}')
+
+                        # 如果是参数错误（code=1000），达到分页上限
+                        if error_code == 1000:
+                            logger.info(f'检测到参数错误(code=1000)，达到微店API分页上限({offset})，{sort_order}方向抓取结束')
+                            hit_limit = True
+                            break
+
+                        break
+
+                    result = data.get('result', {})
+                    if not result.get('hasData', False):
+                        logger.info(f'{sort_order}方向没有更多数据，收集完成')
+                        break
+
+                    items = result.get('itemList', [])
+                    if not items:
+                        logger.info(f'{sort_order}方向商品列表为空，收集完成')
+                        break
+
+                    # 添加调试信息，查看API响应详情
+                    logger.info(f'API响应调试 - tab:{tab_id}, {sort_order}方向, 页码:{page_count + 1}, offset:{offset}, hasData:{result.get("hasData")}, totalItems:{len(items)}')
+                    if 'totalCount' in result:
+                        logger.info(f'API响应调试 - 服务器报告总数: {result.get("totalCount")}')
+                    if len(items) > 0:
+                        logger.info(f'API响应调试 - 第一商品ID: {items[0].get("itemId", "unknown")}')
+
+                    # 收集当前页的商品任务 (内存去重 + 数据库去重)
+                    page_new_count = 0
+                    for item in items:
+                        item_id = item.get('itemId', '')
+                        if item_id and item_id not in unique_product_tasks:  # 内存去重
+                            # 检查数据库是否已存在该商品，如果存在则跳过不进行任何抓取
+                            if db.get_product_by_item_id(item_id):
+                                logger.debug(f'商品 {item_id} 已存在于数据库中，跳过')
+                                continue
+
+                            product_info = {
+                                'item_id': item_id,
+                                'item_url': item.get('itemUrl', ''),
+                                'shop_name': shop_name
+                            }
+                            unique_product_tasks[item_id] = product_info
+                            page_new_count += 1
+
+                    # === 实时更新收集进度到数据库，让前端能看到 ===
+                    current_total = len(unique_product_tasks)
+                    direction_text = "正向" if sort_order == "desc" else "反向"
+                    db.update_scrape_status(
+                        total=current_total,
+                        message=f'正在收集商品({direction_text})... tab{tab_id}第{page_count + 1}页，已找到 {current_total} 个新商品'
+                    )
+
+                    logger.info(f'tab{tab_id} {sort_order}方向第 {page_count + 1} 页收集了 {len(items)} 个商品，其中 {page_new_count} 个新商品，总计 {len(unique_product_tasks)} 个待处理商品')
+
+                    page_count += 1
+                    offset += limit
+                    time.sleep(0.5)  # 稍微歇一下防止封IP
+
+                    # 检查是否还有更多数据
+                    if not result.get('hasData', False):
+                        break
+
+                except Exception as e:
+                    logger.error(f'收集商品列表出错: {e}')
+                    break
+
+            # 如果desc方向没有触发2000限制，说明商品数量不超过2000，不需要反向抓取
+            if sort_order == "desc" and not hit_limit:
+                logger.info(f'tab {tab_id} 商品数量未超过2000，跳过反向抓取')
+                break  # 跳出sort_orders循环
+
+            # 检查停止信号
+            if scrape_stop_event.is_set() or db.get_scrape_status().get('stop_signal', False):
                 break
-
-            result = data.get('result', {})
-            if not result.get('hasData', False):
-                logger.info('没有更多数据，收集完成')
-                break
-
-            items = result.get('itemList', [])
-            if not items:
-                logger.info('商品列表为空，收集完成')
-                break
-
-            # 添加调试信息，查看API响应详情
-            logger.info(f'API响应调试 - tab:{tab_id}, 页码:{page_count + 1}, offset:{offset}, hasData:{result.get("hasData")}, totalItems:{len(items)}')
-            if 'totalCount' in result:
-                logger.info(f'API响应调试 - 服务器报告总数: {result.get("totalCount")}')
-            if len(items) > 0:
-                logger.info(f'API响应调试 - 第一商品ID: {items[0].get("itemId", "unknown")}')
-
-            # 收集当前页的商品任务 (内存去重 + 数据库去重)
-            page_new_count = 0
-            for item in items:
-                item_id = item.get('itemId', '')
-                if item_id and item_id not in unique_product_tasks:  # 内存去重
-                    # 检查数据库是否已存在该商品，如果存在则跳过不进行任何抓取
-                    if db.get_product_by_item_id(item_id):
-                        logger.debug(f'商品 {item_id} 已存在于数据库中，跳过')
-                        continue
-
-                    product_info = {
-                        'item_id': item_id,
-                        'item_url': item.get('itemUrl', ''),
-                        'shop_name': shop_name
-                    }
-                    unique_product_tasks[item_id] = product_info
-                    page_new_count += 1
-
-            # === 新增：实时更新收集进度到数据库，让前端能看到 ===
-            current_total = len(unique_product_tasks)
-            db.update_scrape_status(
-                total=current_total,
-                message=f'正在收集商品... tab{tab_id}第{page_count + 1}页，已找到 {current_total} 个新商品'
-            )
-            # =================================================
-
-            logger.info(f'tab{tab_id}第 {page_count + 1} 页收集了 {len(items)} 个商品，其中 {page_new_count} 个新商品，总计 {len(unique_product_tasks)} 个待处理商品')
-
-            page_count += 1
-            offset += limit
-            time.sleep(0.5)  # 稍微歇一下防止封IP
-
-        except Exception as e:
-            logger.error(f'收集商品列表出错: {e}')
-            break
-
-        # 检查是否还有其他tab需要处理，如果没有更多数据就退出
-        if not result.get('hasData', False):
-            break
 
     # 转回列表用于处理
     all_product_tasks = list(unique_product_tasks.values())

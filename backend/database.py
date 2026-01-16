@@ -401,6 +401,23 @@ class Database:
                 )
             ''')
 
+            # 创建用户级别的网站设置表（轮换设置和消息过滤）
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_website_settings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    website_id INTEGER NOT NULL,
+                    rotation_interval INTEGER DEFAULT 180,
+                    rotation_enabled INTEGER DEFAULT 1,
+                    message_filters TEXT DEFAULT '[]',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+                    FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE,
+                    UNIQUE(user_id, website_id)
+                )
+            ''')
+
             # 创建抓取状态表（持久化存储抓取状态）
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS scrape_status (
@@ -1624,6 +1641,96 @@ class Database:
                 return cursor.rowcount > 0
         except Exception as e:
             logger.error(f"更新网站消息过滤条件失败: {e}")
+            return False
+
+    # ===== 用户级别的网站设置方法 =====
+
+    def get_user_website_settings(self, user_id: int, website_id: int) -> Dict:
+        """获取用户的网站设置（轮换和过滤）"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT rotation_interval, rotation_enabled, message_filters
+                    FROM user_website_settings
+                    WHERE user_id = ? AND website_id = ?
+                ''', (user_id, website_id))
+                row = cursor.fetchone()
+                if row:
+                    return {
+                        'rotation_interval': row['rotation_interval'],
+                        'rotation_enabled': row['rotation_enabled'],
+                        'message_filters': row['message_filters']
+                    }
+                # 返回默认值
+                return {
+                    'rotation_interval': 180,
+                    'rotation_enabled': 1,
+                    'message_filters': '[]'
+                }
+        except Exception as e:
+            logger.error(f"获取用户网站设置失败: {e}")
+            return {'rotation_interval': 180, 'rotation_enabled': 1, 'message_filters': '[]'}
+
+    def update_user_website_rotation(self, user_id: int, website_id: int, rotation_interval: int = None, rotation_enabled: int = None) -> bool:
+        """更新用户的网站轮换设置"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                # 先检查是否存在记录
+                cursor.execute('''
+                    SELECT id FROM user_website_settings WHERE user_id = ? AND website_id = ?
+                ''', (user_id, website_id))
+                exists = cursor.fetchone()
+
+                if exists:
+                    # 更新现有记录
+                    updates = []
+                    params = []
+                    if rotation_interval is not None:
+                        updates.append('rotation_interval = ?')
+                        params.append(rotation_interval)
+                    if rotation_enabled is not None:
+                        updates.append('rotation_enabled = ?')
+                        params.append(rotation_enabled)
+                    if updates:
+                        updates.append('updated_at = CURRENT_TIMESTAMP')
+                        params.extend([user_id, website_id])
+                        cursor.execute(f'''
+                            UPDATE user_website_settings
+                            SET {', '.join(updates)}
+                            WHERE user_id = ? AND website_id = ?
+                        ''', params)
+                else:
+                    # 插入新记录
+                    cursor.execute('''
+                        INSERT INTO user_website_settings (user_id, website_id, rotation_interval, rotation_enabled)
+                        VALUES (?, ?, ?, ?)
+                    ''', (user_id, website_id, rotation_interval or 180, rotation_enabled if rotation_enabled is not None else 1))
+
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"更新用户网站轮换设置失败: {e}")
+            return False
+
+    def update_user_website_filters(self, user_id: int, website_id: int, message_filters: str) -> bool:
+        """更新用户的网站消息过滤设置"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                # 使用 INSERT OR REPLACE
+                cursor.execute('''
+                    INSERT INTO user_website_settings (user_id, website_id, message_filters)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(user_id, website_id) DO UPDATE SET
+                        message_filters = excluded.message_filters,
+                        updated_at = CURRENT_TIMESTAMP
+                ''', (user_id, website_id, message_filters))
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"更新用户网站消息过滤失败: {e}")
             return False
 
     def get_system_stats(self) -> Dict:
