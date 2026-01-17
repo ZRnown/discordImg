@@ -963,7 +963,7 @@ class DiscordBotClient(discord.Client):
                 }
 
                 # 调用后端搜索API
-                async with session.post(f'{config.BACKEND_API_URL}/search_similar_text',
+                async with session.post(f'{config.BACKEND_API_URL}/api/search_similar_text',
                                       json=search_data) as resp:
                     if resp.status == 200:
                         result = await resp.json()
