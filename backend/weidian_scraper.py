@@ -339,38 +339,56 @@ class WeidianScraper:
             return []
 
     def _get_sku_images(self, item_id: str) -> List[str]:
-        """获取SKU属性图片 (新API)"""
+        """获取SKU属性图片 (新API + attrList解析)"""
         try:
             logger.info(f"开始获取SKU图片，商品ID: {item_id}")
-            # 复用 _get_item_title_and_sku 的逻辑
             title_info = self._get_item_title_and_sku(item_id)
             if not title_info or 'sku_info' not in title_info:
                 logger.warning(f"无法获取SKU信息，跳过图片提取: {item_id}")
                 return []
 
             result = title_info['sku_info']
-            attr_list = result.get('attrList', [])
-            logger.info(f"找到 {len(attr_list)} 个属性组")
-
             images = []
-            for i, attr in enumerate(attr_list):
-                attr_values = attr.get('attrValues', [])
-                logger.info(f"属性组 {i+1} 有 {len(attr_values)} 个属性值")
-                for j, attr_value in enumerate(attr_values):
-                    # === 修复：从 attrValues 中提取 img ===
-                    img_url = attr_value.get('img')
+            seen_urls = set()
+
+            # 1. 尝试从 attrList 中提取 (这是你提供的JSON中的结构)
+            attr_list = result.get('attrList', [])
+            if attr_list:
+                logger.info(f"解析 attrList，共 {len(attr_list)} 组属性")
+                for attr in attr_list:
+                    attr_values = attr.get('attrValues', [])
+                    for val in attr_values:
+                        img_url = val.get('img')
+                        if img_url:
+                            # 修复 URL 格式
+                            if img_url.startswith('//'):
+                                img_url = 'https:' + img_url
+
+                            if img_url not in seen_urls:
+                                images.append(img_url)
+                                seen_urls.add(img_url)
+
+            # 2. 尝试从 skuInfos 中提取 (作为补充)
+            sku_infos = result.get('skuInfos', [])
+            if sku_infos:
+                logger.info(f"解析 skuInfos，共 {len(sku_infos)} 个SKU")
+                for sku in sku_infos:
+                    # 注意：skuInfo 对象可能嵌套
+                    info = sku.get('skuInfo', {})
+                    img_url = info.get('img')
                     if img_url:
-                        logger.debug(f"找到SKU图片: {img_url}")
-                        # 确保URL格式正确
                         if img_url.startswith('//'):
                             img_url = 'https:' + img_url
-                        if img_url not in images:
+                        if img_url not in seen_urls:
                             images.append(img_url)
+                            seen_urls.add(img_url)
 
             logger.info(f"从SKU属性中成功提取 {len(images)} 张图片")
             return images
         except Exception as e:
             logger.error(f"获取SKU图片失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return []
 
 

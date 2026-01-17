@@ -192,12 +192,15 @@ class HTTPLogHandler(logging.Handler):
         """同步发送日志（作为fallback）"""
         try:
             import requests
-            response = requests.post(f'{config.BACKEND_API_URL}/logs/add',
+            # 【修复】强制使用 127.0.0.1，因为这是进程间通信，不应走公网
+            local_api_url = 'http://127.0.0.1:5001/api'
+            response = requests.post(f'{local_api_url}/logs/add',
                                    json=log_data, timeout=2, proxies={'http': None, 'https': None, 'all': None})
             if response.status_code != 200:
                 print(f"同步发送日志失败: {response.status_code}")
         except Exception as e:
-            print(f"同步发送日志异常: {e}")
+            # 这里的 print 可能会被重定向，但至少不会抛出 ConnectionRefusedError 炸断流程
+            pass
 
     async def send_pending_logs(self):
         """异步发送待处理的日志"""
@@ -206,24 +209,27 @@ class HTTPLogHandler(logging.Handler):
 
         self.is_sending = True
 
+        # 【修复】强制使用 127.0.0.1
+        local_api_url = 'http://127.0.0.1:5001/api'
+
         try:
             while self.pending_logs:
                 log_data = self.pending_logs.pop(0)
 
                 try:
                     async with aiohttp.ClientSession(trust_env=False) as session:
-                        async with session.post(f'{config.BACKEND_API_URL}/logs/add',
+                        async with session.post(f'{local_api_url}/logs/add',
                                               json=log_data, timeout=aiohttp.ClientTimeout(total=2)) as resp:
                             if resp.status != 200:
                                 print(f"发送日志失败: {resp.status}")
                 except Exception as e:
-                    print(f"发送日志异常: {e}")
-                    # 重新放回队列
-                    self.pending_logs.insert(0, log_data)
+                    # 队列满了就丢弃，不要无限堆积
+                    if len(self.pending_logs) < 1000:
+                        self.pending_logs.insert(0, log_data)
                     break
 
                 # 小延迟避免发送太快
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.01) # 加快发送速度，减少积压
 
         finally:
             self.is_sending = False
