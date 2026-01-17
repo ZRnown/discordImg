@@ -13,6 +13,9 @@ Three-tier architecture:
 - **Backend** (Flask, port 5001): REST API + SQLite + FAISS vector search
 - **Discord Bot** (discord.py-self): Multi-account self-bot for image monitoring
 
+### API Proxy Pattern
+Frontend Next.js API routes (`/frontend/app/api/**/route.ts`) are thin proxies that forward requests to Flask backend. All routes use `NEXT_PUBLIC_BACKEND_URL` environment variable to locate the backend server.
+
 ## Commands
 
 ### Frontend (`/frontend` directory)
@@ -42,6 +45,24 @@ python scripts/clear_database.py   # Clear database
 | `feature_extractor.py` | AI pipeline: YOLO-World (object detection/cropping) + DINOv2 (feature extraction) |
 | `vector_engine.py` | FAISS HNSW index for vector similarity search |
 | `weidian_scraper.py` | Selenium-based Weidian product scraper |
+| `config.py` | Centralized configuration with environment variable loading |
+
+## Database Schema
+
+SQLite database (`/backend/data/metadata.db`) with main tables:
+- **products** - Product metadata (URL, title, description, shop_name, ruleEnabled)
+- **users** - User accounts with role-based access (admin/user)
+- **discord_accounts** - Discord bot account credentials and status
+- **shops** - Shop information and settings
+- **product_images** - Image metadata linked to products
+- **search_history** - Image search query history
+- **announcements** - System announcements
+- **custom_replies** - Custom auto-reply rules
+- **message_filters** - Message filtering rules
+
+## Authentication
+
+Session-based authentication with 30-day cookie lifetime. Admin users created via `python scripts/create_admin.py`. Session configuration in `config.py` (SECRET_KEY, SESSION_COOKIE_SECURE, SESSION_COOKIE_SAMESITE).
 
 ## Key Frontend Components
 
@@ -69,11 +90,31 @@ UI components use shadcn/ui (57 components in `/frontend/components/ui/`).
 ## Environment Variables
 
 Key variables (see `.env.example`):
-- `SCRAPE_THREADS`, `DOWNLOAD_THREADS`, `FEATURE_EXTRACT_THREADS` - Concurrency settings
-- `DISCORD_SIMILARITY_THRESHOLD` - Image match threshold (default 0.6)
-- `GLOBAL_REPLY_MIN_DELAY`, `GLOBAL_REPLY_MAX_DELAY` - Reply delay range
-- `NEXT_PUBLIC_BACKEND_URL` - Backend URL for frontend
 
-## API Proxy
+**Threading Configuration:**
+- `SCRAPE_THREADS` - Product scraping concurrency (IO-bound, default: 10)
+- `DOWNLOAD_THREADS` - Image download concurrency (IO-bound, default: 16)
+- `FEATURE_EXTRACT_THREADS` - Legacy feature extraction threads (default: 4)
+- `AI_INTRA_THREADS` - CPU cores per AI inference task (default: 2)
+- `AI_MAX_WORKERS` - Concurrent AI inference tasks (default: 4)
 
-Frontend Next.js routes in `/frontend/app/api/` proxy requests to the Flask backend. Backend URL configured in `/frontend/next.config.mjs`.
+**Discord Configuration:**
+- `DISCORD_SIMILARITY_THRESHOLD` - Image match threshold 0.0-1.0 (default: 0.6)
+- `GLOBAL_REPLY_MIN_DELAY` - Minimum reply delay in seconds (default: 3.0)
+- `GLOBAL_REPLY_MAX_DELAY` - Maximum reply delay in seconds (default: 8.0)
+
+**Other:**
+- `DEVICE` - PyTorch device: 'cpu', 'cuda', or 'mps' (default: 'cpu')
+- `NEXT_PUBLIC_BACKEND_URL` - Backend URL for frontend (default: http://localhost:5001)
+
+## Performance Tuning
+
+**Threading Strategy** (configured in `config.py`):
+- IO-bound tasks (scraping, downloads) use high thread counts (10-20)
+- CPU-bound tasks (AI inference) use worker pool pattern: `AI_MAX_WORKERS` × `AI_INTRA_THREADS` ≈ total CPU cores
+- Example for 10-core CPU: 4 workers × 2 cores = 8 cores used, 2 reserved for system
+
+**FAISS HNSW Parameters** (in `config.py`):
+- `FAISS_HNSW_M=64` - Graph connectivity (higher = better recall, more memory)
+- `FAISS_EF_CONSTRUCTION=80` - Index build quality (higher = better index, slower build)
+- `FAISS_EF_SEARCH=64` - Search quality (higher = better recall, slower search)

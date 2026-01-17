@@ -688,8 +688,8 @@ class DiscordBotClient(discord.Client):
                 logger.error("图片下载失败，已达到最大重试次数")
                 return  # 静默失败，不发送错误消息
 
-            # 调用 DINOv2 服务识别图片，根据用户权限过滤结果
-            result = await self.recognize_image(image_data, self.user_shops)
+            # 调用 DINOv2 服务识别图片，不使用店铺过滤（所有用户都能识别所有商品）
+            result = await self.recognize_image(image_data, user_shops=None)
 
             logger.info(f'图片识别结果: success={result.get("success") if result else False}, results_count={len(result.get("results", [])) if result else 0}')
 
@@ -915,9 +915,23 @@ class DiscordBotClient(discord.Client):
             # 只在找到商品时回复和记录日志
             if products:
                 logger.info(f'关键词搜索成功: "{search_query}" -> 找到 {len(products)} 个商品')
-                # 根据频道决定发送哪个链接
                 product = products[0]
+
+                # 检查频道是否绑定了网站配置（必须绑定才能回复）
+                website_config = await self.get_website_config_by_channel_async(message.channel.id)
+                if not website_config:
+                    logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过关键词回复")
+                    return
+
+                # 检查商品是否有自定义回复文本
+                custom_text = product.get('custom_reply_text', '').strip()
+
+                # 根据频道决定发送哪个链接
                 response = get_response_url_for_channel(product, message.channel.id, self.user_id)
+
+                # 如果有自定义文本，组合自定义文本和链接
+                if custom_text:
+                    response = f"{custom_text}\n{response}".strip()
 
                 logger.info(f'关键词搜索完成，找到 {len(products)} 个商品')
 

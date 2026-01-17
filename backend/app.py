@@ -95,8 +95,11 @@ def check_duplicate_image(new_features, existing_features_list, threshold=0.99):
         return False, 0.0
 
     try:
+        # 确保 new_features 是 1D 数组
+        new_features = np.array(new_features, dtype='float32').flatten()
+
         # 预计算新向量的范数
-        norm_new = np.linalg.norm(new_features)
+        norm_new = float(np.linalg.norm(new_features))
         if norm_new == 0:
             return False, 0.0
 
@@ -104,20 +107,20 @@ def check_duplicate_image(new_features, existing_features_list, threshold=0.99):
             try:
                 # 处理输入可能是 JSON 字符串或已经是 numpy 数组的情况
                 if isinstance(feat_item, str):
-                    feat_vec = np.array(json.loads(feat_item), dtype='float32')
+                    feat_vec = np.array(json.loads(feat_item), dtype='float32').flatten()
                 else:
-                    feat_vec = np.array(feat_item, dtype='float32')
+                    feat_vec = np.array(feat_item, dtype='float32').flatten()
 
-                norm_existing = np.linalg.norm(feat_vec)
+                norm_existing = float(np.linalg.norm(feat_vec))
                 if norm_existing == 0:
                     continue
 
                 # 计算余弦相似度
-                dot_product = np.dot(new_features, feat_vec)
+                dot_product = float(np.dot(new_features, feat_vec))
                 similarity = dot_product / (norm_new * norm_existing)
 
                 if similarity > threshold:
-                    return True, similarity
+                    return True, float(similarity)
 
             except Exception:
                 continue
@@ -1682,13 +1685,8 @@ def get_accounts():
 
     current_user = get_current_user()
     try:
-        # 根据用户权限过滤账号
-        if current_user['role'] == 'admin':
-            # 管理员可以看到所有账号
-            accounts = db.get_discord_accounts_by_user(None)
-        else:
-            # 普通用户只能看到自己关联的账号
-            accounts = db.get_discord_accounts_by_user(current_user['id'])
+        # 所有用户（包括管理员）只能看到自己的账号
+        accounts = db.get_discord_accounts_by_user(current_user['id'])
 
         return jsonify({'accounts': accounts})
     except Exception as e:
