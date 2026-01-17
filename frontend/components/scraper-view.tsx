@@ -1259,7 +1259,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                 <div className="space-y-2">
                                   <Label className="text-xs text-muted-foreground">或填写图片链接（每行一个）</Label>
                                   <Textarea
-                                    value={editingProduct?.customImageUrls?.join('\n') || ""}
+                                    value={Array.isArray(editingProduct?.customImageUrls) ? editingProduct.customImageUrls.join('\n') : (editingProduct?.customImageUrls || "")}
                                     onChange={(e) => {
                                       const urls = e.target.value.split('\n').filter(url => url.trim());
                                       setEditingProduct({
@@ -1275,7 +1275,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                     className="text-xs"
                                   />
                                   <p className="text-xs text-muted-foreground">
-                                    {editingProduct?.customImageUrls?.length > 0
+                                    {Array.isArray(editingProduct?.customImageUrls) && editingProduct.customImageUrls.length > 0
                                       ? `已填写 ${editingProduct.customImageUrls.length} 个图片链接`
                                       : '填写后将只使用这些链接的图片回复'}
                                   </p>
