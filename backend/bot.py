@@ -378,23 +378,10 @@ class DiscordBotClient(discord.Client):
                         # 不要使用 message.reply()，因为 message 绑定的是监听者(Listener)客户端
                         # 必须用 target_channel.send(..., reference=message) 才会使用 target_client(Sender) 的 token
                         try:
-                            # === 1. 发送文字消息 ===
-                            if response_content:
-                                await target_channel.send(
-                                    response_content,
-                                    reference=message,
-                                    mention_author=True
-                                )
+                            # === 1. 收集所有要发送的图片文件 ===
+                            files = []
 
-                            if hasattr(target_client, 'account_id') and target_client.account_id:
-                                set_account_cooldown(target_client.account_id, message.channel.id)
-
-                            logger.info(
-                                f"✅ [回复成功] 真实发送账号: {target_client.user.name} (ID: {target_client.account_id}) | 商品ID: {product.get('id')}"
-                            )
-
-                            # === 2. 如果是自定义模式，且有图片，也由该账号发送 ===
-                            # 检查是否是自定义回复且禁用了规则
+                            # 检查是否是自定义模式，且有图片
                             is_custom_mode = custom_reply and (
                                 custom_reply.get('reply_type') == 'custom_only' or
                                 custom_reply.get('reply_type') == 'text'
@@ -415,21 +402,20 @@ class DiscordBotClient(discord.Client):
 
                                 image_source = product.get('imageSource', 'product') or product.get('image_source', 'product')
 
-                                # 发送图片逻辑
+                                # 收集图片文件（Discord限制最多10个文件）
                                 if image_source == 'custom' and custom_urls:
-                                    for url in custom_urls[:9]:  # 限制数量
+                                    for url in custom_urls[:10]:  # 限制最多10张
+                                        if len(files) >= 10:
+                                            break
                                         try:
                                             async with aiohttp.ClientSession() as session:
                                                 async with session.get(url) as resp:
                                                     if resp.status == 200:
                                                         data = await resp.read()
                                                         filename = url.split('/')[-1] or 'image.jpg'
-                                                        await target_channel.send(
-                                                            file=discord.File(io.BytesIO(data), filename),
-                                                            reference=message
-                                                        )
+                                                        files.append(discord.File(io.BytesIO(data), filename))
                                         except Exception as e:
-                                            logger.error(f"发送自定义图片失败: {e}")
+                                            logger.error(f"下载自定义图片失败: {e}")
 
                                 elif image_source == 'upload':
                                     # 处理上传的自定义回复图片
@@ -445,19 +431,18 @@ class DiscordBotClient(discord.Client):
 
                                     if pid and uploaded_filenames:
                                         # 使用新的API端点获取上传的自定义回复图片
-                                        for filename in uploaded_filenames:
+                                        for filename in uploaded_filenames[:10]:  # 限制最多10张
+                                            if len(files) >= 10:
+                                                break
                                             img_url = f"{config.BACKEND_API_URL}/api/custom_reply_image/{pid}/{filename}"
                                             try:
                                                 async with aiohttp.ClientSession() as session:
                                                     async with session.get(img_url) as resp:
                                                         if resp.status == 200:
                                                             data = await resp.read()
-                                                            await target_channel.send(
-                                                                file=discord.File(io.BytesIO(data), filename),
-                                                                reference=message
-                                                            )
+                                                            files.append(discord.File(io.BytesIO(data), filename))
                                             except Exception as e:
-                                                logger.error(f"发送上传的自定义回复图片失败: {e}")
+                                                logger.error(f"下载上传的自定义回复图片失败: {e}")
 
                                 elif image_source == 'product':
                                     # 处理商品图集中的图片
@@ -472,19 +457,34 @@ class DiscordBotClient(discord.Client):
 
                                     if pid and indexes:
                                         # 使用原有的API端点获取商品图集中的图片
-                                        for idx in indexes:
+                                        for idx in indexes[:10]:  # 限制最多10张
+                                            if len(files) >= 10:
+                                                break
                                             img_url = f"{config.BACKEND_API_URL}/api/image/{pid}/{idx}"
                                             try:
                                                 async with aiohttp.ClientSession() as session:
                                                     async with session.get(img_url) as resp:
                                                         if resp.status == 200:
                                                             data = await resp.read()
-                                                            await target_channel.send(
-                                                                file=discord.File(io.BytesIO(data), f"{pid}_{idx}.jpg"),
-                                                                reference=message
-                                                            )
-                                            except:
-                                                pass
+                                                            files.append(discord.File(io.BytesIO(data), f"{pid}_{idx}.jpg"))
+                                            except Exception as e:
+                                                logger.error(f"下载商品图片失败: {e}")
+
+                            # === 2. 发送文字和所有图片（合并为一条消息） ===
+                            if response_content or files:
+                                await target_channel.send(
+                                    content=response_content if response_content else None,
+                                    files=files if files else None,
+                                    reference=message,
+                                    mention_author=True
+                                )
+
+                            if hasattr(target_client, 'account_id') and target_client.account_id:
+                                set_account_cooldown(target_client.account_id, message.channel.id)
+
+                            logger.info(
+                                f"✅ [回复成功] 真实发送账号: {target_client.user.name} (ID: {target_client.account_id}) | 商品ID: {product.get('id')} | 图片数量: {len(files)}"
+                            )
 
                         except Exception as reply_error:
                             logger.warning(f"回复失败，尝试直接发送: {reply_error}")
