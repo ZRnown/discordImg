@@ -1032,8 +1032,21 @@ class DiscordBotClient(discord.Client):
 
                 custom_reply = None
 
-                if not rule_enabled:
-                    # 如果规则禁用了，说明要用自定义回复
+                # 检查是否配置了自定义图片
+                has_custom_images = False
+                image_source = product.get('imageSource') or product.get('image_source')
+                if image_source == 'upload':
+                    uploaded_imgs = product.get('uploaded_reply_images', [])
+                    has_custom_images = bool(uploaded_imgs)
+                elif image_source == 'custom':
+                    custom_urls = product.get('customImageUrls', []) or product.get('custom_image_urls', [])
+                    has_custom_images = bool(custom_urls)
+                elif image_source == 'product':
+                    selected_indexes = product.get('selectedImageIndexes', []) or product.get('custom_reply_images', [])
+                    has_custom_images = bool(selected_indexes)
+
+                # 如果规则禁用了，或者配置了自定义图片，都需要创建 custom_reply
+                if not rule_enabled or has_custom_images:
                     # 构造 custom_reply 对象供 schedule_reply 使用
                     custom_text = product.get('custom_reply_text', '').strip()
 
@@ -1045,7 +1058,10 @@ class DiscordBotClient(discord.Client):
                         # 传递图片信息供 schedule_reply 内部处理
                         'product_data': product
                     }
-                    logger.info(f"商品 {product['id']} 规则已禁用，准备发送自定义回复")
+                    if not rule_enabled:
+                        logger.info(f"商品 {product['id']} 规则已禁用，准备发送自定义回复")
+                    elif has_custom_images:
+                        logger.info(f"商品 {product['id']} 配置了自定义图片，准备发送自定义回复")
 
                 # 使用 schedule_reply 统一发送
                 await self.schedule_reply(message, product, custom_reply)
