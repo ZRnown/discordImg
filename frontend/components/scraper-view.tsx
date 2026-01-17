@@ -1123,69 +1123,68 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                               </div>
 
                               <div className="space-y-3">
-                                <div className="flex justify-between items-center">
-                                  <Label className="text-sm font-medium">附带图片回复</Label>
+                                <Label className="text-sm font-medium">附带图片回复</Label>
 
-                                  {/* 图片来源选择器 */}
-                                  <div className="space-y-2 p-3 bg-gray-50 rounded-md border">
-                                    <Label className="text-xs font-medium text-gray-700">选择图片来源</Label>
-                                    <div className="flex gap-4">
-                                      <label className="flex items-center gap-2 cursor-pointer">
-                                        <input
-                                          type="radio"
-                                          name="imageSource"
-                                          value="product"
-                                          checked={!editingProduct?.imageSource || editingProduct?.imageSource === 'product'}
-                                          onChange={() => {
-                                            setEditingProduct({
-                                              ...editingProduct,
-                                              imageSource: 'product',
-                                              uploadedImages: [],
-                                              customImageUrls: []
-                                            });
-                                          }}
-                                          className="w-4 h-4"
-                                        />
-                                        <span className="text-sm">使用商品图片</span>
-                                      </label>
-                                      <label className="flex items-center gap-2 cursor-pointer">
-                                        <input
-                                          type="radio"
-                                          name="imageSource"
-                                          value="upload"
-                                          checked={editingProduct?.imageSource === 'upload'}
-                                          onChange={() => {
-                                            setEditingProduct({
-                                              ...editingProduct,
-                                              imageSource: 'upload',
-                                              selectedImageIndexes: [],
-                                              customImageUrls: []
-                                            });
-                                          }}
-                                          className="w-4 h-4"
-                                        />
-                                        <span className="text-sm">上传本地图片</span>
-                                      </label>
-                                      <label className="flex items-center gap-2 cursor-pointer">
-                                        <input
-                                          type="radio"
-                                          name="imageSource"
-                                          value="custom"
-                                          checked={editingProduct?.imageSource === 'custom'}
-                                          onChange={() => {
-                                            setEditingProduct({
-                                              ...editingProduct,
-                                              imageSource: 'custom',
-                                              selectedImageIndexes: [],
-                                              uploadedImages: []
-                                            });
-                                          }}
-                                          className="w-4 h-4"
-                                        />
-                                        <span className="text-sm">使用图片链接</span>
-                                      </label>
-                                    </div>
+                                {/* 图片来源选择器 */}
+                                <div className="space-y-2 p-3 bg-gray-50 rounded-md border">
+                                  <Label className="text-xs font-medium text-gray-700">选择图片来源</Label>
+                                  <div className="flex gap-4">
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                      <input
+                                        type="radio"
+                                        name="imageSource"
+                                        value="product"
+                                        checked={!editingProduct?.imageSource || editingProduct?.imageSource === 'product'}
+                                        onChange={() => {
+                                          setEditingProduct({
+                                            ...editingProduct,
+                                            imageSource: 'product',
+                                            uploadedImages: [],
+                                            customImageUrls: []
+                                          });
+                                        }}
+                                        className="w-4 h-4"
+                                      />
+                                      <span className="text-sm">使用商品图片</span>
+                                    </label>
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                      <input
+                                        type="radio"
+                                        name="imageSource"
+                                        value="upload"
+                                        checked={editingProduct?.imageSource === 'upload'}
+                                        onChange={() => {
+                                          setEditingProduct({
+                                            ...editingProduct,
+                                            imageSource: 'upload',
+                                            selectedImageIndexes: [],
+                                            customImageUrls: []
+                                          });
+                                        }}
+                                        className="w-4 h-4"
+                                      />
+                                      <span className="text-sm">上传本地图片</span>
+                                    </label>
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                      <input
+                                        type="radio"
+                                        name="imageSource"
+                                        value="custom"
+                                        checked={editingProduct?.imageSource === 'custom'}
+                                        onChange={() => {
+                                          setEditingProduct({
+                                            ...editingProduct,
+                                            imageSource: 'custom',
+                                            selectedImageIndexes: [],
+                                            uploadedImages: []
+                                          });
+                                        }}
+                                        className="w-4 h-4"
+                                      />
+                                      <span className="text-sm">使用图片链接</span>
+                                    </label>
                                   </div>
+                                </div>
 
                                 {/* 模式1: 使用商品图片 */}
                                 {(!editingProduct?.imageSource || editingProduct?.imageSource === 'product') && (
