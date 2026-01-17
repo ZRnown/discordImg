@@ -5736,7 +5736,15 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
       if (res.ok) {
         const data = await res.json()
-        setProducts(products.map(p => p.id === data.product.id ? data.product : p))
+
+        // 转换后端返回的数据格式，将 uploadedImages (URL数组) 转换为 existingUploadedImageUrls
+        const transformedProduct = {
+          ...data.product,
+          uploadedImages: [], // 新上传的File对象（清空）
+          existingUploadedImageUrls: data.product.uploadedImages || [] // 已保存的图片URL
+        }
+
+        setProducts(products.map(p => p.id === data.product.id ? transformedProduct : p))
         setEditingProduct(null)
         toast.success("更新成功")
       } else {
@@ -11613,7 +11621,7 @@ class Database:
                 allowed_fields = [
                     'title', 'english_title', 'ruleEnabled',
                     'custom_reply_text', 'custom_reply_images', 'custom_image_urls',
-                    'image_source'
+                    'image_source', 'uploaded_reply_images'
                 ]
 
                 for field in allowed_fields:
@@ -12518,6 +12526,18 @@ class Database:
                             prod['selectedImageIndexes'] = []
                     except:
                         prod['selectedImageIndexes'] = []
+
+                    # 修复：解析本地上传的自定义回复图片 (uploaded_reply_images)
+                    # 前端组件 ScraperView 需要 uploadedImages 字段 (URL列表) 来显示"已保存图片"
+                    try:
+                        if prod.get('uploaded_reply_images'):
+                            import json
+                            filenames = json.loads(prod['uploaded_reply_images'])
+                            prod['uploadedImages'] = [f"/api/custom_reply_image/{prod['id']}/{fn}" for fn in filenames]
+                        else:
+                            prod['uploadedImages'] = []
+                    except:
+                        prod['uploadedImages'] = []
 
                     # 提取微店ID
                     try:
@@ -14234,6 +14254,8 @@ class DiscordBotClient(discord.Client):
                                 custom_reply.get('reply_type') == 'text'
                             )
 
+                            logger.info(f"[BOT SEND] is_custom_mode={is_custom_mode}, custom_reply={custom_reply is not None}")
+
                             if is_custom_mode:
                                 # 获取图片信息
                                 # 注意：如果是从 search_similar_text 返回的 product，字段名可能已经格式化
@@ -14248,6 +14270,8 @@ class DiscordBotClient(discord.Client):
                                         custom_urls = []
 
                                 image_source = product.get('imageSource', 'product') or product.get('image_source', 'product')
+
+                                logger.info(f"[BOT SEND] image_source={image_source}")
 
                                 # 收集图片文件（Discord限制最多10个文件）
                                 if image_source == 'custom' and custom_urls:
@@ -14276,18 +14300,24 @@ class DiscordBotClient(discord.Client):
                                         except:
                                             uploaded_filenames = []
 
+                                    logger.info(f"[BOT SEND] 上传模式 pid={pid}, uploaded_filenames={uploaded_filenames}")
+
                                     if pid and uploaded_filenames:
                                         # 使用新的API端点获取上传的自定义回复图片
                                         for filename in uploaded_filenames[:10]:  # 限制最多10张
                                             if len(files) >= 10:
                                                 break
                                             img_url = f"{config.BACKEND_API_URL}/api/custom_reply_image/{pid}/{filename}"
+                                            logger.info(f"[BOT SEND] 尝试下载: {img_url}")
                                             try:
                                                 async with aiohttp.ClientSession() as session:
                                                     async with session.get(img_url) as resp:
                                                         if resp.status == 200:
                                                             data = await resp.read()
                                                             files.append(discord.File(io.BytesIO(data), filename))
+                                                            logger.info(f"[BOT SEND] 成功下载图片: {filename}")
+                                                        else:
+                                                            logger.error(f"[BOT SEND] 下载失败 status={resp.status}: {img_url}")
                                             except Exception as e:
                                                 logger.error(f"下载上传的自定义回复图片失败: {e}")
 
@@ -14882,9 +14912,14 @@ class DiscordBotClient(discord.Client):
                 # 检查是否配置了自定义图片
                 has_custom_images = False
                 image_source = product.get('imageSource') or product.get('image_source')
+
+                # 调试：显示关键字段
+                logger.info(f"[BOT] 商品{product.get('id')} image_source={image_source}, uploaded_reply_images={product.get('uploaded_reply_images')}")
+
                 if image_source == 'upload':
                     uploaded_imgs = product.get('uploaded_reply_images', [])
                     has_custom_images = bool(uploaded_imgs)
+                    logger.info(f"[BOT] 上传模式，图片数量: {len(uploaded_imgs) if uploaded_imgs else 0}")
                 elif image_source == 'custom':
                     custom_urls = product.get('customImageUrls', []) or product.get('custom_image_urls', [])
                     has_custom_images = bool(custom_urls)
@@ -16742,6 +16777,10 @@ def search_similar():
             if results:
                 # 处理多个搜索结果
                 processed_results = []
+
+                # 预先导入 json，防止循环中报错
+                import json
+
                 for i, result in enumerate(results):
                     # 获取完整产品信息
                     product_info = db._get_product_info_by_id(result['id'])
@@ -16779,6 +16818,10 @@ def search_similar():
                             'cnfansUrl': product_info.get('cnfans_url', ''),
                             'acbuyUrl': product_info.get('acbuy_url', ''),
                             'ruleEnabled': product_info.get('ruleEnabled', True) if product_info else True,
+                            # 修复：机器人需要 imageSource 和 uploaded_reply_images 才能发送本地图片
+                            'imageSource': product_info.get('image_source', 'product') if product_info else 'product',
+                            'custom_reply_text': product_info.get('custom_reply_text', '') if product_info else '',
+                            'uploaded_reply_images': json.loads(product_info.get('uploaded_reply_images', '[]')) if product_info and product_info.get('uploaded_reply_images') else [],
                             'images': actual_images if actual_images else [f"/api/image/{result['id']}/{result['image_index']}"],  # 使用实际图片列表
                             'websiteUrls': website_urls  # 添加所有网站的链接
                         }

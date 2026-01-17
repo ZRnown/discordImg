@@ -387,8 +387,6 @@ class DiscordBotClient(discord.Client):
                                 custom_reply.get('reply_type') == 'text'
                             )
 
-                            logger.info(f"[BOT SEND] is_custom_mode={is_custom_mode}, custom_reply={custom_reply is not None}")
-
                             if is_custom_mode:
                                 # 获取图片信息
                                 # 注意：如果是从 search_similar_text 返回的 product，字段名可能已经格式化
@@ -402,9 +400,7 @@ class DiscordBotClient(discord.Client):
                                     except:
                                         custom_urls = []
 
-                                image_source = product.get('imageSource', 'product') or product.get('image_source', 'product')
-
-                                logger.info(f"[BOT SEND] image_source={image_source}")
+                                image_source = product.get('imageSource') or product.get('image_source') or 'product'
 
                                 # 收集图片文件（Discord限制最多10个文件）
                                 if image_source == 'custom' and custom_urls:
@@ -431,9 +427,8 @@ class DiscordBotClient(discord.Client):
                                         try:
                                             uploaded_filenames = json.loads(uploaded_filenames)
                                         except:
-                                            uploaded_filenames = []
-
-                                    logger.info(f"[BOT SEND] 上传模式 pid={pid}, uploaded_filenames={uploaded_filenames}")
+                                            # 如果解析失败，且它本身就是列表，则保持原样，否则置空
+                                            uploaded_filenames = uploaded_filenames if isinstance(uploaded_filenames, list) else []
 
                                     if pid and uploaded_filenames:
                                         # 使用新的API端点获取上传的自定义回复图片
@@ -441,16 +436,12 @@ class DiscordBotClient(discord.Client):
                                             if len(files) >= 10:
                                                 break
                                             img_url = f"{config.BACKEND_API_URL}/api/custom_reply_image/{pid}/{filename}"
-                                            logger.info(f"[BOT SEND] 尝试下载: {img_url}")
                                             try:
                                                 async with aiohttp.ClientSession() as session:
                                                     async with session.get(img_url) as resp:
                                                         if resp.status == 200:
                                                             data = await resp.read()
                                                             files.append(discord.File(io.BytesIO(data), filename))
-                                                            logger.info(f"[BOT SEND] 成功下载图片: {filename}")
-                                                        else:
-                                                            logger.error(f"[BOT SEND] 下载失败 status={resp.status}: {img_url}")
                                             except Exception as e:
                                                 logger.error(f"下载上传的自定义回复图片失败: {e}")
 
@@ -1046,13 +1037,9 @@ class DiscordBotClient(discord.Client):
                 has_custom_images = False
                 image_source = product.get('imageSource') or product.get('image_source')
 
-                # 调试：显示关键字段
-                logger.info(f"[BOT] 商品{product.get('id')} image_source={image_source}, uploaded_reply_images={product.get('uploaded_reply_images')}")
-
                 if image_source == 'upload':
                     uploaded_imgs = product.get('uploaded_reply_images', [])
                     has_custom_images = bool(uploaded_imgs)
-                    logger.info(f"[BOT] 上传模式，图片数量: {len(uploaded_imgs) if uploaded_imgs else 0}")
                 elif image_source == 'custom':
                     custom_urls = product.get('customImageUrls', []) or product.get('custom_image_urls', [])
                     has_custom_images = bool(custom_urls)
