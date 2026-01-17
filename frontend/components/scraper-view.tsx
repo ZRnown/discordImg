@@ -1122,9 +1122,9 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                 <p className="text-xs text-muted-foreground">如果留空，将只发送选中的图片</p>
                               </div>
 
-                              <div className="space-y-2">
+                              <div className="space-y-3">
                                 <div className="flex justify-between items-center">
-                                  <Label className="text-sm font-medium">附带图片回复 (勾选即可)</Label>
+                                  <Label className="text-sm font-medium">附带图片回复</Label>
                                   <div className="flex gap-2">
                                     {/* 隐藏的文件输入框 */}
                                     <input
@@ -1135,82 +1135,151 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                       id="edit-upload-input"
                                       onChange={(e) => {
                                         const files = Array.from(e.target.files || []);
-                                        setEditingProduct({
-                                          ...editingProduct,
-                                          uploadedImages: [...(editingProduct.uploadedImages || []), ...files],
-                                          imageSource: 'product' // 保持默认为 product，后端混合处理
-                                        });
+                                        if (files.length > 0) {
+                                          setEditingProduct({
+                                            ...editingProduct,
+                                            uploadedImages: files,
+                                            selectedImageIndexes: [], // 清空现有图片勾选
+                                            customImageUrls: [], // 清空图片链接
+                                            imageSource: 'upload' // 设置为上传模式
+                                          });
+                                        }
                                       }}
                                     />
                                     <Label
                                       htmlFor="edit-upload-input"
                                       className="cursor-pointer text-xs bg-white border px-2 py-1 rounded hover:bg-gray-50 flex items-center"
                                     >
-                                      <Upload className="w-3 h-3 mr-1"/> 上传新图
+                                      <Upload className="w-3 h-3 mr-1"/> 上传本地图片
                                     </Label>
                                   </div>
                                 </div>
 
-                                <div className="grid grid-cols-3 md:grid-cols-4 gap-3 max-h-60 overflow-y-auto p-2 border rounded-md bg-white">
-                                  {/* 1. 显示已有商品图片 */}
-                                  {editingProduct?.images?.map((image: string, index: number) => (
-                                    <div
-                                      key={`prod-${index}`}
-                                      className={`relative aspect-square rounded-md overflow-hidden cursor-pointer border-2 transition-all ${
-                                        editingProduct?.selectedImageIndexes?.includes(index)
-                                          ? 'border-blue-500 ring-2 ring-blue-200'
-                                          : 'border-transparent hover:border-gray-200'
-                                      }`}
-                                      onClick={() => {
-                                        const selectedIndexes = editingProduct?.selectedImageIndexes || [];
-                                        const newIndexes = selectedIndexes.includes(index)
-                                          ? selectedIndexes.filter((i: number) => i !== index)
-                                          : [...selectedIndexes, index];
-                                        setEditingProduct({...editingProduct, selectedImageIndexes: newIndexes});
-                                      }}
-                                    >
-                                      <img
-                                        src={image}
-                                        alt={`图片 ${index + 1}`}
-                                        className="w-full h-full object-cover"
-                                      />
-                                      {editingProduct?.selectedImageIndexes?.includes(index) && (
-                                        <div className="absolute top-1 right-1 bg-blue-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs shadow-sm">
-                                          ✓
+                                {/* 选择现有商品图片 */}
+                                {(!editingProduct?.imageSource || editingProduct?.imageSource === 'product') && (
+                                  <div className="space-y-2">
+                                    <Label className="text-xs text-muted-foreground">勾选现有商品图片</Label>
+                                    <div className="grid grid-cols-3 md:grid-cols-4 gap-3 max-h-60 overflow-y-auto p-2 border rounded-md bg-white">
+                                      {editingProduct?.images?.map((image: string, index: number) => (
+                                        <div
+                                          key={`prod-${index}`}
+                                          className={`relative aspect-square rounded-md overflow-hidden cursor-pointer border-2 transition-all ${
+                                            editingProduct?.selectedImageIndexes?.includes(index)
+                                              ? 'border-blue-500 ring-2 ring-blue-200'
+                                              : 'border-transparent hover:border-gray-200'
+                                          }`}
+                                          onClick={() => {
+                                            const selectedIndexes = editingProduct?.selectedImageIndexes || [];
+                                            const newIndexes = selectedIndexes.includes(index)
+                                              ? selectedIndexes.filter((i: number) => i !== index)
+                                              : [...selectedIndexes, index];
+                                            setEditingProduct({
+                                              ...editingProduct,
+                                              selectedImageIndexes: newIndexes,
+                                              imageSource: 'product'
+                                            });
+                                          }}
+                                        >
+                                          <img
+                                            src={image}
+                                            alt={`图片 ${index + 1}`}
+                                            className="w-full h-full object-cover"
+                                          />
+                                          {editingProduct?.selectedImageIndexes?.includes(index) && (
+                                            <div className="absolute top-1 right-1 bg-blue-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs shadow-sm">
+                                              ✓
+                                            </div>
+                                          )}
                                         </div>
-                                      )}
+                                      ))}
                                     </div>
-                                  ))}
+                                    <p className="text-xs text-muted-foreground">
+                                      已选 {editingProduct?.selectedImageIndexes?.length || 0} 张现有图片
+                                    </p>
+                                  </div>
+                                )}
 
-                                  {/* 2. 显示刚刚上传但未保存的预览图 */}
-                                  {editingProduct?.uploadedImages?.map((file: File, index: number) => (
-                                    <div key={`new-${index}`} className="relative aspect-square rounded-md overflow-hidden border-2 border-green-500">
-                                      <img
-                                        src={URL.createObjectURL(file)}
-                                        alt="New upload"
-                                        className="w-full h-full object-cover opacity-80"
-                                      />
-                                      <div className="absolute top-1 right-1 bg-green-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">
-                                        +
-                                      </div>
-                                      <button
+                                {/* 显示上传的本地图片 */}
+                                {editingProduct?.imageSource === 'upload' && editingProduct?.uploadedImages?.length > 0 && (
+                                  <div className="space-y-2">
+                                    <div className="flex justify-between items-center">
+                                      <Label className="text-xs text-muted-foreground">已上传的本地图片</Label>
+                                      <Button
                                         type="button"
-                                        className="absolute bottom-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center"
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          const newUploads = editingProduct.uploadedImages.filter((_: any, i: number) => i !== index);
-                                          setEditingProduct({...editingProduct, uploadedImages: newUploads});
+                                        variant="ghost"
+                                        size="sm"
+                                        className="h-6 text-xs"
+                                        onClick={() => {
+                                          setEditingProduct({
+                                            ...editingProduct,
+                                            uploadedImages: [],
+                                            imageSource: 'product'
+                                          });
                                         }}
                                       >
-                                        <X className="w-3 h-3"/>
-                                      </button>
+                                        清除
+                                      </Button>
                                     </div>
-                                  ))}
+                                    <div className="grid grid-cols-3 md:grid-cols-4 gap-3 p-2 border rounded-md bg-white">
+                                      {editingProduct.uploadedImages.map((file: File, index: number) => (
+                                        <div key={`upload-${index}`} className="relative aspect-square rounded-md overflow-hidden border-2 border-green-500">
+                                          <img
+                                            src={URL.createObjectURL(file)}
+                                            alt="上传图片"
+                                            className="w-full h-full object-cover"
+                                          />
+                                          <div className="absolute top-1 right-1 bg-green-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">
+                                            ✓
+                                          </div>
+                                          <button
+                                            type="button"
+                                            className="absolute bottom-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              const newUploads = editingProduct.uploadedImages.filter((_: any, i: number) => i !== index);
+                                              setEditingProduct({
+                                                ...editingProduct,
+                                                uploadedImages: newUploads,
+                                                imageSource: newUploads.length > 0 ? 'upload' : 'product'
+                                              });
+                                            }}
+                                          >
+                                            <X className="w-3 h-3"/>
+                                          </button>
+                                        </div>
+                                      ))}
+                                    </div>
+                                    <p className="text-xs text-muted-foreground">
+                                      共 {editingProduct.uploadedImages.length} 张上传图片（只使用这些图片回复）
+                                    </p>
+                                  </div>
+                                )}
+
+                                {/* 填写图片链接 */}
+                                <div className="space-y-2">
+                                  <Label className="text-xs text-muted-foreground">或填写图片链接（每行一个）</Label>
+                                  <Textarea
+                                    value={editingProduct?.customImageUrls?.join('\n') || ""}
+                                    onChange={(e) => {
+                                      const urls = e.target.value.split('\n').filter(url => url.trim());
+                                      setEditingProduct({
+                                        ...editingProduct,
+                                        customImageUrls: urls,
+                                        imageSource: urls.length > 0 ? 'custom' : 'product',
+                                        selectedImageIndexes: urls.length > 0 ? [] : editingProduct?.selectedImageIndexes,
+                                        uploadedImages: urls.length > 0 ? [] : editingProduct?.uploadedImages
+                                      });
+                                    }}
+                                    placeholder="https://example.com/image1.jpg&#10;https://example.com/image2.jpg"
+                                    rows={3}
+                                    className="text-xs"
+                                  />
+                                  <p className="text-xs text-muted-foreground">
+                                    {editingProduct?.customImageUrls?.length > 0
+                                      ? `已填写 ${editingProduct.customImageUrls.length} 个图片链接`
+                                      : '填写后将只使用这些链接的图片回复'}
+                                  </p>
                                 </div>
-                                <p className="text-xs text-muted-foreground">
-                                  已选 {editingProduct?.selectedImageIndexes?.length || 0} 张现有图片
-                                  {editingProduct?.uploadedImages?.length ? ` + ${editingProduct.uploadedImages.length} 张新上传` : ''}
-                                </p>
                               </div>
                             </div>
                           )}
