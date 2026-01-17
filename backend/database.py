@@ -2186,6 +2186,18 @@ class Database:
                     except:
                         prod['selectedImageIndexes'] = []
 
+                    # 修复：解析本地上传的自定义回复图片 (uploaded_reply_images)
+                    # 前端组件 ScraperView 需要 uploadedImages 字段 (URL列表) 来显示"已保存图片"
+                    try:
+                        if prod.get('uploaded_reply_images'):
+                            import json
+                            filenames = json.loads(prod['uploaded_reply_images'])
+                            prod['uploadedImages'] = [f"/api/custom_reply_image/{prod['id']}/{fn}" for fn in filenames]
+                        else:
+                            prod['uploadedImages'] = []
+                    except:
+                        prod['uploadedImages'] = []
+
                     # 提取微店ID
                     try:
                         import re

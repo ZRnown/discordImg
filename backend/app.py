@@ -586,6 +586,10 @@ def search_similar():
             if results:
                 # 处理多个搜索结果
                 processed_results = []
+
+                # 预先导入 json，防止循环中报错
+                import json
+
                 for i, result in enumerate(results):
                     # 获取完整产品信息
                     product_info = db._get_product_info_by_id(result['id'])
@@ -623,6 +627,10 @@ def search_similar():
                             'cnfansUrl': product_info.get('cnfans_url', ''),
                             'acbuyUrl': product_info.get('acbuy_url', ''),
                             'ruleEnabled': product_info.get('ruleEnabled', True) if product_info else True,
+                            # 修复：机器人需要 imageSource 和 uploaded_reply_images 才能发送本地图片
+                            'imageSource': product_info.get('image_source', 'product') if product_info else 'product',
+                            'custom_reply_text': product_info.get('custom_reply_text', '') if product_info else '',
+                            'uploaded_reply_images': json.loads(product_info.get('uploaded_reply_images', '[]')) if product_info and product_info.get('uploaded_reply_images') else [],
                             'images': actual_images if actual_images else [f"/api/image/{result['id']}/{result['image_index']}"],  # 使用实际图片列表
                             'websiteUrls': website_urls  # 添加所有网站的链接
                         }

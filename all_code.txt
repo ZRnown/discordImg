@@ -5458,7 +5458,8 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         selectedImageIndexes: product.selectedImageIndexes || [],
         customImageUrls: product.customImageUrls || product.custom_image_urls || [],
         imageSource: product.imageSource || product.image_source || (product.custom_image_urls ? 'custom' : 'upload'),
-        uploadedImages: product.uploadedImages || []
+        uploadedImages: [], // 新上传的File对象（用户刚选择的）
+        existingUploadedImageUrls: product.uploadedImages || [] // 已保存的图片URL（从后端加载）
       }))
 
       if (append) {
@@ -5682,9 +5683,12 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     try {
       let res;
 
-      // 检查是否有上传的图片文件
-      if (updatedProduct.uploadedImages && updatedProduct.uploadedImages.length > 0) {
-        // 使用FormData发送文件
+      // 检查是否有上传的图片文件或已保存的图片URL
+      const hasNewUploads = updatedProduct.uploadedImages && updatedProduct.uploadedImages.length > 0;
+      const hasExistingUploads = updatedProduct.existingUploadedImageUrls && updatedProduct.existingUploadedImageUrls.length > 0;
+
+      if (hasNewUploads || hasExistingUploads) {
+        // 使用FormData发送文件和已有图片信息
         const formData = new FormData();
 
         // 添加基本数据
@@ -5703,10 +5707,17 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
           formData.append('customImageUrls', JSON.stringify(updatedProduct.customImageUrls));
         }
 
-        // 添加上传的文件
-        updatedProduct.uploadedImages.forEach((file: File, index: number) => {
-          formData.append('uploadedImages', file);
-        });
+        // 添加要保留的已有上传图片URL列表
+        if (hasExistingUploads) {
+          formData.append('existingUploadedImageUrls', JSON.stringify(updatedProduct.existingUploadedImageUrls));
+        }
+
+        // 添加新上传的文件
+        if (hasNewUploads) {
+          updatedProduct.uploadedImages.forEach((file: File, index: number) => {
+            formData.append('uploadedImages', file);
+          });
+        }
 
         res = await fetch('/api/products', {
           method: 'PUT',
@@ -6351,39 +6362,72 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                               </div>
 
                               <div className="space-y-3">
-                                <div className="flex justify-between items-center">
-                                  <Label className="text-sm font-medium">附带图片回复</Label>
-                                  <div className="flex gap-2">
-                                    {/* 隐藏的文件输入框 */}
-                                    <input
-                                      type="file"
-                                      multiple
-                                      accept="image/*"
-                                      className="hidden"
-                                      id="edit-upload-input"
-                                      onChange={(e) => {
-                                        const files = Array.from(e.target.files || []);
-                                        if (files.length > 0) {
+                                <Label className="text-sm font-medium">附带图片回复</Label>
+
+                                {/* 图片来源选择器 */}
+                                <div className="space-y-2 p-3 bg-gray-50 rounded-md border">
+                                  <Label className="text-xs font-medium text-gray-700">选择图片来源</Label>
+                                  <div className="flex gap-4">
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                      <input
+                                        type="radio"
+                                        name="imageSource"
+                                        value="product"
+                                        checked={!editingProduct?.imageSource || editingProduct?.imageSource === 'product'}
+                                        onChange={() => {
                                           setEditingProduct({
                                             ...editingProduct,
-                                            uploadedImages: files,
-                                            selectedImageIndexes: [], // 清空现有图片勾选
-                                            customImageUrls: [], // 清空图片链接
-                                            imageSource: 'upload' // 设置为上传模式
+                                            imageSource: 'product',
+                                            uploadedImages: [],
+                                            existingUploadedImageUrls: [],
+                                            customImageUrls: []
                                           });
-                                        }
-                                      }}
-                                    />
-                                    <Label
-                                      htmlFor="edit-upload-input"
-                                      className="cursor-pointer text-xs bg-white border px-2 py-1 rounded hover:bg-gray-50 flex items-center"
-                                    >
-                                      <Upload className="w-3 h-3 mr-1"/> 上传本地图片
-                                    </Label>
+                                        }}
+                                        className="w-4 h-4"
+                                      />
+                                      <span className="text-sm">使用商品图片</span>
+                                    </label>
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                      <input
+                                        type="radio"
+                                        name="imageSource"
+                                        value="upload"
+                                        checked={editingProduct?.imageSource === 'upload'}
+                                        onChange={() => {
+                                          setEditingProduct({
+                                            ...editingProduct,
+                                            imageSource: 'upload',
+                                            selectedImageIndexes: [],
+                                            customImageUrls: []
+                                          });
+                                        }}
+                                        className="w-4 h-4"
+                                      />
+                                      <span className="text-sm">上传本地图片</span>
+                                    </label>
+                                    <label className="flex items-center gap-2 cursor-pointer">
+                                      <input
+                                        type="radio"
+                                        name="imageSource"
+                                        value="custom"
+                                        checked={editingProduct?.imageSource === 'custom'}
+                                        onChange={() => {
+                                          setEditingProduct({
+                                            ...editingProduct,
+                                            imageSource: 'custom',
+                                            selectedImageIndexes: [],
+                                            uploadedImages: [],
+                                            existingUploadedImageUrls: []
+                                          });
+                                        }}
+                                        className="w-4 h-4"
+                                      />
+                                      <span className="text-sm">使用图片链接</span>
+                                    </label>
                                   </div>
                                 </div>
 
-                                {/* 选择现有商品图片 */}
+                                {/* 模式1: 使用商品图片 */}
                                 {(!editingProduct?.imageSource || editingProduct?.imageSource === 'product') && (
                                   <div className="space-y-2">
                                     <Label className="text-xs text-muted-foreground">勾选现有商品图片</Label>
@@ -6427,87 +6471,130 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                   </div>
                                 )}
 
-                                {/* 显示上传的本地图片 */}
-                                {editingProduct?.imageSource === 'upload' && editingProduct?.uploadedImages?.length > 0 && (
+                                {/* 模式2: 上传本地图片 */}
+                                {editingProduct?.imageSource === 'upload' && (
                                   <div className="space-y-2">
-                                    <div className="flex justify-between items-center">
-                                      <Label className="text-xs text-muted-foreground">已上传的本地图片</Label>
-                                      <Button
-                                        type="button"
-                                        variant="ghost"
-                                        size="sm"
-                                        className="h-6 text-xs"
-                                        onClick={() => {
+                                    {/* 隐藏的文件输入框 */}
+                                    <input
+                                      type="file"
+                                      multiple
+                                      accept="image/*"
+                                      className="hidden"
+                                      id="edit-upload-input"
+                                      onChange={(e) => {
+                                        const files = Array.from(e.target.files || []);
+                                        if (files.length > 0) {
                                           setEditingProduct({
                                             ...editingProduct,
-                                            uploadedImages: [],
-                                            imageSource: 'product'
+                                            uploadedImages: [...(editingProduct?.uploadedImages || []), ...files],
+                                            imageSource: 'upload'
                                           });
-                                        }}
+                                        }
+                                      }}
+                                    />
+                                    <div className="flex justify-between items-center">
+                                      <Label className="text-xs text-muted-foreground">上传本地图片</Label>
+                                      <Label
+                                        htmlFor="edit-upload-input"
+                                        className="cursor-pointer text-xs bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 flex items-center"
                                       >
-                                        清除
-                                      </Button>
+                                        <Upload className="w-3 h-3 mr-1"/> 选择文件
+                                      </Label>
                                     </div>
-                                    <div className="grid grid-cols-3 md:grid-cols-4 gap-3 p-2 border rounded-md bg-white">
-                                      {editingProduct.uploadedImages.map((file: File, index: number) => (
-                                        <div key={`upload-${index}`} className="relative aspect-square rounded-md overflow-hidden border-2 border-green-500">
-                                          <img
-                                            src={URL.createObjectURL(file)}
-                                            alt="上传图片"
-                                            className="w-full h-full object-cover"
-                                          />
-                                          <div className="absolute top-1 right-1 bg-green-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">
-                                            ✓
-                                          </div>
-                                          <button
-                                            type="button"
-                                            className="absolute bottom-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center"
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              const newUploads = editingProduct.uploadedImages.filter((_: any, i: number) => i !== index);
-                                              setEditingProduct({
-                                                ...editingProduct,
-                                                uploadedImages: newUploads,
-                                                imageSource: newUploads.length > 0 ? 'upload' : 'product'
-                                              });
-                                            }}
-                                          >
-                                            <X className="w-3 h-3"/>
-                                          </button>
+
+                                    {/* 显示已保存的图片和新上传的图片 */}
+                                    {((editingProduct?.existingUploadedImageUrls?.length > 0) || (editingProduct?.uploadedImages?.length > 0)) && (
+                                      <>
+                                        <div className="grid grid-cols-3 md:grid-cols-4 gap-3 p-2 border rounded-md bg-white">
+                                          {/* 显示已保存的图片（URL） */}
+                                          {editingProduct?.existingUploadedImageUrls?.map((url: string, index: number) => (
+                                            <div key={`existing-${index}`} className="relative aspect-square rounded-md overflow-hidden border-2 border-blue-500">
+                                              <img
+                                                src={url}
+                                                alt="已保存图片"
+                                                className="w-full h-full object-cover"
+                                              />
+                                              <div className="absolute top-1 right-1 bg-blue-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">
+                                                ✓
+                                              </div>
+                                              <button
+                                                type="button"
+                                                className="absolute bottom-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  const newUrls = editingProduct.existingUploadedImageUrls.filter((_: any, i: number) => i !== index);
+                                                  setEditingProduct({
+                                                    ...editingProduct,
+                                                    existingUploadedImageUrls: newUrls
+                                                  });
+                                                }}
+                                              >
+                                                <X className="w-3 h-3"/>
+                                              </button>
+                                            </div>
+                                          ))}
+
+                                          {/* 显示新上传的图片（File对象） */}
+                                          {editingProduct?.uploadedImages?.map((file: File, index: number) => (
+                                            <div key={`new-${index}`} className="relative aspect-square rounded-md overflow-hidden border-2 border-green-500">
+                                              <img
+                                                src={URL.createObjectURL(file)}
+                                                alt="新上传图片"
+                                                className="w-full h-full object-cover"
+                                              />
+                                              <div className="absolute top-1 right-1 bg-green-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">
+                                                新
+                                              </div>
+                                              <button
+                                                type="button"
+                                                className="absolute bottom-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  const newUploads = editingProduct.uploadedImages.filter((_: any, i: number) => i !== index);
+                                                  setEditingProduct({
+                                                    ...editingProduct,
+                                                    uploadedImages: newUploads
+                                                  });
+                                                }}
+                                              >
+                                                <X className="w-3 h-3"/>
+                                              </button>
+                                            </div>
+                                          ))}
                                         </div>
-                                      ))}
-                                    </div>
-                                    <p className="text-xs text-muted-foreground">
-                                      共 {editingProduct.uploadedImages.length} 张上传图片（只使用这些图片回复）
-                                    </p>
+                                        <p className="text-xs text-muted-foreground">
+                                          已保存: {editingProduct?.existingUploadedImageUrls?.length || 0} 张 | 新上传: {editingProduct?.uploadedImages?.length || 0} 张
+                                        </p>
+                                      </>
+                                    )}
                                   </div>
                                 )}
 
-                                {/* 填写图片链接 */}
-                                <div className="space-y-2">
-                                  <Label className="text-xs text-muted-foreground">或填写图片链接（每行一个）</Label>
-                                  <Textarea
-                                    value={Array.isArray(editingProduct?.customImageUrls) ? editingProduct.customImageUrls.join('\n') : (editingProduct?.customImageUrls || "")}
-                                    onChange={(e) => {
-                                      const urls = e.target.value.split('\n').filter(url => url.trim());
-                                      setEditingProduct({
-                                        ...editingProduct,
-                                        customImageUrls: urls,
-                                        imageSource: urls.length > 0 ? 'custom' : 'product',
-                                        selectedImageIndexes: urls.length > 0 ? [] : editingProduct?.selectedImageIndexes,
-                                        uploadedImages: urls.length > 0 ? [] : editingProduct?.uploadedImages
-                                      });
-                                    }}
-                                    placeholder="https://example.com/image1.jpg&#10;https://example.com/image2.jpg"
-                                    rows={3}
-                                    className="text-xs"
-                                  />
-                                  <p className="text-xs text-muted-foreground">
-                                    {Array.isArray(editingProduct?.customImageUrls) && editingProduct.customImageUrls.length > 0
-                                      ? `已填写 ${editingProduct.customImageUrls.length} 个图片链接`
-                                      : '填写后将只使用这些链接的图片回复'}
-                                  </p>
-                                </div>
+                                {/* 模式3: 使用图片链接 */}
+                                {editingProduct?.imageSource === 'custom' && (
+                                  <div className="space-y-2">
+                                    <Label className="text-xs text-muted-foreground">填写图片链接（每行一个）</Label>
+                                    <Textarea
+                                      value={Array.isArray(editingProduct?.customImageUrls) ? editingProduct.customImageUrls.join('\n') : (editingProduct?.customImageUrls || "")}
+                                      onChange={(e) => {
+                                        const urls = e.target.value.split('\n').filter(url => url.trim());
+                                        setEditingProduct({
+                                          ...editingProduct,
+                                          customImageUrls: urls,
+                                          imageSource: 'custom'
+                                        });
+                                      }}
+                                      placeholder="https://example.com/image1.jpg&#10;https://example.com/image2.jpg"
+                                      rows={4}
+                                      className="text-xs"
+                                    />
+                                    <p className="text-xs text-muted-foreground">
+                                      {Array.isArray(editingProduct?.customImageUrls) && editingProduct.customImageUrls.length > 0
+                                        ? `已填写 ${editingProduct.customImageUrls.length} 个图片链接`
+                                        : '填写后将使用这些链接的图片回复'}
+                                    </p>
+                                  </div>
+                                )}
                               </div>
                             </div>
                           )}
@@ -10381,6 +10468,11 @@ class Database:
                 pass  # 字段已存在
 
             try:
+                cursor.execute('ALTER TABLE products ADD COLUMN uploaded_reply_images TEXT')  # JSON格式存储上传的自定义回复图片文件名数组
+            except sqlite3.OperationalError:
+                pass  # 字段已存在
+
+            try:
                 cursor.execute('ALTER TABLE system_config ADD COLUMN cnfans_channel_id TEXT')
             except sqlite3.OperationalError:
                 pass
@@ -14133,22 +14225,118 @@ class DiscordBotClient(discord.Client):
                         # 不要使用 message.reply()，因为 message 绑定的是监听者(Listener)客户端
                         # 必须用 target_channel.send(..., reference=message) 才会使用 target_client(Sender) 的 token
                         try:
-                            await target_channel.send(
-                                response_content,
-                                reference=message,
-                                mention_author=True
+                            # === 1. 收集所有要发送的图片文件 ===
+                            files = []
+
+                            # 检查是否是自定义模式，且有图片
+                            is_custom_mode = custom_reply and (
+                                custom_reply.get('reply_type') == 'custom_only' or
+                                custom_reply.get('reply_type') == 'text'
                             )
+
+                            if is_custom_mode:
+                                # 获取图片信息
+                                # 注意：如果是从 search_similar_text 返回的 product，字段名可能已经格式化
+                                # 需要兼容处理
+
+                                # 1. 尝试获取自定义图片链接
+                                custom_urls = product.get('customImageUrls', []) or product.get('custom_image_urls', [])
+                                if isinstance(custom_urls, str):
+                                    try:
+                                        custom_urls = json.loads(custom_urls)
+                                    except:
+                                        custom_urls = []
+
+                                image_source = product.get('imageSource', 'product') or product.get('image_source', 'product')
+
+                                # 收集图片文件（Discord限制最多10个文件）
+                                if image_source == 'custom' and custom_urls:
+                                    for url in custom_urls[:10]:  # 限制最多10张
+                                        if len(files) >= 10:
+                                            break
+                                        try:
+                                            async with aiohttp.ClientSession() as session:
+                                                async with session.get(url) as resp:
+                                                    if resp.status == 200:
+                                                        data = await resp.read()
+                                                        filename = url.split('/')[-1] or 'image.jpg'
+                                                        files.append(discord.File(io.BytesIO(data), filename))
+                                        except Exception as e:
+                                            logger.error(f"下载自定义图片失败: {e}")
+
+                                elif image_source == 'upload':
+                                    # 处理上传的自定义回复图片
+                                    pid = product.get('id')
+
+                                    # 从 uploaded_reply_images 字段获取上传的图片文件名列表
+                                    uploaded_filenames = product.get('uploaded_reply_images', [])
+                                    if isinstance(uploaded_filenames, str):
+                                        try:
+                                            uploaded_filenames = json.loads(uploaded_filenames)
+                                        except:
+                                            uploaded_filenames = []
+
+                                    if pid and uploaded_filenames:
+                                        # 使用新的API端点获取上传的自定义回复图片
+                                        for filename in uploaded_filenames[:10]:  # 限制最多10张
+                                            if len(files) >= 10:
+                                                break
+                                            img_url = f"{config.BACKEND_API_URL}/api/custom_reply_image/{pid}/{filename}"
+                                            try:
+                                                async with aiohttp.ClientSession() as session:
+                                                    async with session.get(img_url) as resp:
+                                                        if resp.status == 200:
+                                                            data = await resp.read()
+                                                            files.append(discord.File(io.BytesIO(data), filename))
+                                            except Exception as e:
+                                                logger.error(f"下载上传的自定义回复图片失败: {e}")
+
+                                elif image_source == 'product':
+                                    # 处理商品图集中的图片
+                                    pid = product.get('id')
+                                    indexes = product.get('selectedImageIndexes', []) or product.get('custom_reply_images', [])
+
+                                    if isinstance(indexes, str):
+                                        try:
+                                            indexes = json.loads(indexes)
+                                        except:
+                                            indexes = []
+
+                                    if pid and indexes:
+                                        # 使用原有的API端点获取商品图集中的图片
+                                        for idx in indexes[:10]:  # 限制最多10张
+                                            if len(files) >= 10:
+                                                break
+                                            img_url = f"{config.BACKEND_API_URL}/api/image/{pid}/{idx}"
+                                            try:
+                                                async with aiohttp.ClientSession() as session:
+                                                    async with session.get(img_url) as resp:
+                                                        if resp.status == 200:
+                                                            data = await resp.read()
+                                                            files.append(discord.File(io.BytesIO(data), f"{pid}_{idx}.jpg"))
+                                            except Exception as e:
+                                                logger.error(f"下载商品图片失败: {e}")
+
+                            # === 2. 发送文字和所有图片（合并为一条消息） ===
+                            if response_content or files:
+                                await target_channel.send(
+                                    content=response_content if response_content else None,
+                                    files=files if files else None,
+                                    reference=message,
+                                    mention_author=True
+                                )
 
                             if hasattr(target_client, 'account_id') and target_client.account_id:
                                 set_account_cooldown(target_client.account_id, message.channel.id)
 
                             logger.info(
-                                f"✅ [回复成功] 真实发送账号: {target_client.user.name} (ID: {target_client.account_id}) | 商品ID: {product.get('id')}"
+                                f"✅ [回复成功] 真实发送账号: {target_client.user.name} (ID: {target_client.account_id}) | 商品ID: {product.get('id')} | 图片数量: {len(files)}"
                             )
 
                         except Exception as reply_error:
                             logger.warning(f"回复失败，尝试直接发送: {reply_error}")
-                            await target_channel.send(response_content)
+                            if response_content:
+                                await target_channel.send(response_content)
 
                             if hasattr(target_client, 'account_id') and target_client.account_id:
                                 set_account_cooldown(target_client.account_id, message.channel.id)
@@ -14684,18 +14872,45 @@ class DiscordBotClient(discord.Client):
                     logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过关键词回复")
                     return
 
-                # 构建自定义回复对象（如果有自定义文本）
+                # === 关键修复逻辑 ===
+                # 检查规则是否启用
+                # 注意：后端API返回的 autoReplyEnabled 即 ruleEnabled
+                rule_enabled = product.get('autoReplyEnabled', True)
+
                 custom_reply = None
-                custom_text = product.get('custom_reply_text', '').strip()
-                if custom_text:
+
+                # 检查是否配置了自定义图片
+                has_custom_images = False
+                image_source = product.get('imageSource') or product.get('image_source')
+                if image_source == 'upload':
+                    uploaded_imgs = product.get('uploaded_reply_images', [])
+                    has_custom_images = bool(uploaded_imgs)
+                elif image_source == 'custom':
+                    custom_urls = product.get('customImageUrls', []) or product.get('custom_image_urls', [])
+                    has_custom_images = bool(custom_urls)
+                elif image_source == 'product':
+                    selected_indexes = product.get('selectedImageIndexes', []) or product.get('custom_reply_images', [])
+                    has_custom_images = bool(selected_indexes)
+
+                # 如果规则禁用了，或者配置了自定义图片，都需要创建 custom_reply
+                if not rule_enabled or has_custom_images:
+                    # 构造 custom_reply 对象供 schedule_reply 使用
+                    custom_text = product.get('custom_reply_text', '').strip()
+
+                    # 即使没有文本，只要是要发图片，也需要传递 custom_reply 信号
+                    # schedule_reply 会进一步处理图片逻辑
                     custom_reply = {
-                        'reply_type': 'text_and_link',
-                        'content': custom_text
+                        'reply_type': 'text' if custom_text else 'custom_only', # custom_only 表示不发默认链接
+                        'content': custom_text,
+                        # 传递图片信息供 schedule_reply 内部处理
+                        'product_data': product
                     }
+                    if not rule_enabled:
+                        logger.info(f"商品 {product['id']} 规则已禁用，准备发送自定义回复")
+                    elif has_custom_images:
+                        logger.info(f"商品 {product['id']} 配置了自定义图片，准备发送自定义回复")
 
-                logger.info(f'关键词搜索完成，找到 {len(products)} 个商品')
-
-                # 使用 schedule_reply 来处理回复（包含冷却检查和账号轮换）
+                # 使用 schedule_reply 统一发送
                 await self.schedule_reply(message, product, custom_reply)
             else:
                 # 没有找到商品，不回复任何消息
@@ -17728,88 +17943,147 @@ def update_product():
 
         return False
 
-    def get_full_product_data(product_id):
-        """获取完整的商品数据，包括所有前端需要的字段"""
-        product = db.get_product_by_id(int(product_id))
+    def get_full_product_data(pid):
+        """获取并格式化完整的商品数据，用于前端状态更新"""
+        product = db._get_product_info_by_id(pid)
         if not product:
             return None
 
-        # 获取商品图片
-        images = db.get_product_images(int(product_id))
+        # 获取所有图片
+        images_data = db.get_product_images(pid)
+        # 按索引排序并生成URL
+        sorted_images = sorted(images_data, key=lambda x: x['image_index'])
+        image_urls = [f"/api/image/{pid}/{img['image_index']}" for img in sorted_images]
 
-        # 构建完整的商品对象
-        full_product = {
-            'id': product.get('id'),
+        # 格式化字段以匹配前端需求 (CamelCase)
+        weidian_id = ''
+        try:
+            if 'itemID=' in product.get('product_url', ''):
+                weidian_id = product.get('product_url', '').split('itemID=')[1]
+            elif product.get('item_id'):
+                weidian_id = product.get('item_id')
+        except:
+            pass
+
+        # 解析自定义图片URL和索引
+        selected_indexes = []
+        custom_urls = []
+        uploaded_reply_image_urls = []
+        try:
+            if product.get('custom_reply_images'):
+                selected_indexes = json.loads(product.get('custom_reply_images'))
+            if product.get('custom_image_urls'):
+                custom_urls = json.loads(product.get('custom_image_urls'))
+            # 解析上传的自定义回复图片
+            if product.get('uploaded_reply_images'):
+                uploaded_filenames = json.loads(product.get('uploaded_reply_images'))
+                # 生成图片URL数组
+                uploaded_reply_image_urls = [f"/api/custom_reply_image/{pid}/{filename}" for filename in uploaded_filenames]
+        except:
+            pass
+
+        # 关键：必须返回前端需要的每一个字段，否则前端会变白
+        return {
+            'id': product['id'],
             'title': product.get('title', ''),
             'englishTitle': product.get('english_title', ''),
-            'description': product.get('description', ''),
-            'price': product.get('price', ''),
             'weidianUrl': product.get('product_url', ''),
             'cnfansUrl': product.get('cnfans_url', ''),
-            'shopName': product.get('shop_name', ''),
-            'ruleEnabled': product.get('ruleEnabled', False),
+            'acbuyUrl': product.get('acbuy_url', ''),
+            'shopName': product.get('shop_name', '未知店铺'),
+            'description': product.get('description', ''),
+
+            # 规则相关
+            'ruleEnabled': bool(product.get('ruleEnabled', True)),
             'customReplyText': product.get('custom_reply_text', ''),
-            'customReplyImages': product.get('custom_reply_images', []),
-            'customImageUrls': product.get('custom_image_urls', []),
             'imageSource': product.get('image_source', 'product'),
-            'imageCount': len(images),
-            'createdAt': product.get('created_at', ''),
+
+            # 图片相关
+            'selectedImageIndexes': selected_indexes,
+            'customImageUrls': custom_urls,
+            'images': image_urls, # 包含所有商品图片
+            'uploadedImages': uploaded_reply_image_urls, # 上传的自定义回复图片URL数组
+
+            'weidianId': weidian_id,
+            'createdAt': product.get('created_at')
         }
 
-        return full_product
-
-    # 检查是否是multipart/form-data（包含文件上传）
+    # ---------------------------------------------------------
+    # 场景 A: 包含文件上传 (Multipart)
+    # ---------------------------------------------------------
     if request.content_type and 'multipart/form-data' in request.content_type:
-        # 处理文件上传
         product_id = request.form.get('id')
         if not product_id:
             return jsonify({'error': '商品ID不能为空'}), 400
 
         try:
-            # 检查权限
-            if not check_permission(product_id):
+            pid_int = int(product_id)
+            if not check_permission(pid_int):
                 return jsonify({'error': '无权限更新此商品'}), 403
 
-            # 处理上传的图片文件
-            uploaded_files = []
+            # 1. 处理上传的自定义回复图片
+            # 注意：这些图片只用于自定义回复，不添加到商品图集和FAISS索引
+
+            # 1.1 获取要保留的已有图片文件名列表（从前端传来）
+            existing_filenames_to_keep = []
+            if 'existingUploadedImageUrls' in request.form:
+                try:
+                    # 前端发送的是URL数组的JSON字符串，需要提取文件名
+                    existing_urls = json.loads(request.form.get('existingUploadedImageUrls'))
+                    for url in existing_urls:
+                        # URL格式: /api/custom_reply_image/{product_id}/{filename}
+                        # 提取最后一部分作为文件名
+                        filename = url.split('/')[-1]
+                        existing_filenames_to_keep.append(filename)
+                except:
+                    pass
+
+            # 1.2 处理新上传的文件
+            new_uploaded_filenames = []
             if 'uploadedImages' in request.files:
-                # 获取当前商品已有的图片，找到最大索引
-                existing_images = db.get_product_images(int(product_id))
-                if existing_images:
-                    max_index = max(img['image_index'] for img in existing_images)
-                    next_index = max_index + 1
-                else:
-                    next_index = 0
+                import uuid
+                import os
+
+                # 创建自定义回复图片目录
+                custom_reply_dir = os.path.join('data', 'custom_reply_images', str(pid_int))
+                os.makedirs(custom_reply_dir, exist_ok=True)
 
                 files = request.files.getlist('uploadedImages')
                 for file in files:
                     if file and file.filename:
-                        # 保存文件到商品图片目录
-                        import uuid
-                        import os
+                        # 生成唯一文件名
                         filename = f"{uuid.uuid4()}_{file.filename}"
-                        image_path = os.path.join('data', 'images', str(product_id), filename)
+                        file_path = os.path.join(custom_reply_dir, filename)
 
-                        # 确保目录存在
-                        os.makedirs(os.path.dirname(image_path), exist_ok=True)
+                        # 保存文件（不添加到商品图集，不提取特征，不加入FAISS）
+                        file.save(file_path)
+                        new_uploaded_filenames.append(filename)
 
-                        # 保存文件
-                        file.save(image_path)
+                if new_uploaded_filenames:
+                    logger.info(f"保存了 {len(new_uploaded_filenames)} 张新的自定义回复图片到 {custom_reply_dir}")
 
-                        # 添加到数据库（使用正确的方法名和参数）
-                        db.insert_image_record(int(product_id), image_path, next_index)
-                        uploaded_files.append(filename)
-                        next_index += 1
+            # 1.3 合并已有图片和新上传的图片
+            all_uploaded_filenames = existing_filenames_to_keep + new_uploaded_filenames
+            if existing_filenames_to_keep:
+                logger.info(f"保留了 {len(existing_filenames_to_keep)} 张已有的自定义回复图片")
 
-            # 构建更新数据
+            # 2. 构建更新数据
             updates = {}
+
+            # 如果有上传的自定义回复图片（已有的或新上传的），将文件名列表存储到数据库
+            if all_uploaded_filenames:
+                updates['uploaded_reply_images'] = json.dumps(all_uploaded_filenames)
             for key in ['title', 'englishTitle', 'ruleEnabled', 'customReplyText', 'imageSource']:
                 value = request.form.get(key)
                 if value is not None:
                     if key == 'englishTitle':
                         updates['english_title'] = value
                     elif key == 'ruleEnabled':
-                        updates['ruleEnabled'] = value.lower() == 'true'
+                        # 兼容字符串 'true'/'false' 和 '1'/'0'
+                        if str(value).lower() in ['true', '1']:
+                            updates['ruleEnabled'] = 1
+                        else:
+                            updates['ruleEnabled'] = 0
                     elif key == 'customReplyText':
                         updates['custom_reply_text'] = value
                     elif key == 'imageSource':
@@ -17817,88 +18091,62 @@ def update_product():
                     else:
                         updates[key] = value
 
-            # 处理数组数据
+            # 3. 处理数组数据 (JSON)
             if 'selectedImageIndexes' in request.form:
-                import json
-                try:
-                    updates['custom_reply_images'] = json.loads(request.form.get('selectedImageIndexes'))
-                except:
-                    pass
+                updates['custom_reply_images'] = request.form.get('selectedImageIndexes') # 已经是JSON字符串
 
             if 'customImageUrls' in request.form:
-                try:
-                    updates['custom_image_urls'] = json.loads(request.form.get('customImageUrls'))
-                except:
-                    pass
+                updates['custom_image_urls'] = request.form.get('customImageUrls') # 已经是JSON字符串
 
-            # 执行更新
+            # 4. 执行更新
             if updates:
-                success = db.update_product(int(product_id), updates)
-                if success:
-                    # 返回完整的商品数据
-                    full_product = get_full_product_data(product_id)
-                    if full_product:
-                        return jsonify({'message': '商品更新成功', 'product': full_product})
-                    else:
-                        return jsonify({'error': '获取更新后的商品数据失败'}), 500
-                else:
-                    return jsonify({'error': '更新失败'}), 500
-            else:
-                # 即使没有更新字段，也返回完整的商品数据（可能只是上传了图片）
-                full_product = get_full_product_data(product_id)
-                if full_product:
-                    return jsonify({'message': '商品更新成功', 'product': full_product})
-                else:
-                    return jsonify({'error': '获取商品数据失败'}), 500
+                db.update_product(pid_int, updates)
+
+            # 5. 返回完整数据 (解决闪烁问题)
+            full_product = get_full_product_data(pid_int)
+            return jsonify({'message': '商品更新成功', 'product': full_product})
 
         except Exception as e:
             logger.error(f"更新商品失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return jsonify({'error': '更新失败'}), 500
+    # ---------------------------------------------------------
+    # 场景 B: 仅 JSON 数据更新
+    # ---------------------------------------------------------
     else:
-        # 处理JSON数据（原有逻辑）
         data = request.get_json()
-
         if not data or not data.get('id'):
             return jsonify({'error': '商品ID不能为空'}), 400
 
         product_id = data['id']
 
         try:
-            # 检查权限
             if not check_permission(product_id):
                 return jsonify({'error': '无权限更新此商品'}), 403
 
-            # 构建更新数据
             updates = {}
             if 'title' in data:
                 updates['title'] = data['title']
             if 'englishTitle' in data:
                 updates['english_title'] = data['englishTitle']
             if 'ruleEnabled' in data:
-                updates['ruleEnabled'] = data['ruleEnabled']
+                updates['ruleEnabled'] = 1 if data['ruleEnabled'] else 0
             if 'customReplyText' in data:
                 updates['custom_reply_text'] = data['customReplyText']
             if 'selectedImageIndexes' in data:
-                updates['custom_reply_images'] = data['selectedImageIndexes']
+                updates['custom_reply_images'] = json.dumps(data['selectedImageIndexes'])
             if 'customImageUrls' in data:
-                updates['custom_image_urls'] = data['customImageUrls']
+                updates['custom_image_urls'] = json.dumps(data['customImageUrls'])
             if 'imageSource' in data:
                 updates['image_source'] = data['imageSource']
 
-            # 执行更新
             if updates:
-                success = db.update_product(product_id, updates)
-                if success:
-                    # 返回完整的商品数据
-                    full_product = get_full_product_data(product_id)
-                    if full_product:
-                        return jsonify({'message': '商品更新成功', 'product': full_product})
-                    else:
-                        return jsonify({'error': '获取更新后的商品数据失败'}), 500
-                else:
-                    return jsonify({'error': '更新失败'}), 500
-            else:
-                return jsonify({'error': '没有要更新的字段'}), 400
+                db.update_product(product_id, updates)
+
+            # 返回完整数据
+            full_product = get_full_product_data(product_id)
+            return jsonify({'message': '商品更新成功', 'product': full_product})
 
         except Exception as e:
             logger.error(f"更新商品失败: {e}")
@@ -18085,6 +18333,42 @@ def serve_product_image(product_id: int, image_index: int):
         return send_file(image_path, mimetype='image/jpeg')
     except Exception as e:
         logger.error(f"serve_product_image 失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/custom_reply_image/<int:product_id>/<filename>', methods=['GET'])
+def serve_custom_reply_image(product_id: int, filename: str):
+    """返回指定商品的自定义回复图片文件"""
+    try:
+        # 从数据库读取 uploaded_reply_images 字段，验证文件名
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT uploaded_reply_images FROM products WHERE id = ?", (product_id,))
+            row = cursor.fetchone()
+            if not row or not row[0]:
+                return jsonify({'error': 'Product not found or no uploaded images'}), 404
+
+            # 解析 JSON 数组
+            try:
+                uploaded_filenames = json.loads(row[0])
+            except:
+                return jsonify({'error': 'Invalid image data'}), 500
+
+            # 安全检查：验证文件名是否在列表中
+            if filename not in uploaded_filenames:
+                return jsonify({'error': 'Image not found'}), 404
+
+        # 构建文件路径
+        import os
+        image_path = os.path.join('data', 'custom_reply_images', str(product_id), filename)
+
+        # 安全检查并返回文件
+        from flask import send_file
+        if not os.path.exists(image_path):
+            return jsonify({'error': 'Image file missing'}), 404
+        return send_file(image_path, mimetype='image/jpeg')
+    except Exception as e:
+        logger.error(f"serve_custom_reply_image 失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 def verify_discord_token(token):
@@ -19197,58 +19481,63 @@ def search_similar_text():
             return jsonify({'error': 'Invalid request body'}), 400
 
         query = data.get('query', '').strip()
-        limit = min(int(data.get('limit', 5)), 20)  # 最多20个结果
+        limit = min(int(data.get('limit', 5)), 20)
 
         if not query:
             return jsonify({'error': 'Query is required'}), 400
 
         logger.info(f'文字搜索请求: "{query}", 限制: {limit}')
 
-        # 在数据库中搜索包含关键词的商品
         with db.get_connection() as conn:
             cursor = conn.cursor()
-
-            # 使用 LOWER() 实现大小写不敏感搜索
-            # 同时检查 english_title 中是否包含搜索词（支持逗号分隔的多关键词）
-            # 例如：english_title = "DR Top,B30"，搜索 "b30" 或 "dr top" 都能匹配
             query_lower = query.lower()
 
+            # =======================================================
+            # 修复: 移除 `AND ruleEnabled = 1`
+            # 即使规则被禁用(用于自定义回复)，也必须能被搜出来，
+            # 否则机器人永远找不到这个商品，也就无法发送自定义回复。
+            # =======================================================
             cursor.execute("""
                 SELECT id, product_url, title, english_title, description,
                        ruleEnabled, min_delay, max_delay, created_at,
-                       cnfans_url
+                       cnfans_url, shop_name, custom_reply_text,
+                       custom_reply_images, custom_image_urls, image_source,
+                       uploaded_reply_images
                 FROM products
-                WHERE LOWER(english_title) LIKE ?
-                  AND ruleEnabled = 1
+                WHERE (LOWER(english_title) LIKE ? OR LOWER(title) LIKE ?)
                 ORDER BY created_at DESC
                 LIMIT ?
-            """, (f'%{query_lower}%', limit))
+            """, (f'%{query_lower}%', f'%{query_lower}%', limit))
 
             rows = cursor.fetchall()
 
             products = []
             for row in rows:
                 prod = dict(row)
-                # 获取图片
-                cursor.execute("SELECT image_path FROM product_images WHERE product_id = ? ORDER BY image_index LIMIT 1", (prod['id'],))
+                # 简单获取第一张图作为预览
+                cursor.execute("SELECT image_index FROM product_images WHERE product_id = ? ORDER BY image_index LIMIT 1", (prod['id'],))
                 img_row = cursor.fetchone()
+                # 构造符合 Bot 逻辑的 image 路径
                 if img_row:
-                    prod['image'] = f"/api/image/{prod['id']}/0"
+                    prod['images'] = [f"/api/image/{prod['id']}/{img_row[0]}"]
                 else:
-                    prod['image'] = None
+                    prod['images'] = []
 
-                # 格式化字段
+                # 补充 Bot 需要的字段
                 prod['weidianUrl'] = prod.get('product_url')
-                prod['englishTitle'] = prod.get('english_title') or ''
-                prod['cnfansUrl'] = prod.get('cnfans_url') or ''
-                prod['autoReplyEnabled'] = prod.get('ruleEnabled', True)
-                # 从URL中提取weidian ID
+                prod['autoReplyEnabled'] = bool(prod.get('ruleEnabled', True))
+
+                # 解析 JSON 字段供 Bot 使用
                 try:
-                    import re
-                    m = re.search(r'itemID=(\d+)', prod.get('product_url') or '')
-                    prod['weidianId'] = m.group(1) if m else ''
+                    if prod.get('custom_reply_images'):
+                        prod['selectedImageIndexes'] = json.loads(prod['custom_reply_images'])
+                    if prod.get('custom_image_urls'):
+                        prod['customImageUrls'] = json.loads(prod['custom_image_urls'])
+                    # 解析上传的自定义回复图片
+                    if prod.get('uploaded_reply_images'):
+                        prod['uploaded_reply_images'] = json.loads(prod['uploaded_reply_images'])
                 except:
-                    prod['weidianId'] = ''
+                    pass
 
                 products.append(prod)
 
