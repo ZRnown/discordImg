@@ -1787,53 +1787,82 @@ def update_product():
 
         return False
 
-    def get_full_product_data(product_id):
-        """获取完整的商品数据，包括所有前端需要的字段"""
-        product = db.get_product_by_id(int(product_id))
+    def get_full_product_data(pid):
+        """获取并格式化完整的商品数据，用于前端状态更新"""
+        product = db._get_product_info_by_id(pid)
         if not product:
             return None
 
-        # 获取商品图片
-        images = db.get_product_images(int(product_id))
+        # 获取所有图片
+        images_data = db.get_product_images(pid)
+        # 按索引排序并生成URL
+        sorted_images = sorted(images_data, key=lambda x: x['image_index'])
+        image_urls = [f"/api/image/{pid}/{img['image_index']}" for img in sorted_images]
 
-        # 构建完整的商品对象
-        full_product = {
-            'id': product.get('id'),
+        # 格式化字段以匹配前端需求 (CamelCase)
+        weidian_id = ''
+        try:
+            if 'itemID=' in product.get('product_url', ''):
+                weidian_id = product.get('product_url', '').split('itemID=')[1]
+            elif product.get('item_id'):
+                weidian_id = product.get('item_id')
+        except:
+            pass
+
+        # 解析自定义图片URL和索引
+        selected_indexes = []
+        custom_urls = []
+        try:
+            if product.get('custom_reply_images'):
+                selected_indexes = json.loads(product.get('custom_reply_images'))
+            if product.get('custom_image_urls'):
+                custom_urls = json.loads(product.get('custom_image_urls'))
+        except:
+            pass
+
+        # 关键：必须返回前端需要的每一个字段，否则前端会变白
+        return {
+            'id': product['id'],
             'title': product.get('title', ''),
             'englishTitle': product.get('english_title', ''),
-            'description': product.get('description', ''),
-            'price': product.get('price', ''),
             'weidianUrl': product.get('product_url', ''),
             'cnfansUrl': product.get('cnfans_url', ''),
-            'shopName': product.get('shop_name', ''),
-            'ruleEnabled': product.get('ruleEnabled', False),
+            'acbuyUrl': product.get('acbuy_url', ''),
+            'shopName': product.get('shop_name', '未知店铺'),
+            'description': product.get('description', ''),
+
+            # 规则相关
+            'ruleEnabled': bool(product.get('ruleEnabled', True)),
             'customReplyText': product.get('custom_reply_text', ''),
-            'customReplyImages': product.get('custom_reply_images', []),
-            'customImageUrls': product.get('custom_image_urls', []),
             'imageSource': product.get('image_source', 'product'),
-            'imageCount': len(images),
-            'createdAt': product.get('created_at', ''),
+
+            # 图片相关
+            'selectedImageIndexes': selected_indexes,
+            'customImageUrls': custom_urls,
+            'images': image_urls, # 包含所有图片（含新上传的）
+            'uploadedImages': [], # 前端重置用
+
+            'weidianId': weidian_id,
+            'createdAt': product.get('created_at')
         }
 
-        return full_product
-
-    # 检查是否是multipart/form-data（包含文件上传）
+    # ---------------------------------------------------------
+    # 场景 A: 包含文件上传 (Multipart)
+    # ---------------------------------------------------------
     if request.content_type and 'multipart/form-data' in request.content_type:
-        # 处理文件上传
         product_id = request.form.get('id')
         if not product_id:
             return jsonify({'error': '商品ID不能为空'}), 400
 
         try:
-            # 检查权限
-            if not check_permission(product_id):
+            pid_int = int(product_id)
+            if not check_permission(pid_int):
                 return jsonify({'error': '无权限更新此商品'}), 403
 
-            # 处理上传的图片文件
-            uploaded_files = []
+            # 1. 处理图片上传
             if 'uploadedImages' in request.files:
-                # 获取当前商品已有的图片，找到最大索引
-                existing_images = db.get_product_images(int(product_id))
+                # 获取当前最大索引
+                existing_images = db.get_product_images(pid_int)
                 if existing_images:
                     max_index = max(img['image_index'] for img in existing_images)
                     next_index = max_index + 1
@@ -1843,24 +1872,12 @@ def update_product():
                 files = request.files.getlist('uploadedImages')
                 for file in files:
                     if file and file.filename:
-                        # 保存文件到商品图片目录
-                        import uuid
-                        import os
-                        filename = f"{uuid.uuid4()}_{file.filename}"
-                        image_path = os.path.join('data', 'images', str(product_id), filename)
-
-                        # 确保目录存在
-                        os.makedirs(os.path.dirname(image_path), exist_ok=True)
-
-                        # 保存文件
-                        file.save(image_path)
-
-                        # 添加到数据库（使用正确的方法名和参数）
-                        db.insert_image_record(int(product_id), image_path, next_index)
-                        uploaded_files.append(filename)
+                        # 核心修复：调用 process_and_save_image_core
+                        # 这样会同时写入硬盘、Database 和 FAISS
+                        process_and_save_image_core(pid_int, file, next_index, save_faiss_immediately=True)
                         next_index += 1
 
-            # 构建更新数据
+            # 2. 构建更新数据
             updates = {}
             for key in ['title', 'englishTitle', 'ruleEnabled', 'customReplyText', 'imageSource']:
                 value = request.form.get(key)
@@ -1868,7 +1885,11 @@ def update_product():
                     if key == 'englishTitle':
                         updates['english_title'] = value
                     elif key == 'ruleEnabled':
-                        updates['ruleEnabled'] = value.lower() == 'true'
+                        # 兼容字符串 'true'/'false' 和 '1'/'0'
+                        if str(value).lower() in ['true', '1']:
+                            updates['ruleEnabled'] = 1
+                        else:
+                            updates['ruleEnabled'] = 0
                     elif key == 'customReplyText':
                         updates['custom_reply_text'] = value
                     elif key == 'imageSource':
@@ -1876,88 +1897,62 @@ def update_product():
                     else:
                         updates[key] = value
 
-            # 处理数组数据
+            # 3. 处理数组数据 (JSON)
             if 'selectedImageIndexes' in request.form:
-                import json
-                try:
-                    updates['custom_reply_images'] = json.loads(request.form.get('selectedImageIndexes'))
-                except:
-                    pass
+                updates['custom_reply_images'] = request.form.get('selectedImageIndexes') # 已经是JSON字符串
 
             if 'customImageUrls' in request.form:
-                try:
-                    updates['custom_image_urls'] = json.loads(request.form.get('customImageUrls'))
-                except:
-                    pass
+                updates['custom_image_urls'] = request.form.get('customImageUrls') # 已经是JSON字符串
 
-            # 执行更新
+            # 4. 执行更新
             if updates:
-                success = db.update_product(int(product_id), updates)
-                if success:
-                    # 返回完整的商品数据
-                    full_product = get_full_product_data(product_id)
-                    if full_product:
-                        return jsonify({'message': '商品更新成功', 'product': full_product})
-                    else:
-                        return jsonify({'error': '获取更新后的商品数据失败'}), 500
-                else:
-                    return jsonify({'error': '更新失败'}), 500
-            else:
-                # 即使没有更新字段，也返回完整的商品数据（可能只是上传了图片）
-                full_product = get_full_product_data(product_id)
-                if full_product:
-                    return jsonify({'message': '商品更新成功', 'product': full_product})
-                else:
-                    return jsonify({'error': '获取商品数据失败'}), 500
+                db.update_product(pid_int, updates)
+
+            # 5. 返回完整数据 (解决闪烁问题)
+            full_product = get_full_product_data(pid_int)
+            return jsonify({'message': '商品更新成功', 'product': full_product})
 
         except Exception as e:
             logger.error(f"更新商品失败: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return jsonify({'error': '更新失败'}), 500
+    # ---------------------------------------------------------
+    # 场景 B: 仅 JSON 数据更新
+    # ---------------------------------------------------------
     else:
-        # 处理JSON数据（原有逻辑）
         data = request.get_json()
-
         if not data or not data.get('id'):
             return jsonify({'error': '商品ID不能为空'}), 400
 
         product_id = data['id']
 
         try:
-            # 检查权限
             if not check_permission(product_id):
                 return jsonify({'error': '无权限更新此商品'}), 403
 
-            # 构建更新数据
             updates = {}
             if 'title' in data:
                 updates['title'] = data['title']
             if 'englishTitle' in data:
                 updates['english_title'] = data['englishTitle']
             if 'ruleEnabled' in data:
-                updates['ruleEnabled'] = data['ruleEnabled']
+                updates['ruleEnabled'] = 1 if data['ruleEnabled'] else 0
             if 'customReplyText' in data:
                 updates['custom_reply_text'] = data['customReplyText']
             if 'selectedImageIndexes' in data:
-                updates['custom_reply_images'] = data['selectedImageIndexes']
+                updates['custom_reply_images'] = json.dumps(data['selectedImageIndexes'])
             if 'customImageUrls' in data:
-                updates['custom_image_urls'] = data['customImageUrls']
+                updates['custom_image_urls'] = json.dumps(data['customImageUrls'])
             if 'imageSource' in data:
                 updates['image_source'] = data['imageSource']
 
-            # 执行更新
             if updates:
-                success = db.update_product(product_id, updates)
-                if success:
-                    # 返回完整的商品数据
-                    full_product = get_full_product_data(product_id)
-                    if full_product:
-                        return jsonify({'message': '商品更新成功', 'product': full_product})
-                    else:
-                        return jsonify({'error': '获取更新后的商品数据失败'}), 500
-                else:
-                    return jsonify({'error': '更新失败'}), 500
-            else:
-                return jsonify({'error': '没有要更新的字段'}), 400
+                db.update_product(product_id, updates)
+
+            # 返回完整数据
+            full_product = get_full_product_data(product_id)
+            return jsonify({'message': '商品更新成功', 'product': full_product})
 
         except Exception as e:
             logger.error(f"更新商品失败: {e}")
@@ -3256,58 +3251,59 @@ def search_similar_text():
             return jsonify({'error': 'Invalid request body'}), 400
 
         query = data.get('query', '').strip()
-        limit = min(int(data.get('limit', 5)), 20)  # 最多20个结果
+        limit = min(int(data.get('limit', 5)), 20)
 
         if not query:
             return jsonify({'error': 'Query is required'}), 400
 
         logger.info(f'文字搜索请求: "{query}", 限制: {limit}')
 
-        # 在数据库中搜索包含关键词的商品
         with db.get_connection() as conn:
             cursor = conn.cursor()
-
-            # 使用 LOWER() 实现大小写不敏感搜索
-            # 同时检查 english_title 中是否包含搜索词（支持逗号分隔的多关键词）
-            # 例如：english_title = "DR Top,B30"，搜索 "b30" 或 "dr top" 都能匹配
             query_lower = query.lower()
 
+            # =======================================================
+            # 修复: 移除 `AND ruleEnabled = 1`
+            # 即使规则被禁用(用于自定义回复)，也必须能被搜出来，
+            # 否则机器人永远找不到这个商品，也就无法发送自定义回复。
+            # =======================================================
             cursor.execute("""
                 SELECT id, product_url, title, english_title, description,
                        ruleEnabled, min_delay, max_delay, created_at,
-                       cnfans_url
+                       cnfans_url, shop_name, custom_reply_text,
+                       custom_reply_images, custom_image_urls, image_source
                 FROM products
-                WHERE LOWER(english_title) LIKE ?
-                  AND ruleEnabled = 1
+                WHERE (LOWER(english_title) LIKE ? OR LOWER(title) LIKE ?)
                 ORDER BY created_at DESC
                 LIMIT ?
-            """, (f'%{query_lower}%', limit))
+            """, (f'%{query_lower}%', f'%{query_lower}%', limit))
 
             rows = cursor.fetchall()
 
             products = []
             for row in rows:
                 prod = dict(row)
-                # 获取图片
-                cursor.execute("SELECT image_path FROM product_images WHERE product_id = ? ORDER BY image_index LIMIT 1", (prod['id'],))
+                # 简单获取第一张图作为预览
+                cursor.execute("SELECT image_index FROM product_images WHERE product_id = ? ORDER BY image_index LIMIT 1", (prod['id'],))
                 img_row = cursor.fetchone()
+                # 构造符合 Bot 逻辑的 image 路径
                 if img_row:
-                    prod['image'] = f"/api/image/{prod['id']}/0"
+                    prod['images'] = [f"/api/image/{prod['id']}/{img_row[0]}"]
                 else:
-                    prod['image'] = None
+                    prod['images'] = []
 
-                # 格式化字段
+                # 补充 Bot 需要的字段
                 prod['weidianUrl'] = prod.get('product_url')
-                prod['englishTitle'] = prod.get('english_title') or ''
-                prod['cnfansUrl'] = prod.get('cnfans_url') or ''
-                prod['autoReplyEnabled'] = prod.get('ruleEnabled', True)
-                # 从URL中提取weidian ID
+                prod['autoReplyEnabled'] = bool(prod.get('ruleEnabled', True))
+
+                # 解析 JSON 字段供 Bot 使用
                 try:
-                    import re
-                    m = re.search(r'itemID=(\d+)', prod.get('product_url') or '')
-                    prod['weidianId'] = m.group(1) if m else ''
+                    if prod.get('custom_reply_images'):
+                        prod['selectedImageIndexes'] = json.loads(prod['custom_reply_images'])
+                    if prod.get('custom_image_urls'):
+                        prod['customImageUrls'] = json.loads(prod['custom_image_urls'])
                 except:
-                    prod['weidianId'] = ''
+                    pass
 
                 products.append(prod)
 

@@ -14718,7 +14718,7 @@ class DiscordBotClient(discord.Client):
                 }
 
                 # 调用后端搜索API
-                async with session.post(f'{config.BACKEND_API_URL}/search_similar_text',
+                async with session.post(f'{config.BACKEND_API_URL}/api/search_similar_text',
                                       json=search_data) as resp:
                     if resp.status == 200:
                         result = await resp.json()
@@ -17728,6 +17728,36 @@ def update_product():
 
         return False
 
+    def get_full_product_data(product_id):
+        """获取完整的商品数据，包括所有前端需要的字段"""
+        product = db.get_product_by_id(int(product_id))
+        if not product:
+            return None
+
+        # 获取商品图片
+        images = db.get_product_images(int(product_id))
+
+        # 构建完整的商品对象
+        full_product = {
+            'id': product.get('id'),
+            'title': product.get('title', ''),
+            'englishTitle': product.get('english_title', ''),
+            'description': product.get('description', ''),
+            'price': product.get('price', ''),
+            'weidianUrl': product.get('product_url', ''),
+            'cnfansUrl': product.get('cnfans_url', ''),
+            'shopName': product.get('shop_name', ''),
+            'ruleEnabled': product.get('ruleEnabled', False),
+            'customReplyText': product.get('custom_reply_text', ''),
+            'customReplyImages': product.get('custom_reply_images', []),
+            'customImageUrls': product.get('custom_image_urls', []),
+            'imageSource': product.get('image_source', 'product'),
+            'imageCount': len(images),
+            'createdAt': product.get('created_at', ''),
+        }
+
+        return full_product
+
     # 检查是否是multipart/form-data（包含文件上传）
     if request.content_type and 'multipart/form-data' in request.content_type:
         # 处理文件上传
@@ -17805,12 +17835,21 @@ def update_product():
             if updates:
                 success = db.update_product(int(product_id), updates)
                 if success:
-                    updated_product = db.get_product_by_id(int(product_id))
-                    return jsonify({'message': '商品更新成功', 'product': updated_product})
+                    # 返回完整的商品数据
+                    full_product = get_full_product_data(product_id)
+                    if full_product:
+                        return jsonify({'message': '商品更新成功', 'product': full_product})
+                    else:
+                        return jsonify({'error': '获取更新后的商品数据失败'}), 500
                 else:
                     return jsonify({'error': '更新失败'}), 500
             else:
-                return jsonify({'error': '没有要更新的字段'}), 400
+                # 即使没有更新字段，也返回完整的商品数据（可能只是上传了图片）
+                full_product = get_full_product_data(product_id)
+                if full_product:
+                    return jsonify({'message': '商品更新成功', 'product': full_product})
+                else:
+                    return jsonify({'error': '获取商品数据失败'}), 500
 
         except Exception as e:
             logger.error(f"更新商品失败: {e}")
@@ -17850,8 +17889,12 @@ def update_product():
             if updates:
                 success = db.update_product(product_id, updates)
                 if success:
-                    updated_product = db.get_product_by_id(product_id)
-                    return jsonify({'message': '商品更新成功', 'product': updated_product})
+                    # 返回完整的商品数据
+                    full_product = get_full_product_data(product_id)
+                    if full_product:
+                        return jsonify({'message': '商品更新成功', 'product': full_product})
+                    else:
+                        return jsonify({'error': '获取更新后的商品数据失败'}), 500
                 else:
                     return jsonify({'error': '更新失败'}), 500
             else:

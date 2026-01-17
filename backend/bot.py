@@ -378,11 +378,13 @@ class DiscordBotClient(discord.Client):
                         # 不要使用 message.reply()，因为 message 绑定的是监听者(Listener)客户端
                         # 必须用 target_channel.send(..., reference=message) 才会使用 target_client(Sender) 的 token
                         try:
-                            await target_channel.send(
-                                response_content,
-                                reference=message,
-                                mention_author=True
-                            )
+                            # === 1. 发送文字消息 ===
+                            if response_content:
+                                await target_channel.send(
+                                    response_content,
+                                    reference=message,
+                                    mention_author=True
+                                )
 
                             if hasattr(target_client, 'account_id') and target_client.account_id:
                                 set_account_cooldown(target_client.account_id, message.channel.id)
@@ -391,9 +393,82 @@ class DiscordBotClient(discord.Client):
                                 f"✅ [回复成功] 真实发送账号: {target_client.user.name} (ID: {target_client.account_id}) | 商品ID: {product.get('id')}"
                             )
 
+                            # === 2. 如果是自定义模式，且有图片，也由该账号发送 ===
+                            # 检查是否是自定义回复且禁用了规则
+                            is_custom_mode = custom_reply and (
+                                custom_reply.get('reply_type') == 'custom_only' or
+                                custom_reply.get('reply_type') == 'text'
+                            )
+
+                            if is_custom_mode:
+                                # 获取图片信息
+                                # 注意：如果是从 search_similar_text 返回的 product，字段名可能已经格式化
+                                # 需要兼容处理
+
+                                # 1. 尝试获取自定义图片链接
+                                custom_urls = product.get('customImageUrls', []) or product.get('custom_image_urls', [])
+                                if isinstance(custom_urls, str):
+                                    try:
+                                        custom_urls = json.loads(custom_urls)
+                                    except:
+                                        custom_urls = []
+
+                                image_source = product.get('imageSource', 'product') or product.get('image_source', 'product')
+
+                                # 发送图片逻辑
+                                if image_source == 'custom' and custom_urls:
+                                    for url in custom_urls[:9]:  # 限制数量
+                                        try:
+                                            async with aiohttp.ClientSession() as session:
+                                                async with session.get(url) as resp:
+                                                    if resp.status == 200:
+                                                        data = await resp.read()
+                                                        filename = url.split('/')[-1] or 'image.jpg'
+                                                        await target_channel.send(
+                                                            file=discord.File(io.BytesIO(data), filename),
+                                                            reference=message
+                                                        )
+                                        except Exception as e:
+                                            logger.error(f"发送自定义图片失败: {e}")
+
+                                elif image_source == 'upload' or image_source == 'product':
+                                    # 处理本地/商品图片
+                                    # 这里需要 product_id 来查库获取路径
+                                    pid = product.get('id')
+                                    indexes = product.get('selectedImageIndexes', []) or product.get('custom_reply_images', [])
+
+                                    if isinstance(indexes, str):
+                                        try:
+                                            indexes = json.loads(indexes)
+                                        except:
+                                            indexes = []
+
+                                    # 如果是 'upload' 模式且没有选具体索引，通常意味着发送所有上传的图
+                                    # 但简化起见，我们依赖于 selectedImageIndexes 字段存储了上传图片的索引
+
+                                    if pid and indexes:
+                                        # 需要查询数据库获取路径，但这在异步函数里不方便直接调同步DB
+                                        # 可以在 bot.py 头部 import sqlite3 手动查，或者调用 API
+                                        # 简单起见，我们调用本地 API 获取图片流
+
+                                        for idx in indexes:
+                                            img_url = f"{config.BACKEND_API_URL}/api/image/{pid}/{idx}"
+                                            try:
+                                                async with aiohttp.ClientSession() as session:
+                                                    async with session.get(img_url) as resp:
+                                                        if resp.status == 200:
+                                                            data = await resp.read()
+                                                            await target_channel.send(
+                                                                file=discord.File(io.BytesIO(data), f"{pid}_{idx}.jpg"),
+                                                                reference=message
+                                                            )
+                                            except:
+                                                pass
+
                         except Exception as reply_error:
                             logger.warning(f"回复失败，尝试直接发送: {reply_error}")
-                            await target_channel.send(response_content)
+                            if response_content:
+                                await target_channel.send(response_content)
 
                             if hasattr(target_client, 'account_id') and target_client.account_id:
                                 set_account_cooldown(target_client.account_id, message.channel.id)
@@ -929,18 +1004,29 @@ class DiscordBotClient(discord.Client):
                     logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过关键词回复")
                     return
 
-                # 构建自定义回复对象（如果有自定义文本）
+                # === 关键修复逻辑 ===
+                # 检查规则是否启用
+                # 注意：后端API返回的 autoReplyEnabled 即 ruleEnabled
+                rule_enabled = product.get('autoReplyEnabled', True)
+
                 custom_reply = None
-                custom_text = product.get('custom_reply_text', '').strip()
-                if custom_text:
+
+                if not rule_enabled:
+                    # 如果规则禁用了，说明要用自定义回复
+                    # 构造 custom_reply 对象供 schedule_reply 使用
+                    custom_text = product.get('custom_reply_text', '').strip()
+
+                    # 即使没有文本，只要是要发图片，也需要传递 custom_reply 信号
+                    # schedule_reply 会进一步处理图片逻辑
                     custom_reply = {
-                        'reply_type': 'text_and_link',
-                        'content': custom_text
+                        'reply_type': 'text' if custom_text else 'custom_only', # custom_only 表示不发默认链接
+                        'content': custom_text,
+                        # 传递图片信息供 schedule_reply 内部处理
+                        'product_data': product
                     }
+                    logger.info(f"商品 {product['id']} 规则已禁用，准备发送自定义回复")
 
-                logger.info(f'关键词搜索完成，找到 {len(products)} 个商品')
-
-                # 使用 schedule_reply 来处理回复（包含冷却检查和账号轮换）
+                # 使用 schedule_reply 统一发送
                 await self.schedule_reply(message, product, custom_reply)
             else:
                 # 没有找到商品，不回复任何消息
