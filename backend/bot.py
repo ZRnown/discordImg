@@ -923,32 +923,19 @@ class DiscordBotClient(discord.Client):
                     logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过关键词回复")
                     return
 
-                # 检查商品是否有自定义回复文本
+                # 构建自定义回复对象（如果有自定义文本）
+                custom_reply = None
                 custom_text = product.get('custom_reply_text', '').strip()
-
-                # 根据频道决定发送哪个链接
-                response = get_response_url_for_channel(product, message.channel.id, self.user_id)
-
-                # 如果有自定义文本，组合自定义文本和链接
                 if custom_text:
-                    response = f"{custom_text}\n{response}".strip()
+                    custom_reply = {
+                        'reply_type': 'text_and_link',
+                        'content': custom_text
+                    }
 
                 logger.info(f'关键词搜索完成，找到 {len(products)} 个商品')
 
-                # 模拟打字状态并延迟回复
-                async with message.channel.typing():
-                    # 检查是否设置了全局延迟（只要有一个值不为默认值3.0，就认为已设置）
-                    if abs(config.GLOBAL_REPLY_MIN_DELAY - 3.0) > 0.01 or abs(config.GLOBAL_REPLY_MAX_DELAY - 8.0) > 0.01:
-                        delay = random.uniform(config.GLOBAL_REPLY_MIN_DELAY, config.GLOBAL_REPLY_MAX_DELAY)
-                        logger.info(f"模拟打字并延迟回复 {delay:.2f} 秒...")
-                        await asyncio.sleep(delay)
-                    else:
-                        # 如果没有设置延迟，至少模拟1-3秒的打字时间
-                        delay = random.uniform(1.0, 3.0)
-                        logger.info(f"模拟打字 {delay:.2f} 秒...")
-                        await asyncio.sleep(delay)
-
-                await message.reply(response)
+                # 使用 schedule_reply 来处理回复（包含冷却检查和账号轮换）
+                await self.schedule_reply(message, product, custom_reply)
             else:
                 # 没有找到商品，不回复任何消息
                 logger.info(f'关键词搜索无结果: {search_query}')

@@ -2628,6 +2628,26 @@ def batch_delete_all_products():
         logger.error(f"全选删除失败: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/products/<int:product_id>', methods=['GET'])
+def get_product(product_id):
+    """获取单个商品的详细信息"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        product = db._get_product_info_by_id(product_id)
+        if not product:
+            return jsonify({'error': '商品不存在'}), 404
+
+        # 获取商品图片
+        images = db.get_product_images(product_id)
+        product['images'] = [f"/api/image/{product_id}/{img['image_index']}" for img in images]
+
+        return jsonify(product)
+    except Exception as e:
+        logger.error(f"获取商品失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/products/<int:product_id>', methods=['DELETE'])
 def delete_product(product_id):
     """删除商品及其所有相关数据"""
