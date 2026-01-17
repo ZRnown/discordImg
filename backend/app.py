@@ -2655,7 +2655,7 @@ def upload_product_image(product_id):
     try:
         # 获取现有特征用于查重
         existing_images = db.get_product_images(product_id)
-        existing_feats = [img['features'] for img in existing_images if img['features']]
+        existing_feats = [img['features'] for img in existing_images if img.get('features') is not None]
 
         # 获取下一个 index
         with db.get_connection() as conn:
@@ -4904,7 +4904,7 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
         return 0
 
     existing_images = db.get_product_images(product_id)
-    existing_feats = [img['features'] for img in existing_images if img['features']]
+    existing_feats = [img['features'] for img in existing_images if img.get('features') is not None]
 
     processed_count = 0
     vectors_to_add = []  # (db_id, features)
