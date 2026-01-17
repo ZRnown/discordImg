@@ -1035,9 +1035,14 @@ class DiscordBotClient(discord.Client):
                 # 检查是否配置了自定义图片
                 has_custom_images = False
                 image_source = product.get('imageSource') or product.get('image_source')
+
+                # 调试：显示关键字段
+                logger.info(f"[BOT] 商品{product.get('id')} image_source={image_source}, uploaded_reply_images={product.get('uploaded_reply_images')}")
+
                 if image_source == 'upload':
                     uploaded_imgs = product.get('uploaded_reply_images', [])
                     has_custom_images = bool(uploaded_imgs)
+                    logger.info(f"[BOT] 上传模式，图片数量: {len(uploaded_imgs) if uploaded_imgs else 0}")
                 elif image_source == 'custom':
                     custom_urls = product.get('customImageUrls', []) or product.get('custom_image_urls', [])
                     has_custom_images = bool(custom_urls)
