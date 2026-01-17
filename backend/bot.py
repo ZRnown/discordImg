@@ -431,9 +431,36 @@ class DiscordBotClient(discord.Client):
                                         except Exception as e:
                                             logger.error(f"发送自定义图片失败: {e}")
 
-                                elif image_source == 'upload' or image_source == 'product':
-                                    # 处理本地/商品图片
-                                    # 这里需要 product_id 来查库获取路径
+                                elif image_source == 'upload':
+                                    # 处理上传的自定义回复图片
+                                    pid = product.get('id')
+
+                                    # 从 uploaded_reply_images 字段获取上传的图片文件名列表
+                                    uploaded_filenames = product.get('uploaded_reply_images', [])
+                                    if isinstance(uploaded_filenames, str):
+                                        try:
+                                            uploaded_filenames = json.loads(uploaded_filenames)
+                                        except:
+                                            uploaded_filenames = []
+
+                                    if pid and uploaded_filenames:
+                                        # 使用新的API端点获取上传的自定义回复图片
+                                        for filename in uploaded_filenames:
+                                            img_url = f"{config.BACKEND_API_URL}/api/custom_reply_image/{pid}/{filename}"
+                                            try:
+                                                async with aiohttp.ClientSession() as session:
+                                                    async with session.get(img_url) as resp:
+                                                        if resp.status == 200:
+                                                            data = await resp.read()
+                                                            await target_channel.send(
+                                                                file=discord.File(io.BytesIO(data), filename),
+                                                                reference=message
+                                                            )
+                                            except Exception as e:
+                                                logger.error(f"发送上传的自定义回复图片失败: {e}")
+
+                                elif image_source == 'product':
+                                    # 处理商品图集中的图片
                                     pid = product.get('id')
                                     indexes = product.get('selectedImageIndexes', []) or product.get('custom_reply_images', [])
 
@@ -443,14 +470,8 @@ class DiscordBotClient(discord.Client):
                                         except:
                                             indexes = []
 
-                                    # 如果是 'upload' 模式且没有选具体索引，通常意味着发送所有上传的图
-                                    # 但简化起见，我们依赖于 selectedImageIndexes 字段存储了上传图片的索引
-
                                     if pid and indexes:
-                                        # 需要查询数据库获取路径，但这在异步函数里不方便直接调同步DB
-                                        # 可以在 bot.py 头部 import sqlite3 手动查，或者调用 API
-                                        # 简单起见，我们调用本地 API 获取图片流
-
+                                        # 使用原有的API端点获取商品图集中的图片
                                         for idx in indexes:
                                             img_url = f"{config.BACKEND_API_URL}/api/image/{pid}/{idx}"
                                             try:

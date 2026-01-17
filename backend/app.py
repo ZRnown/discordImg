@@ -1812,11 +1812,17 @@ def update_product():
         # 解析自定义图片URL和索引
         selected_indexes = []
         custom_urls = []
+        uploaded_reply_image_urls = []
         try:
             if product.get('custom_reply_images'):
                 selected_indexes = json.loads(product.get('custom_reply_images'))
             if product.get('custom_image_urls'):
                 custom_urls = json.loads(product.get('custom_image_urls'))
+            # 解析上传的自定义回复图片
+            if product.get('uploaded_reply_images'):
+                uploaded_filenames = json.loads(product.get('uploaded_reply_images'))
+                # 生成图片URL数组
+                uploaded_reply_image_urls = [f"/api/custom_reply_image/{pid}/{filename}" for filename in uploaded_filenames]
         except:
             pass
 
@@ -1839,8 +1845,8 @@ def update_product():
             # 图片相关
             'selectedImageIndexes': selected_indexes,
             'customImageUrls': custom_urls,
-            'images': image_urls, # 包含所有图片（含新上传的）
-            'uploadedImages': [], # 前端重置用
+            'images': image_urls, # 包含所有商品图片
+            'uploadedImages': uploaded_reply_image_urls, # 上传的自定义回复图片URL数组
 
             'weidianId': weidian_id,
             'createdAt': product.get('created_at')
@@ -1859,26 +1865,37 @@ def update_product():
             if not check_permission(pid_int):
                 return jsonify({'error': '无权限更新此商品'}), 403
 
-            # 1. 处理图片上传
+            # 1. 处理上传的自定义回复图片
+            # 注意：这些图片只用于自定义回复，不添加到商品图集和FAISS索引
+            uploaded_filenames = []
             if 'uploadedImages' in request.files:
-                # 获取当前最大索引
-                existing_images = db.get_product_images(pid_int)
-                if existing_images:
-                    max_index = max(img['image_index'] for img in existing_images)
-                    next_index = max_index + 1
-                else:
-                    next_index = 0
+                import uuid
+                import os
+
+                # 创建自定义回复图片目录
+                custom_reply_dir = os.path.join('data', 'custom_reply_images', str(pid_int))
+                os.makedirs(custom_reply_dir, exist_ok=True)
 
                 files = request.files.getlist('uploadedImages')
                 for file in files:
                     if file and file.filename:
-                        # 核心修复：调用 process_and_save_image_core
-                        # 这样会同时写入硬盘、Database 和 FAISS
-                        process_and_save_image_core(pid_int, file, next_index, save_faiss_immediately=True)
-                        next_index += 1
+                        # 生成唯一文件名
+                        filename = f"{uuid.uuid4()}_{file.filename}"
+                        file_path = os.path.join(custom_reply_dir, filename)
+
+                        # 保存文件（不添加到商品图集，不提取特征，不加入FAISS）
+                        file.save(file_path)
+                        uploaded_filenames.append(filename)
+
+                if uploaded_filenames:
+                    logger.info(f"保存了 {len(uploaded_filenames)} 张自定义回复图片到 {custom_reply_dir}")
 
             # 2. 构建更新数据
             updates = {}
+
+            # 如果上传了自定义回复图片，将文件名列表存储到数据库
+            if uploaded_filenames:
+                updates['uploaded_reply_images'] = json.dumps(uploaded_filenames)
             for key in ['title', 'englishTitle', 'ruleEnabled', 'customReplyText', 'imageSource']:
                 value = request.form.get(key)
                 if value is not None:
@@ -2139,6 +2156,42 @@ def serve_product_image(product_id: int, image_index: int):
         return send_file(image_path, mimetype='image/jpeg')
     except Exception as e:
         logger.error(f"serve_product_image 失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/custom_reply_image/<int:product_id>/<filename>', methods=['GET'])
+def serve_custom_reply_image(product_id: int, filename: str):
+    """返回指定商品的自定义回复图片文件"""
+    try:
+        # 从数据库读取 uploaded_reply_images 字段，验证文件名
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT uploaded_reply_images FROM products WHERE id = ?", (product_id,))
+            row = cursor.fetchone()
+            if not row or not row[0]:
+                return jsonify({'error': 'Product not found or no uploaded images'}), 404
+
+            # 解析 JSON 数组
+            try:
+                uploaded_filenames = json.loads(row[0])
+            except:
+                return jsonify({'error': 'Invalid image data'}), 500
+
+            # 安全检查：验证文件名是否在列表中
+            if filename not in uploaded_filenames:
+                return jsonify({'error': 'Image not found'}), 404
+
+        # 构建文件路径
+        import os
+        image_path = os.path.join('data', 'custom_reply_images', str(product_id), filename)
+
+        # 安全检查并返回文件
+        from flask import send_file
+        if not os.path.exists(image_path):
+            return jsonify({'error': 'Image file missing'}), 404
+        return send_file(image_path, mimetype='image/jpeg')
+    except Exception as e:
+        logger.error(f"serve_custom_reply_image 失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 def verify_discord_token(token):
