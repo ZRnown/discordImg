@@ -1801,6 +1801,9 @@ def update_product():
         if not product:
             return None
 
+        # 调试：显示从数据库读取的 uploaded_reply_images 原始值
+        logger.info(f"[DEBUG] 从数据库读取的 product.get('uploaded_reply_images') = {product.get('uploaded_reply_images')}")
+
         # 获取所有图片
         images_data = db.get_product_images(pid)
         # 按索引排序并生成URL
@@ -1919,12 +1922,17 @@ def update_product():
             if existing_filenames_to_keep:
                 logger.info(f"保留了 {len(existing_filenames_to_keep)} 张已有的自定义回复图片")
 
+            # 调试：显示将要写入数据库的文件名列表
+            logger.info(f"[DEBUG] all_uploaded_filenames = {all_uploaded_filenames}")
+
             # 2. 构建更新数据
             updates = {}
 
             # 如果有上传的自定义回复图片（已有的或新上传的），将文件名列表存储到数据库
             if all_uploaded_filenames:
-                updates['uploaded_reply_images'] = json.dumps(all_uploaded_filenames)
+                json_value = json.dumps(all_uploaded_filenames)
+                updates['uploaded_reply_images'] = json_value
+                logger.info(f"[DEBUG] 将写入数据库的 uploaded_reply_images = {json_value}")
             for key in ['title', 'englishTitle', 'ruleEnabled', 'customReplyText', 'imageSource']:
                 value = request.form.get(key)
                 if value is not None:

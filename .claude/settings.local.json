@@ -3,7 +3,8 @@
     "allow": [
       "Bash(python -c \"\nimport traceback\nimport sys\n\n# 尝试导入并测试\ntry:\n    from feature_extractor import DINOv2FeatureExtractor\n    import numpy as np\n    \n    # 创建一个测试数组\n    test_array = np.array\\([1.0, 2.0, 3.0], dtype=''float32''\\)\n    \n    # 测试可能导致问题的操作\n    norm = np.linalg.norm\\(test_array\\)\n    print\\(f''norm type: {type\\(norm\\)}''\\)\n    print\\(f''norm value: {norm}''\\)\n    \n    # 测试比较\n    if norm > 0:\n        print\\(''Comparison works''\\)\n    \nexcept Exception as e:\n    print\\(f''Error: {e}''\\)\n    traceback.print_exc\\(\\)\n\")",
       "Bash(ls -la /Users/wanghaixin/Development/DiscordBotWork/discord-marketing-system/frontend/app/api/products/[id]/)",
-      "Bash(find ../frontend/app/api -name *image* -type f)"
+      "Bash(find ../frontend/app/api -name *image* -type f)",
+      "Skill(planning-with-files)"
     ]
   }
 }
