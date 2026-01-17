@@ -192,7 +192,7 @@ class HTTPLogHandler(logging.Handler):
         """同步发送日志（作为fallback）"""
         try:
             import requests
-            response = requests.post('http://localhost:5001/api/logs/add',
+            response = requests.post(f'{config.BACKEND_API_URL}/logs/add',
                                    json=log_data, timeout=2, proxies={'http': None, 'https': None, 'all': None})
             if response.status_code != 200:
                 print(f"同步发送日志失败: {response.status_code}")
@@ -212,7 +212,7 @@ class HTTPLogHandler(logging.Handler):
 
                 try:
                     async with aiohttp.ClientSession(trust_env=False) as session:
-                        async with session.post('http://localhost:5001/api/logs/add',
+                        async with session.post(f'{config.BACKEND_API_URL}/logs/add',
                                               json=log_data, timeout=aiohttp.ClientTimeout(total=2)) as resp:
                             if resp.status != 200:
                                 print(f"发送日志失败: {resp.status}")
@@ -957,7 +957,7 @@ class DiscordBotClient(discord.Client):
                 }
 
                 # 调用后端搜索API
-                async with session.post('http://localhost:5001/api/search_similar_text',
+                async with session.post(f'{config.BACKEND_API_URL}/search_similar_text',
                                       json=search_data) as resp:
                     if resp.status == 200:
                         result = await resp.json()
@@ -1002,7 +1002,7 @@ class DiscordBotClient(discord.Client):
                     form_data.add_field('user_shops', json.dumps(user_shops))
 
                 # 调用 DINOv2 + FAISS 服务（本地）
-                async with session.post('http://localhost:5001/search_similar', data=form_data) as resp:
+                async with session.post(f'{config.BACKEND_API_URL.replace("/api", "")}/search_similar', data=form_data) as resp:
                     if resp.status == 200:
                         result = await resp.json()
                         return result

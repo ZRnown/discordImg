@@ -47,10 +47,12 @@ export function DashboardView({ currentUser }: { currentUser: any }) {
     fetchStats()
     fetchAnnouncements()
 
-    // 每10秒自动刷新统计数据
+    // 优化轮询频率：每30秒自动刷新统计数据（降低服务器负载）
     const statsInterval = setInterval(() => {
-      fetchStats()
-    }, 10000)
+      if (!document.hidden) { // 只在标签页可见时刷新
+        fetchStats()
+      }
+    }, 30000)
 
     return () => {
       clearInterval(statsInterval)

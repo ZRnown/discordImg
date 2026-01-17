@@ -205,15 +205,19 @@ export function AccountsView() {
     fetchMessageFilters();
     fetchCooldowns();
 
-    // 每3秒刷新一次账号状态（准实时）
+    // 优化轮询频率：每15秒刷新一次账号状态（降低服务器负载）
     const statusInterval = setInterval(() => {
-      fetchAccounts(true); // 强制刷新，清除缓存
-    }, 3000);
+      if (!document.hidden) { // 只在标签页可见时刷新
+        fetchAccounts(true); // 强制刷新，清除缓存
+      }
+    }, 15000);
 
-    // 每秒刷新一次冷却状态
+    // 优化轮询频率：每10秒刷新一次冷却状态（降低服务器负载）
     const cooldownInterval = setInterval(() => {
-      fetchCooldowns()
-    }, 1000)
+      if (!document.hidden) { // 只在标签页可见时刷新
+        fetchCooldowns()
+      }
+    }, 10000)
 
     const handleStatusChange = () => {
       fetchAccounts(true)

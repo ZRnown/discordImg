@@ -1849,50 +1849,50 @@ def update_product():
         # 处理JSON数据（原有逻辑）
         data = request.get_json()
 
-    if not data or not data.get('id'):
-        return jsonify({'error': '商品ID不能为空'}), 400
+        if not data or not data.get('id'):
+            return jsonify({'error': '商品ID不能为空'}), 400
 
-    product_id = data['id']
+        product_id = data['id']
 
-    try:
-        # 检查权限
-        if current_user['role'] != 'admin':
-            user_shops = current_user.get('shops', [])
-            product = db.get_product_by_id(product_id)
-            if not product or product.get('shop_name') not in user_shops:
-                return jsonify({'error': '无权限更新此商品'}), 403
+        try:
+            # 检查权限
+            if current_user['role'] != 'admin':
+                user_shops = current_user.get('shops', [])
+                product = db.get_product_by_id(product_id)
+                if not product or product.get('shop_name') not in user_shops:
+                    return jsonify({'error': '无权限更新此商品'}), 403
 
-        # 构建更新数据
-        updates = {}
-        if 'title' in data:
-            updates['title'] = data['title']
-        if 'englishTitle' in data:
-            updates['english_title'] = data['englishTitle']
-        if 'ruleEnabled' in data:
-            updates['ruleEnabled'] = data['ruleEnabled']
-        if 'customReplyText' in data:
-            updates['custom_reply_text'] = data['customReplyText']
-        if 'selectedImageIndexes' in data:
-            updates['custom_reply_images'] = data['selectedImageIndexes']
-        if 'customImageUrls' in data:
-            updates['custom_image_urls'] = data['customImageUrls']
-        if 'imageSource' in data:
-            updates['image_source'] = data['imageSource']
+            # 构建更新数据
+            updates = {}
+            if 'title' in data:
+                updates['title'] = data['title']
+            if 'englishTitle' in data:
+                updates['english_title'] = data['englishTitle']
+            if 'ruleEnabled' in data:
+                updates['ruleEnabled'] = data['ruleEnabled']
+            if 'customReplyText' in data:
+                updates['custom_reply_text'] = data['customReplyText']
+            if 'selectedImageIndexes' in data:
+                updates['custom_reply_images'] = data['selectedImageIndexes']
+            if 'customImageUrls' in data:
+                updates['custom_image_urls'] = data['customImageUrls']
+            if 'imageSource' in data:
+                updates['image_source'] = data['imageSource']
 
-        # 执行更新
-        if updates:
-            success = db.update_product(product_id, updates)
-            if success:
-                updated_product = db.get_product_by_id(product_id)
-                return jsonify({'message': '商品更新成功', 'product': updated_product})
+            # 执行更新
+            if updates:
+                success = db.update_product(product_id, updates)
+                if success:
+                    updated_product = db.get_product_by_id(product_id)
+                    return jsonify({'message': '商品更新成功', 'product': updated_product})
+                else:
+                    return jsonify({'error': '更新失败'}), 500
             else:
-                return jsonify({'error': '更新失败'}), 500
-        else:
-            return jsonify({'error': '没有要更新的字段'}), 400
+                return jsonify({'error': '没有要更新的字段'}), 400
 
-    except Exception as e:
-        logger.error(f"更新商品失败: {e}")
-        return jsonify({'error': '更新失败'}), 500
+        except Exception as e:
+            logger.error(f"更新商品失败: {e}")
+            return jsonify({'error': '更新失败'}), 500
 
 
 @app.route('/api/backfill_products', methods=['POST'])

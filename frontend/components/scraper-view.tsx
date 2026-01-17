@@ -1175,7 +1175,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                         }}
                                       >
                                         <img
-                                          src={`/api/products/${editingProduct.id}/images/${index}`}
+                                          src={`/api/image/${editingProduct.id}/${index}`}
                                           alt={`图片 ${index + 1}`}
                                           className="w-full h-20 object-cover"
                                         />
@@ -1283,7 +1283,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                         }}
                                       >
                                         <img
-                                          src={`/api/products/${editingProduct.id}/images/${index}`}
+                                          src={`/api/image/${editingProduct.id}/${index}`}
                                           alt={`图片 ${index + 1}`}
                                           className="w-full h-20 object-cover"
                                         />
