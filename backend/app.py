@@ -1802,9 +1802,13 @@ def update_product():
             # 处理上传的图片文件
             uploaded_files = []
             if 'uploadedImages' in request.files:
-                # 获取当前商品已有的图片数量，用于计算新图片的索引
+                # 获取当前商品已有的图片，找到最大索引
                 existing_images = db.get_product_images(int(product_id))
-                next_index = len(existing_images)
+                if existing_images:
+                    max_index = max(img['image_index'] for img in existing_images)
+                    next_index = max_index + 1
+                else:
+                    next_index = 0
 
                 files = request.files.getlist('uploadedImages')
                 for file in files:
