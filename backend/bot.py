@@ -1024,7 +1024,7 @@ async def get_all_accounts_from_backend():
     """从后端 API 获取所有可用的 Discord 账号"""
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get('http://127.0.0.1:5001/api/accounts') as resp:
+            async with session.get(f'{config.BACKEND_API_URL}/accounts') as resp:
                 if resp.status == 200:
                     result = await resp.json()
                     accounts = result.get('accounts', [])

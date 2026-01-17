@@ -37,13 +37,16 @@ export async function PUT(
     const body = await request.json()
     const cookieHeader = request.headers.get('cookie') || '';
 
-    const response = await fetch(`${BACKEND_URL}/api/products/${id}`, {
+    // 将ID添加到请求体中，因为后端期望ID在body中而不是URL中
+    const bodyWithId = { ...body, id: parseInt(id) }
+
+    const response = await fetch(`${BACKEND_URL}/api/products`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
         'Cookie': cookieHeader
       },
-      body: JSON.stringify(body)
+      body: JSON.stringify(bodyWithId)
     })
 
     if (!response.ok) {
