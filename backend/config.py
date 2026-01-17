@@ -39,7 +39,7 @@ class Config:
     FORWARD_TARGET_CHANNEL_ID = 0
 
     # === API 地址 ===
-    BACKEND_API_URL = 'http://127.0.0.1:5001'
+    BACKEND_API_URL = os.getenv('BACKEND_API_URL', 'http://127.0.0.1:5001')
     NEXTJS_API_URL = f'{BACKEND_API_URL}/api'
 
     # === 机器人 ===
