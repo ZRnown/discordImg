@@ -3324,7 +3324,8 @@ def search_similar_text():
                 SELECT id, product_url, title, english_title, description,
                        ruleEnabled, min_delay, max_delay, created_at,
                        cnfans_url, shop_name, custom_reply_text,
-                       custom_reply_images, custom_image_urls, image_source
+                       custom_reply_images, custom_image_urls, image_source,
+                       uploaded_reply_images
                 FROM products
                 WHERE (LOWER(english_title) LIKE ? OR LOWER(title) LIKE ?)
                 ORDER BY created_at DESC
@@ -3355,6 +3356,9 @@ def search_similar_text():
                         prod['selectedImageIndexes'] = json.loads(prod['custom_reply_images'])
                     if prod.get('custom_image_urls'):
                         prod['customImageUrls'] = json.loads(prod['custom_image_urls'])
+                    # 解析上传的自定义回复图片
+                    if prod.get('uploaded_reply_images'):
+                        prod['uploaded_reply_images'] = json.loads(prod['uploaded_reply_images'])
                 except:
                     pass
 
