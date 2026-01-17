@@ -1867,7 +1867,23 @@ def update_product():
 
             # 1. 处理上传的自定义回复图片
             # 注意：这些图片只用于自定义回复，不添加到商品图集和FAISS索引
-            uploaded_filenames = []
+
+            # 1.1 获取要保留的已有图片文件名列表（从前端传来）
+            existing_filenames_to_keep = []
+            if 'existingUploadedImageUrls' in request.form:
+                try:
+                    # 前端发送的是URL数组的JSON字符串，需要提取文件名
+                    existing_urls = json.loads(request.form.get('existingUploadedImageUrls'))
+                    for url in existing_urls:
+                        # URL格式: /api/custom_reply_image/{product_id}/{filename}
+                        # 提取最后一部分作为文件名
+                        filename = url.split('/')[-1]
+                        existing_filenames_to_keep.append(filename)
+                except:
+                    pass
+
+            # 1.2 处理新上传的文件
+            new_uploaded_filenames = []
             if 'uploadedImages' in request.files:
                 import uuid
                 import os
@@ -1885,17 +1901,22 @@ def update_product():
 
                         # 保存文件（不添加到商品图集，不提取特征，不加入FAISS）
                         file.save(file_path)
-                        uploaded_filenames.append(filename)
+                        new_uploaded_filenames.append(filename)
 
-                if uploaded_filenames:
-                    logger.info(f"保存了 {len(uploaded_filenames)} 张自定义回复图片到 {custom_reply_dir}")
+                if new_uploaded_filenames:
+                    logger.info(f"保存了 {len(new_uploaded_filenames)} 张新的自定义回复图片到 {custom_reply_dir}")
+
+            # 1.3 合并已有图片和新上传的图片
+            all_uploaded_filenames = existing_filenames_to_keep + new_uploaded_filenames
+            if existing_filenames_to_keep:
+                logger.info(f"保留了 {len(existing_filenames_to_keep)} 张已有的自定义回复图片")
 
             # 2. 构建更新数据
             updates = {}
 
-            # 如果上传了自定义回复图片，将文件名列表存储到数据库
-            if uploaded_filenames:
-                updates['uploaded_reply_images'] = json.dumps(uploaded_filenames)
+            # 如果有上传的自定义回复图片（已有的或新上传的），将文件名列表存储到数据库
+            if all_uploaded_filenames:
+                updates['uploaded_reply_images'] = json.dumps(all_uploaded_filenames)
             for key in ['title', 'englishTitle', 'ruleEnabled', 'customReplyText', 'imageSource']:
                 value = request.form.get(key)
                 if value is not None:

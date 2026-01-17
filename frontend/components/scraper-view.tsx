@@ -230,7 +230,8 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         selectedImageIndexes: product.selectedImageIndexes || [],
         customImageUrls: product.customImageUrls || product.custom_image_urls || [],
         imageSource: product.imageSource || product.image_source || (product.custom_image_urls ? 'custom' : 'upload'),
-        uploadedImages: product.uploadedImages || []
+        uploadedImages: [], // 新上传的File对象（用户刚选择的）
+        existingUploadedImageUrls: product.uploadedImages || [] // 已保存的图片URL（从后端加载）
       }))
 
       if (append) {
@@ -454,9 +455,12 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     try {
       let res;
 
-      // 检查是否有上传的图片文件
-      if (updatedProduct.uploadedImages && updatedProduct.uploadedImages.length > 0) {
-        // 使用FormData发送文件
+      // 检查是否有上传的图片文件或已保存的图片URL
+      const hasNewUploads = updatedProduct.uploadedImages && updatedProduct.uploadedImages.length > 0;
+      const hasExistingUploads = updatedProduct.existingUploadedImageUrls && updatedProduct.existingUploadedImageUrls.length > 0;
+
+      if (hasNewUploads || hasExistingUploads) {
+        // 使用FormData发送文件和已有图片信息
         const formData = new FormData();
 
         // 添加基本数据
@@ -475,10 +479,17 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
           formData.append('customImageUrls', JSON.stringify(updatedProduct.customImageUrls));
         }
 
-        // 添加上传的文件
-        updatedProduct.uploadedImages.forEach((file: File, index: number) => {
-          formData.append('uploadedImages', file);
-        });
+        // 添加要保留的已有上传图片URL列表
+        if (hasExistingUploads) {
+          formData.append('existingUploadedImageUrls', JSON.stringify(updatedProduct.existingUploadedImageUrls));
+        }
+
+        // 添加新上传的文件
+        if (hasNewUploads) {
+          updatedProduct.uploadedImages.forEach((file: File, index: number) => {
+            formData.append('uploadedImages', file);
+          });
+        }
 
         res = await fetch('/api/products', {
           method: 'PUT',
@@ -1140,6 +1151,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                             ...editingProduct,
                                             imageSource: 'product',
                                             uploadedImages: [],
+                                            existingUploadedImageUrls: [],
                                             customImageUrls: []
                                           });
                                         }}
@@ -1176,7 +1188,8 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                             ...editingProduct,
                                             imageSource: 'custom',
                                             selectedImageIndexes: [],
-                                            uploadedImages: []
+                                            uploadedImages: [],
+                                            existingUploadedImageUrls: []
                                           });
                                         }}
                                         className="w-4 h-4"
@@ -1261,18 +1274,48 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                       </Label>
                                     </div>
 
-                                    {editingProduct?.uploadedImages?.length > 0 && (
+                                    {/* 显示已保存的图片和新上传的图片 */}
+                                    {((editingProduct?.existingUploadedImageUrls?.length > 0) || (editingProduct?.uploadedImages?.length > 0)) && (
                                       <>
                                         <div className="grid grid-cols-3 md:grid-cols-4 gap-3 p-2 border rounded-md bg-white">
-                                          {editingProduct.uploadedImages.map((file: File, index: number) => (
-                                            <div key={`upload-${index}`} className="relative aspect-square rounded-md overflow-hidden border-2 border-green-500">
+                                          {/* 显示已保存的图片（URL） */}
+                                          {editingProduct?.existingUploadedImageUrls?.map((url: string, index: number) => (
+                                            <div key={`existing-${index}`} className="relative aspect-square rounded-md overflow-hidden border-2 border-blue-500">
+                                              <img
+                                                src={url}
+                                                alt="已保存图片"
+                                                className="w-full h-full object-cover"
+                                              />
+                                              <div className="absolute top-1 right-1 bg-blue-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">
+                                                ✓
+                                              </div>
+                                              <button
+                                                type="button"
+                                                className="absolute bottom-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center"
+                                                onClick={(e) => {
+                                                  e.stopPropagation();
+                                                  const newUrls = editingProduct.existingUploadedImageUrls.filter((_: any, i: number) => i !== index);
+                                                  setEditingProduct({
+                                                    ...editingProduct,
+                                                    existingUploadedImageUrls: newUrls
+                                                  });
+                                                }}
+                                              >
+                                                <X className="w-3 h-3"/>
+                                              </button>
+                                            </div>
+                                          ))}
+
+                                          {/* 显示新上传的图片（File对象） */}
+                                          {editingProduct?.uploadedImages?.map((file: File, index: number) => (
+                                            <div key={`new-${index}`} className="relative aspect-square rounded-md overflow-hidden border-2 border-green-500">
                                               <img
                                                 src={URL.createObjectURL(file)}
-                                                alt="上传图片"
+                                                alt="新上传图片"
                                                 className="w-full h-full object-cover"
                                               />
                                               <div className="absolute top-1 right-1 bg-green-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">
-                                                ✓
+                                                新
                                               </div>
                                               <button
                                                 type="button"
@@ -1292,7 +1335,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                           ))}
                                         </div>
                                         <p className="text-xs text-muted-foreground">
-                                          共 {editingProduct.uploadedImages.length} 张上传图片
+                                          已保存: {editingProduct?.existingUploadedImageUrls?.length || 0} 张 | 新上传: {editingProduct?.uploadedImages?.length || 0} 张
                                         </p>
                                       </>
                                     )}
