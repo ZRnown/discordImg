@@ -1802,6 +1802,10 @@ def update_product():
             # 处理上传的图片文件
             uploaded_files = []
             if 'uploadedImages' in request.files:
+                # 获取当前商品已有的图片数量，用于计算新图片的索引
+                existing_images = db.get_product_images(int(product_id))
+                next_index = len(existing_images)
+
                 files = request.files.getlist('uploadedImages')
                 for file in files:
                     if file and file.filename:
@@ -1817,9 +1821,10 @@ def update_product():
                         # 保存文件
                         file.save(image_path)
 
-                        # 添加到数据库
-                        db.add_product_image(int(product_id), filename)
+                        # 添加到数据库（使用正确的方法名和参数）
+                        db.insert_image_record(int(product_id), image_path, next_index)
                         uploaded_files.append(filename)
+                        next_index += 1
 
             # 构建更新数据
             updates = {}
