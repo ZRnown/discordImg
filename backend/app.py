@@ -1953,9 +1953,17 @@ def update_product():
             # 4. 执行更新
             if updates:
                 db.update_product(pid_int, updates)
+                logger.info(f"数据库更新完成，updates: {updates.keys()}")
 
             # 5. 返回完整数据 (解决闪烁问题)
             full_product = get_full_product_data(pid_int)
+
+            # 调试：记录返回的uploadedImages字段
+            if full_product and 'uploadedImages' in full_product:
+                logger.info(f"返回给前端的uploadedImages: {full_product['uploadedImages']}")
+            else:
+                logger.warning(f"返回的数据中没有uploadedImages字段！full_product keys: {full_product.keys() if full_product else 'None'}")
+
             return jsonify({'message': '商品更新成功', 'product': full_product})
 
         except Exception as e:
