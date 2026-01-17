@@ -1762,6 +1762,31 @@ def update_product():
 
     current_user = get_current_user()
 
+    # 提取公共权限检查逻辑
+    def check_permission(product_id):
+        """检查用户是否有权限更新指定商品"""
+        if current_user['role'] == 'admin':
+            return True
+
+        user_shop_ids = current_user.get('shops', [])
+        product = db.get_product_by_id(int(product_id))
+
+        if not product:
+            return False
+
+        # 将店铺ID转换为店铺名称进行对比
+        allowed_shop_names = []
+        for shop_id in user_shop_ids:
+            shop_info = db.get_shop_by_id(shop_id)
+            if shop_info:
+                allowed_shop_names.append(shop_info['name'])
+
+        # 对比商品所属店铺名是否在用户允许的店铺名列表中
+        if product.get('shop_name') in allowed_shop_names:
+            return True
+
+        return False
+
     # 检查是否是multipart/form-data（包含文件上传）
     if request.content_type and 'multipart/form-data' in request.content_type:
         # 处理文件上传
@@ -1771,13 +1796,8 @@ def update_product():
 
         try:
             # 检查权限
-            if current_user['role'] == 'admin':
-                pass
-            else:
-                user_shops = current_user.get('shops', [])
-                product = db.get_product_by_id(int(product_id))
-                if not product or product.get('shop_name') not in user_shops:
-                    return jsonify({'error': '无权限更新此商品'}), 403
+            if not check_permission(product_id):
+                return jsonify({'error': '无权限更新此商品'}), 403
 
             # 处理上传的图片文件
             uploaded_files = []
@@ -1856,11 +1876,8 @@ def update_product():
 
         try:
             # 检查权限
-            if current_user['role'] != 'admin':
-                user_shops = current_user.get('shops', [])
-                product = db.get_product_by_id(product_id)
-                if not product or product.get('shop_name') not in user_shops:
-                    return jsonify({'error': '无权限更新此商品'}), 403
+            if not check_permission(product_id):
+                return jsonify({'error': '无权限更新此商品'}), 403
 
             # 构建更新数据
             updates = {}

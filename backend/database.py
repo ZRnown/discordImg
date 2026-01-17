@@ -1274,7 +1274,8 @@ class Database:
                 params = []
                 allowed_fields = [
                     'title', 'english_title', 'ruleEnabled',
-                    'custom_reply_text', 'custom_reply_images', 'custom_image_urls'
+                    'custom_reply_text', 'custom_reply_images', 'custom_image_urls',
+                    'image_source'
                 ]
 
                 for field in allowed_fields:

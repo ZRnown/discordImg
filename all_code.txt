@@ -269,6 +269,32 @@ import { NextRequest, NextResponse } from 'next/server'
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001'
 
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params
+    const cookieHeader = request.headers.get('cookie') || '';
+
+    const response = await fetch(`${BACKEND_URL}/api/products/${id}`, {
+      method: 'GET',
+      headers: { 'Cookie': cookieHeader }
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      return NextResponse.json(errorData, { status: response.status })
+    }
+
+    const data = await response.json()
+    return NextResponse.json(data)
+  } catch (error: any) {
+    console.error('GET /api/products/[id] failed:', error)
+    return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+}
+
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -278,13 +304,16 @@ export async function PUT(
     const body = await request.json()
     const cookieHeader = request.headers.get('cookie') || '';
 
-    const response = await fetch(`${BACKEND_URL}/api/products/${id}`, {
+    // 将ID添加到请求体中，因为后端期望ID在body中而不是URL中
+    const bodyWithId = { ...body, id: parseInt(id) }
+
+    const response = await fetch(`${BACKEND_URL}/api/products`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
         'Cookie': cookieHeader
       },
-      body: JSON.stringify(body)
+      body: JSON.stringify(bodyWithId)
     })
 
     if (!response.ok) {
@@ -1725,8 +1754,7 @@ export async function GET(request: NextRequest) {
 --- File: ./frontend/app/api/logs/route.ts ---
 import { NextRequest, NextResponse } from 'next/server'
 
-// 强制使用内网回环地址，速度最快且最稳定
-const BACKEND_URL = 'http://127.0.0.1:5001'
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001'
 
 export async function GET(request: NextRequest) {
   try {
@@ -3158,15 +3186,19 @@ export function AccountsView() {
     fetchMessageFilters();
     fetchCooldowns();
 
-    // 每3秒刷新一次账号状态（准实时）
+    // 优化轮询频率：每15秒刷新一次账号状态（降低服务器负载）
     const statusInterval = setInterval(() => {
-      fetchAccounts(true); // 强制刷新，清除缓存
-    }, 3000);
+      if (!document.hidden) { // 只在标签页可见时刷新
+        fetchAccounts(true); // 强制刷新，清除缓存
+      }
+    }, 15000);
 
-    // 每秒刷新一次冷却状态
+    // 优化轮询频率：每10秒刷新一次冷却状态（降低服务器负载）
     const cooldownInterval = setInterval(() => {
-      fetchCooldowns()
-    }, 1000)
+      if (!document.hidden) { // 只在标签页可见时刷新
+        fetchCooldowns()
+      }
+    }, 10000)
 
     const handleStatusChange = () => {
       fetchAccounts(true)
@@ -4345,8 +4377,8 @@ export function AccountsView() {
                             className="w-20 h-7 text-xs"
                             disabled={!(rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))}
                             onChange={(e) => {
-                              const value = parseInt(e.target.value) || 180
-                              setRotationIntervals(prev => ({ ...prev, [website.id]: value }))
+                              const value = e.target.value
+                              setRotationInputs(prev => ({ ...prev, [website.id]: value }))
                             }}
                             onBlur={(e) => {
                               const value = parseInt(rotationInputs[website.id] ?? (website.rotation_interval ?? 180).toString())
@@ -4354,7 +4386,7 @@ export function AccountsView() {
                                 handleUpdateRotation(website.id, value)
                               } else if (value <= 0) {
                                 toast.error('轮换间隔必须大于0秒')
-                                setRotationIntervals(prev => ({ ...prev, [website.id]: website.rotation_interval ?? 180 }))
+                                setRotationInputs(prev => ({ ...prev, [website.id]: (website.rotation_interval ?? 180).toString() }))
                               }
                             }}
                           />
@@ -6371,7 +6403,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                         }}
                                       >
                                         <img
-                                          src={`/api/products/${editingProduct.id}/images/${index}`}
+                                          src={`/api/image/${editingProduct.id}/${index}`}
                                           alt={`图片 ${index + 1}`}
                                           className="w-full h-20 object-cover"
                                         />
@@ -6479,7 +6511,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                         }}
                                       >
                                         <img
-                                          src={`/api/products/${editingProduct.id}/images/${index}`}
+                                          src={`/api/image/${editingProduct.id}/${index}`}
                                           alt={`图片 ${index + 1}`}
                                           className="w-full h-20 object-cover"
                                         />
@@ -7164,7 +7196,18 @@ export function DashboardView({ currentUser }: { currentUser: any }) {
 
   useEffect(() => {
     fetchStats()
-      fetchAnnouncements()
+    fetchAnnouncements()
+
+    // 优化轮询频率：每30秒自动刷新统计数据（降低服务器负载）
+    const statsInterval = setInterval(() => {
+      if (!document.hidden) { // 只在标签页可见时刷新
+        fetchStats()
+      }
+    }, 30000)
+
+    return () => {
+      clearInterval(statsInterval)
+    }
   }, [currentUser])
 
   const fetchStats = async () => {
@@ -7451,6 +7494,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
 import { toast } from "sonner"
 import { Settings, Save } from "lucide-react"
 
@@ -7467,6 +7511,8 @@ interface UserSettings {
   global_reply_max_delay: number
   user_blacklist: string
   keyword_filters: string
+  keyword_reply_enabled: boolean
+  image_reply_enabled: boolean
 }
 
 interface SystemSettings {
@@ -7482,6 +7528,8 @@ export function SettingsView() {
     global_reply_max_delay: 8.0,
     user_blacklist: '',
     keyword_filters: '',
+    keyword_reply_enabled: true,
+    image_reply_enabled: true,
   })
   const [systemSettings, setSystemSettings] = useState<SystemSettings>({
     scrape_threads: 2,
@@ -7515,6 +7563,8 @@ export function SettingsView() {
           global_reply_max_delay: data.global_reply_max_delay ?? 8.0,
           user_blacklist: data.user_blacklist ?? '',
           keyword_filters: data.keyword_filters ?? '',
+          keyword_reply_enabled: data.keyword_reply_enabled === 1 || data.keyword_reply_enabled === true,
+          image_reply_enabled: data.image_reply_enabled === 1 || data.image_reply_enabled === true,
         })
       } else {
         toast.error("获取设置失败")
@@ -7891,6 +7941,39 @@ export function SettingsView() {
             </div>
           </div>
 
+          {/* 回复功能开关 */}
+          <div className="space-y-4">
+            <Label className="text-sm font-medium">回复功能开关</Label>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label htmlFor="keyword-reply" className="text-sm">关键词回复</Label>
+                  <p className="text-xs text-muted-foreground">
+                    启用后，机器人会根据文字关键词搜索商品并回复
+                  </p>
+                </div>
+                <Switch
+                  id="keyword-reply"
+                  checked={settings.keyword_reply_enabled}
+                  onCheckedChange={(checked) => setSettings(prev => ({ ...prev, keyword_reply_enabled: checked }))}
+                />
+              </div>
+              <div className="flex items-center justify-between">
+                <div className="space-y-0.5">
+                  <Label htmlFor="image-reply" className="text-sm">图片回复</Label>
+                  <p className="text-xs text-muted-foreground">
+                    启用后，机器人会根据图片搜索相似商品并回复
+                  </p>
+                </div>
+                <Switch
+                  id="image-reply"
+                  checked={settings.image_reply_enabled}
+                  onCheckedChange={(checked) => setSettings(prev => ({ ...prev, image_reply_enabled: checked }))}
+                />
+              </div>
+            </div>
+          </div>
+
           {/* 用户黑名单设置 */}
           <div className="space-y-2">
             <Label htmlFor="user-blacklist" className="text-sm font-medium">用户黑名单</Label>
@@ -8108,6 +8191,15 @@ export function DashboardView({ currentUser }: { currentUser: any }) {
     fetchStats()
     if (currentUser?.role === 'admin') {
       fetchAnnouncements()
+    }
+
+    // 每10秒自动刷新统计数据
+    const statsInterval = setInterval(() => {
+      fetchStats()
+    }, 10000)
+
+    return () => {
+      clearInterval(statsInterval)
     }
   }, [currentUser])
 
@@ -10123,7 +10215,7 @@ class Config:
     FORWARD_TARGET_CHANNEL_ID = 0
 
     # === API 地址 ===
-    BACKEND_API_URL = 'http://127.0.0.1:5001'
+    BACKEND_API_URL = os.getenv('BACKEND_API_URL', 'http://127.0.0.1:5001')
     NEXTJS_API_URL = f'{BACKEND_API_URL}/api'
 
     # === 机器人 ===
@@ -10135,21 +10227,22 @@ class Config:
     YOLO_MODEL_PATH = 'yolov8s-world.pt'
     USE_YOLO_CROP = True
 
-    # === 多线程配置 ===
-    # 性能建议：AI推理是CPU瓶颈，入口并发过高会导致上下文切换爆炸。
-    # 这里默认降低商品并发，图片下载仍可保持较高并发。
-    SCRAPE_THREADS = int(os.getenv('SCRAPE_THREADS', '2'))
-    DOWNLOAD_THREADS = int(os.getenv('DOWNLOAD_THREADS', '8'))
+    # === 多线程配置 (针对 10核 CPU 优化) ===
+    # 商品信息抓取是IO密集型，可以开大
+    SCRAPE_THREADS = int(os.getenv('SCRAPE_THREADS', '10'))
+    
+    # 图片下载也是IO密集型，可以开更大
+    DOWNLOAD_THREADS = int(os.getenv('DOWNLOAD_THREADS', '16'))
 
-    # AI 推理的并发控制：
-    # - AI_INTRA_THREADS：单个推理任务内部使用的 CPU 核心数（OpenMP/MKL 线程数）
+    # AI 推理的并发控制 (CPU密集型)：
+    # - AI_INTRA_THREADS：单个推理任务内部使用的 CPU 核心数
     # - AI_MAX_WORKERS：同时跑多少个“图片特征提取任务”
-    # 推荐（10核CPU）：AI_INTRA_THREADS=3, AI_MAX_WORKERS=3
-    AI_INTRA_THREADS = int(os.getenv('AI_INTRA_THREADS', '3'))
-    AI_MAX_WORKERS = int(os.getenv('AI_MAX_WORKERS', '3'))
+    # 策略：4个Worker * 2核 = 占用8核，预留2核给系统和数据库
+    AI_INTRA_THREADS = int(os.getenv('AI_INTRA_THREADS', '2'))
+    AI_MAX_WORKERS = int(os.getenv('AI_MAX_WORKERS', '4'))
 
     # 新的 save_product_images_unified 已不依赖该参数做图片特征线程池，保留字段主要用于兼容旧逻辑。
-    FEATURE_EXTRACT_THREADS = int(os.getenv('FEATURE_EXTRACT_THREADS', '1'))
+    FEATURE_EXTRACT_THREADS = int(os.getenv('FEATURE_EXTRACT_THREADS', '4'))
 
     # === FAISS ===
     FAISS_HNSW_M = 64
@@ -10308,6 +10401,11 @@ class Database:
 
             try:
                 cursor.execute('ALTER TABLE products ADD COLUMN item_id TEXT')
+            except sqlite3.OperationalError:
+                pass  # 字段已存在
+
+            try:
+                cursor.execute('ALTER TABLE products ADD COLUMN updated_at TIMESTAMP')
             except sqlite3.OperationalError:
                 pass  # 字段已存在
 
@@ -10576,12 +10674,25 @@ class Database:
                     global_reply_max_delay REAL DEFAULT 8.0,
                     user_blacklist TEXT DEFAULT '',  -- 用户黑名单，逗号分隔
                     keyword_filters TEXT DEFAULT '',  -- 关键词过滤，逗号分隔
+                    keyword_reply_enabled INTEGER DEFAULT 1,  -- 是否启用关键词回复
+                    image_reply_enabled INTEGER DEFAULT 1,  -- 是否启用图片回复
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
                     UNIQUE(user_id)
                 )
             ''')
+
+            # 为 user_settings 表添加新字段（如果不存在）
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN keyword_reply_enabled INTEGER DEFAULT 1')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN image_reply_enabled INTEGER DEFAULT 1')
+            except sqlite3.OperationalError:
+                pass
 
             # 创建用户级别的网站设置表（轮换设置和消息过滤）
             cursor.execute('''
@@ -11438,7 +11549,8 @@ class Database:
                 params = []
                 allowed_fields = [
                     'title', 'english_title', 'ruleEnabled',
-                    'custom_reply_text', 'custom_reply_images', 'custom_image_urls'
+                    'custom_reply_text', 'custom_reply_images', 'custom_image_urls',
+                    'image_source'
                 ]
 
                 for field in allowed_fields:
@@ -11644,6 +11756,35 @@ class Database:
         except Exception as e:
             logger.error(f"移除网站频道绑定失败: {e}")
             return False
+
+    def get_website_config_by_channel(self, channel_id: str, user_id: int = None) -> Dict:
+        """根据频道ID获取绑定的网站配置"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                if user_id:
+                    cursor.execute('''
+                        SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color
+                        FROM website_configs wc
+                        JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
+                        WHERE wcb.channel_id = ? AND wcb.user_id = ?
+                        LIMIT 1
+                    ''', (str(channel_id), user_id))
+                else:
+                    cursor.execute('''
+                        SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color
+                        FROM website_configs wc
+                        JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
+                        WHERE wcb.channel_id = ?
+                        LIMIT 1
+                    ''', (str(channel_id),))
+                row = cursor.fetchone()
+                if row:
+                    return dict(row)
+                return None
+        except Exception as e:
+            logger.error(f"根据频道获取网站配置失败: {e}")
+            return None
 
     def generate_website_urls(self, weidian_id: str) -> List[Dict]:
         """根据微店ID生成所有网站的URL"""
@@ -11929,8 +12070,11 @@ class Database:
                 cursor.execute("SELECT COUNT(*) FROM products")
                 product_count = cursor.fetchone()[0] or 0
 
-                # 获取图片数量
-                cursor.execute("SELECT COUNT(*) FROM product_images")
+                # 获取图片数量（只统计有对应商品的图片）
+                cursor.execute("""
+                    SELECT COUNT(*) FROM product_images
+                    WHERE product_id IN (SELECT id FROM products)
+                """)
                 image_count = cursor.fetchone()[0] or 0
 
                 # 获取用户数量
@@ -11946,6 +12090,25 @@ class Database:
         except Exception as e:
             logger.error(f"获取系统统计信息失败: {e}")
             return {'shop_count': 0, 'product_count': 0, 'image_count': 0, 'user_count': 0}
+
+    def cleanup_orphaned_images(self) -> int:
+        """清理孤立的图片记录（没有对应商品的图片）"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                # 删除没有对应商品的图片记录
+                cursor.execute("""
+                    DELETE FROM product_images
+                    WHERE product_id NOT IN (SELECT id FROM products)
+                """)
+                deleted_count = cursor.rowcount
+                conn.commit()
+                if deleted_count > 0:
+                    logger.info(f"清理了 {deleted_count} 条孤立的图片记录")
+                return deleted_count
+        except Exception as e:
+            logger.error(f"清理孤立图片记录失败: {e}")
+            return 0
 
     def get_active_announcements(self) -> List[Dict]:
         """获取活跃的系统公告"""
@@ -12393,7 +12556,8 @@ class Database:
                 cursor = conn.cursor()
                 cursor.execute('''
                     SELECT download_threads, feature_extract_threads, discord_similarity_threshold,
-                           global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters
+                           global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
+                           keyword_reply_enabled, image_reply_enabled
                     FROM user_settings WHERE user_id = ?
                 ''', (user_id,))
                 row = cursor.fetchone()
@@ -12406,6 +12570,8 @@ class Database:
                         'global_reply_max_delay': row[4] or 8.0,
                         'user_blacklist': row[5] or '',
                         'keyword_filters': row[6] or '',
+                        'keyword_reply_enabled': row[7] if row[7] is not None else 1,
+                        'image_reply_enabled': row[8] if row[8] is not None else 1,
                     }
                 # 如果用户没有设置，返回默认值
                 return {
@@ -12416,6 +12582,8 @@ class Database:
                     'global_reply_max_delay': 8.0,
                     'user_blacklist': '',
                     'keyword_filters': '',
+                    'keyword_reply_enabled': 1,
+                    'image_reply_enabled': 1,
                 }
         except Exception as e:
             logger.error(f"获取用户设置失败: {e}")
@@ -12427,12 +12595,15 @@ class Database:
                 'global_reply_max_delay': 8.0,
                 'user_blacklist': '',
                 'keyword_filters': '',
+                'keyword_reply_enabled': 1,
+                'image_reply_enabled': 1,
             }
 
     def update_user_settings(self, user_id: int, download_threads: int = None,
                            feature_extract_threads: int = None, discord_similarity_threshold: float = None,
                            global_reply_min_delay: float = None, global_reply_max_delay: float = None,
-                           user_blacklist: str = None, keyword_filters: str = None) -> bool:
+                           user_blacklist: str = None, keyword_filters: str = None,
+                           keyword_reply_enabled: int = None, image_reply_enabled: int = None) -> bool:
         """更新用户个性化设置"""
         try:
             with self.get_connection() as conn:
@@ -12475,6 +12646,14 @@ class Database:
                         update_fields.append('keyword_filters = ?')
                         params.append(keyword_filters)
 
+                    if keyword_reply_enabled is not None:
+                        update_fields.append('keyword_reply_enabled = ?')
+                        params.append(keyword_reply_enabled)
+
+                    if image_reply_enabled is not None:
+                        update_fields.append('image_reply_enabled = ?')
+                        params.append(image_reply_enabled)
+
                     if update_fields:
                         update_fields.append('updated_at = CURRENT_TIMESTAMP')
                         sql = f'UPDATE user_settings SET {", ".join(update_fields)} WHERE user_id = ?'
@@ -12485,8 +12664,9 @@ class Database:
                     cursor.execute('''
                         INSERT INTO user_settings
                         (user_id, download_threads, feature_extract_threads, discord_similarity_threshold,
-                         global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                         global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
+                         keyword_reply_enabled, image_reply_enabled)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         user_id,
                         download_threads or 4,
@@ -12495,7 +12675,9 @@ class Database:
                         global_reply_min_delay or 3.0,
                         global_reply_max_delay or 8.0,
                         user_blacklist or '',
-                        keyword_filters or ''
+                        keyword_filters or '',
+                        keyword_reply_enabled if keyword_reply_enabled is not None else 1,
+                        image_reply_enabled if image_reply_enabled is not None else 1
                     ))
 
                 conn.commit()
@@ -13677,11 +13859,39 @@ def mark_message_as_processed(message_id):
     except sqlite3.IntegrityError:
         return False  # 已经被其他Bot抢锁
 
-def get_response_url_for_channel(product, channel_id):
-    """根据频道ID决定发送哪个链接"""
+def get_response_url_for_channel(product, channel_id, user_id=None):
+    """根据频道ID和网站配置决定发送哪个链接"""
+    import re
+    try:
+        from database import db
+    except ImportError:
+        from .database import db
+
     channel_id_str = str(channel_id)
 
-    # 如果是CNFans频道，优先发送CNFans链接
+    # 1. 首先尝试根据频道绑定获取网站配置
+    website_config = db.get_website_config_by_channel(channel_id_str, user_id)
+
+    if website_config and website_config.get('url_template'):
+        # 从商品URL中提取微店ID
+        weidian_url = product.get('weidianUrl') or product.get('product_url') or ''
+        weidian_id = None
+
+        # 尝试从URL中提取itemID
+        match = re.search(r'itemID=(\d+)', weidian_url)
+        if match:
+            weidian_id = match.group(1)
+        else:
+            # 尝试从weidianId字段获取
+            weidian_id = product.get('weidianId')
+
+        if weidian_id:
+            # 使用URL模板生成链接
+            url = website_config['url_template'].replace('{id}', weidian_id)
+            logger.info(f"使用网站配置 '{website_config['name']}' 的URL模板生成链接: {url[:50]}...")
+            return url
+
+    # 2. 回退到旧的硬编码逻辑（兼容性）
     if config.CNFANS_CHANNEL_ID and channel_id_str == config.CNFANS_CHANNEL_ID:
         if product.get('cnfansUrl'):
             return product['cnfansUrl']
@@ -13690,7 +13900,6 @@ def get_response_url_for_channel(product, channel_id):
         else:
             return product.get('weidianUrl', '未找到相关商品')
 
-    # 如果是AcBuy频道，优先发送AcBuy链接
     elif config.ACBUY_CHANNEL_ID and channel_id_str == config.ACBUY_CHANNEL_ID:
         if product.get('acbuyUrl'):
             return product['acbuyUrl']
@@ -13699,7 +13908,7 @@ def get_response_url_for_channel(product, channel_id):
         else:
             return product.get('weidianUrl', '未找到相关商品')
 
-    # 其他频道默认发送CNFans链接，如果没有则发送微店链接
+    # 3. 默认发送CNFans链接
     else:
         if product.get('cnfansUrl'):
             return product['cnfansUrl']
@@ -13749,7 +13958,7 @@ class HTTPLogHandler(logging.Handler):
         """同步发送日志（作为fallback）"""
         try:
             import requests
-            response = requests.post('http://localhost:5001/api/logs/add',
+            response = requests.post(f'{config.BACKEND_API_URL}/logs/add',
                                    json=log_data, timeout=2, proxies={'http': None, 'https': None, 'all': None})
             if response.status_code != 200:
                 print(f"同步发送日志失败: {response.status_code}")
@@ -13769,7 +13978,7 @@ class HTTPLogHandler(logging.Handler):
 
                 try:
                     async with aiohttp.ClientSession(trust_env=False) as session:
-                        async with session.post('http://localhost:5001/api/logs/add',
+                        async with session.post(f'{config.BACKEND_API_URL}/logs/add',
                                               json=log_data, timeout=aiohttp.ClientTimeout(total=2)) as resp:
                             if resp.status != 200:
                                 print(f"发送日志失败: {resp.status}")
@@ -13871,9 +14080,19 @@ class DiscordBotClient(discord.Client):
                 logger.warning("❌ [状态错误] 配置的发送账号均不在线。请检查 Discord 账号连接状态。")
                 return
 
-            # 3. 轮换/冷却逻辑
+            # 3. 轮换/冷却逻辑 - 使用用户级别设置
+            # 优先使用用户个性化设置，如果没有则使用全局配置
             rotation_enabled = website_config.get('rotation_enabled', 1)
             rotation_interval = website_config.get('rotation_interval', 180)
+
+            if self.user_id and website_config.get('id'):
+                user_website_settings = await asyncio.get_event_loop().run_in_executor(
+                    None, db.get_user_website_settings, self.user_id, website_config['id']
+                )
+                if user_website_settings:
+                    rotation_enabled = user_website_settings.get('rotation_enabled', rotation_enabled)
+                    rotation_interval = user_website_settings.get('rotation_interval', rotation_interval)
+                    logger.info(f"📋 使用用户级别设置: rotation_interval={rotation_interval}秒, rotation_enabled={rotation_enabled}")
 
             available_senders = []
 
@@ -13966,7 +14185,7 @@ class DiscordBotClient(discord.Client):
 
             elif reply_type == 'text_and_link':
                 # 发送文字 + 链接
-                response = get_response_url_for_channel(product, channel_id)
+                response = get_response_url_for_channel(product, channel_id, self.user_id)
                 return f"{custom_reply.get('content', '')}\n{response}".strip()
 
             elif reply_type == 'text':
@@ -13974,7 +14193,7 @@ class DiscordBotClient(discord.Client):
                 return custom_reply.get('content', '')
 
         # 默认行为：发送链接
-        return get_response_url_for_channel(product, channel_id)
+        return get_response_url_for_channel(product, channel_id, self.user_id)
 
     def get_website_config_by_channel(self, channel_id):
         """根据频道ID获取对应的网站配置"""
@@ -14172,14 +14391,34 @@ class DiscordBotClient(discord.Client):
 
         logger.info(f'收到消息: {message.author.name} 在 #{message.channel.name}: "{message.content[:100]}{"..." if len(message.content) > 100 else ""}"')
 
+        # 获取用户设置，检查是否启用关键词和图片回复
+        keyword_reply_enabled = True
+        image_reply_enabled = True
+        if self.user_id:
+            try:
+                try:
+                    from database import db
+                except ImportError:
+                    from .database import db
+                user_settings = await asyncio.get_event_loop().run_in_executor(
+                    None, db.get_user_settings, self.user_id
+                )
+                keyword_reply_enabled = user_settings.get('keyword_reply_enabled', 1) == 1
+                image_reply_enabled = user_settings.get('image_reply_enabled', 1) == 1
+            except Exception as e:
+                logger.error(f'获取用户回复开关设置失败: {e}')
+
         # 处理关键词消息转发
         await self.handle_keyword_forward(message)
 
-        # 处理关键词搜索（文字消息）
-        await self.handle_keyword_search(message)
+        # 处理关键词搜索（文字消息）- 检查开关
+        if keyword_reply_enabled:
+            await self.handle_keyword_search(message)
+        else:
+            logger.debug(f'关键词回复已禁用，跳过关键词搜索')
 
-        # 检查消息是否包含图片（只处理图片，不处理文字）
-        if message.attachments:
+        # 检查消息是否包含图片（只处理图片，不处理文字）- 检查开关
+        if image_reply_enabled and message.attachments:
             for attachment in message.attachments:
                 if attachment.content_type and attachment.content_type.startswith('image/'):
                     await self.handle_image(message, attachment)
@@ -14215,8 +14454,8 @@ class DiscordBotClient(discord.Client):
                 logger.error("图片下载失败，已达到最大重试次数")
                 return  # 静默失败，不发送错误消息
 
-            # 调用 DINOv2 服务识别图片，根据用户权限过滤结果
-            result = await self.recognize_image(image_data, self.user_shops)
+            # 调用 DINOv2 服务识别图片，不使用店铺过滤（所有用户都能识别所有商品）
+            result = await self.recognize_image(image_data, user_shops=None)
 
             logger.info(f'图片识别结果: success={result.get("success") if result else False}, results_count={len(result.get("results", [])) if result else 0}')
 
@@ -14336,7 +14575,7 @@ class DiscordBotClient(discord.Client):
 
                         # 如果既没有文本也没有图片，则发送默认链接
                         if not custom_text and not images_sent:
-                            response = get_response_url_for_channel(product, message.channel.id)
+                            response = get_response_url_for_channel(product, message.channel.id, self.user_id)
                             await message.reply(response)
 
                     logger.info(f'图片识别成功，相似度: {similarity:.4f}')
@@ -14415,6 +14654,23 @@ class DiscordBotClient(discord.Client):
             if not search_query:
                 return
 
+            # 过滤太短的消息（至少需要2个字符）
+            if len(search_query) < 2:
+                return
+
+            # 过滤纯数字消息（如 "1", "2", "123"）
+            if search_query.isdigit():
+                return
+
+            # 过滤只包含数字和空格的消息（如 "1 2 3"）
+            if search_query.replace(' ', '').isdigit():
+                return
+
+            # 过滤常见的无意义短消息
+            meaningless_patterns = {'ok', 'no', 'yes', 'hi', 'hey', 'lol', 'lmao', 'wtf', 'omg', 'bruh'}
+            if search_query.lower() in meaningless_patterns:
+                return
+
             # 调用搜索API
             result = await self.search_products_by_keyword(search_query)
 
@@ -14425,26 +14681,27 @@ class DiscordBotClient(discord.Client):
             # 只在找到商品时回复和记录日志
             if products:
                 logger.info(f'关键词搜索成功: "{search_query}" -> 找到 {len(products)} 个商品')
-                # 根据频道决定发送哪个链接
                 product = products[0]
-                response = get_response_url_for_channel(product, message.channel.id)
+
+                # 检查频道是否绑定了网站配置（必须绑定才能回复）
+                website_config = await self.get_website_config_by_channel_async(message.channel.id)
+                if not website_config:
+                    logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过关键词回复")
+                    return
+
+                # 构建自定义回复对象（如果有自定义文本）
+                custom_reply = None
+                custom_text = product.get('custom_reply_text', '').strip()
+                if custom_text:
+                    custom_reply = {
+                        'reply_type': 'text_and_link',
+                        'content': custom_text
+                    }
 
                 logger.info(f'关键词搜索完成，找到 {len(products)} 个商品')
 
-                # 模拟打字状态并延迟回复
-                async with message.channel.typing():
-                    # 检查是否设置了全局延迟（只要有一个值不为默认值3.0，就认为已设置）
-                    if abs(config.GLOBAL_REPLY_MIN_DELAY - 3.0) > 0.01 or abs(config.GLOBAL_REPLY_MAX_DELAY - 8.0) > 0.01:
-                        delay = random.uniform(config.GLOBAL_REPLY_MIN_DELAY, config.GLOBAL_REPLY_MAX_DELAY)
-                        logger.info(f"模拟打字并延迟回复 {delay:.2f} 秒...")
-                        await asyncio.sleep(delay)
-                    else:
-                        # 如果没有设置延迟，至少模拟1-3秒的打字时间
-                        delay = random.uniform(1.0, 3.0)
-                        logger.info(f"模拟打字 {delay:.2f} 秒...")
-                        await asyncio.sleep(delay)
-
-                await message.reply(response)
+                # 使用 schedule_reply 来处理回复（包含冷却检查和账号轮换）
+                await self.schedule_reply(message, product, custom_reply)
             else:
                 # 没有找到商品，不回复任何消息
                 logger.info(f'关键词搜索无结果: {search_query}')
@@ -14466,7 +14723,7 @@ class DiscordBotClient(discord.Client):
                 }
 
                 # 调用后端搜索API
-                async with session.post('http://localhost:5001/api/search_similar_text',
+                async with session.post(f'{config.BACKEND_API_URL}/search_similar_text',
                                       json=search_data) as resp:
                     if resp.status == 200:
                         result = await resp.json()
@@ -14511,7 +14768,7 @@ class DiscordBotClient(discord.Client):
                     form_data.add_field('user_shops', json.dumps(user_shops))
 
                 # 调用 DINOv2 + FAISS 服务（本地）
-                async with session.post('http://localhost:5001/search_similar', data=form_data) as resp:
+                async with session.post(f'{config.BACKEND_API_URL.replace("/api", "")}/search_similar', data=form_data) as resp:
                     if resp.status == 200:
                         result = await resp.json()
                         return result
@@ -14533,7 +14790,7 @@ async def get_all_accounts_from_backend():
     """从后端 API 获取所有可用的 Discord 账号"""
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get('http://127.0.0.1:5001/api/accounts') as resp:
+            async with session.get(f'{config.BACKEND_API_URL}/accounts') as resp:
                 if resp.status == 200:
                     result = await resp.json()
                     accounts = result.get('accounts', [])
@@ -14985,7 +15242,7 @@ class DINOv2FeatureExtractor:
             embedding = outputs.last_hidden_state[0, 0, :].cpu().numpy()
 
             # 5. L2归一化 (对余弦相似度至关重要)
-            norm = np.linalg.norm(embedding)
+            norm = float(np.linalg.norm(embedding))
             if norm > 0:
                 embedding = embedding / norm
 
@@ -15784,8 +16041,11 @@ def check_duplicate_image(new_features, existing_features_list, threshold=0.99):
         return False, 0.0
 
     try:
+        # 确保 new_features 是 1D 数组
+        new_features = np.array(new_features, dtype='float32').flatten()
+
         # 预计算新向量的范数
-        norm_new = np.linalg.norm(new_features)
+        norm_new = float(np.linalg.norm(new_features))
         if norm_new == 0:
             return False, 0.0
 
@@ -15793,20 +16053,20 @@ def check_duplicate_image(new_features, existing_features_list, threshold=0.99):
             try:
                 # 处理输入可能是 JSON 字符串或已经是 numpy 数组的情况
                 if isinstance(feat_item, str):
-                    feat_vec = np.array(json.loads(feat_item), dtype='float32')
+                    feat_vec = np.array(json.loads(feat_item), dtype='float32').flatten()
                 else:
-                    feat_vec = np.array(feat_item, dtype='float32')
+                    feat_vec = np.array(feat_item, dtype='float32').flatten()
 
-                norm_existing = np.linalg.norm(feat_vec)
+                norm_existing = float(np.linalg.norm(feat_vec))
                 if norm_existing == 0:
                     continue
 
                 # 计算余弦相似度
-                dot_product = np.dot(new_features, feat_vec)
+                dot_product = float(np.dot(new_features, feat_vec))
                 similarity = dot_product / (norm_new * norm_existing)
 
                 if similarity > threshold:
-                    return True, similarity
+                    return True, float(similarity)
 
             except Exception:
                 continue
@@ -16776,6 +17036,11 @@ def get_website_configs():
             # 2) 频道绑定：只返回当前用户自己的绑定
             config['channels'] = db.get_website_channel_bindings(config_id, current_user['id'])
 
+            # 3) 用户级别的轮换设置
+            user_settings = db.get_user_website_settings(current_user['id'], config_id)
+            config['rotation_interval'] = user_settings.get('rotation_interval', 180)
+            config['rotation_enabled'] = user_settings.get('rotation_enabled', 1)
+
         return jsonify({'websites': configs})
     except Exception as e:
         logger.error(f"获取网站配置失败: {e}")
@@ -17104,6 +17369,22 @@ def get_system_stats():
         logger.error(f"获取系统统计信息失败: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/system/cleanup-orphaned-images', methods=['POST'])
+def cleanup_orphaned_images():
+    """清理孤立的图片记录"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        deleted_count = db.cleanup_orphaned_images()
+        return jsonify({
+            'message': f'清理完成，删除了 {deleted_count} 条孤立记录',
+            'deleted_count': deleted_count
+        })
+    except Exception as e:
+        logger.error(f"清理孤立图片记录失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
 # === 新增：公告管理API ===
 @app.route('/api/announcements', methods=['GET'])
 def get_announcements():
@@ -17350,13 +17631,8 @@ def get_accounts():
 
     current_user = get_current_user()
     try:
-        # 根据用户权限过滤账号
-        if current_user['role'] == 'admin':
-            # 管理员可以看到所有账号
-            accounts = db.get_discord_accounts_by_user(None)
-        else:
-            # 普通用户只能看到自己关联的账号
-            accounts = db.get_discord_accounts_by_user(current_user['id'])
+        # 所有用户（包括管理员）只能看到自己的账号
+        accounts = db.get_discord_accounts_by_user(current_user['id'])
 
         return jsonify({'accounts': accounts})
     except Exception as e:
@@ -17432,6 +17708,31 @@ def update_product():
 
     current_user = get_current_user()
 
+    # 提取公共权限检查逻辑
+    def check_permission(product_id):
+        """检查用户是否有权限更新指定商品"""
+        if current_user['role'] == 'admin':
+            return True
+
+        user_shop_ids = current_user.get('shops', [])
+        product = db.get_product_by_id(int(product_id))
+
+        if not product:
+            return False
+
+        # 将店铺ID转换为店铺名称进行对比
+        allowed_shop_names = []
+        for shop_id in user_shop_ids:
+            shop_info = db.get_shop_by_id(shop_id)
+            if shop_info:
+                allowed_shop_names.append(shop_info['name'])
+
+        # 对比商品所属店铺名是否在用户允许的店铺名列表中
+        if product.get('shop_name') in allowed_shop_names:
+            return True
+
+        return False
+
     # 检查是否是multipart/form-data（包含文件上传）
     if request.content_type and 'multipart/form-data' in request.content_type:
         # 处理文件上传
@@ -17441,13 +17742,8 @@ def update_product():
 
         try:
             # 检查权限
-            if current_user['role'] == 'admin':
-                pass
-            else:
-                user_shops = current_user.get('shops', [])
-                product = db.get_product_by_id(int(product_id))
-                if not product or product.get('shop_name') not in user_shops:
-                    return jsonify({'error': '无权限更新此商品'}), 403
+            if not check_permission(product_id):
+                return jsonify({'error': '无权限更新此商品'}), 403
 
             # 处理上传的图片文件
             uploaded_files = []
@@ -17519,19 +17815,14 @@ def update_product():
         # 处理JSON数据（原有逻辑）
         data = request.get_json()
 
-    if not data or not data.get('id'):
-        return jsonify({'error': '商品ID不能为空'}), 400
+        if not data or not data.get('id'):
+            return jsonify({'error': '商品ID不能为空'}), 400
 
-    product_id = data['id']
+        product_id = data['id']
 
-    try:
+        try:
             # 检查权限
-        if current_user['role'] == 'admin':
-            pass
-        else:
-            user_shops = current_user.get('shops', [])
-            product = db.get_product_by_id(product_id)
-            if not product or product.get('shop_name') not in user_shops:
+            if not check_permission(product_id):
                 return jsonify({'error': '无权限更新此商品'}), 403
 
             # 构建更新数据
@@ -17562,9 +17853,9 @@ def update_product():
             else:
                 return jsonify({'error': '没有要更新的字段'}), 400
 
-    except Exception as e:
-        logger.error(f"更新商品失败: {e}")
-        return jsonify({'error': '更新失败'}), 500
+        except Exception as e:
+            logger.error(f"更新商品失败: {e}")
+            return jsonify({'error': '更新失败'}), 500
 
 
 @app.route('/api/backfill_products', methods=['POST'])
@@ -18118,6 +18409,14 @@ def update_user_settings():
         max_delay = data.get('global_reply_max_delay')
         logger.info(f"用户设置延迟 - 最小: {min_delay}, 最大: {max_delay}")
 
+        # 处理开关设置（boolean 转 integer）
+        keyword_reply = data.get('keyword_reply_enabled')
+        image_reply = data.get('image_reply_enabled')
+        if keyword_reply is not None:
+            keyword_reply = 1 if keyword_reply else 0
+        if image_reply is not None:
+            image_reply = 1 if image_reply else 0
+
         success = db.update_user_settings(
             user_id=user['id'],
             download_threads=data.get('download_threads'),
@@ -18126,7 +18425,9 @@ def update_user_settings():
             global_reply_min_delay=min_delay,
             global_reply_max_delay=max_delay,
             user_blacklist=data.get('user_blacklist'),
-            keyword_filters=data.get('keyword_filters')
+            keyword_filters=data.get('keyword_filters'),
+            keyword_reply_enabled=keyword_reply,
+            image_reply_enabled=image_reply
         )
 
         if success:
@@ -18290,6 +18591,26 @@ def batch_delete_all_products():
         logger.error(f"全选删除失败: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/products/<int:product_id>', methods=['GET'])
+def get_product(product_id):
+    """获取单个商品的详细信息"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        product = db._get_product_info_by_id(product_id)
+        if not product:
+            return jsonify({'error': '商品不存在'}), 404
+
+        # 获取商品图片
+        images = db.get_product_images(product_id)
+        product['images'] = [f"/api/image/{product_id}/{img['image_index']}" for img in images]
+
+        return jsonify(product)
+    except Exception as e:
+        logger.error(f"获取商品失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/products/<int:product_id>', methods=['DELETE'])
 def delete_product(product_id):
     """删除商品及其所有相关数据"""
@@ -18317,7 +18638,7 @@ def upload_product_image(product_id):
     try:
         # 获取现有特征用于查重
         existing_images = db.get_product_images(product_id)
-        existing_feats = [img['features'] for img in existing_images if img['features']]
+        existing_feats = [img['features'] for img in existing_images if img.get('features') is not None]
 
         # 获取下一个 index
         with db.get_connection() as conn:
@@ -18840,17 +19161,21 @@ def search_similar_text():
         with db.get_connection() as conn:
             cursor = conn.cursor()
 
-            # 只在英文标题中搜索（根据用户要求，不监听中文关键词）
+            # 使用 LOWER() 实现大小写不敏感搜索
+            # 同时检查 english_title 中是否包含搜索词（支持逗号分隔的多关键词）
+            # 例如：english_title = "DR Top,B30"，搜索 "b30" 或 "dr top" 都能匹配
+            query_lower = query.lower()
+
             cursor.execute("""
                 SELECT id, product_url, title, english_title, description,
                        ruleEnabled, min_delay, max_delay, created_at,
                        cnfans_url
                 FROM products
-                WHERE english_title LIKE ?
+                WHERE LOWER(english_title) LIKE ?
                   AND ruleEnabled = 1
                 ORDER BY created_at DESC
                 LIMIT ?
-            """, (f'%{query}%', limit))
+            """, (f'%{query_lower}%', limit))
 
             rows = cursor.fetchall()
 
@@ -20562,7 +20887,7 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
         return 0
 
     existing_images = db.get_product_images(product_id)
-    existing_feats = [img['features'] for img in existing_images if img['features']]
+    existing_feats = [img['features'] for img in existing_images if img.get('features') is not None]
 
     processed_count = 0
     vectors_to_add = []  # (db_id, features)
