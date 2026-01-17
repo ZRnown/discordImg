@@ -508,7 +508,15 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
       if (res.ok) {
         const data = await res.json()
-        setProducts(products.map(p => p.id === data.product.id ? data.product : p))
+
+        // 转换后端返回的数据格式，将 uploadedImages (URL数组) 转换为 existingUploadedImageUrls
+        const transformedProduct = {
+          ...data.product,
+          uploadedImages: [], // 新上传的File对象（清空）
+          existingUploadedImageUrls: data.product.uploadedImages || [] // 已保存的图片URL
+        }
+
+        setProducts(products.map(p => p.id === data.product.id ? transformedProduct : p))
         setEditingProduct(null)
         toast.success("更新成功")
       } else {
