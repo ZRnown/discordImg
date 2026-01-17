@@ -387,6 +387,8 @@ class DiscordBotClient(discord.Client):
                                 custom_reply.get('reply_type') == 'text'
                             )
 
+                            logger.info(f"[BOT SEND] is_custom_mode={is_custom_mode}, custom_reply={custom_reply is not None}")
+
                             if is_custom_mode:
                                 # 获取图片信息
                                 # 注意：如果是从 search_similar_text 返回的 product，字段名可能已经格式化
@@ -401,6 +403,8 @@ class DiscordBotClient(discord.Client):
                                         custom_urls = []
 
                                 image_source = product.get('imageSource', 'product') or product.get('image_source', 'product')
+
+                                logger.info(f"[BOT SEND] image_source={image_source}")
 
                                 # 收集图片文件（Discord限制最多10个文件）
                                 if image_source == 'custom' and custom_urls:
@@ -429,18 +433,24 @@ class DiscordBotClient(discord.Client):
                                         except:
                                             uploaded_filenames = []
 
+                                    logger.info(f"[BOT SEND] 上传模式 pid={pid}, uploaded_filenames={uploaded_filenames}")
+
                                     if pid and uploaded_filenames:
                                         # 使用新的API端点获取上传的自定义回复图片
                                         for filename in uploaded_filenames[:10]:  # 限制最多10张
                                             if len(files) >= 10:
                                                 break
                                             img_url = f"{config.BACKEND_API_URL}/api/custom_reply_image/{pid}/{filename}"
+                                            logger.info(f"[BOT SEND] 尝试下载: {img_url}")
                                             try:
                                                 async with aiohttp.ClientSession() as session:
                                                     async with session.get(img_url) as resp:
                                                         if resp.status == 200:
                                                             data = await resp.read()
                                                             files.append(discord.File(io.BytesIO(data), filename))
+                                                            logger.info(f"[BOT SEND] 成功下载图片: {filename}")
+                                                        else:
+                                                            logger.error(f"[BOT SEND] 下载失败 status={resp.status}: {img_url}")
                                             except Exception as e:
                                                 logger.error(f"下载上传的自定义回复图片失败: {e}")
 
