@@ -339,7 +339,7 @@ class DINOv2FeatureExtractor:
             embedding = outputs.last_hidden_state[0, 0, :].cpu().numpy()
 
             # 5. L2归一化 (对余弦相似度至关重要)
-            norm = np.linalg.norm(embedding)
+            norm = float(np.linalg.norm(embedding))
             if norm > 0:
                 embedding = embedding / norm
 
