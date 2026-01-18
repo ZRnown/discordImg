@@ -246,8 +246,8 @@ def process_and_save_image_core(product_id, image_url_or_file, index, existing_f
 
 # 线程配置现在统一在 config.py 中管理
 
-# 加载系统配置
-load_system_config()
+# 【修复】移除全局 load_system_config() 调用，防止子进程重复初始化
+# load_system_config() 现在在 initialize_runtime() 中调用
 
 # === 重构：店铺抓取状态控制 ===
 # 移除全局状态变量，改为数据库持久化存储
@@ -264,23 +264,10 @@ faiss_lock = Lock()
 # 全局关闭事件，用于优雅关闭
 shutdown_event = None
 
-# 配置日志
-# 1. 获取根日志记录器
-root_logger = logging.getLogger()
-root_logger.setLevel(logging.INFO)
+# 【修复】移除全局日志配置，防止子进程重复初始化
+# 日志配置现在在 initialize_runtime() 中执行
 
-# 2. 清除现有的所有处理器（防止 Flask 或 basicConfig 自动添加的导致重复）
-if root_logger.handlers:
-    root_logger.handlers = []
-
-# 3. 创建控制台处理器
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-console_handler.setFormatter(console_formatter)
-root_logger.addHandler(console_handler)
-
-# 4. 创建队列日志处理器 (用于前端 SSE)
+# 日志队列和客户端列表（数据结构，需要在全局）
 log_queue = queue.Queue()
 log_clients = []
 all_logs = []
@@ -356,20 +343,8 @@ class QueueHandler(logging.Handler):
 
         return False
 
-# 5. 添加队列处理器
-queue_handler = QueueHandler()
-queue_handler.setLevel(logging.INFO)
-root_logger.addHandler(queue_handler)
-
-# 控制台处理器已在上面配置完成
-
-# 1. 设置 werkzeug 日志级别为 WARNING，屏蔽 HTTP 请求刷屏
-logging.getLogger('werkzeug').setLevel(logging.WARNING)
-# 2. 设置其他库的日志级别
-logging.getLogger('urllib3').setLevel(logging.WARNING)
-logging.getLogger('requests').setLevel(logging.WARNING)
-logging.getLogger('aiohttp').setLevel(logging.WARNING)
-logging.getLogger('ultralytics').setLevel(logging.WARNING)  # 屏蔽 YOLO 日志
+# 【修复】移除全局队列处理器和日志级别设置，防止子进程重复初始化
+# 这些配置现在在 initialize_runtime() 中执行
 
 logger = logging.getLogger(__name__)
 
@@ -429,6 +404,46 @@ app.config.update(
     SESSION_COOKIE_DOMAIN=None,
     PERMANENT_SESSION_LIFETIME=config.SESSION_LIFETIME,  # 30天不过期
 )
+
+def initialize_runtime():
+    """
+    初始化运行时环境 (日志、配置等)
+    只在主进程中执行，防止子进程重复初始化
+    """
+    print(f"🔧 [系统] 正在初始化运行时环境 (PID: {os.getpid()})...")
+
+    # --- 加载系统配置 ---
+    load_system_config()
+
+    # --- 配置日志系统 ---
+    # 1. 获取根日志记录器
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+
+    # 2. 清除现有的所有处理器（防止重复）
+    if root_logger.handlers:
+        root_logger.handlers = []
+
+    # 3. 创建控制台处理器
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    console_handler.setFormatter(console_formatter)
+    root_logger.addHandler(console_handler)
+
+    # 4. 创建并添加队列处理器
+    queue_handler = QueueHandler()
+    queue_handler.setLevel(logging.INFO)
+    root_logger.addHandler(queue_handler)
+
+    # 5. 设置其他库的日志级别
+    logging.getLogger('werkzeug').setLevel(logging.WARNING)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+    logging.getLogger('requests').setLevel(logging.WARNING)
+    logging.getLogger('aiohttp').setLevel(logging.WARNING)
+    logging.getLogger('ultralytics').setLevel(logging.WARNING)
+
+    print(f"✅ [系统] 运行时环境初始化完成")
 
 def extract_features(image_path):
     """使用深度学习模型提取图像特征"""
@@ -5259,6 +5274,10 @@ if __name__ == '__main__':
     import threading
     import signal
     import time
+
+    # 【核心修复】在主进程启动时初始化运行时环境
+    # 只有主进程会进入这个判断，子进程不会，从而解决了重启问题
+    initialize_runtime()
 
     # 全局变量用于控制优雅关闭
     shutdown_event = threading.Event()
