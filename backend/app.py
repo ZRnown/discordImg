@@ -4,6 +4,7 @@
 # 移除这些限制可以让 AI 推理速度提升 3-5 倍
 # ============================================================
 import os
+import multiprocessing  # Windows多进程兼容性必需
 # 已移除全局线程限制，让 PyTorch 能够利用多核 CPU
 # os.environ["OMP_NUM_THREADS"] = "1"
 # os.environ["MKL_NUM_THREADS"] = "1"
@@ -412,36 +413,62 @@ def initialize_runtime():
     """
     print(f"🔧 [系统] 正在初始化运行时环境 (PID: {os.getpid()})...")
 
-    # --- 加载系统配置 ---
+    # 1. 加载系统配置
     load_system_config()
 
-    # --- 配置日志系统 ---
-    # 1. 获取根日志记录器
+    # 2. 配置日志系统
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
 
-    # 2. 清除现有的所有处理器（防止重复）
+    # 清除现有的所有处理器（防止重复）
     if root_logger.handlers:
         root_logger.handlers = []
 
-    # 3. 创建控制台处理器
+    # 创建控制台处理器
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     console_handler.setFormatter(console_formatter)
     root_logger.addHandler(console_handler)
 
-    # 4. 创建并添加队列处理器
+    # 创建并添加队列处理器
     queue_handler = QueueHandler()
     queue_handler.setLevel(logging.INFO)
     root_logger.addHandler(queue_handler)
 
-    # 5. 设置其他库的日志级别
-    logging.getLogger('werkzeug').setLevel(logging.WARNING)
-    logging.getLogger('urllib3').setLevel(logging.WARNING)
-    logging.getLogger('requests').setLevel(logging.WARNING)
-    logging.getLogger('aiohttp').setLevel(logging.WARNING)
-    logging.getLogger('ultralytics').setLevel(logging.WARNING)
+    # 屏蔽噪音日志
+    for lib in ['werkzeug', 'urllib3', 'requests', 'ultralytics', 'aiohttp']:
+        logging.getLogger(lib).setLevel(logging.WARNING)
+
+    # 3. 重置数据库状态
+    print("🧹 [系统] 正在重置抓取任务状态...")
+    try:
+        db.update_scrape_status(
+            is_scraping=False,
+            stop_signal=False,
+            message='系统重启，任务状态已重置'
+        )
+        # 重置所有Discord账号状态为离线
+        with db.get_connection() as conn:
+            conn.execute("UPDATE discord_accounts SET status = 'offline'")
+            conn.commit()
+        print("✅ [系统] 数据库状态已重置")
+    except Exception as e:
+        print(f"⚠️ [系统] 状态重置失败: {e}")
+
+    # 4. 预热AI模型
+    try:
+        print("🤖 [系统] 正在预热AI模型...")
+        get_global_feature_extractor()
+        print("✅ [系统] AI模型预热完成")
+    except Exception as e:
+        print(f"⚠️ [系统] AI预热失败: {e}")
+
+    # 5. 启动后台清理线程
+    import threading
+    cleanup_thread = threading.Thread(target=run_cleanup_task, daemon=True)
+    cleanup_thread.start()
+    logger.info("🚀 后台清理任务已启动")
 
     print(f"✅ [系统] 运行时环境初始化完成")
 
@@ -5309,20 +5336,18 @@ def run_cleanup_task():
             logger.error(f"后台清理任务异常: {e}")
 
 if __name__ == '__main__':
-    # 【Windows兼容性修复】必须在最开始调用，防止Windows上的multiprocessing问题
-    import multiprocessing
+    # 【Windows兼容性修复】必须在最开始调用
     multiprocessing.freeze_support()
 
     import atexit
-    import threading
     import signal
     import time
 
-    # 【核心修复】在主进程启动时初始化运行时环境
-    # 只有主进程会进入这个判断，子进程不会，从而解决了重启问题
+    # 【核心修复】只在主进程执行初始化
     initialize_runtime()
 
     # 全局变量用于控制优雅关闭
+    import threading
     shutdown_event = threading.Event()
 
     def signal_handler(signum, frame):
@@ -5366,51 +5391,7 @@ if __name__ == '__main__':
     # 注册退出时停止机器人的函数
     atexit.register(stop_discord_bot)
 
-    # 启动后台清理线程（定期清理 processed_messages / 冷却缓存）
-    cleanup_thread = threading.Thread(target=run_cleanup_task, daemon=True)
-    cleanup_thread.start()
-    logger.info("🚀 后台清理任务已启动，每小时运行一次")
-
-    # ====================================================
-    # 新增修复：启动时强制重置数据库抓取状态
-    # ====================================================
-    print("🧹 [系统] 正在重置抓取任务状态...")
-    try:
-        # 强制将所有正在运行的状态重置为停止
-        db.update_scrape_status(
-            is_scraping=False,
-            stop_signal=False,
-            message='系统重启，任务状态已重置'
-        )
-        print("✅ [系统] 抓取状态已重置，随时可以开始新任务")
-    except Exception as e:
-        print(f"⚠️ [系统] 状态重置失败 (可能是第一次运行数据库未初始化): {e}")
-
-    # ====================================================
-    # 新增修复：启动时重置所有Discord账号状态为offline
-    # ====================================================
-    print("🧹 [系统] 正在重置Discord账号状态...")
-    try:
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("UPDATE discord_accounts SET status = 'offline'")
-            conn.commit()
-            affected = cursor.rowcount
-        print(f"✅ [系统] 已重置 {affected} 个Discord账号状态为offline")
-    except Exception as e:
-        print(f"⚠️ [系统] 账号状态重置失败: {e}")
-
-    # 3. 在主线程预加载模型 (关键)
-    print("🤖 [系统] 正在预热 AI 引擎，请稍候...")
-    try:
-        from feature_extractor import get_feature_extractor
-        # 强制获取一次实例，触发初始化
-        get_feature_extractor()
-        print("✅ [系统] AI 引擎预热完成，多线程任务将共享此实例")
-    except Exception as e:
-        print(f"⚠️ [系统] AI 预热失败: {e}")
-
-    # 4. 启动 Flask
+    # 启动 Flask 服务
     print("🚀 服务启动中...")
     try:
         # 关闭 debug 模式，避免 Flask 重载器导致双重初始化

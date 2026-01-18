@@ -21770,6 +21770,10 @@ def run_cleanup_task():
             logger.error(f"后台清理任务异常: {e}")
 
 if __name__ == '__main__':
+    # 【Windows兼容性修复】必须在最开始调用，防止Windows上的multiprocessing问题
+    import multiprocessing
+    multiprocessing.freeze_support()
+
     import atexit
     import threading
     import signal
