@@ -15358,6 +15358,7 @@ except Exception:
     pass
 # =================
 import numpy as np
+import cv2  # OpenCV for color histogram and structure comparison
 import threading
 from typing import List, Optional, Union, Dict
 import logging
@@ -15699,6 +15700,83 @@ class DINOv2FeatureExtractor:
             feature = self.extract_feature(image_path)
             results.append(feature)
         return results
+
+    def calculate_hybrid_similarity(self, img_path1: str, img_path2: str, dino_score: float) -> dict:
+        """
+        【新增】计算综合相似度 (Re-ranking)
+
+        综合分 = DINO语义分(60%) + 颜色分(25%) + 轮廓分(15%)
+
+        Args:
+            img_path1: 查询图片路径
+            img_path2: 候选图片路径
+            dino_score: DINOv2原始相似度分数
+
+        Returns:
+            dict: {'score': 综合分数, 'details': {'dino': ..., 'color': ..., 'structure': ...}}
+        """
+        try:
+            # 读取图片 (OpenCV)
+            img1 = cv2.imread(img_path1)
+            img2 = cv2.imread(img_path2)
+
+            if img1 is None or img2 is None:
+                logger.warning(f"无法读取图片，使用原始DINO分数: {img_path1} or {img_path2}")
+                return {'score': dino_score, 'details': {}}
+
+            # 1. 颜色相似度 (基于 HSV 直方图)
+            # 转换到 HSV 空间，对光照更鲁棒
+            hsv1 = cv2.cvtColor(img1, cv2.COLOR_BGR2HSV)
+            hsv2 = cv2.cvtColor(img2, cv2.COLOR_BGR2HSV)
+
+            # 计算直方图 (H:色调, S:饱和度)
+            hist1 = cv2.calcHist([hsv1], [0, 1], None, [180, 256], [0, 180, 0, 256])
+            hist2 = cv2.calcHist([hsv2], [0, 1], None, [180, 256], [0, 180, 0, 256])
+
+            # 归一化
+            cv2.normalize(hist1, hist1, 0, 1, cv2.NORM_MINMAX)
+            cv2.normalize(hist2, hist2, 0, 1, cv2.NORM_MINMAX)
+
+            # 巴氏距离比较 (结果 0-1, 1为完全匹配)
+            color_score = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL)
+            color_score = max(0.0, color_score)  # 修正可能的负值
+
+            # 2. 轮廓/结构相似度 (简化版：缩小后比较像素差异)
+            # 将两图统一缩放到 64x64
+            img1_small = cv2.resize(img1, (64, 64))
+            img2_small = cv2.resize(img2, (64, 64))
+
+            # 转灰度
+            gray1 = cv2.cvtColor(img1_small, cv2.COLOR_BGR2GRAY)
+            gray2 = cv2.cvtColor(img2_small, cv2.COLOR_BGR2GRAY)
+
+            # 计算差异
+            diff = cv2.absdiff(gray1, gray2)
+            structure_score = 1.0 - (np.mean(diff) / 255.0)
+
+            # === 综合评分公式 (可调优) ===
+            # DINO (语义/版型): 权重 0.6
+            # Color (颜色): 权重 0.25 (对区分不同配色的同款鞋很有用)
+            # Structure (细节): 权重 0.15
+
+            final_score = (dino_score * 0.6) + (color_score * 0.25) + (structure_score * 0.15)
+
+            logger.debug(f"综合评分: DINO={dino_score:.3f}, Color={color_score:.3f}, Structure={structure_score:.3f}, Final={final_score:.3f}")
+
+            return {
+                'score': float(final_score),
+                'details': {
+                    'dino': float(dino_score),
+                    'color': float(color_score),
+                    'structure': float(structure_score)
+                }
+            }
+
+        except Exception as e:
+            logger.error(f"计算综合相似度出错: {e}")
+            import traceback
+            traceback.print_exc()
+            return {'score': dino_score, 'details': {}}
 
     def get_status(self) -> Dict:
         """获取AI模型状态和性能信息"""
@@ -16950,32 +17028,69 @@ def search_similar():
             if query_features is None:
                 return jsonify({'error': 'Feature extraction failed'}), 500
 
-            # 使用 FAISS HNSW 向量搜索
+            # 【优化】使用 FAISS HNSW 向量搜索 + 综合评分重排序
             print(f"DEBUG: Searching with threshold: {threshold}, vector length: {len(query_features)}")
-            # 用较低的阈值搜索找到候选结果，然后从中筛选满足用户阈值的结果
-            low_threshold_results = db.search_similar_images(query_features, limit=10, threshold=0.1)
-            print(f"DEBUG: Low threshold (0.1) search results: {len(low_threshold_results) if low_threshold_results else 0}")
 
-            # 从低阈值结果中筛选出满足用户阈值的结果
+            # 1. 扩大召回范围：FAISS 先找前 20 个候选 (Primary Search)
+            # 使用较低的阈值召回，防止漏掉可能的匹配
+            candidates_limit = 20
+            raw_results = db.search_similar_images(query_features, limit=candidates_limit, threshold=0.05)
+            print(f"DEBUG: FAISS recalled {len(raw_results) if raw_results else 0} candidates")
+
+            # 2. 重排序 (Re-ranking) - 综合评分
+            refined_results = []
+
+            if raw_results:
+                # 获取全局特征提取器实例用来计算颜色/结构
+                extractor = get_global_feature_extractor()
+
+                for res in raw_results:
+                    # 获取候选图片的本地路径
+                    candidate_img_path = res.get('image_path')
+
+                    # 如果文件不存在，只能用原始 DINO 分数
+                    if not candidate_img_path or not os.path.exists(candidate_img_path):
+                        final_score = res['similarity']
+                        breakdown = {}
+                        print(f"DEBUG: Candidate image not found, using DINO score: {final_score:.3f}")
+                    else:
+                        # 计算综合评分
+                        hybrid_data = extractor.calculate_hybrid_similarity(
+                            image_path,  # 上传的查询图 (临时文件)
+                            candidate_img_path,  # 数据库里的图
+                            res['similarity']  # 原始 DINO 分数
+                        )
+                        final_score = hybrid_data['score']
+                        breakdown = hybrid_data.get('details', {})
+
+                    # 更新分数
+                    res['original_similarity'] = res['similarity']  # 保留原分用于调试
+                    res['similarity'] = final_score  # 更新为综合分
+                    res['score_breakdown'] = breakdown
+
+                    refined_results.append(res)
+
+                # 3. 按新的综合分数重新排序
+                refined_results.sort(key=lambda x: x['similarity'], reverse=True)
+                print(f"DEBUG: Re-ranking completed, best score: {refined_results[0]['similarity']:.3f}")
+
+            # 4. 应用用户阈值和店铺过滤
             results = []
-            if low_threshold_results:
-                for result in low_threshold_results:
-                    similarity = result.get('similarity', 0)
-                    # 应用用户相似度阈值和店铺过滤
-                    if similarity >= threshold:
-                        # 检查店铺权限
-                        if user_shops and result.get('shop_name') not in user_shops:
-                            print(f"DEBUG: Skipping result from shop {result.get('shop_name')} - not in user shops {user_shops}")
-                            continue
-                        results.append(result)
-                        if len(results) >= limit:
-                            break
+            for result in refined_results:
+                similarity = result.get('similarity', 0)
+                # 应用用户相似度阈值
+                if similarity >= threshold:
+                    # 检查店铺权限
+                    if user_shops and result.get('shop_name') not in user_shops:
+                        print(f"DEBUG: Skipping result from shop {result.get('shop_name')} - not in user shops {user_shops}")
+                        continue
+                    results.append(result)
+                    if len(results) >= limit:
+                        break
 
             print(f"DEBUG: Filtered results count (threshold {threshold}): {len(results)}")
             if results:
-                print(f"DEBUG: Best match similarity: {results[0]['similarity']}")
-            elif low_threshold_results:
-                print(f"DEBUG: Best low-threshold match similarity: {low_threshold_results[0]['similarity']}")
+                print(f"DEBUG: Best match similarity: {results[0]['similarity']:.3f} (original DINO: {results[0].get('original_similarity', 0):.3f})")
             print(f"DEBUG: Total indexed images: {db.get_total_indexed_images()}")
 
             # 严格执行阈值：如果没有满足阈值的结果，则返回空结果
@@ -17028,6 +17143,8 @@ def search_similar():
                     result_data = {
                         'rank': i + 1,
                         'similarity': float(result['similarity']),
+                        'originalSimilarity': float(result.get('original_similarity', result['similarity'])),  # 原始DINO分数
+                        'scoreBreakdown': result.get('score_breakdown', {}),  # 评分详情
                         'imageIndex': result['image_index'],
                         'matchedImage': f"/api/image/{result['id']}/{result['image_index']}",
                         'product': {
@@ -21754,7 +21871,8 @@ if __name__ == '__main__':
     print("🚀 服务启动中...")
     try:
         # 关闭 debug 模式，避免 Flask 重载器导致双重初始化
-        app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)
+        # 【关键修改】添加 use_reloader=False 禁用Flask重载器，避免双重进程
+        app.run(host='0.0.0.0', port=5001, debug=False, threaded=True, use_reloader=False)
     except KeyboardInterrupt:
         print("\n🛑 Received KeyboardInterrupt, shutting down...")
         signal_handler(signal.SIGINT, None)
