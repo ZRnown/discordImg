@@ -511,6 +511,9 @@ class Database:
             conn.execute('PRAGMA synchronous=NORMAL;') # 稍微降低安全性以换取性能
 
             yield conn
+        except sqlite3.IntegrityError:
+            # 这是一个逻辑控制信号（如唯一性约束），直接抛出给上层处理，不记录为连接错误
+            raise
         except Exception as e:
             logger.error("数据库连接失败: %s", str(e))
             raise

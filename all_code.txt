@@ -14807,16 +14807,25 @@ class DiscordBotClient(discord.Client):
 
     async def handle_image(self, message, attachment):
         try:
-            # 下载图片，设置较短的超时时间和重试机制
-            timeout = aiohttp.ClientTimeout(total=10, connect=5)  # 10秒总超时，5秒连接超时
+            # 【增强稳定性】增加超时时间，添加代理支持
+            timeout = aiohttp.ClientTimeout(total=30, connect=10)  # 30秒总超时，10秒连接超时
             image_data = None
+
+            # 【代理配置】从环境变量获取代理（支持国内网络环境）
+            proxy_url = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or None
+
+            # 【伪装头】添加 User-Agent 防止被 Discord CDN 拒绝
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
 
             # 重试最多3次
             for attempt in range(3):
                 try:
                     logger.info(f"下载Discord图片 (尝试 {attempt + 1}/3): {attachment.filename}")
-                    async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
-                        async with session.get(attachment.url) as resp:
+                    # 【关键修复】trust_env=True 允许使用系统代理
+                    async with aiohttp.ClientSession(timeout=timeout, headers=headers, trust_env=True) as session:
+                        async with session.get(attachment.url, proxy=proxy_url) as resp:
                             if resp.status == 200:
                                 image_data = await resp.read()
                                 logger.info(f"图片下载成功，大小: {len(image_data)} bytes")
@@ -14824,9 +14833,9 @@ class DiscordBotClient(discord.Client):
                             else:
                                 logger.warning(f"图片下载失败，状态码: {resp.status}")
                 except aiohttp.ClientError as e:
-                    logger.warning(f"图片下载失败 (尝试 {attempt + 1}/3): {e}")
+                    logger.warning(f"图片下载网络错误 (尝试 {attempt + 1}/3): {e}")
                     if attempt < 2:  # 不是最后一次尝试
-                        await asyncio.sleep(1)  # 等待1秒后重试
+                        await asyncio.sleep(2)  # 【增强】等待2秒后重试
                 except Exception as e:
                     logger.error(f"图片下载未知错误 (尝试 {attempt + 1}/3): {e}")
                     break
@@ -14923,11 +14932,19 @@ class DiscordBotClient(discord.Client):
                         elif image_source == 'custom' and custom_image_urls and len(custom_image_urls) > 0:
                             # 发送自定义图片链接
                             try:
-                                # aiohttp already imported at module level
+                                # 【代理配置】从环境变量获取代理
+                                proxy_url = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or None
+                                # 【伪装头】添加 User-Agent
+                                headers = {
+                                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                                }
+                                timeout = aiohttp.ClientTimeout(total=30, connect=10)
+
                                 for url in custom_image_urls[:10]:  # 最多发送10张图片
                                     try:
-                                        async with aiohttp.ClientSession(trust_env=False) as session:
-                                            async with session.get(url.strip()) as resp:
+                                        # 【关键修复】trust_env=True 允许使用系统代理
+                                        async with aiohttp.ClientSession(timeout=timeout, headers=headers, trust_env=True) as session:
+                                            async with session.get(url.strip(), proxy=proxy_url) as resp:
                                                 if resp.status == 200:
                                                     image_data = await resp.read()
                                                     # 从URL提取文件名
@@ -16465,6 +16482,7 @@ if __name__ == '__main__':
 # 移除这些限制可以让 AI 推理速度提升 3-5 倍
 # ============================================================
 import os
+import multiprocessing  # Windows多进程兼容性必需
 # 已移除全局线程限制，让 PyTorch 能够利用多核 CPU
 # os.environ["OMP_NUM_THREADS"] = "1"
 # os.environ["MKL_NUM_THREADS"] = "1"
@@ -16512,6 +16530,9 @@ import time
 from urllib.parse import quote
 import hashlib
 import uuid
+
+# === 全局状态变量 ===
+ai_model_ready = False  # AI模型是否已就绪
 
 # 在应用启动时从数据库加载系统配置
 def load_system_config():
@@ -16873,36 +16894,70 @@ def initialize_runtime():
     """
     print(f"🔧 [系统] 正在初始化运行时环境 (PID: {os.getpid()})...")
 
-    # --- 加载系统配置 ---
+    # 1. 加载系统配置
     load_system_config()
 
-    # --- 配置日志系统 ---
-    # 1. 获取根日志记录器
+    # 2. 配置日志系统
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
 
-    # 2. 清除现有的所有处理器（防止重复）
+    # 清除现有的所有处理器（防止重复）
     if root_logger.handlers:
         root_logger.handlers = []
 
-    # 3. 创建控制台处理器
+    # 创建控制台处理器
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     console_handler.setFormatter(console_formatter)
     root_logger.addHandler(console_handler)
 
-    # 4. 创建并添加队列处理器
+    # 创建并添加队列处理器
     queue_handler = QueueHandler()
     queue_handler.setLevel(logging.INFO)
     root_logger.addHandler(queue_handler)
 
-    # 5. 设置其他库的日志级别
-    logging.getLogger('werkzeug').setLevel(logging.WARNING)
-    logging.getLogger('urllib3').setLevel(logging.WARNING)
-    logging.getLogger('requests').setLevel(logging.WARNING)
-    logging.getLogger('aiohttp').setLevel(logging.WARNING)
-    logging.getLogger('ultralytics').setLevel(logging.WARNING)
+    # 屏蔽噪音日志
+    for lib in ['werkzeug', 'urllib3', 'requests', 'ultralytics', 'aiohttp']:
+        logging.getLogger(lib).setLevel(logging.WARNING)
+
+    # 3. 重置数据库状态
+    print("🧹 [系统] 正在重置抓取任务状态...")
+    try:
+        db.update_scrape_status(
+            is_scraping=False,
+            stop_signal=False,
+            message='系统重启，任务状态已重置'
+        )
+        # 重置所有Discord账号状态为离线
+        with db.get_connection() as conn:
+            conn.execute("UPDATE discord_accounts SET status = 'offline'")
+            conn.commit()
+        print("✅ [系统] 数据库状态已重置")
+    except Exception as e:
+        print(f"⚠️ [系统] 状态重置失败: {e}")
+
+    # 4. 【异步】预热AI模型（不阻塞Flask启动）
+    import threading
+    def async_warmup_ai():
+        global ai_model_ready
+        try:
+            print("🤖 [后台] 正在预热AI模型...")
+            get_global_feature_extractor()
+            ai_model_ready = True
+            print("✅ [后台] AI模型预热完成，系统已就绪")
+        except Exception as e:
+            print(f"⚠️ [后台] AI预热失败: {e}")
+            ai_model_ready = False
+
+    ai_warmup_thread = threading.Thread(target=async_warmup_ai, daemon=True)
+    ai_warmup_thread.start()
+    print("🚀 [系统] AI模型正在后台预热，Flask服务即将启动...")
+
+    # 5. 启动后台清理线程
+    cleanup_thread = threading.Thread(target=run_cleanup_task, daemon=True)
+    cleanup_thread.start()
+    logger.info("🚀 后台清理任务已启动")
 
     print(f"✅ [系统] 运行时环境初始化完成")
 
@@ -17976,6 +18031,17 @@ def get_product_urls(product_id):
     except Exception as e:
         logger.error(f"获取商品URL失败: {e}")
         return jsonify({'error': str(e)}), 500
+
+# === 健康检查端点（不需要认证，快速响应）===
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """健康检查端点，返回后端和AI模型状态"""
+    return jsonify({
+        'status': 'ok',
+        'backend': 'running',
+        'ai_ready': ai_model_ready,
+        'timestamp': datetime.now().isoformat()
+    })
 
 # === 新增：系统统计信息API ===
 @app.route('/api/system/stats', methods=['GET'])
@@ -21770,20 +21836,18 @@ def run_cleanup_task():
             logger.error(f"后台清理任务异常: {e}")
 
 if __name__ == '__main__':
-    # 【Windows兼容性修复】必须在最开始调用，防止Windows上的multiprocessing问题
-    import multiprocessing
+    # 【Windows兼容性修复】必须在最开始调用
     multiprocessing.freeze_support()
 
     import atexit
-    import threading
     import signal
     import time
 
-    # 【核心修复】在主进程启动时初始化运行时环境
-    # 只有主进程会进入这个判断，子进程不会，从而解决了重启问题
+    # 【核心修复】只在主进程执行初始化
     initialize_runtime()
 
     # 全局变量用于控制优雅关闭
+    import threading
     shutdown_event = threading.Event()
 
     def signal_handler(signum, frame):
@@ -21827,51 +21891,7 @@ if __name__ == '__main__':
     # 注册退出时停止机器人的函数
     atexit.register(stop_discord_bot)
 
-    # 启动后台清理线程（定期清理 processed_messages / 冷却缓存）
-    cleanup_thread = threading.Thread(target=run_cleanup_task, daemon=True)
-    cleanup_thread.start()
-    logger.info("🚀 后台清理任务已启动，每小时运行一次")
-
-    # ====================================================
-    # 新增修复：启动时强制重置数据库抓取状态
-    # ====================================================
-    print("🧹 [系统] 正在重置抓取任务状态...")
-    try:
-        # 强制将所有正在运行的状态重置为停止
-        db.update_scrape_status(
-            is_scraping=False,
-            stop_signal=False,
-            message='系统重启，任务状态已重置'
-        )
-        print("✅ [系统] 抓取状态已重置，随时可以开始新任务")
-    except Exception as e:
-        print(f"⚠️ [系统] 状态重置失败 (可能是第一次运行数据库未初始化): {e}")
-
-    # ====================================================
-    # 新增修复：启动时重置所有Discord账号状态为offline
-    # ====================================================
-    print("🧹 [系统] 正在重置Discord账号状态...")
-    try:
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("UPDATE discord_accounts SET status = 'offline'")
-            conn.commit()
-            affected = cursor.rowcount
-        print(f"✅ [系统] 已重置 {affected} 个Discord账号状态为offline")
-    except Exception as e:
-        print(f"⚠️ [系统] 账号状态重置失败: {e}")
-
-    # 3. 在主线程预加载模型 (关键)
-    print("🤖 [系统] 正在预热 AI 引擎，请稍候...")
-    try:
-        from feature_extractor import get_feature_extractor
-        # 强制获取一次实例，触发初始化
-        get_feature_extractor()
-        print("✅ [系统] AI 引擎预热完成，多线程任务将共享此实例")
-    except Exception as e:
-        print(f"⚠️ [系统] AI 预热失败: {e}")
-
-    # 4. 启动 Flask
+    # 启动 Flask 服务
     print("🚀 服务启动中...")
     try:
         # 关闭 debug 模式，避免 Flask 重载器导致双重初始化

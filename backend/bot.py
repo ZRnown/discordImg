@@ -984,7 +984,6 @@ class DiscordBotClient(discord.Client):
                             # 发送选中的商品图片
                             try:
                                 import aiofiles
-                                import os
                                 from database import db
 
                                 for image_index in custom_image_indexes:

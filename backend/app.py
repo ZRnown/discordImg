@@ -53,6 +53,9 @@ from urllib.parse import quote
 import hashlib
 import uuid
 
+# === 全局状态变量 ===
+ai_model_ready = False  # AI模型是否已就绪
+
 # 在应用启动时从数据库加载系统配置
 def load_system_config():
     """从数据库加载系统配置到内存"""
@@ -456,16 +459,24 @@ def initialize_runtime():
     except Exception as e:
         print(f"⚠️ [系统] 状态重置失败: {e}")
 
-    # 4. 预热AI模型
-    try:
-        print("🤖 [系统] 正在预热AI模型...")
-        get_global_feature_extractor()
-        print("✅ [系统] AI模型预热完成")
-    except Exception as e:
-        print(f"⚠️ [系统] AI预热失败: {e}")
+    # 4. 【异步】预热AI模型（不阻塞Flask启动）
+    import threading
+    def async_warmup_ai():
+        global ai_model_ready
+        try:
+            print("🤖 [后台] 正在预热AI模型...")
+            get_global_feature_extractor()
+            ai_model_ready = True
+            print("✅ [后台] AI模型预热完成，系统已就绪")
+        except Exception as e:
+            print(f"⚠️ [后台] AI预热失败: {e}")
+            ai_model_ready = False
+
+    ai_warmup_thread = threading.Thread(target=async_warmup_ai, daemon=True)
+    ai_warmup_thread.start()
+    print("🚀 [系统] AI模型正在后台预热，Flask服务即将启动...")
 
     # 5. 启动后台清理线程
-    import threading
     cleanup_thread = threading.Thread(target=run_cleanup_task, daemon=True)
     cleanup_thread.start()
     logger.info("🚀 后台清理任务已启动")
@@ -1542,6 +1553,17 @@ def get_product_urls(product_id):
     except Exception as e:
         logger.error(f"获取商品URL失败: {e}")
         return jsonify({'error': str(e)}), 500
+
+# === 健康检查端点（不需要认证，快速响应）===
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    """健康检查端点，返回后端和AI模型状态"""
+    return jsonify({
+        'status': 'ok',
+        'backend': 'running',
+        'ai_ready': ai_model_ready,
+        'timestamp': datetime.now().isoformat()
+    })
 
 # === 新增：系统统计信息API ===
 @app.route('/api/system/stats', methods=['GET'])
