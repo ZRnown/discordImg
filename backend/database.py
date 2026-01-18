@@ -243,6 +243,12 @@ class Database:
                 )
             ''')
 
+            # 【新增优化】为搜索历史创建时间索引，极大提升翻页速度
+            try:
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_search_history_time ON search_history(search_time DESC)')
+            except Exception:
+                pass
+
             # 创建全局延迟配置表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS global_reply_config (

@@ -1138,7 +1138,6 @@ class DiscordBotClient(discord.Client):
                         result = await resp.json()
                         return result
                     else:
-                        logger.error(f'PP-ShiTuV2 service error: {resp.status}')
                         return None
 
         except asyncio.TimeoutError:

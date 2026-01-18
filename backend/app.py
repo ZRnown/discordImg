@@ -50,6 +50,7 @@ import threading
 import time
 from urllib.parse import quote
 import hashlib
+import uuid
 
 # 在应用启动时从数据库加载系统配置
 def load_system_config():
@@ -404,6 +405,12 @@ def get_global_feature_extractor():
 # 在应用启动时初始化
 initialize_feature_extractor()
 
+# 【新增】定义项目内的临时文件目录 (在 backend/data/tmp)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+TEMP_DIR = os.path.join(BASE_DIR, 'data', 'tmp')
+# 确保目录存在
+os.makedirs(TEMP_DIR, exist_ok=True)
+
 # Flask配置初始化（简化版 - 解决HTTP IP访问问题）
 app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
@@ -496,7 +503,8 @@ def search_similar():
                     print(f"DEBUG: Warning - Content-Type '{content_type}' may not be an image")
 
                 temp_filename = f"{uuid.uuid4()}.jpg"
-                image_path = f"/tmp/{temp_filename}"
+                # 【修改】使用项目目录下的 TEMP_DIR
+                image_path = os.path.join(TEMP_DIR, temp_filename)
 
                 with open(image_path, 'wb') as f:
                     for chunk in response.iter_content(chunk_size=8192):
@@ -527,7 +535,8 @@ def search_similar():
             print(f"DEBUG: Found uploaded file: {image_file.filename if image_file else 'None'}")
 
             temp_filename = f"{uuid.uuid4()}.jpg"
-            image_path = f"/tmp/{temp_filename}"
+            # 【修改】使用项目目录下的 TEMP_DIR
+            image_path = os.path.join(TEMP_DIR, temp_filename)
             image_file.save(image_path)
 
         else:
@@ -1202,6 +1211,18 @@ def add_website_channel(config_id):
         if not channel_id:
             return jsonify({'error': '频道ID不能为空'}), 400
 
+        # 【修复】如果输入的是完整的Discord URL，提取频道ID
+        # Discord URL格式: https://discord.com/channels/{server_id}/{channel_id}
+        if 'discord.com/channels/' in channel_id:
+            # 提取URL中的最后一部分作为频道ID
+            parts = channel_id.rstrip('/').split('/')
+            if len(parts) >= 1:
+                channel_id = parts[-1]
+
+        # 验证频道ID是否为纯数字
+        if not channel_id.isdigit():
+            return jsonify({'error': '无效的频道ID格式'}), 400
+
         current_user = get_current_user()
         if db.add_website_channel_binding(config_id, channel_id, current_user['id']):
             return jsonify({'success': True, 'message': '频道绑定已添加'})
@@ -1218,6 +1239,14 @@ def remove_website_channel(config_id, channel_id):
         return jsonify({'error': '需要登录'}), 401
 
     try:
+        # 【修复】如果channel_id是完整的Discord URL，提取频道ID
+        # Discord URL格式: https://discord.com/channels/{server_id}/{channel_id}
+        if 'discord.com/channels/' in channel_id:
+            # 提取URL中的最后一部分作为频道ID
+            parts = channel_id.rstrip('/').split('/')
+            if len(parts) >= 1:
+                channel_id = parts[-1]
+
         current_user = get_current_user()
         if db.remove_website_channel_binding(config_id, channel_id, current_user['id']):
             return jsonify({'success': True, 'message': '频道绑定已移除'})
@@ -4533,9 +4562,9 @@ def scrape_shop_products(shop_id):
     logger.info(f"已加载 {len(existing_item_ids)} 个已存在的商品ID，将快速跳过")
 
     # =========================================================================
-    # 阶段 1: 通过分类树抓取所有商品 (突破2000条限制)
+    # 阶段 1: 通过分类树抓取所有商品 (多线程优化版)
     # =========================================================================
-    logger.info("=== 阶段 1: 通过分类树抓取商品 ===")
+    logger.info("=== 阶段 1: 通过分类树并发抓取商品 ===")
 
     db.update_scrape_status(message='正在获取店铺分类树...')
 
@@ -4546,47 +4575,63 @@ def scrape_shop_products(shop_id):
 
             if not categories:
                 logger.warning("未获取到任何分类，尝试使用Tab 0备用方案...")
-                # 备用方案：如果没有分类，使用Tab 0
                 db.update_scrape_status(message='未找到分类，使用备用方案...')
             else:
-                # 2. 遍历每个分类抓取商品
-                for idx, cate in enumerate(categories):
+                logger.info(f"获取到 {len(categories)} 个分类，准备并发扫描...")
+
+                # 定义单个分类的处理函数
+                def process_category(cate):
                     if scrape_stop_event.is_set() or db.get_scrape_status().get('stop_signal', False):
-                        break
+                        return 0
 
                     cate_id = cate['id']
                     cate_name = cate['name']
-
                     # 跳过空分类
                     if cate['count'] == 0:
-                        continue
+                        return 0
 
-                    logger.info(f"=== 正在扫描分类 [{idx+1}/{len(categories)}]: {cate_name} (ID: {cate_id}, 约 {cate['count']} 个商品) ===")
-                    db.update_scrape_status(message=f'正在扫描分类 [{idx+1}/{len(categories)}]: {cate_name}...')
-
-                    # 抓取该分类下的商品
-                    new_in_cate = 0
+                    local_new_count = 0
+                    # 注意：fetch_category_items 内部会有分页请求，这里是 IO 密集型
                     for item in fetch_category_items(shop_id, cate_id, cate_name, scraper.session):
                         item_id = str(item.get('itemId', ''))
 
-                        # 去重：只有不在字典里的才添加
-                        if item_id and item_id not in unique_product_tasks:
-                            # 【性能优化】使用集合快速检查，而不是查询数据库
-                            if item_id in existing_item_ids:
-                                continue
+                        # 检查停止信号
+                        if scrape_stop_event.is_set():
+                            break
 
-                            unique_product_tasks[item_id] = {
-                                'item_id': item_id,
-                                'item_url': item.get('itemUrl', f"https://weidian.com/item.html?itemID={item_id}"),
-                                'shop_name': shop_name
-                            }
-                            new_in_cate += 1
+                        if item_id:
+                            # 字典操作的线程安全性：Python字典的key唯一性天然去重
+                            if item_id not in unique_product_tasks:
+                                # 检查数据库去重
+                                if item_id in existing_item_ids:
+                                    continue
 
-                    if new_in_cate > 0:
-                        logger.info(f"  -> 分类 [{cate_name}] 收集了 {new_in_cate} 个新商品，总计: {len(unique_product_tasks)}")
-                        db.update_scrape_status(total=len(unique_product_tasks))
-                    else:
-                        logger.info(f"  -> 分类 [{cate_name}] 无新商品")
+                                unique_product_tasks[item_id] = {
+                                    'item_id': item_id,
+                                    'item_url': item.get('itemUrl', f"https://weidian.com/item.html?itemID={item_id}"),
+                                    'shop_name': shop_name
+                                }
+                                local_new_count += 1
+                    return local_new_count
+
+                # 使用线程池并发扫描分类
+                # 分类扫描主要是网络请求，可以开较高的并发
+                cate_workers = min(10, len(categories))
+                with concurrent.futures.ThreadPoolExecutor(max_workers=cate_workers) as cate_executor:
+                    # 提交任务
+                    future_to_cate = {cate_executor.submit(process_category, cate): cate for cate in categories}
+
+                    completed_cates = 0
+                    for future in concurrent.futures.as_completed(future_to_cate):
+                        cate = future_to_cate[future]
+                        try:
+                            count = future.result()
+                            completed_cates += 1
+                            logger.info(f"[{completed_cates}/{len(categories)}] 分类 '{cate['name']}' 扫描完成，新增 {count} 个商品")
+                            # 实时更新前端显示的总数
+                            db.update_scrape_status(total=len(unique_product_tasks), message=f"正在并发扫描分类 ({completed_cates}/{len(categories)})...")
+                        except Exception as e:
+                            logger.error(f"扫描分类 '{cate['name']}' 失败: {e}")
 
         except Exception as e:
             logger.error(f"分类遍历过程异常: {e}")

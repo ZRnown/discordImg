@@ -13,6 +13,14 @@ class WeidianScraper:
 
     def __init__(self):
         self.session = requests.Session()
+
+        # [新增] 优化连接池，防止多线程抓取时连接数不够
+        from requests.adapters import HTTPAdapter
+        # 设置连接池大小为 50，重试次数 3
+        adapter = HTTPAdapter(pool_connections=50, pool_maxsize=50, max_retries=3)
+        self.session.mount('http://', adapter)
+        self.session.mount('https://', adapter)
+
         # 修复：更新 Headers，完全匹配你的 CURL 请求
         self.session.headers.update({
             'accept': 'application/json, */*',  # 注意：curl中是 application/json, / 但实际应该是 /*

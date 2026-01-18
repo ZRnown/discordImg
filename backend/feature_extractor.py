@@ -206,16 +206,17 @@ class DINOv2FeatureExtractor:
             raise RuntimeError("DINOv2模型加载失败") from e
 
     def _crop_main_object(self, image_path: str) -> Image.Image:
-        """全自动裁剪商品主体
+        """全自动裁剪商品主体 + [新增] 尺寸优化
 
         全自动裁剪逻辑：
         1. 在预设的商品类别中检测所有物体
         2. 自动过滤掉背景、人、手
         3. 在剩下的商品中，选出最显著的一个（最大+最中心）
+        4. [新增] 缩小图片尺寸以加快AI推理速度
         """
         try:
             if not config.USE_YOLO_CROP:
-                return Image.open(image_path).convert("RGB")
+                return self._resize_for_ai(Image.open(image_path).convert("RGB"))
 
             # 检查缓存
             image_hash = self._get_image_hash(image_path)
@@ -224,7 +225,7 @@ class DINOv2FeatureExtractor:
                 cached_result = self._detection_cache[image_hash]
                 if cached_result is None:
                     # 缓存中表示未检测到商品
-                    return Image.open(image_path).convert("RGB")
+                    return self._resize_for_ai(Image.open(image_path).convert("RGB"))
                 # 返回缓存的裁剪结果
                 return cached_result
 
@@ -235,7 +236,7 @@ class DINOv2FeatureExtractor:
                 logger.info("未检测到通用商品，降级使用原图")
                 # 缓存未检测到商品的结果
                 self._detection_cache[image_hash] = None
-                return Image.open(image_path).convert("RGB")
+                return self._resize_for_ai(Image.open(image_path).convert("RGB"))
 
             boxes = results[0].boxes
             img = Image.open(image_path).convert("RGB")
@@ -280,7 +281,7 @@ class DINOv2FeatureExtractor:
                 logger.info("未找到合适的商品框，使用原图")
                 # 缓存失败结果
                 self._detection_cache[image_hash] = None
-                return img
+                return self._resize_for_ai(img)
 
             # 执行裁剪
             x1, y1, x2, y2 = best_box
@@ -299,10 +300,13 @@ class DINOv2FeatureExtractor:
             cropped_img = img.crop(crop_box)
             logger.info(f"成功裁剪商品区域: {crop_box}")
 
-            # 缓存成功结果
-            self._detection_cache[image_hash] = cropped_img.copy()
+            # 优化：Resize 裁剪后的图片
+            final_img = self._resize_for_ai(cropped_img)
 
-            return cropped_img
+            # 缓存成功结果
+            self._detection_cache[image_hash] = final_img.copy()
+
+            return final_img
 
         except Exception as e:
             logger.warning(f"自动裁剪出错: {e}, 使用原图")
@@ -312,7 +316,25 @@ class DINOv2FeatureExtractor:
                 self._detection_cache[image_hash] = None
             except:
                 pass
-            return Image.open(image_path).convert("RGB")
+            return self._resize_for_ai(Image.open(image_path).convert("RGB"))
+
+    def _resize_for_ai(self, img: Image.Image, max_size: int = 640) -> Image.Image:
+        """[新增] 将图片缩小到适合 AI 推理的尺寸，大幅提升速度
+
+        Args:
+            img: 输入图片
+            max_size: 最大尺寸（默认640px），对于特征提取任务已经足够精确
+
+        Returns:
+            缩放后的图片
+        """
+        w, h = img.size
+        if max(w, h) > max_size:
+            scale = max_size / max(w, h)
+            new_w = int(w * scale)
+            new_h = int(h * scale)
+            return img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        return img
 
     def extract_feature(self, image_path: Union[str, Path]) -> Optional[np.ndarray]:
         """提取单张图片的特征向量 (384维或768维)"""
