@@ -403,7 +403,9 @@ def get_global_feature_extractor():
     return feature_extractor_instance
 
 # 在应用启动时初始化
-initialize_feature_extractor()
+# 【修复】注释掉模块级别的初始化，避免多进程环境下重复初始化
+# 实际的初始化在 if __name__ == '__main__' 块中的预热阶段执行
+# initialize_feature_extractor()
 
 # 【新增】定义项目内的临时文件目录 (在 backend/data/tmp)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
