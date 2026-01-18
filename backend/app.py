@@ -1250,7 +1250,16 @@ def remove_website_channel(config_id, channel_id):
                 channel_id = parts[-1]
 
         current_user = get_current_user()
-        if db.remove_website_channel_binding(config_id, channel_id, current_user['id']):
+
+        # 【修复】管理员可以删除任何频道，普通用户只能删除自己的
+        if current_user.get('role') == 'admin':
+            # 管理员：删除该频道的所有绑定
+            success = db.remove_website_channel_binding_admin(config_id, channel_id)
+        else:
+            # 普通用户：只删除自己的绑定
+            success = db.remove_website_channel_binding(config_id, channel_id, current_user['id'])
+
+        if success:
             return jsonify({'success': True, 'message': '频道绑定已移除'})
         else:
             return jsonify({'error': '移除失败'}), 500

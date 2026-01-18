@@ -1490,14 +1490,46 @@ class Database:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
+
+                # 【修复】兼容完整URL和频道ID两种格式
+                # 如果传入的是频道ID，也要匹配数据库中可能存储的完整URL
+                # 构造两种可能的匹配模式
                 cursor.execute('''
                     DELETE FROM website_channel_bindings
-                    WHERE website_id = ? AND channel_id = ? AND (user_id = ? OR user_id IS NULL)
-                ''', (website_id, channel_id, user_id))
+                    WHERE website_id = ?
+                    AND (
+                        channel_id = ?
+                        OR channel_id LIKE '%/' || ?
+                        OR channel_id LIKE '%/' || ? || '/%'
+                    )
+                    AND (user_id = ? OR user_id IS NULL)
+                ''', (website_id, channel_id, channel_id, channel_id, user_id))
                 conn.commit()
                 return cursor.rowcount > 0
         except Exception as e:
             logger.error(f"移除网站频道绑定失败: {e}")
+            return False
+
+    def remove_website_channel_binding_admin(self, website_id: int, channel_id: str) -> bool:
+        """移除网站频道绑定（管理员权限，删除所有用户的绑定）"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # 【修复】兼容完整URL和频道ID两种格式
+                cursor.execute('''
+                    DELETE FROM website_channel_bindings
+                    WHERE website_id = ?
+                    AND (
+                        channel_id = ?
+                        OR channel_id LIKE '%/' || ?
+                        OR channel_id LIKE '%/' || ? || '/%'
+                    )
+                ''', (website_id, channel_id, channel_id, channel_id))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"管理员移除网站频道绑定失败: {e}")
             return False
 
     def get_website_config_by_channel(self, channel_id: str, user_id: int = None) -> Dict:
