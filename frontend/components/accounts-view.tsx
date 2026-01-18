@@ -491,7 +491,14 @@ export function AccountsView() {
 
   const handleRemoveChannel = async (websiteId: number, channelId: string) => {
     try {
-      const res = await fetch(`/api/websites/${websiteId}/channels/${channelId}`, {
+      // 【修复】如果channelId是完整的Discord URL，提取频道ID
+      let actualChannelId = channelId;
+      if (channelId.includes('discord.com/channels/')) {
+        const parts = channelId.split('/');
+        actualChannelId = parts[parts.length - 1];
+      }
+
+      const res = await fetch(`/api/websites/${websiteId}/channels/${actualChannelId}`, {
         method: 'DELETE',
         credentials: 'include'
       })
