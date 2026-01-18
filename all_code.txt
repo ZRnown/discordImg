@@ -3475,7 +3475,14 @@ export function AccountsView() {
 
   const handleRemoveChannel = async (websiteId: number, channelId: string) => {
     try {
-      const res = await fetch(`/api/websites/${websiteId}/channels/${channelId}`, {
+      // 【修复】如果channelId是完整的Discord URL，提取频道ID
+      let actualChannelId = channelId;
+      if (channelId.includes('discord.com/channels/')) {
+        const parts = channelId.split('/');
+        actualChannelId = parts[parts.length - 1];
+      }
+
+      const res = await fetch(`/api/websites/${websiteId}/channels/${actualChannelId}`, {
         method: 'DELETE',
         credentials: 'include'
       })
@@ -10588,6 +10595,12 @@ class Database:
                 )
             ''')
 
+            # 【新增优化】为搜索历史创建时间索引，极大提升翻页速度
+            try:
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_search_history_time ON search_history(search_time DESC)')
+            except Exception:
+                pass
+
             # 创建全局延迟配置表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS global_reply_config (
@@ -11829,14 +11842,46 @@ class Database:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
+
+                # 【修复】兼容完整URL和频道ID两种格式
+                # 如果传入的是频道ID，也要匹配数据库中可能存储的完整URL
+                # 构造两种可能的匹配模式
                 cursor.execute('''
                     DELETE FROM website_channel_bindings
-                    WHERE website_id = ? AND channel_id = ? AND (user_id = ? OR user_id IS NULL)
-                ''', (website_id, channel_id, user_id))
+                    WHERE website_id = ?
+                    AND (
+                        channel_id = ?
+                        OR channel_id LIKE '%/' || ?
+                        OR channel_id LIKE '%/' || ? || '/%'
+                    )
+                    AND (user_id = ? OR user_id IS NULL)
+                ''', (website_id, channel_id, channel_id, channel_id, user_id))
                 conn.commit()
                 return cursor.rowcount > 0
         except Exception as e:
             logger.error(f"移除网站频道绑定失败: {e}")
+            return False
+
+    def remove_website_channel_binding_admin(self, website_id: int, channel_id: str) -> bool:
+        """移除网站频道绑定（管理员权限，删除所有用户的绑定）"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # 【修复】兼容完整URL和频道ID两种格式
+                cursor.execute('''
+                    DELETE FROM website_channel_bindings
+                    WHERE website_id = ?
+                    AND (
+                        channel_id = ?
+                        OR channel_id LIKE '%/' || ?
+                        OR channel_id LIKE '%/' || ? || '/%'
+                    )
+                ''', (website_id, channel_id, channel_id, channel_id))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"管理员移除网站频道绑定失败: {e}")
             return False
 
     def get_website_config_by_channel(self, channel_id: str, user_id: int = None) -> Dict:
@@ -13073,6 +13118,14 @@ class WeidianScraper:
 
     def __init__(self):
         self.session = requests.Session()
+
+        # [新增] 优化连接池，防止多线程抓取时连接数不够
+        from requests.adapters import HTTPAdapter
+        # 设置连接池大小为 50，重试次数 3
+        adapter = HTTPAdapter(pool_connections=50, pool_maxsize=50, max_retries=3)
+        self.session.mount('http://', adapter)
+        self.session.mount('https://', adapter)
+
         # 修复：更新 Headers，完全匹配你的 CURL 请求
         self.session.headers.update({
             'accept': 'application/json, */*',  # 注意：curl中是 application/json, / 但实际应该是 /*
@@ -15016,7 +15069,6 @@ class DiscordBotClient(discord.Client):
                         result = await resp.json()
                         return result
                     else:
-                        logger.error(f'PP-ShiTuV2 service error: {resp.status}')
                         return None
 
         except asyncio.TimeoutError:
@@ -15352,16 +15404,17 @@ class DINOv2FeatureExtractor:
             raise RuntimeError("DINOv2模型加载失败") from e
 
     def _crop_main_object(self, image_path: str) -> Image.Image:
-        """全自动裁剪商品主体
+        """全自动裁剪商品主体 + [新增] 尺寸优化
 
         全自动裁剪逻辑：
         1. 在预设的商品类别中检测所有物体
         2. 自动过滤掉背景、人、手
         3. 在剩下的商品中，选出最显著的一个（最大+最中心）
+        4. [新增] 缩小图片尺寸以加快AI推理速度
         """
         try:
             if not config.USE_YOLO_CROP:
-                return Image.open(image_path).convert("RGB")
+                return self._resize_for_ai(Image.open(image_path).convert("RGB"))
 
             # 检查缓存
             image_hash = self._get_image_hash(image_path)
@@ -15370,7 +15423,7 @@ class DINOv2FeatureExtractor:
                 cached_result = self._detection_cache[image_hash]
                 if cached_result is None:
                     # 缓存中表示未检测到商品
-                    return Image.open(image_path).convert("RGB")
+                    return self._resize_for_ai(Image.open(image_path).convert("RGB"))
                 # 返回缓存的裁剪结果
                 return cached_result
 
@@ -15381,7 +15434,7 @@ class DINOv2FeatureExtractor:
                 logger.info("未检测到通用商品，降级使用原图")
                 # 缓存未检测到商品的结果
                 self._detection_cache[image_hash] = None
-                return Image.open(image_path).convert("RGB")
+                return self._resize_for_ai(Image.open(image_path).convert("RGB"))
 
             boxes = results[0].boxes
             img = Image.open(image_path).convert("RGB")
@@ -15426,7 +15479,7 @@ class DINOv2FeatureExtractor:
                 logger.info("未找到合适的商品框，使用原图")
                 # 缓存失败结果
                 self._detection_cache[image_hash] = None
-                return img
+                return self._resize_for_ai(img)
 
             # 执行裁剪
             x1, y1, x2, y2 = best_box
@@ -15445,10 +15498,13 @@ class DINOv2FeatureExtractor:
             cropped_img = img.crop(crop_box)
             logger.info(f"成功裁剪商品区域: {crop_box}")
 
-            # 缓存成功结果
-            self._detection_cache[image_hash] = cropped_img.copy()
+            # 优化：Resize 裁剪后的图片
+            final_img = self._resize_for_ai(cropped_img)
 
-            return cropped_img
+            # 缓存成功结果
+            self._detection_cache[image_hash] = final_img.copy()
+
+            return final_img
 
         except Exception as e:
             logger.warning(f"自动裁剪出错: {e}, 使用原图")
@@ -15458,7 +15514,25 @@ class DINOv2FeatureExtractor:
                 self._detection_cache[image_hash] = None
             except:
                 pass
-            return Image.open(image_path).convert("RGB")
+            return self._resize_for_ai(Image.open(image_path).convert("RGB"))
+
+    def _resize_for_ai(self, img: Image.Image, max_size: int = 640) -> Image.Image:
+        """[新增] 将图片缩小到适合 AI 推理的尺寸，大幅提升速度
+
+        Args:
+            img: 输入图片
+            max_size: 最大尺寸（默认640px），对于特征提取任务已经足够精确
+
+        Returns:
+            缩放后的图片
+        """
+        w, h = img.size
+        if max(w, h) > max_size:
+            scale = max_size / max(w, h)
+            new_w = int(w * scale)
+            new_h = int(h * scale)
+            return img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+        return img
 
     def extract_feature(self, image_path: Union[str, Path]) -> Optional[np.ndarray]:
         """提取单张图片的特征向量 (384维或768维)"""
@@ -16239,6 +16313,7 @@ import threading
 import time
 from urllib.parse import quote
 import hashlib
+import uuid
 
 # 在应用启动时从数据库加载系统配置
 def load_system_config():
@@ -16591,7 +16666,15 @@ def get_global_feature_extractor():
     return feature_extractor_instance
 
 # 在应用启动时初始化
-initialize_feature_extractor()
+# 【修复】注释掉模块级别的初始化，避免多进程环境下重复初始化
+# 实际的初始化在 if __name__ == '__main__' 块中的预热阶段执行
+# initialize_feature_extractor()
+
+# 【新增】定义项目内的临时文件目录 (在 backend/data/tmp)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+TEMP_DIR = os.path.join(BASE_DIR, 'data', 'tmp')
+# 确保目录存在
+os.makedirs(TEMP_DIR, exist_ok=True)
 
 # Flask配置初始化（简化版 - 解决HTTP IP访问问题）
 app = Flask(__name__)
@@ -16685,7 +16768,8 @@ def search_similar():
                     print(f"DEBUG: Warning - Content-Type '{content_type}' may not be an image")
 
                 temp_filename = f"{uuid.uuid4()}.jpg"
-                image_path = f"/tmp/{temp_filename}"
+                # 【修改】使用项目目录下的 TEMP_DIR
+                image_path = os.path.join(TEMP_DIR, temp_filename)
 
                 with open(image_path, 'wb') as f:
                     for chunk in response.iter_content(chunk_size=8192):
@@ -16716,7 +16800,8 @@ def search_similar():
             print(f"DEBUG: Found uploaded file: {image_file.filename if image_file else 'None'}")
 
             temp_filename = f"{uuid.uuid4()}.jpg"
-            image_path = f"/tmp/{temp_filename}"
+            # 【修改】使用项目目录下的 TEMP_DIR
+            image_path = os.path.join(TEMP_DIR, temp_filename)
             image_file.save(image_path)
 
         else:
@@ -17391,6 +17476,18 @@ def add_website_channel(config_id):
         if not channel_id:
             return jsonify({'error': '频道ID不能为空'}), 400
 
+        # 【修复】如果输入的是完整的Discord URL，提取频道ID
+        # Discord URL格式: https://discord.com/channels/{server_id}/{channel_id}
+        if 'discord.com/channels/' in channel_id:
+            # 提取URL中的最后一部分作为频道ID
+            parts = channel_id.rstrip('/').split('/')
+            if len(parts) >= 1:
+                channel_id = parts[-1]
+
+        # 验证频道ID是否为纯数字
+        if not channel_id.isdigit():
+            return jsonify({'error': '无效的频道ID格式'}), 400
+
         current_user = get_current_user()
         if db.add_website_channel_binding(config_id, channel_id, current_user['id']):
             return jsonify({'success': True, 'message': '频道绑定已添加'})
@@ -17407,8 +17504,25 @@ def remove_website_channel(config_id, channel_id):
         return jsonify({'error': '需要登录'}), 401
 
     try:
+        # 【修复】如果channel_id是完整的Discord URL，提取频道ID
+        # Discord URL格式: https://discord.com/channels/{server_id}/{channel_id}
+        if 'discord.com/channels/' in channel_id:
+            # 提取URL中的最后一部分作为频道ID
+            parts = channel_id.rstrip('/').split('/')
+            if len(parts) >= 1:
+                channel_id = parts[-1]
+
         current_user = get_current_user()
-        if db.remove_website_channel_binding(config_id, channel_id, current_user['id']):
+
+        # 【修复】管理员可以删除任何频道，普通用户只能删除自己的
+        if current_user.get('role') == 'admin':
+            # 管理员：删除该频道的所有绑定
+            success = db.remove_website_channel_binding_admin(config_id, channel_id)
+        else:
+            # 普通用户：只删除自己的绑定
+            success = db.remove_website_channel_binding(config_id, channel_id, current_user['id'])
+
+        if success:
             return jsonify({'success': True, 'message': '频道绑定已移除'})
         else:
             return jsonify({'error': '移除失败'}), 500
@@ -20722,9 +20836,9 @@ def scrape_shop_products(shop_id):
     logger.info(f"已加载 {len(existing_item_ids)} 个已存在的商品ID，将快速跳过")
 
     # =========================================================================
-    # 阶段 1: 通过分类树抓取所有商品 (突破2000条限制)
+    # 阶段 1: 通过分类树抓取所有商品 (多线程优化版)
     # =========================================================================
-    logger.info("=== 阶段 1: 通过分类树抓取商品 ===")
+    logger.info("=== 阶段 1: 通过分类树并发抓取商品 ===")
 
     db.update_scrape_status(message='正在获取店铺分类树...')
 
@@ -20735,47 +20849,63 @@ def scrape_shop_products(shop_id):
 
             if not categories:
                 logger.warning("未获取到任何分类，尝试使用Tab 0备用方案...")
-                # 备用方案：如果没有分类，使用Tab 0
                 db.update_scrape_status(message='未找到分类，使用备用方案...')
             else:
-                # 2. 遍历每个分类抓取商品
-                for idx, cate in enumerate(categories):
+                logger.info(f"获取到 {len(categories)} 个分类，准备并发扫描...")
+
+                # 定义单个分类的处理函数
+                def process_category(cate):
                     if scrape_stop_event.is_set() or db.get_scrape_status().get('stop_signal', False):
-                        break
+                        return 0
 
                     cate_id = cate['id']
                     cate_name = cate['name']
-
                     # 跳过空分类
                     if cate['count'] == 0:
-                        continue
+                        return 0
 
-                    logger.info(f"=== 正在扫描分类 [{idx+1}/{len(categories)}]: {cate_name} (ID: {cate_id}, 约 {cate['count']} 个商品) ===")
-                    db.update_scrape_status(message=f'正在扫描分类 [{idx+1}/{len(categories)}]: {cate_name}...')
-
-                    # 抓取该分类下的商品
-                    new_in_cate = 0
+                    local_new_count = 0
+                    # 注意：fetch_category_items 内部会有分页请求，这里是 IO 密集型
                     for item in fetch_category_items(shop_id, cate_id, cate_name, scraper.session):
                         item_id = str(item.get('itemId', ''))
 
-                        # 去重：只有不在字典里的才添加
-                        if item_id and item_id not in unique_product_tasks:
-                            # 【性能优化】使用集合快速检查，而不是查询数据库
-                            if item_id in existing_item_ids:
-                                continue
+                        # 检查停止信号
+                        if scrape_stop_event.is_set():
+                            break
 
-                            unique_product_tasks[item_id] = {
-                                'item_id': item_id,
-                                'item_url': item.get('itemUrl', f"https://weidian.com/item.html?itemID={item_id}"),
-                                'shop_name': shop_name
-                            }
-                            new_in_cate += 1
+                        if item_id:
+                            # 字典操作的线程安全性：Python字典的key唯一性天然去重
+                            if item_id not in unique_product_tasks:
+                                # 检查数据库去重
+                                if item_id in existing_item_ids:
+                                    continue
 
-                    if new_in_cate > 0:
-                        logger.info(f"  -> 分类 [{cate_name}] 收集了 {new_in_cate} 个新商品，总计: {len(unique_product_tasks)}")
-                        db.update_scrape_status(total=len(unique_product_tasks))
-                    else:
-                        logger.info(f"  -> 分类 [{cate_name}] 无新商品")
+                                unique_product_tasks[item_id] = {
+                                    'item_id': item_id,
+                                    'item_url': item.get('itemUrl', f"https://weidian.com/item.html?itemID={item_id}"),
+                                    'shop_name': shop_name
+                                }
+                                local_new_count += 1
+                    return local_new_count
+
+                # 使用线程池并发扫描分类
+                # 分类扫描主要是网络请求，可以开较高的并发
+                cate_workers = min(10, len(categories))
+                with concurrent.futures.ThreadPoolExecutor(max_workers=cate_workers) as cate_executor:
+                    # 提交任务
+                    future_to_cate = {cate_executor.submit(process_category, cate): cate for cate in categories}
+
+                    completed_cates = 0
+                    for future in concurrent.futures.as_completed(future_to_cate):
+                        cate = future_to_cate[future]
+                        try:
+                            count = future.result()
+                            completed_cates += 1
+                            logger.info(f"[{completed_cates}/{len(categories)}] 分类 '{cate['name']}' 扫描完成，新增 {count} 个商品")
+                            # 实时更新前端显示的总数
+                            db.update_scrape_status(total=len(unique_product_tasks), message=f"正在并发扫描分类 ({completed_cates}/{len(categories)})...")
+                        except Exception as e:
+                            logger.error(f"扫描分类 '{cate['name']}' 失败: {e}")
 
         except Exception as e:
             logger.error(f"分类遍历过程异常: {e}")

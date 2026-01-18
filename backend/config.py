@@ -62,8 +62,9 @@ class Config:
     # - AI_INTRA_THREADS：单个推理任务内部使用的 CPU 核心数
     # - AI_MAX_WORKERS：同时跑多少个"图片特征提取任务"
     # 【优化建议】如果是 10核 CPU，单次搜索设为 4-6 可以显著加快单张图的搜索速度
-    # 优化后策略：单张图搜索使用6核，批量抓取时2个Worker * 6核 = 12核
-    AI_INTRA_THREADS = int(os.getenv('AI_INTRA_THREADS', '6'))
+    # 【修复】从6改为4，为Flask Web服务留出CPU核心，避免Bot和Web服务争抢资源导致UI卡死
+    # 优化后策略：单张图搜索使用4核，批量抓取时2个Worker * 4核 = 8核，留2核给Flask
+    AI_INTRA_THREADS = int(os.getenv('AI_INTRA_THREADS', '4'))
     AI_MAX_WORKERS = int(os.getenv('AI_MAX_WORKERS', '2'))
 
     # 新的 save_product_images_unified 已不依赖该参数做图片特征线程池，保留字段主要用于兼容旧逻辑。

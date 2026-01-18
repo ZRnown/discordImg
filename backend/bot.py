@@ -21,6 +21,9 @@ bot_tasks = []
 # 全局冷却管理器：(account_id, channel_id) -> timestamp (上次发送时间)
 account_last_sent = {}
 
+# 【新增】AI并发限制：最多同时2个AI推理任务，防止CPU饱和导致Flask阻塞
+ai_concurrency_limit = asyncio.Semaphore(2)
+
 
 def get_all_cooldowns():
     """获取所有活跃的冷却状态（供 API 查询）"""
@@ -248,6 +251,11 @@ logger = logging.getLogger(__name__)
 logging.getLogger('discord').setLevel(logging.INFO)
 
 class DiscordBotClient(discord.Client):
+    # 【新增】频道白名单缓存（类级别共享，所有Bot实例共用）
+    _bound_channels_cache = set()  # 已绑定的频道ID集合
+    _last_cache_update = 0  # 上次缓存更新时间戳
+    _cache_ttl = 60  # 缓存有效期（秒）
+
     def __init__(self, account_id=None, user_id=None, user_shops=None, role='both'):
         # discord.py-self 可能不需要 intents，或者使用不同的语法
         try:
@@ -266,6 +274,39 @@ class DiscordBotClient(discord.Client):
         self.user_id = user_id  # 用户ID，用于获取个性化设置
         self.user_shops = user_shops  # 用户管理的店铺列表
         self.role = role  # 'listener', 'sender', 'both' - 账号角色
+
+    async def _refresh_channel_cache(self):
+        """【新增】刷新频道白名单缓存（60秒TTL）
+
+        从数据库获取所有已绑定的频道ID，更新类级别缓存。
+        使用TTL机制避免频繁查询数据库。
+        """
+        current_time = time.time()
+
+        # 检查缓存是否过期
+        if current_time - DiscordBotClient._last_cache_update < DiscordBotClient._cache_ttl:
+            return  # 缓存仍然有效，无需刷新
+
+        try:
+            # 在线程池中执行数据库查询（避免阻塞事件循环）
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+
+            channel_ids = await asyncio.get_event_loop().run_in_executor(
+                None, db.get_all_bound_channel_ids
+            )
+
+            # 更新类级别缓存
+            DiscordBotClient._bound_channels_cache = channel_ids
+            DiscordBotClient._last_cache_update = current_time
+
+            logger.debug(f"✅ 频道白名单缓存已刷新，共 {len(channel_ids)} 个频道")
+
+        except Exception as e:
+            logger.error(f"❌ 刷新频道白名单缓存失败: {e}")
+            # 失败时不更新时间戳，下次会重试
 
     async def schedule_reply(self, message, product, custom_reply=None):
         """调度回复到合适的发送账号 (增强版：带详细状态诊断)"""
@@ -697,6 +738,16 @@ class DiscordBotClient(discord.Client):
         if message.author.bot or message.webhook_id:
             return
 
+        # 【新增】极速过滤：频道白名单检查（在所有处理之前）
+        # 刷新频道白名单缓存（60秒TTL，不会频繁查询数据库）
+        await self._refresh_channel_cache()
+
+        # 提取频道ID并检查是否在白名单中
+        channel_id_str = str(message.channel.id)
+        if channel_id_str not in DiscordBotClient._bound_channels_cache:
+            # 静默丢弃：不在白名单中的频道消息直接忽略，不记录日志
+            return
+
         # --- 新增过滤需求 ---
 
         # 1. 忽略 @别人的信息 (Message Mentions)
@@ -791,8 +842,15 @@ class DiscordBotClient(discord.Client):
                 logger.error("图片下载失败，已达到最大重试次数")
                 return  # 静默失败，不发送错误消息
 
-            # 调用 DINOv2 服务识别图片，不使用店铺过滤（所有用户都能识别所有商品）
-            result = await self.recognize_image(image_data, user_shops=None)
+            # 【新增】AI并发限制：最多同时2个AI推理任务
+            # 使用Semaphore控制并发，防止CPU饱和导致Flask主线程阻塞
+            async with ai_concurrency_limit:
+                logger.debug(f"🔒 获取AI并发锁，当前等待队列: {ai_concurrency_limit._value}")
+
+                # 调用 DINOv2 服务识别图片，不使用店铺过滤（所有用户都能识别所有商品）
+                result = await self.recognize_image(image_data, user_shops=None)
+
+                logger.debug(f"🔓 释放AI并发锁")
 
             logger.info(f'图片识别结果: success={result.get("success") if result else False}, results_count={len(result.get("results", [])) if result else 0}')
 

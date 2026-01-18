@@ -1561,6 +1561,52 @@ class Database:
             logger.error(f"根据频道获取网站配置失败: {e}")
             return None
 
+    def get_all_bound_channel_ids(self) -> set:
+        """【新增】高效获取所有已绑定的频道ID列表（用于Bot白名单缓存）
+
+        返回所有已绑定的频道ID集合，包括:
+        1. website_channel_bindings 表中的所有频道
+        2. 系统配置中的 CNFANS_CHANNEL_ID 和 ACBUY_CHANNEL_ID
+
+        Returns:
+            set: 频道ID字符串集合，用于O(1)快速查找
+        """
+        try:
+            channel_ids = set()
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # 1. 从绑定表中获取所有频道ID
+                cursor.execute('SELECT DISTINCT channel_id FROM website_channel_bindings')
+                rows = cursor.fetchall()
+                for row in rows:
+                    channel_id = row[0]
+                    if channel_id:
+                        # 兼容完整URL格式，提取频道ID
+                        if 'discord.com/channels/' in channel_id:
+                            parts = channel_id.rstrip('/').split('/')
+                            if len(parts) >= 1:
+                                channel_id = parts[-1]
+                        channel_ids.add(str(channel_id))
+
+            # 2. 添加系统配置中的频道ID（兼容旧配置）
+            try:
+                from config import config
+                if hasattr(config, 'CNFANS_CHANNEL_ID') and config.CNFANS_CHANNEL_ID:
+                    channel_ids.add(str(config.CNFANS_CHANNEL_ID))
+                if hasattr(config, 'ACBUY_CHANNEL_ID') and config.ACBUY_CHANNEL_ID:
+                    channel_ids.add(str(config.ACBUY_CHANNEL_ID))
+            except Exception as e:
+                logger.debug(f"读取系统配置频道ID失败（可忽略）: {e}")
+
+            logger.debug(f"获取到 {len(channel_ids)} 个已绑定的频道ID")
+            return channel_ids
+
+        except Exception as e:
+            logger.error(f"获取已绑定频道ID列表失败: {e}")
+            return set()
+
     def generate_website_urls(self, weidian_id: str) -> List[Dict]:
         """根据微店ID生成所有网站的URL"""
         try:
