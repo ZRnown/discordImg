@@ -829,16 +829,25 @@ class DiscordBotClient(discord.Client):
 
     async def handle_image(self, message, attachment):
         try:
-            # 下载图片，设置较短的超时时间和重试机制
-            timeout = aiohttp.ClientTimeout(total=10, connect=5)  # 10秒总超时，5秒连接超时
+            # 【增强稳定性】增加超时时间，添加代理支持
+            timeout = aiohttp.ClientTimeout(total=30, connect=10)  # 30秒总超时，10秒连接超时
             image_data = None
+
+            # 【代理配置】从环境变量获取代理（支持国内网络环境）
+            proxy_url = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or None
+
+            # 【伪装头】添加 User-Agent 防止被 Discord CDN 拒绝
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
 
             # 重试最多3次
             for attempt in range(3):
                 try:
                     logger.info(f"下载Discord图片 (尝试 {attempt + 1}/3): {attachment.filename}")
-                    async with aiohttp.ClientSession(timeout=timeout, trust_env=False) as session:
-                        async with session.get(attachment.url) as resp:
+                    # 【关键修复】trust_env=True 允许使用系统代理
+                    async with aiohttp.ClientSession(timeout=timeout, headers=headers, trust_env=True) as session:
+                        async with session.get(attachment.url, proxy=proxy_url) as resp:
                             if resp.status == 200:
                                 image_data = await resp.read()
                                 logger.info(f"图片下载成功，大小: {len(image_data)} bytes")
@@ -846,9 +855,9 @@ class DiscordBotClient(discord.Client):
                             else:
                                 logger.warning(f"图片下载失败，状态码: {resp.status}")
                 except aiohttp.ClientError as e:
-                    logger.warning(f"图片下载失败 (尝试 {attempt + 1}/3): {e}")
+                    logger.warning(f"图片下载网络错误 (尝试 {attempt + 1}/3): {e}")
                     if attempt < 2:  # 不是最后一次尝试
-                        await asyncio.sleep(1)  # 等待1秒后重试
+                        await asyncio.sleep(2)  # 【增强】等待2秒后重试
                 except Exception as e:
                     logger.error(f"图片下载未知错误 (尝试 {attempt + 1}/3): {e}")
                     break
@@ -945,11 +954,19 @@ class DiscordBotClient(discord.Client):
                         elif image_source == 'custom' and custom_image_urls and len(custom_image_urls) > 0:
                             # 发送自定义图片链接
                             try:
-                                # aiohttp already imported at module level
+                                # 【代理配置】从环境变量获取代理
+                                proxy_url = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or None
+                                # 【伪装头】添加 User-Agent
+                                headers = {
+                                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                                }
+                                timeout = aiohttp.ClientTimeout(total=30, connect=10)
+
                                 for url in custom_image_urls[:10]:  # 最多发送10张图片
                                     try:
-                                        async with aiohttp.ClientSession(trust_env=False) as session:
-                                            async with session.get(url.strip()) as resp:
+                                        # 【关键修复】trust_env=True 允许使用系统代理
+                                        async with aiohttp.ClientSession(timeout=timeout, headers=headers, trust_env=True) as session:
+                                            async with session.get(url.strip(), proxy=proxy_url) as resp:
                                                 if resp.status == 200:
                                                     image_data = await resp.read()
                                                     # 从URL提取文件名
