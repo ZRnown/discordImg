@@ -738,56 +738,73 @@ class DiscordBotClient(discord.Client):
         if message.author.bot or message.webhook_id:
             return
 
-        # 【新增】极速过滤：频道白名单检查（在所有处理之前）
-        # 刷新频道白名单缓存（60秒TTL，不会频繁查询数据库）
-        await self._refresh_channel_cache()
-
-        # 提取频道ID并检查是否在白名单中
-        channel_id_str = str(message.channel.id)
-        if channel_id_str not in DiscordBotClient._bound_channels_cache:
-            # 静默丢弃：不在白名单中的频道消息直接忽略，不记录日志
-            return
-
-        # --- 新增过滤需求 ---
-
-        # 1. 忽略 @别人的信息 (Message Mentions)
-        # 如果消息中包含 mention，且 mention 的不是自己，则忽略
+        # 1. 忽略 @别人的信息
         if message.mentions:
-            # 如果仅仅是不想回复 @别人的消息（不管是不是@自己），直接 return
             return
 
-        # 2. 忽略回复别人的信息 (Message Reference)
+        # 2. 忽略回复别人的信息
         if message.reference is not None:
             return
 
-        # 3. 触发消息过滤规则
-        if self._should_filter_message(message):
+        # 3. 角色过滤：纯 sender 账号完全不处理消息
+        if self.role == 'sender':
             return
 
-        # 4. 角色过滤：纯 sender 账号不处理消息
-        if self.role == 'sender':
-            return  # 纯发送账号不监听消息
+        # =================================================================
+        # 【核心修复】先检查：这条消息所在的频道，是否归当前账号"监听"？
+        # =================================================================
+        try:
+            # 异步获取该频道绑定的网站配置
+            website_config = await self.get_website_config_by_channel_async(message.channel.id)
 
-        # 多Bot并发控制：同一条消息只允许一个Bot处理
-        # 如果这个消息已经被别的Bot抢锁处理了，我就退出
+            # 如果这个频道没有绑定任何配置，直接忽略
+            if not website_config:
+                # logger.debug(f"频道 {message.channel.id} 未绑定配置，账号 {self.account_id} 忽略此消息")
+                return
+
+            # 进一步检查：当前账号是否是该配置的合法监听者？
+            # 这是一个关键步骤，防止未绑定的账号处理已绑定频道的消息
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+
+            # 获取该网站配置绑定的所有监听者ID
+            listener_ids = await asyncio.get_event_loop().run_in_executor(
+                None, db.get_website_listeners, website_config['id']
+            )
+
+            # 如果当前账号不在监听列表中，直接忽略
+            if self.account_id not in listener_ids:
+                # logger.debug(f"账号 {self.account_id} 不是频道 {message.channel.id} 的监听者，忽略")
+                return
+
+        except Exception as e:
+            logger.error(f"检查频道绑定权限失败: {e}")
+            return
+
+        # =================================================================
+        # 【核心修复】确认我有资格处理后，再抢全局锁
+        # =================================================================
         try:
             if not mark_message_as_processed(message.id):
+                logger.info(f"消息 {message.id} 已被其他(合法的)Bot处理，跳过")
                 return
         except Exception as e:
             logger.error(f"消息去重检查失败: {e}")
             return
 
-        logger.info(f'收到消息: {message.author.name} 在 #{message.channel.name}: "{message.content[:100]}{"..." if len(message.content) > 100 else ""}"')
+        # 4. 触发内容过滤规则
+        if self._should_filter_message(message):
+            return
 
-        # 获取用户设置，检查是否启用关键词和图片回复
+        logger.info(f'📨 [接收] 账号:{self.user.name} | 频道:{message.channel.name} | 内容: "{message.content[:50]}..."')
+
+        # 获取用户设置
         keyword_reply_enabled = True
         image_reply_enabled = True
         if self.user_id:
             try:
-                try:
-                    from database import db
-                except ImportError:
-                    from .database import db
                 user_settings = await asyncio.get_event_loop().run_in_executor(
                     None, db.get_user_settings, self.user_id
                 )
@@ -799,18 +816,16 @@ class DiscordBotClient(discord.Client):
         # 处理关键词消息转发
         await self.handle_keyword_forward(message)
 
-        # 处理关键词搜索（文字消息）- 检查开关
+        # 处理关键词搜索
         if keyword_reply_enabled:
             await self.handle_keyword_search(message)
-        else:
-            logger.debug(f'关键词回复已禁用，跳过关键词搜索')
 
-        # 检查消息是否包含图片（只处理图片，不处理文字）- 检查开关
+        # 处理图片
         if image_reply_enabled and message.attachments:
             for attachment in message.attachments:
                 if attachment.content_type and attachment.content_type.startswith('image/'):
+                    logger.info(f"📷 检测到图片，开始处理: {attachment.filename}")
                     await self.handle_image(message, attachment)
-                    # 如果消息包含图片，不再处理文字内容，避免重复回复
 
     async def handle_image(self, message, attachment):
         try:

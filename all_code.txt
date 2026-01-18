@@ -10314,8 +10314,9 @@ class Config:
     # - AI_INTRA_THREADS：单个推理任务内部使用的 CPU 核心数
     # - AI_MAX_WORKERS：同时跑多少个"图片特征提取任务"
     # 【优化建议】如果是 10核 CPU，单次搜索设为 4-6 可以显著加快单张图的搜索速度
-    # 优化后策略：单张图搜索使用6核，批量抓取时2个Worker * 6核 = 12核
-    AI_INTRA_THREADS = int(os.getenv('AI_INTRA_THREADS', '6'))
+    # 【修复】从6改为4，为Flask Web服务留出CPU核心，避免Bot和Web服务争抢资源导致UI卡死
+    # 优化后策略：单张图搜索使用4核，批量抓取时2个Worker * 4核 = 8核，留2核给Flask
+    AI_INTRA_THREADS = int(os.getenv('AI_INTRA_THREADS', '4'))
     AI_MAX_WORKERS = int(os.getenv('AI_MAX_WORKERS', '2'))
 
     # 新的 save_product_images_unified 已不依赖该参数做图片特征线程池，保留字段主要用于兼容旧逻辑。
@@ -11912,6 +11913,52 @@ class Database:
         except Exception as e:
             logger.error(f"根据频道获取网站配置失败: {e}")
             return None
+
+    def get_all_bound_channel_ids(self) -> set:
+        """【新增】高效获取所有已绑定的频道ID列表（用于Bot白名单缓存）
+
+        返回所有已绑定的频道ID集合，包括:
+        1. website_channel_bindings 表中的所有频道
+        2. 系统配置中的 CNFANS_CHANNEL_ID 和 ACBUY_CHANNEL_ID
+
+        Returns:
+            set: 频道ID字符串集合，用于O(1)快速查找
+        """
+        try:
+            channel_ids = set()
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                # 1. 从绑定表中获取所有频道ID
+                cursor.execute('SELECT DISTINCT channel_id FROM website_channel_bindings')
+                rows = cursor.fetchall()
+                for row in rows:
+                    channel_id = row[0]
+                    if channel_id:
+                        # 兼容完整URL格式，提取频道ID
+                        if 'discord.com/channels/' in channel_id:
+                            parts = channel_id.rstrip('/').split('/')
+                            if len(parts) >= 1:
+                                channel_id = parts[-1]
+                        channel_ids.add(str(channel_id))
+
+            # 2. 添加系统配置中的频道ID（兼容旧配置）
+            try:
+                from config import config
+                if hasattr(config, 'CNFANS_CHANNEL_ID') and config.CNFANS_CHANNEL_ID:
+                    channel_ids.add(str(config.CNFANS_CHANNEL_ID))
+                if hasattr(config, 'ACBUY_CHANNEL_ID') and config.ACBUY_CHANNEL_ID:
+                    channel_ids.add(str(config.ACBUY_CHANNEL_ID))
+            except Exception as e:
+                logger.debug(f"读取系统配置频道ID失败（可忽略）: {e}")
+
+            logger.debug(f"获取到 {len(channel_ids)} 个已绑定的频道ID")
+            return channel_ids
+
+        except Exception as e:
+            logger.error(f"获取已绑定频道ID列表失败: {e}")
+            return set()
 
     def generate_website_urls(self, weidian_id: str) -> List[Dict]:
         """根据微店ID生成所有网站的URL"""
@@ -13952,6 +13999,9 @@ bot_tasks = []
 # 全局冷却管理器：(account_id, channel_id) -> timestamp (上次发送时间)
 account_last_sent = {}
 
+# 【新增】AI并发限制：最多同时2个AI推理任务，防止CPU饱和导致Flask阻塞
+ai_concurrency_limit = asyncio.Semaphore(2)
+
 
 def get_all_cooldowns():
     """获取所有活跃的冷却状态（供 API 查询）"""
@@ -14179,6 +14229,11 @@ logger = logging.getLogger(__name__)
 logging.getLogger('discord').setLevel(logging.INFO)
 
 class DiscordBotClient(discord.Client):
+    # 【新增】频道白名单缓存（类级别共享，所有Bot实例共用）
+    _bound_channels_cache = set()  # 已绑定的频道ID集合
+    _last_cache_update = 0  # 上次缓存更新时间戳
+    _cache_ttl = 60  # 缓存有效期（秒）
+
     def __init__(self, account_id=None, user_id=None, user_shops=None, role='both'):
         # discord.py-self 可能不需要 intents，或者使用不同的语法
         try:
@@ -14197,6 +14252,39 @@ class DiscordBotClient(discord.Client):
         self.user_id = user_id  # 用户ID，用于获取个性化设置
         self.user_shops = user_shops  # 用户管理的店铺列表
         self.role = role  # 'listener', 'sender', 'both' - 账号角色
+
+    async def _refresh_channel_cache(self):
+        """【新增】刷新频道白名单缓存（60秒TTL）
+
+        从数据库获取所有已绑定的频道ID，更新类级别缓存。
+        使用TTL机制避免频繁查询数据库。
+        """
+        current_time = time.time()
+
+        # 检查缓存是否过期
+        if current_time - DiscordBotClient._last_cache_update < DiscordBotClient._cache_ttl:
+            return  # 缓存仍然有效，无需刷新
+
+        try:
+            # 在线程池中执行数据库查询（避免阻塞事件循环）
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+
+            channel_ids = await asyncio.get_event_loop().run_in_executor(
+                None, db.get_all_bound_channel_ids
+            )
+
+            # 更新类级别缓存
+            DiscordBotClient._bound_channels_cache = channel_ids
+            DiscordBotClient._last_cache_update = current_time
+
+            logger.debug(f"✅ 频道白名单缓存已刷新，共 {len(channel_ids)} 个频道")
+
+        except Exception as e:
+            logger.error(f"❌ 刷新频道白名单缓存失败: {e}")
+            # 失败时不更新时间戳，下次会重试
 
     async def schedule_reply(self, message, product, custom_reply=None):
         """调度回复到合适的发送账号 (增强版：带详细状态诊断)"""
@@ -14628,6 +14716,16 @@ class DiscordBotClient(discord.Client):
         if message.author.bot or message.webhook_id:
             return
 
+        # 【新增】极速过滤：频道白名单检查（在所有处理之前）
+        # 刷新频道白名单缓存（60秒TTL，不会频繁查询数据库）
+        await self._refresh_channel_cache()
+
+        # 提取频道ID并检查是否在白名单中
+        channel_id_str = str(message.channel.id)
+        if channel_id_str not in DiscordBotClient._bound_channels_cache:
+            # 静默丢弃：不在白名单中的频道消息直接忽略，不记录日志
+            return
+
         # --- 新增过滤需求 ---
 
         # 1. 忽略 @别人的信息 (Message Mentions)
@@ -14722,8 +14820,15 @@ class DiscordBotClient(discord.Client):
                 logger.error("图片下载失败，已达到最大重试次数")
                 return  # 静默失败，不发送错误消息
 
-            # 调用 DINOv2 服务识别图片，不使用店铺过滤（所有用户都能识别所有商品）
-            result = await self.recognize_image(image_data, user_shops=None)
+            # 【新增】AI并发限制：最多同时2个AI推理任务
+            # 使用Semaphore控制并发，防止CPU饱和导致Flask主线程阻塞
+            async with ai_concurrency_limit:
+                logger.debug(f"🔒 获取AI并发锁，当前等待队列: {ai_concurrency_limit._value}")
+
+                # 调用 DINOv2 服务识别图片，不使用店铺过滤（所有用户都能识别所有商品）
+                result = await self.recognize_image(image_data, user_shops=None)
+
+                logger.debug(f"🔓 释放AI并发锁")
 
             logger.info(f'图片识别结果: success={result.get("success") if result else False}, results_count={len(result.get("results", [])) if result else 0}')
 
