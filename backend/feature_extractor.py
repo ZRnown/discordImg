@@ -40,6 +40,7 @@ except Exception:
     pass
 # =================
 import numpy as np
+import cv2  # OpenCV for color histogram and structure comparison
 import threading
 from typing import List, Optional, Union, Dict
 import logging
@@ -381,6 +382,83 @@ class DINOv2FeatureExtractor:
             feature = self.extract_feature(image_path)
             results.append(feature)
         return results
+
+    def calculate_hybrid_similarity(self, img_path1: str, img_path2: str, dino_score: float) -> dict:
+        """
+        【新增】计算综合相似度 (Re-ranking)
+
+        综合分 = DINO语义分(60%) + 颜色分(25%) + 轮廓分(15%)
+
+        Args:
+            img_path1: 查询图片路径
+            img_path2: 候选图片路径
+            dino_score: DINOv2原始相似度分数
+
+        Returns:
+            dict: {'score': 综合分数, 'details': {'dino': ..., 'color': ..., 'structure': ...}}
+        """
+        try:
+            # 读取图片 (OpenCV)
+            img1 = cv2.imread(img_path1)
+            img2 = cv2.imread(img_path2)
+
+            if img1 is None or img2 is None:
+                logger.warning(f"无法读取图片，使用原始DINO分数: {img_path1} or {img_path2}")
+                return {'score': dino_score, 'details': {}}
+
+            # 1. 颜色相似度 (基于 HSV 直方图)
+            # 转换到 HSV 空间，对光照更鲁棒
+            hsv1 = cv2.cvtColor(img1, cv2.COLOR_BGR2HSV)
+            hsv2 = cv2.cvtColor(img2, cv2.COLOR_BGR2HSV)
+
+            # 计算直方图 (H:色调, S:饱和度)
+            hist1 = cv2.calcHist([hsv1], [0, 1], None, [180, 256], [0, 180, 0, 256])
+            hist2 = cv2.calcHist([hsv2], [0, 1], None, [180, 256], [0, 180, 0, 256])
+
+            # 归一化
+            cv2.normalize(hist1, hist1, 0, 1, cv2.NORM_MINMAX)
+            cv2.normalize(hist2, hist2, 0, 1, cv2.NORM_MINMAX)
+
+            # 巴氏距离比较 (结果 0-1, 1为完全匹配)
+            color_score = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL)
+            color_score = max(0.0, color_score)  # 修正可能的负值
+
+            # 2. 轮廓/结构相似度 (简化版：缩小后比较像素差异)
+            # 将两图统一缩放到 64x64
+            img1_small = cv2.resize(img1, (64, 64))
+            img2_small = cv2.resize(img2, (64, 64))
+
+            # 转灰度
+            gray1 = cv2.cvtColor(img1_small, cv2.COLOR_BGR2GRAY)
+            gray2 = cv2.cvtColor(img2_small, cv2.COLOR_BGR2GRAY)
+
+            # 计算差异
+            diff = cv2.absdiff(gray1, gray2)
+            structure_score = 1.0 - (np.mean(diff) / 255.0)
+
+            # === 综合评分公式 (可调优) ===
+            # DINO (语义/版型): 权重 0.6
+            # Color (颜色): 权重 0.25 (对区分不同配色的同款鞋很有用)
+            # Structure (细节): 权重 0.15
+
+            final_score = (dino_score * 0.6) + (color_score * 0.25) + (structure_score * 0.15)
+
+            logger.debug(f"综合评分: DINO={dino_score:.3f}, Color={color_score:.3f}, Structure={structure_score:.3f}, Final={final_score:.3f}")
+
+            return {
+                'score': float(final_score),
+                'details': {
+                    'dino': float(dino_score),
+                    'color': float(color_score),
+                    'structure': float(structure_score)
+                }
+            }
+
+        except Exception as e:
+            logger.error(f"计算综合相似度出错: {e}")
+            import traceback
+            traceback.print_exc()
+            return {'score': dino_score, 'details': {}}
 
     def get_status(self) -> Dict:
         """获取AI模型状态和性能信息"""

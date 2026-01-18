@@ -567,32 +567,69 @@ def search_similar():
             if query_features is None:
                 return jsonify({'error': 'Feature extraction failed'}), 500
 
-            # 使用 FAISS HNSW 向量搜索
+            # 【优化】使用 FAISS HNSW 向量搜索 + 综合评分重排序
             print(f"DEBUG: Searching with threshold: {threshold}, vector length: {len(query_features)}")
-            # 用较低的阈值搜索找到候选结果，然后从中筛选满足用户阈值的结果
-            low_threshold_results = db.search_similar_images(query_features, limit=10, threshold=0.1)
-            print(f"DEBUG: Low threshold (0.1) search results: {len(low_threshold_results) if low_threshold_results else 0}")
 
-            # 从低阈值结果中筛选出满足用户阈值的结果
+            # 1. 扩大召回范围：FAISS 先找前 20 个候选 (Primary Search)
+            # 使用较低的阈值召回，防止漏掉可能的匹配
+            candidates_limit = 20
+            raw_results = db.search_similar_images(query_features, limit=candidates_limit, threshold=0.05)
+            print(f"DEBUG: FAISS recalled {len(raw_results) if raw_results else 0} candidates")
+
+            # 2. 重排序 (Re-ranking) - 综合评分
+            refined_results = []
+
+            if raw_results:
+                # 获取全局特征提取器实例用来计算颜色/结构
+                extractor = get_global_feature_extractor()
+
+                for res in raw_results:
+                    # 获取候选图片的本地路径
+                    candidate_img_path = res.get('image_path')
+
+                    # 如果文件不存在，只能用原始 DINO 分数
+                    if not candidate_img_path or not os.path.exists(candidate_img_path):
+                        final_score = res['similarity']
+                        breakdown = {}
+                        print(f"DEBUG: Candidate image not found, using DINO score: {final_score:.3f}")
+                    else:
+                        # 计算综合评分
+                        hybrid_data = extractor.calculate_hybrid_similarity(
+                            image_path,  # 上传的查询图 (临时文件)
+                            candidate_img_path,  # 数据库里的图
+                            res['similarity']  # 原始 DINO 分数
+                        )
+                        final_score = hybrid_data['score']
+                        breakdown = hybrid_data.get('details', {})
+
+                    # 更新分数
+                    res['original_similarity'] = res['similarity']  # 保留原分用于调试
+                    res['similarity'] = final_score  # 更新为综合分
+                    res['score_breakdown'] = breakdown
+
+                    refined_results.append(res)
+
+                # 3. 按新的综合分数重新排序
+                refined_results.sort(key=lambda x: x['similarity'], reverse=True)
+                print(f"DEBUG: Re-ranking completed, best score: {refined_results[0]['similarity']:.3f}")
+
+            # 4. 应用用户阈值和店铺过滤
             results = []
-            if low_threshold_results:
-                for result in low_threshold_results:
-                    similarity = result.get('similarity', 0)
-                    # 应用用户相似度阈值和店铺过滤
-                    if similarity >= threshold:
-                        # 检查店铺权限
-                        if user_shops and result.get('shop_name') not in user_shops:
-                            print(f"DEBUG: Skipping result from shop {result.get('shop_name')} - not in user shops {user_shops}")
-                            continue
-                        results.append(result)
-                        if len(results) >= limit:
-                            break
+            for result in refined_results:
+                similarity = result.get('similarity', 0)
+                # 应用用户相似度阈值
+                if similarity >= threshold:
+                    # 检查店铺权限
+                    if user_shops and result.get('shop_name') not in user_shops:
+                        print(f"DEBUG: Skipping result from shop {result.get('shop_name')} - not in user shops {user_shops}")
+                        continue
+                    results.append(result)
+                    if len(results) >= limit:
+                        break
 
             print(f"DEBUG: Filtered results count (threshold {threshold}): {len(results)}")
             if results:
-                print(f"DEBUG: Best match similarity: {results[0]['similarity']}")
-            elif low_threshold_results:
-                print(f"DEBUG: Best low-threshold match similarity: {low_threshold_results[0]['similarity']}")
+                print(f"DEBUG: Best match similarity: {results[0]['similarity']:.3f} (original DINO: {results[0].get('original_similarity', 0):.3f})")
             print(f"DEBUG: Total indexed images: {db.get_total_indexed_images()}")
 
             # 严格执行阈值：如果没有满足阈值的结果，则返回空结果
@@ -645,6 +682,8 @@ def search_similar():
                     result_data = {
                         'rank': i + 1,
                         'similarity': float(result['similarity']),
+                        'originalSimilarity': float(result.get('original_similarity', result['similarity'])),  # 原始DINO分数
+                        'scoreBreakdown': result.get('score_breakdown', {}),  # 评分详情
                         'imageIndex': result['image_index'],
                         'matchedImage': f"/api/image/{result['id']}/{result['image_index']}",
                         'product': {
@@ -5371,7 +5410,8 @@ if __name__ == '__main__':
     print("🚀 服务启动中...")
     try:
         # 关闭 debug 模式，避免 Flask 重载器导致双重初始化
-        app.run(host='0.0.0.0', port=5001, debug=False, threaded=True)
+        # 【关键修改】添加 use_reloader=False 禁用Flask重载器，避免双重进程
+        app.run(host='0.0.0.0', port=5001, debug=False, threaded=True, use_reloader=False)
     except KeyboardInterrupt:
         print("\n🛑 Received KeyboardInterrupt, shutting down...")
         signal_handler(signal.SIGINT, None)
