@@ -879,6 +879,13 @@ class Database:
             row = cursor.fetchone()
             return dict(row) if row else None
 
+    def get_all_existing_item_ids(self) -> set:
+        """获取数据库中所有已存在的商品item_id，用于快速查重"""
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT item_id FROM products WHERE item_id IS NOT NULL")
+            return {row[0] for row in cursor.fetchall()}
+
     def cleanup_unused_images(self, days_old: int = 30) -> int:
         """
         清理未使用的图片文件

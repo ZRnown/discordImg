@@ -60,10 +60,11 @@ class Config:
 
     # AI 推理的并发控制 (CPU密集型)：
     # - AI_INTRA_THREADS：单个推理任务内部使用的 CPU 核心数
-    # - AI_MAX_WORKERS：同时跑多少个“图片特征提取任务”
-    # 策略：4个Worker * 2核 = 占用8核，预留2核给系统和数据库
-    AI_INTRA_THREADS = int(os.getenv('AI_INTRA_THREADS', '2'))
-    AI_MAX_WORKERS = int(os.getenv('AI_MAX_WORKERS', '4'))
+    # - AI_MAX_WORKERS：同时跑多少个"图片特征提取任务"
+    # 【优化建议】如果是 10核 CPU，单次搜索设为 4-6 可以显著加快单张图的搜索速度
+    # 优化后策略：单张图搜索使用6核，批量抓取时2个Worker * 6核 = 12核
+    AI_INTRA_THREADS = int(os.getenv('AI_INTRA_THREADS', '6'))
+    AI_MAX_WORKERS = int(os.getenv('AI_MAX_WORKERS', '2'))
 
     # 新的 save_product_images_unified 已不依赖该参数做图片特征线程池，保留字段主要用于兼容旧逻辑。
     FEATURE_EXTRACT_THREADS = int(os.getenv('FEATURE_EXTRACT_THREADS', '4'))
