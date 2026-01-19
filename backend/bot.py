@@ -716,7 +716,21 @@ class DiscordBotClient(discord.Client):
     async def on_ready(self):
         logger.info(f'Discord机器人已登录: {self.user} (ID: {self.user.id})')
         logger.info(f'机器人已就绪，开始监听消息')
-        logger.info(f'监听频道: {config.DISCORD_CHANNEL_ID or "所有频道"}')
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+            bound_channels = await asyncio.get_event_loop().run_in_executor(None, db.get_all_bound_channel_ids)
+            if bound_channels:
+                bound_list = sorted(bound_channels)
+                preview = ", ".join(bound_list[:5])
+                suffix = " ..." if len(bound_list) > 5 else ""
+                logger.info(f'监听频道: 已绑定 {len(bound_list)} 个 ({preview}{suffix})')
+            else:
+                logger.info('监听频道: 未绑定频道')
+        except Exception as e:
+            logger.error(f'获取监听频道失败: {e}')
         self.running = True
 
         # 更新数据库中的账号状态为在线
