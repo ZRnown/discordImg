@@ -4,9 +4,9 @@ const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:500
 
 export async function GET(request: NextRequest) {
   try {
-    const cookieHeader = request.headers.get('cookie') || '';
+    const cookieHeader = request.headers.get('cookie') || ''
 
-    const response = await fetch(`${BACKEND_URL}/api/bot/status`, {
+    const response = await fetch(`${BACKEND_URL}/api/bot/cooldowns`, {
       headers: { 'Cookie': cookieHeader }
     })
 
@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(data)
   } catch (error: any) {
-    console.error('GET /api/bot/status failed:', error)
+    console.error('GET /api/bot/cooldowns failed:', error)
     return NextResponse.json({ error: error.message }, { status: 500 })
   }
 }

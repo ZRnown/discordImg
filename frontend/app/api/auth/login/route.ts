@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// 强制使用内网回环地址，速度最快且最稳定
-const BACKEND_URL = 'http://127.0.0.1:5001';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
 
 export async function POST(request: NextRequest) {
   try {
@@ -14,7 +13,22 @@ export async function POST(request: NextRequest) {
       body: JSON.stringify(body)
     });
 
-    const data = await backendResponse.json();
+    const rawText = await backendResponse.text();
+    let data: any = null;
+    let parsed = false;
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+      parsed = true;
+    } catch {
+      data = { error: rawText || 'Backend error' };
+    }
+
+    if (!parsed) {
+      return NextResponse.json({
+        error: 'Backend returned non-JSON response',
+        details: rawText ? rawText.slice(0, 200) : ''
+      }, { status: backendResponse.status || 502 });
+    }
 
     if (backendResponse.ok) {
       const response = NextResponse.json(data);

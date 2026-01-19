@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-// 强制使用内网回环地址，速度最快且最稳定
-const BACKEND_URL = 'http://127.0.0.1:5001';
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
 
 export async function GET(request: NextRequest) {
   try {
@@ -15,16 +14,31 @@ export async function GET(request: NextRequest) {
       }
     });
 
+    const rawText = await backendResponse.text();
+    let data: any = null;
+    let parsed = false;
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+      parsed = true;
+    } catch {
+      data = { error: rawText || 'Backend error' };
+    }
+
+    if (!parsed) {
+      return NextResponse.json({
+        error: 'Backend returned non-JSON response',
+        details: rawText ? rawText.slice(0, 200) : ''
+      }, { status: backendResponse.status || 502 });
+    }
+
     if (backendResponse.ok) {
-      const data = await backendResponse.json();
       return NextResponse.json(data);
     } else {
       // 如果后端验证失败 (401)，前端也要清除 user_session
-      const errorData = await backendResponse.json().catch(() => ({ error: 'Not authenticated' }));
-      const response = NextResponse.json(errorData, { status: backendResponse.status });
+      const response = NextResponse.json(data, { status: backendResponse.status });
 
       if (backendResponse.status === 401) {
-      response.cookies.set('user_session', '', { maxAge: 0 });
+        response.cookies.set('user_session', '', { maxAge: 0 });
       }
       return response;
     }
