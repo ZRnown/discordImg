@@ -386,7 +386,7 @@ export function ImageSearchView() {
 
                       <div className="space-y-0.5 min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <h4 className="font-bold text-base truncate">{result.product.title}</h4>
+                          <h4 className="font-bold text-base truncate max-w-[200px] sm:max-w-[400px]">{result.product.title}</h4>
                           <Badge
                             className={
                               result.similarity >= 0.95
@@ -400,7 +400,7 @@ export function ImageSearchView() {
                           </Badge>
                         </div>
                         <div className="flex items-center gap-2 mt-1">
-                          <p className="text-sm font-bold text-blue-600 truncate">{result.product.englishTitle || "No English Title"}</p>
+                          <p className="text-sm font-bold text-blue-600 truncate max-w-[240px] sm:max-w-[500px]">{result.product.englishTitle || "No English Title"}</p>
                         </div>
                         <div className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground">
                           <span className="font-mono">ID: {result.product.weidianUrl?.split('itemID=')?.[1] || 'N/A'}</span>
@@ -512,7 +512,7 @@ export function ImageSearchView() {
 
                       <div className="space-y-0.5 min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <h4 className="font-bold text-base truncate">{history.title}</h4>
+                          <h4 className="font-bold text-base truncate max-w-[200px] sm:max-w-[400px]">{history.title}</h4>
                             <Badge
                               className={
                                 history.similarity >= 0.95
@@ -526,7 +526,7 @@ export function ImageSearchView() {
                             </Badge>
                           </div>
                         <div className="flex items-center gap-2 mt-1">
-                          <p className="text-sm font-bold text-blue-600 truncate">{history.english_title || "No English Title"}</p>
+                          <p className="text-sm font-bold text-blue-600 truncate max-w-[240px] sm:max-w-[500px]">{history.english_title || "No English Title"}</p>
                         </div>
                         <div className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground">
                           <span className="font-mono">ID: {history.weidian_url?.split('itemID=')?.[1] || 'N/A'}</span>

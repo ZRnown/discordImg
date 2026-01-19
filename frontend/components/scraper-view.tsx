@@ -25,6 +25,83 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Checkbox } from "@/components/ui/checkbox"
 
+function ImageLightbox({
+  images,
+  initialIndex,
+  onClose
+}: {
+  images: string[]
+  initialIndex: number
+  onClose: () => void
+}) {
+  const [currentIndex, setCurrentIndex] = useState(initialIndex)
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+      if (e.key === 'ArrowLeft') {
+        setCurrentIndex((prev) => (prev > 0 ? prev - 1 : images.length - 1))
+      }
+      if (e.key === 'ArrowRight') {
+        setCurrentIndex((prev) => (prev < images.length - 1 ? prev + 1 : 0))
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [images.length, onClose])
+
+  if (!images.length) {
+    return null
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <button
+        onClick={onClose}
+        className="absolute top-4 right-4 text-white/70 hover:text-white p-2"
+      >
+        <X className="size-8" />
+      </button>
+      <div className="relative w-full h-full flex items-center justify-center p-4">
+        <img
+          src={images[currentIndex]}
+          alt={`Preview ${currentIndex + 1}`}
+          className="max-h-[90vh] max-w-[90vw] object-contain rounded-md shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+        />
+        {images.length > 1 && (
+          <>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                setCurrentIndex((prev) => (prev > 0 ? prev - 1 : images.length - 1))
+              }}
+              className="absolute left-4 top-1/2 -translate-y-1/2 p-3 bg-black/50 text-white rounded-full hover:bg-white/20 transition-colors"
+            >
+              <ChevronLeft className="size-8" />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                setCurrentIndex((prev) => (prev < images.length - 1 ? prev + 1 : 0))
+              }}
+              className="absolute right-4 top-1/2 -translate-y-1/2 p-3 bg-black/50 text-white rounded-full hover:bg-white/20 transition-colors"
+            >
+              <ChevronRight className="size-8" />
+            </button>
+          </>
+        )}
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/60 text-white px-4 py-1 rounded-full text-sm font-mono">
+          {currentIndex + 1} / {images.length}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function ScraperView({ currentUser }: { currentUser: any }) {
   const [batchIds, setBatchIds] = useState('')
   const [isBatchScraping, setIsBatchScraping] = useState(false)
@@ -36,7 +113,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   const [itemsPerPage, setItemsPerPage] = useState(50)
   const [editingProduct, setEditingProduct] = useState<any>(null)
   const [selectedProducts, setSelectedProducts] = useState<number[]>([])
-  const [selectAll, setSelectAll] = useState(false)
+  const [selectAllAcrossPages, setSelectAllAcrossPages] = useState(false)
   const [indexedIds, setIndexedIds] = useState<string[]>([])
   const [shopFilter, setShopFilter] = useState('__ALL__')
   const [keywordSearch, setKeywordSearch] = useState('')
@@ -50,6 +127,9 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   const [expandedProducts, setExpandedProducts] = useState<Set<number>>(new Set())
   const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null)
   const [batchUploading, setBatchUploading] = useState(false)
+  const [lightboxOpen, setLightboxOpen] = useState(false)
+  const [lightboxImages, setLightboxImages] = useState<string[]>([])
+  const [lightboxIndex, setLightboxIndex] = useState(0)
 
   // 使用API缓存hook
   const { cachedFetch, invalidateCache } = useApiCache()
@@ -86,14 +166,24 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
   useEffect(() => {
     fetchProducts(currentPage)
-  }, [currentPage, itemsPerPage, keywordSearch, shopFilter]) // 只在相关参数改变时重新加载商品
+  }, [currentPage, itemsPerPage, keywordSearch, shopFilter, searchType]) // 只在相关参数改变时重新加载商品
 
   useEffect(() => {
     // 当搜索条件改变时，重置到第一页
     if (keywordSearch || shopFilter) {
       setCurrentPage(1)
     }
-  }, [keywordSearch, shopFilter])
+  }, [keywordSearch, shopFilter, searchType])
+
+  useEffect(() => {
+    setSelectAllAcrossPages(false)
+    setSelectedProducts([])
+  }, [keywordSearch, shopFilter, searchType])
+
+  useEffect(() => {
+    if (!selectAllAcrossPages) return
+    setSelectedProducts(products.map(p => p.id))
+  }, [selectAllAcrossPages, products])
 
   // 优化轮询机制：使用智能轮询，避免重复请求
   useEffect(() => {
@@ -139,80 +229,22 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     }
   }, [isShopScraping, isBatchScraping])
 
-  const fetchProducts = async (page: number = 1, append: boolean = false, usePreload: boolean = true) => {
+  const fetchProducts = async (page: number = currentPage) => {
     try {
-      // 首先检查是否有预加载数据（只在第一次加载且未追加时）
-      if (page === 1 && !append && usePreload) {
-        const preloadData = sessionStorage.getItem('preload_products')
-        if (preloadData) {
-          try {
-            console.log('使用预加载商品数据')
-            const data = JSON.parse(preloadData)
-            // 使用预加载数据
-            const processedProducts = (Array.isArray(data.products) ? data.products : []).map((product: any) => ({
-              ...product,
-              id: product.id,
-              shopName: product.shopName || product.shop_name || '未知店铺',
-              title: product.title || '',
-              englishTitle: product.englishTitle || product.english_title || '',
-              weidianUrl: product.weidianUrl || product.product_url || '',
-              cnfansUrl: product.cnfansUrl || product.cnfans_url || '',
-              acbuyUrl: product.acbuyUrl || product.acbuy_url || '',
-              weidianId: product.weidianId || '',
-              ruleEnabled: product.ruleEnabled !== undefined ? product.ruleEnabled : true,
-              customReplyText: product.customReplyText || product.custom_reply_text || '',
-              customReplyImages: product.customReplyImages || product.custom_reply_images || [],
-              selectedImageIndexes: product.selectedImageIndexes || [],
-              customImageUrls: product.customImageUrls || product.custom_image_urls || [],
-              imageSource: product.imageSource || product.image_source || (product.custom_image_urls ? 'custom' : 'upload')
-            }))
-
-            setProducts(processedProducts)
-            setTotalProducts(data.total || 0)
-
-            // 清除预加载数据，避免重复使用
-            sessionStorage.removeItem('preload_products')
-
-            // 在后台获取最新数据，但不显示加载状态
-            setTimeout(() => fetchProducts(1, false, false), 500)
-            return
-          } catch (e) {
-            console.error('预加载数据解析失败:', e)
-            // 预加载数据损坏，清除并重新获取
-            sessionStorage.removeItem('preload_products')
-          }
-        } else {
-          // 如果没有预加载数据，等待一下再试（给预加载一点时间）
-          if (page === 1 && !append) {
-            setTimeout(() => {
-              const retryPreload = sessionStorage.getItem('preload_products')
-              if (retryPreload) {
-                fetchProducts(1, false, true)
-              } else {
-                fetchProducts(1, false, false)
-              }
-            }, 200)
-            return
-          }
-        }
+      const params = new URLSearchParams({
+        page: String(page),
+        limit: String(itemsPerPage)
+      })
+      if (keywordSearch.trim()) {
+        params.set('keyword', keywordSearch.trim())
+        params.set('search_type', searchType)
+      }
+      if (shopFilter && shopFilter !== "__ALL__") {
+        params.set('shop_name', shopFilter)
       }
 
-      console.log('从API获取商品数据')
-      const res = await fetch(`/api/products?page=${page}&limit=${itemsPerPage}`)
+      const res = await fetch(`/api/products?${params.toString()}`)
       const data = await res.json()
-
-      // 调试信息
-      console.log('商品列表API响应:', {
-        page,
-        total: data.total,
-        productsCount: data.products?.length || 0,
-        debug: data.debug,
-        firstProduct: data.products?.[0] ? {
-          id: data.products[0].id,
-          shopName: data.products[0].shopName || data.products[0].shop_name,
-          title: data.products[0].title
-        } : null
-      })
 
       const processedProducts = (Array.isArray(data.products) ? data.products : []).map((product: any) => ({
         ...product,
@@ -230,18 +262,12 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         selectedImageIndexes: product.selectedImageIndexes || [],
         customImageUrls: product.customImageUrls || product.custom_image_urls || [],
         imageSource: product.imageSource || product.image_source || (product.custom_image_urls ? 'custom' : 'upload'),
-        uploadedImages: [], // 新上传的File对象（用户刚选择的）
-        existingUploadedImageUrls: product.uploadedImages || [] // 已保存的图片URL（从后端加载）
+        uploadedImages: [],
+        existingUploadedImageUrls: product.uploadedImages || []
       }))
 
-      if (append) {
-        // 分页加载更多
-        setProducts(prev => [...prev, ...processedProducts])
-      } else {
-        // 重新加载第一页
-        setProducts(processedProducts)
-      }
-
+      setProducts(processedProducts)
+      setSelectedProducts([])
       setTotalProducts(data.total || 0)
     } catch (e) {
       toast.error("加载商品库失败")
@@ -315,8 +341,9 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   // ... (保留 handleBatchDelete, confirmBatchDelete, handleUploadImage, handleBatchUploadImages) ...
 
   const handleBatchDelete = async () => {
-    console.log('批量删除按钮被点击，选中商品数量:', selectedProducts.length)
-    if (selectedProducts.length === 0) {
+    const selectedCount = selectAllAcrossPages ? totalProducts : selectedProducts.length
+    console.log('批量删除按钮被点击，选中商品数量:', selectedCount)
+    if (selectedCount === 0) {
       console.log('没有选中商品，返回')
       return
     }
@@ -328,14 +355,33 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     setShowDeleteConfirm(false)
     setIsDeleting(true)
     try {
-      const res = await fetch(`/api/products?ids=${selectedProducts.join(',')}`, {
-        method: 'DELETE',
-        credentials: 'include'
-      })
+      let res: Response
+      if (selectAllAcrossPages) {
+        const params = new URLSearchParams()
+        if (keywordSearch.trim()) params.set('keyword', keywordSearch.trim())
+        params.set('search_type', searchType)
+        if (shopFilter && shopFilter !== '__ALL__') params.set('shop_name', shopFilter)
+        const query = params.toString()
+        res = await fetch(`/api/products/batch-delete-all${query ? `?${query}` : ''}`, {
+          method: 'DELETE',
+          credentials: 'include'
+        })
+      } else {
+        res = await fetch(`/api/products/batch`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ ids: selectedProducts })
+        })
+      }
+
       if (res.ok) {
         toast.success("批量删除成功")
-        setProducts(products.filter(p => !selectedProducts.includes(p.id)))
         setSelectedProducts([])
+        setSelectAllAcrossPages(false)
+        if (selectAllAcrossPages) setCurrentPage(1)
+        fetchProducts()
+        fetchProductsCount()
       } else {
         toast.error("批量删除失败")
       }
@@ -401,11 +447,14 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   }
 
   const handleSelectAll = () => {
-    if (selectedProducts.length === currentProducts.length && currentProducts.length > 0) {
+    if (selectAllAcrossPages) {
+      setSelectAllAcrossPages(false)
       setSelectedProducts([])
-    } else {
-      setSelectedProducts(currentProducts.map(p => p.id))
+      return
     }
+    if (totalProducts === 0) return
+    setSelectAllAcrossPages(true)
+    setSelectedProducts(currentProducts.map(p => p.id))
   }
 
   const toggleProductExpansion = (productId: number) => {
@@ -703,41 +752,35 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
   const handleJumpPage = () => { /* ... */ }
 
-  // 筛选和分页逻辑（简化版，避免一次性加载过多数据）
-  const uniqueShops = Array.from(new Set(products.map(p => p?.shopName || '').filter(name => name && name.trim()))).sort()
+  const openLightbox = (images: string[], index: number) => {
+    if (!images || images.length === 0) return
+    setLightboxImages(images)
+    setLightboxIndex(index)
+    setLightboxOpen(true)
+  }
 
-  // 简化分页：直接使用当前页的产品数据，不再进行复杂的内存筛选
-  // 这样可以显著提升加载速度，但暂时不支持跨页搜索
-  const currentProducts = products.filter(p => {
-    // 只有在没有搜索条件时才显示当前页数据
-    if (!keywordSearch && !shopFilter) {
-      return true
-    }
+  // 筛选和分页逻辑：纯服务端分页，前端不再二次过滤
+  const uniqueShops = Array.from(
+    new Set(availableShops.map((shop) => shop?.name || '').filter((name) => name && name.trim()))
+  ).sort()
+  const currentProducts = products
+  const selectedCount = selectAllAcrossPages ? totalProducts : selectedProducts.length
+  const isAllOnPageSelected = currentProducts.length > 0 && currentProducts.every(p => selectedProducts.includes(p.id))
+  const isAllSelected = (selectAllAcrossPages && totalProducts > 0) || isAllOnPageSelected
 
-    // 有搜索条件时，对当前加载的数据进行筛选
-    let matchesSearch = true
-    if (keywordSearch) {
-      if (searchType === 'id') {
-        matchesSearch = p.weidianId?.includes(keywordSearch)
-      } else if (searchType === 'keyword') {
-        matchesSearch = p.englishTitle?.toLowerCase().includes(keywordSearch.toLowerCase())
-      } else if (searchType === 'chinese') {
-        matchesSearch = p.title?.toLowerCase().includes(keywordSearch.toLowerCase())
-      } else {
-        matchesSearch = p.title?.toLowerCase().includes(keywordSearch.toLowerCase()) ||
-        p.englishTitle?.toLowerCase().includes(keywordSearch.toLowerCase()) ||
-        p.weidianId?.includes(keywordSearch)
-      }
-    }
-    const matchesShop = !shopFilter || shopFilter === "__ALL__" || p.shopName === shopFilter
-    return matchesSearch && matchesShop
-  })
-
-  // 计算总页数（基于总数）
-  const totalPages = Math.ceil(totalProducts / itemsPerPage)
+  // 计算总页数（基于总数，至少为1）
+  const totalPages = Math.max(1, Math.ceil(totalProducts / itemsPerPage))
+  const hasNextPage = totalProducts > 0 ? currentPage < totalPages : currentProducts.length === itemsPerPage
 
   return (
     <div className="space-y-8 overflow-x-hidden">
+      {lightboxOpen && (
+        <ImageLightbox
+          images={lightboxImages}
+          initialIndex={lightboxIndex}
+          onClose={() => setLightboxOpen(false)}
+        />
+      )}
       {/* ... 顶部标题和管理员/普通用户上传区域 (保持不变) ... */}
 
       <div>
@@ -918,12 +961,12 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
             </div>
                         {/* 操作按钮 */}
                         <div className="flex items-center gap-3">
-                            <Button variant={selectedProducts.length===currentProducts.length && currentProducts.length>0?"secondary":"outline"} size="sm" onClick={handleSelectAll}>
-                                {selectedProducts.length===currentProducts.length && currentProducts.length>0 ? <CheckSquare className="mr-2 h-4 w-4"/> : <Square className="mr-2 h-4 w-4"/>} 全选 ({currentProducts.length})
+                            <Button variant={isAllSelected ? "secondary" : "outline"} size="sm" onClick={handleSelectAll}>
+                                {isAllSelected ? <CheckSquare className="mr-2 h-4 w-4"/> : <Square className="mr-2 h-4 w-4"/>} 全选 (全部 {totalProducts})
             </Button>
-                            {selectedProducts.length > 0 && (
+                            {selectedCount > 0 && (
                                 <Button variant="destructive" size="sm" onClick={handleBatchDelete} disabled={isDeleting}>
-                                    <Trash2 className="mr-2 h-4 w-4" /> 删除 ({selectedProducts.length})
+                                    <Trash2 className="mr-2 h-4 w-4" /> 删除 ({selectedCount})
                                 </Button>
                             )}
           </div>
@@ -932,17 +975,23 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
             </CardHeader>
             <CardContent className="p-0">
                 {/* 列表 */}
-          <div className="divide-y">
+          <div className="divide-y overflow-x-hidden">
                     {currentProducts.map((product) => {
                         const links = getProductLinks(product);
                         const showAllLinks = expandedProducts.has(product.id);
                         const displayedLinks = showAllLinks ? links : links.slice(0, 3);
                         return (
-              <div key={product.id} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3">
+              <div key={product.id} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3 min-w-0">
                 <div className="flex gap-3 items-center">
-                                <Checkbox checked={selectedProducts.includes(product.id)} onCheckedChange={(checked)=>{
-                                    if(checked) setSelectedProducts([...selectedProducts, product.id])
-                                    else setSelectedProducts(selectedProducts.filter(id=>id!==product.id))
+                                <Checkbox checked={selectAllAcrossPages || selectedProducts.includes(product.id)} onCheckedChange={(checked)=>{
+                                    if (!checked && selectAllAcrossPages) {
+                                      setSelectAllAcrossPages(false)
+                                    }
+                                    if (checked) {
+                                      setSelectedProducts(Array.from(new Set([...selectedProducts, product.id])))
+                                    } else {
+                                      setSelectedProducts(selectedProducts.filter(id=>id!==product.id))
+                                    }
                                 }}/>
                 </div>
 
@@ -988,7 +1037,12 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-1">
                           {product.images?.map((img: string, idx: number) => (
                             <div key={img} className="aspect-square rounded-xl border-2 bg-muted overflow-hidden group relative">
-                              <img src={img} alt={`Img ${idx}`} className="object-cover w-full h-full transition-transform group-hover:scale-110" />
+                              <img
+                                src={img}
+                                alt={`Img ${idx}`}
+                                className="object-cover w-full h-full transition-transform group-hover:scale-110 cursor-zoom-in"
+                                onClick={() => openLightbox(product.images || [], idx)}
+                              />
                               <button
                                                             onClick={async (e) => {
                                                                 e.preventDefault()
@@ -1039,13 +1093,13 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                   </Dialog>
                   <div className="space-y-0.5 min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                                        <h4 className="font-bold text-base truncate">{product.title}</h4>
+                                        <h4 className="font-bold text-base truncate max-w-[200px] sm:max-w-[400px]">{product.title}</h4>
                                         {/* 已删除这里原本的小编辑按钮 */}
                                         {indexedIds.includes(product.weidianId) && <Badge className="bg-blue-600 text-[10px] h-4 px-2">已索引</Badge>}
                                         {product.ruleEnabled && <Badge className="bg-purple-600 text-[10px] h-4 px-2">规则启用</Badge>}
                     </div>
                     <div className="flex items-center gap-2 mt-1">
-                                        <p className="text-sm font-bold text-blue-600 truncate">{product.englishTitle || "No English Title"}</p>
+                                        <p className="text-sm font-bold text-blue-600 truncate max-w-[240px] sm:max-w-[500px]">{product.englishTitle || "No English Title"}</p>
                     </div>
                                     <div className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground">
                                         <span className="font-mono">ID: {product.weidianId}</span>
@@ -1080,7 +1134,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                                 link.badge_color === 'orange' ? 'bg-orange-600' : 'bg-gray-600'
                                             }`}>{link.display_name}</Badge>
                         <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
-                                                <a href={link.url} target="_blank" className="font-mono truncate hover:underline text-muted-foreground">{link.url}</a>
+                                                <a href={link.url} target="_blank" className="font-mono truncate hover:underline text-muted-foreground block max-w-full">{link.url}</a>
                                                 <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(link.url); toast.success("Copied")}}><Copy className="h-2.5 w-2.5"/></Button>
                         </div>
                       </div>
@@ -1093,7 +1147,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                     )}
                   </div>
                                 {/* 操作按钮组 */}
-                                <div className="flex items-center gap-1">
+                                <div className="flex items-center gap-1 ml-auto shrink-0">
                                     {/* 编辑按钮 */}
                                     <Dialog open={editingProduct?.id === product.id} onOpenChange={(open)=>!open && setEditingProduct(null)}>
                       <DialogTrigger asChild>
@@ -1401,7 +1455,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                 {currentProducts.length > 0 && (
                     <div className="flex flex-col sm:flex-row justify-between items-center gap-4 p-6 border-t bg-muted/5">
               <div className="text-sm text-muted-foreground font-medium">
-                            显示第 {(currentPage-1)*itemsPerPage + 1} - {Math.min(currentPage*itemsPerPage, currentProducts.length)} 条，共 {currentProducts.length} 条记录
+                            显示第 {(currentPage-1)*itemsPerPage + 1} - {Math.min(currentPage*itemsPerPage, totalProducts)} 条，共 {totalProducts} 条记录
                             <span className="ml-2">({currentPage}/{totalPages}页)</span>
               </div>
                 <div className="flex items-center gap-2">
@@ -1421,7 +1475,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                     variant="outline"
                     size="sm"
                                 onClick={()=>setCurrentPage(p=>Math.min(totalPages, p+1))}
-                                disabled={currentPage===totalPages}
+                                disabled={!hasNextPage}
                                 className="h-8 px-3"
                   >
                                 下一页 <ChevronRight className="h-4 w-4 ml-1"/>
@@ -1469,7 +1523,9 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
           <DialogHeader>
               <DialogTitle>确认批量删除</DialogTitle>
             <DialogDescription>
-              确定要删除选中的 {selectedProducts.length} 个商品吗？此操作不可恢复。
+              {selectAllAcrossPages
+                ? `确定要删除全部 ${totalProducts} 个商品吗？此操作不可恢复。`
+                : `确定要删除选中的 ${selectedCount} 个商品吗？此操作不可恢复。`}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

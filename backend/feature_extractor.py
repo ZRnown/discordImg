@@ -70,6 +70,8 @@ class DINOv2FeatureExtractor:
 
     def __init__(self):
         self.device = torch.device(config.DEVICE)
+        # 保护 YOLO/DINO 推理，避免多线程同时访问导致模型状态损坏
+        self.inference_lock = threading.Lock()
         logger.info(f"正在初始化猎鹰AI引擎，使用设备: {self.device}")
 
         # 加载YOLOv8-Nano (眼睛 - 主体检测)
@@ -117,8 +119,7 @@ class DINOv2FeatureExtractor:
                 "toy", "box", "bottle", "cup", "lamp"
             ]
 
-            # 将这些类别注入模型
-            self.detector.set_classes(self.target_classes)
+            # 不在初始化时设置类别，避免某些版本出现副作用
 
             logger.info("🎉 YOLO-World模型加载成功！")
             logger.info(f"🎯 支持自动识别 {len(self.target_classes)} 种商品类别")
@@ -179,27 +180,12 @@ class DINOv2FeatureExtractor:
 
             self.processor = AutoImageProcessor.from_pretrained(model_name)
             self.model = AutoModel.from_pretrained(model_name)
-
-            # 安全地将模型移动到设备，避免meta tensor错误
             try:
-                if hasattr(self.model, 'to'):
-                    self.model = self.model.to(self.device)
-                else:
-                    logger.warning("模型没有to()方法，使用原模型")
+                self.model.to(self.device)
             except Exception as device_error:
-                logger.warning(f"模型移动到设备失败: {device_error}，尝试其他方法...")
-                try:
-                    # 尝试使用to_empty方法
-                    if hasattr(self.model, 'to_empty'):
-                        self.model = self.model.to_empty(device=self.device)
-                    else:
-                        logger.error("模型不支持to_empty方法，使用CPU")
-                        self.device = torch.device('cpu')
-                        self.model = self.model.to(self.device)
-                except Exception as fallback_error:
-                    logger.error(f"所有设备移动方法都失败: {fallback_error}")
-                    raise
-
+                logger.warning(f"模型移动到设备失败: {device_error}，改用CPU")
+                self.device = torch.device('cpu')
+                self.model.to(self.device)
             self.model.eval()
             logger.info("✅ DINOv2模型加载成功")
         except Exception as e:
@@ -216,7 +202,7 @@ class DINOv2FeatureExtractor:
         4. [新增] 缩小图片尺寸以加快AI推理速度
         """
         try:
-            if not config.USE_YOLO_CROP:
+            if not config.USE_YOLO_CROP or self.detector is None:
                 return self._resize_for_ai(Image.open(image_path).convert("RGB"))
 
             # 检查缓存
@@ -231,7 +217,8 @@ class DINOv2FeatureExtractor:
                 return cached_result
 
             # conf=0.1: 降低门槛，宁可多检不要漏检，反正我们有逻辑过滤
-            results = self.detector(image_path, conf=0.1, verbose=False)
+            with self.inference_lock:
+                results = self.detector(image_path, conf=0.1, verbose=False)
 
             if not results or len(results[0].boxes) == 0:
                 logger.info("未检测到通用商品，降级使用原图")
@@ -350,11 +337,11 @@ class DINOv2FeatureExtractor:
             img = self._crop_main_object(image_path)
 
             # 2. 预处理（DINOv2会自动处理）
-            inputs = self.processor(images=img, return_tensors="pt").to(self.device)
-
-            # 3. 特征提取
-            with torch.no_grad():
-                outputs = self.model(**inputs)
+            with self.inference_lock:
+                inputs = self.processor(images=img, return_tensors="pt").to(self.device)
+                # 3. 特征提取
+                with torch.no_grad():
+                    outputs = self.model(**inputs)
 
             # 4. 获取CLS token特征 (DINOv2的最佳实践)
             # outputs.last_hidden_state.shape: [1, num_patches+1, dim]

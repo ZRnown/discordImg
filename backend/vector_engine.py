@@ -40,6 +40,12 @@ class VectorEngine:
                 self.index = faiss.read_index(self.index_file)
                 with open(self.id_map_file, 'rb') as f:
                     self.id_map = pickle.load(f)
+                if getattr(self.index, 'd', None) != self.dimension:
+                    logger.error(
+                        f"索引维度不匹配: index.d={getattr(self.index, 'd', None)} != config={self.dimension}，重新创建索引"
+                    )
+                    self._create_new_index()
+                    return
                 if hasattr(self.index, 'efSearch'):
                     self.index.efSearch = config.FAISS_EF_SEARCH
                     logger.info(f"设置efSearch = {config.FAISS_EF_SEARCH}")

@@ -2111,157 +2111,105 @@ class Database:
             logger.error(f"删除自定义回复内容失败: {e}")
             return False
 
-    def get_products_by_user_shops(self, user_shops: List[str], limit: int = None, offset: int = 0) -> Dict:
-        """根据用户店铺权限获取商品"""
+    def get_products_by_user_shops(
+        self,
+        user_shops: List[str],
+        limit: int = None,
+        offset: int = 0,
+        keyword: str = None,
+        search_type: str = 'all',
+        shop_name: str = None
+    ) -> Dict:
+        """根据用户店铺权限获取商品（支持分页与搜索过滤）"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor = conn.cursor()
 
-                if user_shops is None:
-                    # 管理员可以看到所有商品（不限制店铺）- 优化查询性能
-                    if limit is None or limit <= 0:
-                        # 一次性获取所有商品和对应的图片索引
-                        query = '''
-                            SELECT p.*,
-                                   GROUP_CONCAT(pi.image_index) as image_indices,
-                                   COUNT(pi.id) as image_count,
-                                   p.custom_reply_text, p.custom_reply_images, p.custom_image_urls, p.image_source
-                            FROM products p
-                            LEFT JOIN product_images pi ON p.id = pi.product_id
-                            GROUP BY p.id
-                            ORDER BY p.created_at DESC
-                        '''
-                        cursor.execute(query)
-                        rows = cursor.fetchall()
+                shop_names = None
+                if user_shops is not None:
+                    if not isinstance(user_shops, list):
+                        user_shops = []
+                    if not user_shops:
+                        return {'products': [], 'total': 0}
 
-                        # 获取总数
-                        cursor.execute('SELECT COUNT(*) FROM products')
-                        total = cursor.fetchone()[0]
+                    shop_names = []
+                    for shop_id in user_shops:
+                        cursor.execute("SELECT name FROM shops WHERE shop_id = ?", (shop_id,))
+                        shop_row = cursor.fetchone()
+                        if shop_row:
+                            shop_names.append(shop_row[0])
+
+                    if not shop_names:
+                        return {'products': [], 'total': 0}
+
+                where_clauses = []
+                params: List = []
+
+                if shop_names is not None:
+                    placeholders = ','.join('?' * len(shop_names))
+                    where_clauses.append(f"p.shop_name IN ({placeholders})")
+                    params.extend(shop_names)
+
+                if shop_name and shop_name != '__ALL__':
+                    where_clauses.append("p.shop_name = ?")
+                    params.append(shop_name)
+
+                if keyword:
+                    keyword = keyword.strip()
+                if keyword:
+                    keyword_lower = keyword.lower()
+                    like = f"%{keyword_lower}%"
+
+                    if search_type == 'id':
+                        where_clauses.append("(CAST(p.id AS TEXT) = ? OR LOWER(p.product_url) LIKE ?)")
+                        params.extend([keyword, f"%itemid={keyword_lower}%"])
+                    elif search_type == 'keyword':
+                        where_clauses.append("LOWER(p.english_title) LIKE ?")
+                        params.append(like)
+                    elif search_type == 'chinese':
+                        where_clauses.append("LOWER(p.title) LIKE ?")
+                        params.append(like)
                     else:
-                        # 分页查询 - 使用子查询优化性能
-                        query = '''
-                            SELECT p.*,
-                                   GROUP_CONCAT(pi.image_index) as image_indices,
-                                   COUNT(pi.id) as image_count,
-                                   p.custom_reply_text, p.custom_reply_images, p.custom_image_urls, p.image_source
-                            FROM products p
-                            LEFT JOIN product_images pi ON p.id = pi.product_id
-                            GROUP BY p.id
-                            ORDER BY p.created_at DESC
-                            LIMIT ? OFFSET ?
-                        '''
-                        cursor.execute(query, [limit, offset])
-                    rows = cursor.fetchall()
+                        where_clauses.append(
+                            "(CAST(p.id AS TEXT) = ? OR LOWER(p.title) LIKE ? OR LOWER(p.english_title) LIKE ? OR LOWER(p.product_url) LIKE ?)"
+                        )
+                        params.extend([keyword, like, like, f"%itemid={keyword_lower}%"])
 
-                    # 获取总数
-                    cursor.execute('SELECT COUNT(*) FROM products')
-                    total = cursor.fetchone()[0]
+                where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
-                    products = []
-                    for row in rows:
-                        prod = dict(row)
-                        # 处理图片路径 - 直接使用预查询的image_indices
-                        if prod.get('image_indices'):
-                            image_indices = [int(idx) for idx in prod['image_indices'].split(',') if idx]
-                            prod['images'] = [f"/api/image/{prod['id']}/{idx}" for idx in image_indices]
-                        else:
-                            prod['images'] = []
+                query = f'''
+                    SELECT p.*,
+                           GROUP_CONCAT(pi.image_index) as image_indices,
+                           COUNT(pi.id) as image_count,
+                           p.custom_reply_text, p.custom_reply_images, p.custom_image_urls, p.image_source
+                    FROM products p
+                    LEFT JOIN product_images pi ON p.id = pi.product_id
+                    {where_sql}
+                    GROUP BY p.id
+                    ORDER BY p.created_at DESC
+                '''
 
-                        # 格式化字段名以兼容前端
-                        prod['weidianUrl'] = prod.get('product_url')
-                        prod['englishTitle'] = prod.get('english_title') or ''
-                        prod['cnfansUrl'] = prod.get('cnfans_url') or ''
-                        prod['acbuyUrl'] = prod.get('acbuy_url') or ''
-                        prod['createdAt'] = prod.get('created_at')
-                        prod['autoReplyEnabled'] = prod.get('ruleEnabled', True)
-                        prod['shopName'] = prod.get('shop_name') or '未知店铺'
+                query_params = list(params)
+                if limit is not None and limit > 0:
+                    query += " LIMIT ? OFFSET ?"
+                    query_params.extend([limit, offset])
 
-                        # 提取微店ID
-                        try:
-                            import re
-                            m = re.search(r'itemID=(\d+)', prod.get('product_url') or '')
-                            prod['weidianId'] = m.group(1) if m else ''
-                        except:
-                            prod['weidianId'] = ''
-
-                        products.append(prod)
-
-                    return {'products': products, 'total': total}
-
-                elif not user_shops:
-                    # 如果用户没有店铺权限，返回空结果
-                    return {'products': [], 'total': 0}
-
-                # 确保user_shops是list类型
-                if not isinstance(user_shops, list):
-                    user_shops = []
-
-                # 根据shop_id找到对应的shop_name
-                shop_names = []
-                for shop_id in user_shops:
-                    cursor.execute("SELECT name FROM shops WHERE shop_id = ?", (shop_id,))
-                    shop_row = cursor.fetchone()
-                    if shop_row:
-                        shop_names.append(shop_row[0])
-
-                if not shop_names:
-                    # 如果没有找到对应的店铺名称，返回空结果
-                    return {'products': [], 'total': 0}
-
-                # 构建IN查询 - 优化性能
-                placeholders = ','.join('?' * len(shop_names))
-                if limit is None or limit <= 0:
-                    query = f'''
-                        SELECT p.*,
-                               GROUP_CONCAT(pi.image_index) as image_indices,
-                               COUNT(pi.id) as image_count,
-                               p.custom_reply_text, p.custom_reply_images, p.custom_image_urls, p.image_source
-                        FROM products p
-                        LEFT JOIN product_images pi ON p.id = pi.product_id
-                        WHERE p.shop_name IN ({placeholders})
-                        GROUP BY p.id
-                        ORDER BY p.created_at DESC
-                    '''
-                    cursor.execute(query, shop_names)
-                    rows = cursor.fetchall()
-
-                    # 获取总数
-                    count_query = f'SELECT COUNT(*) FROM products WHERE shop_name IN ({placeholders})'
-                    cursor.execute(count_query, shop_names)
-                    total = cursor.fetchone()[0]
-                else:
-                    query = f'''
-                        SELECT p.*,
-                               GROUP_CONCAT(pi.image_index) as image_indices,
-                               COUNT(pi.id) as image_count,
-                               p.custom_reply_text, p.custom_reply_images, p.custom_image_urls, p.image_source
-                        FROM products p
-                        LEFT JOIN product_images pi ON p.id = pi.product_id
-                        WHERE p.shop_name IN ({placeholders})
-                        GROUP BY p.id
-                        ORDER BY p.created_at DESC
-                        LIMIT ? OFFSET ?
-                    '''
-                    cursor.execute(query, shop_names + [limit, offset])
+                cursor.execute(query, query_params)
                 rows = cursor.fetchall()
 
-                # 获取总数
-                count_query = f'SELECT COUNT(*) FROM products WHERE shop_name IN ({placeholders})'
-                cursor.execute(count_query, shop_names)
+                count_query = f"SELECT COUNT(*) FROM products p {where_sql}"
+                cursor.execute(count_query, params)
                 total = cursor.fetchone()[0]
 
                 products = []
                 for row in rows:
                     prod = dict(row)
-                    # 处理图片路径 - 直接使用预查询的image_indices
                     if prod.get('image_indices'):
                         image_indices = [int(idx) for idx in prod['image_indices'].split(',') if idx]
                         prod['images'] = [f"/api/image/{prod['id']}/{idx}" for idx in image_indices]
                     else:
                         prod['images'] = []
 
-                    # 格式化字段名以兼容前端
                     prod['weidianUrl'] = prod.get('product_url')
                     prod['englishTitle'] = prod.get('english_title') or ''
                     prod['cnfansUrl'] = prod.get('cnfans_url') or ''
@@ -2270,34 +2218,30 @@ class Database:
                     prod['autoReplyEnabled'] = prod.get('ruleEnabled', True)
                     prod['shopName'] = prod.get('shop_name') or '未知店铺'
                     prod['customReplyText'] = prod.get('custom_reply_text') or ''
-                    # 解析自定义回复图片索引
+
                     try:
                         custom_reply_images = prod.get('custom_reply_images')
                         if custom_reply_images:
                             prod['selectedImageIndexes'] = json.loads(custom_reply_images)
                         else:
                             prod['selectedImageIndexes'] = []
-                    except:
+                    except Exception:
                         prod['selectedImageIndexes'] = []
 
-                    # 修复：解析本地上传的自定义回复图片 (uploaded_reply_images)
-                    # 前端组件 ScraperView 需要 uploadedImages 字段 (URL列表) 来显示"已保存图片"
                     try:
                         if prod.get('uploaded_reply_images'):
-                            import json
                             filenames = json.loads(prod['uploaded_reply_images'])
                             prod['uploadedImages'] = [f"/api/custom_reply_image/{prod['id']}/{fn}" for fn in filenames]
                         else:
                             prod['uploadedImages'] = []
-                    except:
+                    except Exception:
                         prod['uploadedImages'] = []
 
-                    # 提取微店ID
                     try:
                         import re
                         m = re.search(r'itemID=(\d+)', prod.get('product_url') or '')
                         prod['weidianId'] = m.group(1) if m else ''
-                    except:
+                    except Exception:
                         prod['weidianId'] = ''
 
                     products.append(prod)
@@ -2310,6 +2254,79 @@ class Database:
             print(f"DEBUG: Full traceback: {traceback.format_exc()}")
             logger.error("获取用户商品失败: %s", str(e))
             return {'products': [], 'total': 0}
+
+    def get_product_ids_by_user_shops(
+        self,
+        user_shops: List[str],
+        keyword: str = None,
+        search_type: str = 'all',
+        shop_name: str = None
+    ) -> List[int]:
+        """根据用户店铺权限获取商品ID（支持搜索过滤）"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                shop_names = None
+                if user_shops is not None:
+                    if not isinstance(user_shops, list):
+                        user_shops = []
+                    if not user_shops:
+                        return []
+
+                    shop_names = []
+                    for shop_id in user_shops:
+                        cursor.execute("SELECT name FROM shops WHERE shop_id = ?", (shop_id,))
+                        shop_row = cursor.fetchone()
+                        if shop_row:
+                            shop_names.append(shop_row[0])
+
+                    if not shop_names:
+                        return []
+
+                where_clauses = []
+                params: List = []
+
+                if shop_names is not None:
+                    placeholders = ','.join('?' * len(shop_names))
+                    where_clauses.append(f"p.shop_name IN ({placeholders})")
+                    params.extend(shop_names)
+
+                if shop_name and shop_name != '__ALL__':
+                    where_clauses.append("p.shop_name = ?")
+                    params.append(shop_name)
+
+                if keyword:
+                    keyword = keyword.strip()
+                if keyword:
+                    keyword_lower = keyword.lower()
+                    like = f"%{keyword_lower}%"
+
+                    if search_type == 'id':
+                        where_clauses.append("(CAST(p.id AS TEXT) = ? OR LOWER(p.product_url) LIKE ?)")
+                        params.extend([keyword, f"%itemid={keyword_lower}%"])
+                    elif search_type == 'keyword':
+                        where_clauses.append("LOWER(p.english_title) LIKE ?")
+                        params.append(like)
+                    elif search_type == 'chinese':
+                        where_clauses.append("LOWER(p.title) LIKE ?")
+                        params.append(like)
+                    else:
+                        where_clauses.append(
+                            "(CAST(p.id AS TEXT) = ? OR LOWER(p.title) LIKE ? OR LOWER(p.english_title) LIKE ? OR LOWER(p.product_url) LIKE ?)"
+                        )
+                        params.extend([keyword, like, like, f"%itemid={keyword_lower}%"])
+
+                where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+                query = f"SELECT p.id FROM products p {where_sql} ORDER BY p.created_at DESC"
+
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+                return [row[0] for row in rows]
+
+        except Exception as e:
+            logger.error("获取用户商品ID失败: %s", str(e))
+            return []
 
     def get_global_reply_config(self) -> Dict[str, float]:
         """获取全局回复延迟配置"""

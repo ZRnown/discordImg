@@ -55,6 +55,8 @@ import uuid
 
 # === 全局状态变量 ===
 ai_model_ready = False  # AI模型是否已就绪
+# 全局 AI 并发控制（跨商品），避免 CPU 被同时推理任务打满
+GLOBAL_AI_SEMAPHORE = threading.Semaphore(4)
 
 # 在应用启动时从数据库加载系统配置
 def load_system_config():
@@ -1861,17 +1863,34 @@ def list_products():
         page = int(request.args.get('page', 1))
         limit = int(request.args.get('limit', 50))  # 默认每页50条
         offset = (page - 1) * limit
+        keyword = (request.args.get('keyword') or '').strip()
+        search_type = request.args.get('search_type', 'all')
+        shop_name = (request.args.get('shop_name') or '').strip() or None
 
         # 根据用户权限获取商品（支持分页）
         if current_user['role'] == 'admin':
             # 管理员可以看到所有商品
             logger.info(f"管理员用户 {current_user['username']} 获取商品列表 (页{page}, 每页{limit}条)")
-            result = db.get_products_by_user_shops(None, limit=limit, offset=offset)
+            result = db.get_products_by_user_shops(
+                None,
+                limit=limit,
+                offset=offset,
+                keyword=keyword,
+                search_type=search_type,
+                shop_name=shop_name
+            )
         else:
             # 普通用户只能看到自己管理的店铺的商品
             user_shops = current_user.get('shops', [])
             logger.info(f"普通用户 {current_user['username']} 获取店铺商品 (页{page}, 每页{limit}条)，分配的店铺: {user_shops}")
-            result = db.get_products_by_user_shops(user_shops, limit=limit, offset=offset)
+            result = db.get_products_by_user_shops(
+                user_shops,
+                limit=limit,
+                offset=offset,
+                keyword=keyword,
+                search_type=search_type,
+                shop_name=shop_name
+            )
 
             # 调试：检查数据库中的商品和店铺匹配情况
             if user_shops:
@@ -1896,7 +1915,10 @@ def list_products():
             'debug': {
                 'user_role': current_user['role'],
                 'user_shops': current_user.get('shops', []),
-                'is_admin': current_user['role'] == 'admin'
+                'is_admin': current_user['role'] == 'admin',
+                'keyword': keyword,
+                'search_type': search_type,
+                'shop_name': shop_name
             }
         }
 
@@ -2817,7 +2839,7 @@ def batch_delete_products():
 
         # 使用多线程删除
         import concurrent.futures
-        max_threads = min(5, len(ids))  # 删除用较少的线程，避免IO冲突
+        max_threads = min(16, len(ids))  # 提高并发删除速度，同时避免过多线程
 
         deleted_count = 0
         failed_ids = []
@@ -2862,11 +2884,30 @@ def batch_delete_products():
 def batch_delete_all_products():
     """删除所有商品（全选删除）"""
     try:
-        # 获取所有商品ID
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT id FROM products")
-            all_ids = [row['id'] for row in cursor.fetchall()]
+        if not require_login():
+            return jsonify({'error': '需要登录'}), 401
+
+        current_user = get_current_user()
+        data = request.get_json(silent=True) or {}
+        keyword = (request.args.get('keyword') or data.get('keyword') or '').strip()
+        search_type = request.args.get('search_type') or data.get('search_type') or 'all'
+        shop_name = (request.args.get('shop_name') or data.get('shop_name') or '').strip() or None
+
+        if current_user['role'] == 'admin':
+            all_ids = db.get_product_ids_by_user_shops(
+                None,
+                keyword=keyword,
+                search_type=search_type,
+                shop_name=shop_name
+            )
+        else:
+            user_shops = current_user.get('shops', [])
+            all_ids = db.get_product_ids_by_user_shops(
+                user_shops,
+                keyword=keyword,
+                search_type=search_type,
+                shop_name=shop_name
+            )
 
         if not all_ids:
             return jsonify({'success': True, 'count': 0, 'message': '没有商品需要删除'})
@@ -2875,7 +2916,7 @@ def batch_delete_all_products():
 
         # 使用多线程删除所有商品
         import concurrent.futures
-        max_threads = min(5, len(all_ids))
+        max_threads = min(16, len(all_ids))
 
         deleted_count = 0
         failed_ids = []
@@ -5088,79 +5129,6 @@ def process_products_multithreaded(products_list):
     logger.info(f'多线程处理完成，共处理 {len(processed_products)} 个商品')
     return processed_products
 
-def process_page_multithreaded(products_list, page_num):
-    """
-    多线程处理整个页面：获取详情 + 插入数据库 + 下载图片
-    每个线程负责一个商品的完整处理流程
-    """
-    import concurrent.futures
-
-    processed_count = 0
-
-    # 获取配置的线程数
-    max_workers = config.DOWNLOAD_THREADS
-
-    logger.info(f'第 {page_num} 页开始多线程处理 {len(products_list)} 个商品')
-
-    def process_and_save_product(product):
-        """处理单个商品的完整流程：获取详情 -> 插入数据库 -> 下载图片"""
-        try:
-            # 1. 获取商品详情
-            product_data = process_single_product(product)
-            if not product_data:
-                logger.warning(f'商品详情获取失败: {product}')
-                return 0
-
-            # 2. 检查商品是否已存在
-            existing = db.get_product_by_url(product_data['product_url'])
-            if existing:
-                logger.info(f'商品已存在，跳过: {product_data["title"]} (URL: {product_data["product_url"]})')
-                return 0
-
-            # 3. 插入商品到数据库
-            product_id = db.insert_product(product_data)
-            logger.info(f'✅ 成功插入新商品: {product_data["title"]} (ID: {product_id})')
-
-            # 4. 下载并保存图片
-            if product_data.get('images'):
-                save_product_images(product_id, product_data['images'])
-                logger.info(f'📸 商品图片下载完成: {product_data["title"]} ({len(product_data["images"])}张)')
-
-            return 1  # 成功处理一个商品
-
-        except Exception as e:
-            logger.error(f'处理商品失败: {e}')
-            return 0
-
-    # 降低并发数避免内存爆炸，YOLO模型现在是单例模式
-    max_workers_page = min(2, len(products_list))  # 最多2个并发
-    logger.info(f"页面处理使用 {max_workers_page} 个线程")
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers_page) as executor:
-        # 提交所有任务，每个商品一个任务
-        future_to_product = {
-            executor.submit(process_and_save_product, product): product
-            for product in products_list
-        }
-
-        # 收集结果
-        for future in concurrent.futures.as_completed(future_to_product):
-            try:
-                result = future.result()
-                processed_count += result
-            except Exception as e:
-                logger.error(f'页面处理任务失败: {e}')
-
-    logger.info(f'第 {page_num} 页处理完成，成功新增 {processed_count} 个商品')
-    return processed_count
-
-def save_product_images(product_id, image_urls):
-    """
-    统一的图片保存入口（向后兼容的别名）
-    实际调用 save_product_images_unified
-    """
-    return save_product_images_unified(product_id, image_urls)
-
 def save_product_images_unified(product_id, image_urls, max_workers=None, shutdown_event=None):
     """
     【性能优化版】统一的批量图片处理函数
@@ -5169,7 +5137,7 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
     解决 CPU 争抢和 GIL 锁导致的假死/卡顿问题。
 
     - 下载阶段：IO 密集，允许高并发
-    - AI 阶段：CPU 密集，使用有限并发（并发数建议与 config.AI_MAX_WORKERS 对齐）
+    - AI 阶段：CPU 密集，使用全局信号量限制并发，避免 CPU 冲突
     - FAISS：一个商品只写入/保存一次，减少锁竞争
     """
     if not image_urls:
@@ -5193,33 +5161,48 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
     logger.info(f"🚀 [商品 {product_id}] 阶段1: 开始并发下载 {len(image_urls)} 张图片...")
 
     def download_task(index, url):
-        try:
-            if shutdown_event and shutdown_event.is_set():
-                return None
+        max_retries = 10
+        for attempt in range(1, max_retries + 1):
+            try:
+                if shutdown_event and shutdown_event.is_set():
+                    return None
 
-            timestamp = int(time.time() * 1000000)
-            filename = f"{product_id}_{index}_{timestamp}.jpg"
-            save_path = os.path.join(save_dir, filename)
+                timestamp = int(time.time() * 1000000)
+                filename = f"{product_id}_{index}_{timestamp}.jpg"
+                save_path = os.path.join(save_dir, filename)
 
-            resp = requests.get(url, timeout=config.REQUEST_TIMEOUT, proxies={'http': None, 'https': None})
-            if resp.status_code != 200:
-                return None
+                resp = requests.get(
+                    url,
+                    timeout=config.REQUEST_TIMEOUT,
+                    proxies={'http': None, 'https': None}
+                )
+                if resp.status_code != 200:
+                    if attempt < max_retries:
+                        time.sleep(0.2 * attempt)
+                        continue
+                    return None
 
-            with open(save_path, 'wb') as f:
-                f.write(resp.content)
+                with open(save_path, 'wb') as f:
+                    f.write(resp.content)
 
-            if os.path.getsize(save_path) == 0:
-                try:
-                    os.remove(save_path)
-                except Exception:
-                    pass
-                return None
+                if os.path.getsize(save_path) == 0:
+                    try:
+                        os.remove(save_path)
+                    except Exception:
+                        pass
+                    if attempt < max_retries:
+                        time.sleep(0.2 * attempt)
+                        continue
+                    return None
 
-            return (index, save_path)
+                return (index, save_path)
 
-        except Exception as e:
-            logger.warning(f"下载失败 {url}: {e}")
-            return None
+            except Exception as e:
+                if attempt == max_retries:
+                    logger.warning(f"下载失败 {url}: {e}")
+                else:
+                    time.sleep(0.2 * attempt)
+        return None
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=download_workers) as executor:
         futures = [executor.submit(download_task, i, url) for i, url in enumerate(image_urls)]
@@ -5247,70 +5230,39 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
     processed_count = 0
     vectors_to_add = []  # (db_id, features)
 
-    # AI 并发数优先级：显式参数 > config.AI_MAX_WORKERS > 默认 3
-    ai_max_workers = getattr(config, 'AI_MAX_WORKERS', 3)
-    if max_workers is not None:
-        try:
-            ai_max_workers = max(1, int(max_workers))
-        except Exception:
-            ai_max_workers = getattr(config, 'AI_MAX_WORKERS', 3)
+    logger.info(f"🧠 [商品 {product_id}] 阶段2: 顺序处理图片 (全局并发受控)...")
 
-    # 保护：不要超过待处理数量
-    ai_max_workers = min(ai_max_workers, len(downloaded_images)) if downloaded_images else 1
-
-    results_lock = threading.Lock()
-
-    logger.info(f"🧠 [商品 {product_id}] 阶段2: 启动 {ai_max_workers} 个 AI 线程进行特征提取...")
-
-    def process_image_task(args):
-        index, save_path = args
-
+    for index, save_path in downloaded_images:
         if shutdown_event and shutdown_event.is_set():
-            return None
+            break
 
-        try:
-            features = extractor.extract_feature(save_path)
-            if features is None:
-                try:
-                    os.remove(save_path)
-                except Exception:
-                    pass
-                return None
+        with GLOBAL_AI_SEMAPHORE:
+            try:
+                features = extractor.extract_feature(save_path)
+                if features is None:
+                    try:
+                        os.remove(save_path)
+                    except Exception:
+                        pass
+                    continue
 
-            # 查重：必须加锁同步读写 existing_feats
-            with results_lock:
                 is_dup, score = check_duplicate_image(features, existing_feats, threshold=0.995)
-                if not is_dup:
-                    existing_feats.append(features)
+                if is_dup:
+                    logger.info(f"♻️ [商品 {product_id}] 图片重复 (相似度 {score:.3f})，跳过")
+                    try:
+                        os.remove(save_path)
+                    except Exception:
+                        pass
+                    continue
 
-            if is_dup:
-                logger.info(f"♻️ [商品 {product_id}] 图片重复 (相似度 {score:.3f})，跳过")
-                try:
-                    os.remove(save_path)
-                except Exception:
-                    pass
-                return None
-
-            img_db_id = db.insert_image_record(product_id, save_path, index, features)
-            if img_db_id:
-                logger.info(f"📸 [商品 {product_id}] 图片 {index} 处理完毕 (ID: {img_db_id})")
-                return (img_db_id, features)
-
-            return None
-
-        except Exception as e:
-            logger.error(f"处理图片异常: {e}")
-            return None
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=ai_max_workers) as ai_executor:
-        future_to_img = {ai_executor.submit(process_image_task, item): item for item in downloaded_images}
-
-        for future in concurrent.futures.as_completed(future_to_img):
-            result = future.result()
-            if result:
-                db_id, feats = result
-                vectors_to_add.append((db_id, feats))
-                processed_count += 1
+                existing_feats.append(features)
+                img_db_id = db.insert_image_record(product_id, save_path, index, features)
+                if img_db_id:
+                    logger.info(f"📸 [商品 {product_id}] 图片 {index} 处理完毕 (ID: {img_db_id})")
+                    vectors_to_add.append((img_db_id, features))
+                    processed_count += 1
+            except Exception as e:
+                logger.error(f"处理图片异常: {e}")
 
     # --- 阶段 3: 批量写入 FAISS (内存/磁盘操作) ---
     if vectors_to_add:
@@ -5330,10 +5282,6 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
 
     logger.info(f"商品 {product_id} 成功处理 {processed_count}/{len(image_urls)} 张图片")
     return processed_count
-
-def save_product_images_multithreaded(product_id, image_urls):
-    """向后兼容的别名"""
-    return save_product_images_unified(product_id, image_urls)
 
 def run_cleanup_task():
     """后台清理任务，定期清理数据库和内存中的过期记录"""

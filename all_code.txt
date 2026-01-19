@@ -70,6 +70,8 @@ export async function GET() {
 
 --- File: ./frontend/app/api/products/route.ts ---
 // 强制使用内网回环地址，速度最快且最稳定
+export const dynamic = 'force-dynamic'
+
 const BACKEND_URL = 'http://127.0.0.1:5001'
 
 export async function GET(request: Request) {
@@ -81,6 +83,7 @@ export async function GET(request: Request) {
       : `${BACKEND_URL}/api/products`
     const response = await fetch(backendUrl, {
       method: 'GET',
+      cache: 'no-store',
       headers: {
         'Cookie': request.headers.get('cookie') || ''
       }
@@ -96,7 +99,7 @@ export async function GET(request: Request) {
     const data = await response.json()
     return new Response(JSON.stringify(data), {
       status: 200,
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }
     })
   } catch (error) {
     console.error('Error fetching products:', error)
@@ -4965,7 +4968,7 @@ export function ImageSearchView() {
 
                       <div className="space-y-0.5 min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <h4 className="font-bold text-base truncate">{result.product.title}</h4>
+                          <h4 className="font-bold text-base truncate max-w-[200px] sm:max-w-[400px]">{result.product.title}</h4>
                           <Badge
                             className={
                               result.similarity >= 0.95
@@ -4979,7 +4982,7 @@ export function ImageSearchView() {
                           </Badge>
                         </div>
                         <div className="flex items-center gap-2 mt-1">
-                          <p className="text-sm font-bold text-blue-600 truncate">{result.product.englishTitle || "No English Title"}</p>
+                          <p className="text-sm font-bold text-blue-600 truncate max-w-[240px] sm:max-w-[500px]">{result.product.englishTitle || "No English Title"}</p>
                         </div>
                         <div className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground">
                           <span className="font-mono">ID: {result.product.weidianUrl?.split('itemID=')?.[1] || 'N/A'}</span>
@@ -5091,7 +5094,7 @@ export function ImageSearchView() {
 
                       <div className="space-y-0.5 min-w-0 flex-1">
                         <div className="flex items-center gap-2">
-                          <h4 className="font-bold text-base truncate">{history.title}</h4>
+                          <h4 className="font-bold text-base truncate max-w-[200px] sm:max-w-[400px]">{history.title}</h4>
                             <Badge
                               className={
                                 history.similarity >= 0.95
@@ -5105,7 +5108,7 @@ export function ImageSearchView() {
                             </Badge>
                           </div>
                         <div className="flex items-center gap-2 mt-1">
-                          <p className="text-sm font-bold text-blue-600 truncate">{history.english_title || "No English Title"}</p>
+                          <p className="text-sm font-bold text-blue-600 truncate max-w-[240px] sm:max-w-[500px]">{history.english_title || "No English Title"}</p>
                         </div>
                         <div className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground">
                           <span className="font-mono">ID: {history.weidian_url?.split('itemID=')?.[1] || 'N/A'}</span>
@@ -5268,6 +5271,83 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Checkbox } from "@/components/ui/checkbox"
 
+function ImageLightbox({
+  images,
+  initialIndex,
+  onClose
+}: {
+  images: string[]
+  initialIndex: number
+  onClose: () => void
+}) {
+  const [currentIndex, setCurrentIndex] = useState(initialIndex)
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+      if (e.key === 'ArrowLeft') {
+        setCurrentIndex((prev) => (prev > 0 ? prev - 1 : images.length - 1))
+      }
+      if (e.key === 'ArrowRight') {
+        setCurrentIndex((prev) => (prev < images.length - 1 ? prev + 1 : 0))
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [images.length, onClose])
+
+  if (!images.length) {
+    return null
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <button
+        onClick={onClose}
+        className="absolute top-4 right-4 text-white/70 hover:text-white p-2"
+      >
+        <X className="size-8" />
+      </button>
+      <div className="relative w-full h-full flex items-center justify-center p-4">
+        <img
+          src={images[currentIndex]}
+          alt={`Preview ${currentIndex + 1}`}
+          className="max-h-[90vh] max-w-[90vw] object-contain rounded-md shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+        />
+        {images.length > 1 && (
+          <>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                setCurrentIndex((prev) => (prev > 0 ? prev - 1 : images.length - 1))
+              }}
+              className="absolute left-4 top-1/2 -translate-y-1/2 p-3 bg-black/50 text-white rounded-full hover:bg-white/20 transition-colors"
+            >
+              <ChevronLeft className="size-8" />
+            </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                setCurrentIndex((prev) => (prev < images.length - 1 ? prev + 1 : 0))
+              }}
+              className="absolute right-4 top-1/2 -translate-y-1/2 p-3 bg-black/50 text-white rounded-full hover:bg-white/20 transition-colors"
+            >
+              <ChevronRight className="size-8" />
+            </button>
+          </>
+        )}
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-black/60 text-white px-4 py-1 rounded-full text-sm font-mono">
+          {currentIndex + 1} / {images.length}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function ScraperView({ currentUser }: { currentUser: any }) {
   const [batchIds, setBatchIds] = useState('')
   const [isBatchScraping, setIsBatchScraping] = useState(false)
@@ -5279,7 +5359,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   const [itemsPerPage, setItemsPerPage] = useState(50)
   const [editingProduct, setEditingProduct] = useState<any>(null)
   const [selectedProducts, setSelectedProducts] = useState<number[]>([])
-  const [selectAll, setSelectAll] = useState(false)
+  const [selectAllAcrossPages, setSelectAllAcrossPages] = useState(false)
   const [indexedIds, setIndexedIds] = useState<string[]>([])
   const [shopFilter, setShopFilter] = useState('__ALL__')
   const [keywordSearch, setKeywordSearch] = useState('')
@@ -5293,6 +5373,9 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   const [expandedProducts, setExpandedProducts] = useState<Set<number>>(new Set())
   const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null)
   const [batchUploading, setBatchUploading] = useState(false)
+  const [lightboxOpen, setLightboxOpen] = useState(false)
+  const [lightboxImages, setLightboxImages] = useState<string[]>([])
+  const [lightboxIndex, setLightboxIndex] = useState(0)
 
   // 使用API缓存hook
   const { cachedFetch, invalidateCache } = useApiCache()
@@ -5329,14 +5412,24 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
   useEffect(() => {
     fetchProducts(currentPage)
-  }, [currentPage, itemsPerPage, keywordSearch, shopFilter]) // 只在相关参数改变时重新加载商品
+  }, [currentPage, itemsPerPage, keywordSearch, shopFilter, searchType]) // 只在相关参数改变时重新加载商品
 
   useEffect(() => {
     // 当搜索条件改变时，重置到第一页
     if (keywordSearch || shopFilter) {
       setCurrentPage(1)
     }
-  }, [keywordSearch, shopFilter])
+  }, [keywordSearch, shopFilter, searchType])
+
+  useEffect(() => {
+    setSelectAllAcrossPages(false)
+    setSelectedProducts([])
+  }, [keywordSearch, shopFilter, searchType])
+
+  useEffect(() => {
+    if (!selectAllAcrossPages) return
+    setSelectedProducts(products.map(p => p.id))
+  }, [selectAllAcrossPages, products])
 
   // 优化轮询机制：使用智能轮询，避免重复请求
   useEffect(() => {
@@ -5382,80 +5475,22 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     }
   }, [isShopScraping, isBatchScraping])
 
-  const fetchProducts = async (page: number = 1, append: boolean = false, usePreload: boolean = true) => {
+  const fetchProducts = async (page: number = currentPage) => {
     try {
-      // 首先检查是否有预加载数据（只在第一次加载且未追加时）
-      if (page === 1 && !append && usePreload) {
-        const preloadData = sessionStorage.getItem('preload_products')
-        if (preloadData) {
-          try {
-            console.log('使用预加载商品数据')
-            const data = JSON.parse(preloadData)
-            // 使用预加载数据
-            const processedProducts = (Array.isArray(data.products) ? data.products : []).map((product: any) => ({
-              ...product,
-              id: product.id,
-              shopName: product.shopName || product.shop_name || '未知店铺',
-              title: product.title || '',
-              englishTitle: product.englishTitle || product.english_title || '',
-              weidianUrl: product.weidianUrl || product.product_url || '',
-              cnfansUrl: product.cnfansUrl || product.cnfans_url || '',
-              acbuyUrl: product.acbuyUrl || product.acbuy_url || '',
-              weidianId: product.weidianId || '',
-              ruleEnabled: product.ruleEnabled !== undefined ? product.ruleEnabled : true,
-              customReplyText: product.customReplyText || product.custom_reply_text || '',
-              customReplyImages: product.customReplyImages || product.custom_reply_images || [],
-              selectedImageIndexes: product.selectedImageIndexes || [],
-              customImageUrls: product.customImageUrls || product.custom_image_urls || [],
-              imageSource: product.imageSource || product.image_source || (product.custom_image_urls ? 'custom' : 'upload')
-            }))
-
-            setProducts(processedProducts)
-            setTotalProducts(data.total || 0)
-
-            // 清除预加载数据，避免重复使用
-            sessionStorage.removeItem('preload_products')
-
-            // 在后台获取最新数据，但不显示加载状态
-            setTimeout(() => fetchProducts(1, false, false), 500)
-            return
-          } catch (e) {
-            console.error('预加载数据解析失败:', e)
-            // 预加载数据损坏，清除并重新获取
-            sessionStorage.removeItem('preload_products')
-          }
-        } else {
-          // 如果没有预加载数据，等待一下再试（给预加载一点时间）
-          if (page === 1 && !append) {
-            setTimeout(() => {
-              const retryPreload = sessionStorage.getItem('preload_products')
-              if (retryPreload) {
-                fetchProducts(1, false, true)
-              } else {
-                fetchProducts(1, false, false)
-              }
-            }, 200)
-            return
-          }
-        }
+      const params = new URLSearchParams({
+        page: String(page),
+        limit: String(itemsPerPage)
+      })
+      if (keywordSearch.trim()) {
+        params.set('keyword', keywordSearch.trim())
+        params.set('search_type', searchType)
+      }
+      if (shopFilter && shopFilter !== "__ALL__") {
+        params.set('shop_name', shopFilter)
       }
 
-      console.log('从API获取商品数据')
-      const res = await fetch(`/api/products?page=${page}&limit=${itemsPerPage}`)
+      const res = await fetch(`/api/products?${params.toString()}`)
       const data = await res.json()
-
-      // 调试信息
-      console.log('商品列表API响应:', {
-        page,
-        total: data.total,
-        productsCount: data.products?.length || 0,
-        debug: data.debug,
-        firstProduct: data.products?.[0] ? {
-          id: data.products[0].id,
-          shopName: data.products[0].shopName || data.products[0].shop_name,
-          title: data.products[0].title
-        } : null
-      })
 
       const processedProducts = (Array.isArray(data.products) ? data.products : []).map((product: any) => ({
         ...product,
@@ -5473,18 +5508,12 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         selectedImageIndexes: product.selectedImageIndexes || [],
         customImageUrls: product.customImageUrls || product.custom_image_urls || [],
         imageSource: product.imageSource || product.image_source || (product.custom_image_urls ? 'custom' : 'upload'),
-        uploadedImages: [], // 新上传的File对象（用户刚选择的）
-        existingUploadedImageUrls: product.uploadedImages || [] // 已保存的图片URL（从后端加载）
+        uploadedImages: [],
+        existingUploadedImageUrls: product.uploadedImages || []
       }))
 
-      if (append) {
-        // 分页加载更多
-        setProducts(prev => [...prev, ...processedProducts])
-      } else {
-        // 重新加载第一页
-        setProducts(processedProducts)
-      }
-
+      setProducts(processedProducts)
+      setSelectedProducts([])
       setTotalProducts(data.total || 0)
     } catch (e) {
       toast.error("加载商品库失败")
@@ -5558,8 +5587,9 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   // ... (保留 handleBatchDelete, confirmBatchDelete, handleUploadImage, handleBatchUploadImages) ...
 
   const handleBatchDelete = async () => {
-    console.log('批量删除按钮被点击，选中商品数量:', selectedProducts.length)
-    if (selectedProducts.length === 0) {
+    const selectedCount = selectAllAcrossPages ? totalProducts : selectedProducts.length
+    console.log('批量删除按钮被点击，选中商品数量:', selectedCount)
+    if (selectedCount === 0) {
       console.log('没有选中商品，返回')
       return
     }
@@ -5571,14 +5601,33 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     setShowDeleteConfirm(false)
     setIsDeleting(true)
     try {
-      const res = await fetch(`/api/products?ids=${selectedProducts.join(',')}`, {
-        method: 'DELETE',
-        credentials: 'include'
-      })
+      let res: Response
+      if (selectAllAcrossPages) {
+        const params = new URLSearchParams()
+        if (keywordSearch.trim()) params.set('keyword', keywordSearch.trim())
+        params.set('search_type', searchType)
+        if (shopFilter && shopFilter !== '__ALL__') params.set('shop_name', shopFilter)
+        const query = params.toString()
+        res = await fetch(`/api/products/batch-delete-all${query ? `?${query}` : ''}`, {
+          method: 'DELETE',
+          credentials: 'include'
+        })
+      } else {
+        res = await fetch(`/api/products/batch`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ ids: selectedProducts })
+        })
+      }
+
       if (res.ok) {
         toast.success("批量删除成功")
-        setProducts(products.filter(p => !selectedProducts.includes(p.id)))
         setSelectedProducts([])
+        setSelectAllAcrossPages(false)
+        if (selectAllAcrossPages) setCurrentPage(1)
+        fetchProducts()
+        fetchProductsCount()
       } else {
         toast.error("批量删除失败")
       }
@@ -5644,11 +5693,14 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   }
 
   const handleSelectAll = () => {
-    if (selectedProducts.length === currentProducts.length && currentProducts.length > 0) {
+    if (selectAllAcrossPages) {
+      setSelectAllAcrossPages(false)
       setSelectedProducts([])
-    } else {
-      setSelectedProducts(currentProducts.map(p => p.id))
+      return
     }
+    if (totalProducts === 0) return
+    setSelectAllAcrossPages(true)
+    setSelectedProducts(currentProducts.map(p => p.id))
   }
 
   const toggleProductExpansion = (productId: number) => {
@@ -5946,41 +5998,35 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
   const handleJumpPage = () => { /* ... */ }
 
-  // 筛选和分页逻辑（简化版，避免一次性加载过多数据）
-  const uniqueShops = Array.from(new Set(products.map(p => p?.shopName || '').filter(name => name && name.trim()))).sort()
+  const openLightbox = (images: string[], index: number) => {
+    if (!images || images.length === 0) return
+    setLightboxImages(images)
+    setLightboxIndex(index)
+    setLightboxOpen(true)
+  }
 
-  // 简化分页：直接使用当前页的产品数据，不再进行复杂的内存筛选
-  // 这样可以显著提升加载速度，但暂时不支持跨页搜索
-  const currentProducts = products.filter(p => {
-    // 只有在没有搜索条件时才显示当前页数据
-    if (!keywordSearch && !shopFilter) {
-      return true
-    }
+  // 筛选和分页逻辑：纯服务端分页，前端不再二次过滤
+  const uniqueShops = Array.from(
+    new Set(availableShops.map((shop) => shop?.name || '').filter((name) => name && name.trim()))
+  ).sort()
+  const currentProducts = products
+  const selectedCount = selectAllAcrossPages ? totalProducts : selectedProducts.length
+  const isAllOnPageSelected = currentProducts.length > 0 && currentProducts.every(p => selectedProducts.includes(p.id))
+  const isAllSelected = (selectAllAcrossPages && totalProducts > 0) || isAllOnPageSelected
 
-    // 有搜索条件时，对当前加载的数据进行筛选
-    let matchesSearch = true
-    if (keywordSearch) {
-      if (searchType === 'id') {
-        matchesSearch = p.weidianId?.includes(keywordSearch)
-      } else if (searchType === 'keyword') {
-        matchesSearch = p.englishTitle?.toLowerCase().includes(keywordSearch.toLowerCase())
-      } else if (searchType === 'chinese') {
-        matchesSearch = p.title?.toLowerCase().includes(keywordSearch.toLowerCase())
-      } else {
-        matchesSearch = p.title?.toLowerCase().includes(keywordSearch.toLowerCase()) ||
-        p.englishTitle?.toLowerCase().includes(keywordSearch.toLowerCase()) ||
-        p.weidianId?.includes(keywordSearch)
-      }
-    }
-    const matchesShop = !shopFilter || shopFilter === "__ALL__" || p.shopName === shopFilter
-    return matchesSearch && matchesShop
-  })
-
-  // 计算总页数（基于总数）
-  const totalPages = Math.ceil(totalProducts / itemsPerPage)
+  // 计算总页数（基于总数，至少为1）
+  const totalPages = Math.max(1, Math.ceil(totalProducts / itemsPerPage))
+  const hasNextPage = totalProducts > 0 ? currentPage < totalPages : currentProducts.length === itemsPerPage
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 overflow-x-hidden">
+      {lightboxOpen && (
+        <ImageLightbox
+          images={lightboxImages}
+          initialIndex={lightboxIndex}
+          onClose={() => setLightboxOpen(false)}
+        />
+      )}
       {/* ... 顶部标题和管理员/普通用户上传区域 (保持不变) ... */}
 
       <div>
@@ -6161,12 +6207,12 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
             </div>
                         {/* 操作按钮 */}
                         <div className="flex items-center gap-3">
-                            <Button variant={selectedProducts.length===currentProducts.length && currentProducts.length>0?"secondary":"outline"} size="sm" onClick={handleSelectAll}>
-                                {selectedProducts.length===currentProducts.length && currentProducts.length>0 ? <CheckSquare className="mr-2 h-4 w-4"/> : <Square className="mr-2 h-4 w-4"/>} 全选 ({currentProducts.length})
+                            <Button variant={isAllSelected ? "secondary" : "outline"} size="sm" onClick={handleSelectAll}>
+                                {isAllSelected ? <CheckSquare className="mr-2 h-4 w-4"/> : <Square className="mr-2 h-4 w-4"/>} 全选 (全部 {totalProducts})
             </Button>
-                            {selectedProducts.length > 0 && (
+                            {selectedCount > 0 && (
                                 <Button variant="destructive" size="sm" onClick={handleBatchDelete} disabled={isDeleting}>
-                                    <Trash2 className="mr-2 h-4 w-4" /> 删除 ({selectedProducts.length})
+                                    <Trash2 className="mr-2 h-4 w-4" /> 删除 ({selectedCount})
                                 </Button>
                             )}
           </div>
@@ -6175,17 +6221,23 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
             </CardHeader>
             <CardContent className="p-0">
                 {/* 列表 */}
-          <div className="divide-y">
+          <div className="divide-y overflow-x-hidden">
                     {currentProducts.map((product) => {
                         const links = getProductLinks(product);
                         const showAllLinks = expandedProducts.has(product.id);
                         const displayedLinks = showAllLinks ? links : links.slice(0, 3);
                         return (
-              <div key={product.id} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3">
+              <div key={product.id} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3 min-w-0">
                 <div className="flex gap-3 items-center">
-                                <Checkbox checked={selectedProducts.includes(product.id)} onCheckedChange={(checked)=>{
-                                    if(checked) setSelectedProducts([...selectedProducts, product.id])
-                                    else setSelectedProducts(selectedProducts.filter(id=>id!==product.id))
+                                <Checkbox checked={selectAllAcrossPages || selectedProducts.includes(product.id)} onCheckedChange={(checked)=>{
+                                    if (!checked && selectAllAcrossPages) {
+                                      setSelectAllAcrossPages(false)
+                                    }
+                                    if (checked) {
+                                      setSelectedProducts(Array.from(new Set([...selectedProducts, product.id])))
+                                    } else {
+                                      setSelectedProducts(selectedProducts.filter(id=>id!==product.id))
+                                    }
                                 }}/>
                 </div>
 
@@ -6231,7 +6283,12 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-1">
                           {product.images?.map((img: string, idx: number) => (
                             <div key={img} className="aspect-square rounded-xl border-2 bg-muted overflow-hidden group relative">
-                              <img src={img} alt={`Img ${idx}`} className="object-cover w-full h-full transition-transform group-hover:scale-110" />
+                              <img
+                                src={img}
+                                alt={`Img ${idx}`}
+                                className="object-cover w-full h-full transition-transform group-hover:scale-110 cursor-zoom-in"
+                                onClick={() => openLightbox(product.images || [], idx)}
+                              />
                               <button
                                                             onClick={async (e) => {
                                                                 e.preventDefault()
@@ -6282,13 +6339,13 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                   </Dialog>
                   <div className="space-y-0.5 min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                                        <h4 className="font-bold text-base truncate">{product.title}</h4>
+                                        <h4 className="font-bold text-base truncate max-w-[200px] sm:max-w-[400px]">{product.title}</h4>
                                         {/* 已删除这里原本的小编辑按钮 */}
                                         {indexedIds.includes(product.weidianId) && <Badge className="bg-blue-600 text-[10px] h-4 px-2">已索引</Badge>}
                                         {product.ruleEnabled && <Badge className="bg-purple-600 text-[10px] h-4 px-2">规则启用</Badge>}
                     </div>
                     <div className="flex items-center gap-2 mt-1">
-                                        <p className="text-sm font-bold text-blue-600 truncate">{product.englishTitle || "No English Title"}</p>
+                                        <p className="text-sm font-bold text-blue-600 truncate max-w-[240px] sm:max-w-[500px]">{product.englishTitle || "No English Title"}</p>
                     </div>
                                     <div className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground">
                                         <span className="font-mono">ID: {product.weidianId}</span>
@@ -6313,7 +6370,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                   </div>
                 </div>
                             {/* 链接显示区域 */}
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-4 min-w-0 flex-1">
                                 <div className="flex flex-col gap-1 min-w-0 flex-1 max-w-md">
                                     {displayedLinks.map((link) => (
                       <div key={link.name} className="flex items-center gap-1.5">
@@ -6323,7 +6380,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                                 link.badge_color === 'orange' ? 'bg-orange-600' : 'bg-gray-600'
                                             }`}>{link.display_name}</Badge>
                         <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
-                                                <a href={link.url} target="_blank" className="font-mono truncate hover:underline text-muted-foreground">{link.url}</a>
+                                                <a href={link.url} target="_blank" className="font-mono truncate hover:underline text-muted-foreground block max-w-full">{link.url}</a>
                                                 <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(link.url); toast.success("Copied")}}><Copy className="h-2.5 w-2.5"/></Button>
                         </div>
                       </div>
@@ -6336,7 +6393,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                     )}
                   </div>
                                 {/* 操作按钮组 */}
-                                <div className="flex items-center gap-1">
+                                <div className="flex items-center gap-1 ml-auto shrink-0">
                                     {/* 编辑按钮 */}
                                     <Dialog open={editingProduct?.id === product.id} onOpenChange={(open)=>!open && setEditingProduct(null)}>
                       <DialogTrigger asChild>
@@ -6644,7 +6701,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                 {currentProducts.length > 0 && (
                     <div className="flex flex-col sm:flex-row justify-between items-center gap-4 p-6 border-t bg-muted/5">
               <div className="text-sm text-muted-foreground font-medium">
-                            显示第 {(currentPage-1)*itemsPerPage + 1} - {Math.min(currentPage*itemsPerPage, currentProducts.length)} 条，共 {currentProducts.length} 条记录
+                            显示第 {(currentPage-1)*itemsPerPage + 1} - {Math.min(currentPage*itemsPerPage, totalProducts)} 条，共 {totalProducts} 条记录
                             <span className="ml-2">({currentPage}/{totalPages}页)</span>
               </div>
                 <div className="flex items-center gap-2">
@@ -6664,7 +6721,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                     variant="outline"
                     size="sm"
                                 onClick={()=>setCurrentPage(p=>Math.min(totalPages, p+1))}
-                                disabled={currentPage===totalPages}
+                                disabled={!hasNextPage}
                                 className="h-8 px-3"
                   >
                                 下一页 <ChevronRight className="h-4 w-4 ml-1"/>
@@ -6712,7 +6769,9 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
           <DialogHeader>
               <DialogTitle>确认批量删除</DialogTitle>
             <DialogDescription>
-              确定要删除选中的 {selectedProducts.length} 个商品吗？此操作不可恢复。
+              {selectAllAcrossPages
+                ? `确定要删除全部 ${totalProducts} 个商品吗？此操作不可恢复。`
+                : `确定要删除选中的 ${selectedCount} 个商品吗？此操作不可恢复。`}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -10311,10 +10370,10 @@ class Config:
 
     # === 多线程配置 (针对 10核 CPU 优化) ===
     # 商品信息抓取是IO密集型，可以开大
-    SCRAPE_THREADS = int(os.getenv('SCRAPE_THREADS', '10'))
+    SCRAPE_THREADS = int(os.getenv('SCRAPE_THREADS', '5'))
     
     # 图片下载也是IO密集型，可以开更大
-    DOWNLOAD_THREADS = int(os.getenv('DOWNLOAD_THREADS', '16'))
+    DOWNLOAD_THREADS = int(os.getenv('DOWNLOAD_THREADS', '8'))
 
     # AI 推理的并发控制 (CPU密集型)：
     # - AI_INTRA_THREADS：单个推理任务内部使用的 CPU 核心数
@@ -12471,157 +12530,105 @@ class Database:
             logger.error(f"删除自定义回复内容失败: {e}")
             return False
 
-    def get_products_by_user_shops(self, user_shops: List[str], limit: int = None, offset: int = 0) -> Dict:
-        """根据用户店铺权限获取商品"""
+    def get_products_by_user_shops(
+        self,
+        user_shops: List[str],
+        limit: int = None,
+        offset: int = 0,
+        keyword: str = None,
+        search_type: str = 'all',
+        shop_name: str = None
+    ) -> Dict:
+        """根据用户店铺权限获取商品（支持分页与搜索过滤）"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor = conn.cursor()
 
-                if user_shops is None:
-                    # 管理员可以看到所有商品（不限制店铺）- 优化查询性能
-                    if limit is None or limit <= 0:
-                        # 一次性获取所有商品和对应的图片索引
-                        query = '''
-                            SELECT p.*,
-                                   GROUP_CONCAT(pi.image_index) as image_indices,
-                                   COUNT(pi.id) as image_count,
-                                   p.custom_reply_text, p.custom_reply_images, p.custom_image_urls, p.image_source
-                            FROM products p
-                            LEFT JOIN product_images pi ON p.id = pi.product_id
-                            GROUP BY p.id
-                            ORDER BY p.created_at DESC
-                        '''
-                        cursor.execute(query)
-                        rows = cursor.fetchall()
+                shop_names = None
+                if user_shops is not None:
+                    if not isinstance(user_shops, list):
+                        user_shops = []
+                    if not user_shops:
+                        return {'products': [], 'total': 0}
 
-                        # 获取总数
-                        cursor.execute('SELECT COUNT(*) FROM products')
-                        total = cursor.fetchone()[0]
+                    shop_names = []
+                    for shop_id in user_shops:
+                        cursor.execute("SELECT name FROM shops WHERE shop_id = ?", (shop_id,))
+                        shop_row = cursor.fetchone()
+                        if shop_row:
+                            shop_names.append(shop_row[0])
+
+                    if not shop_names:
+                        return {'products': [], 'total': 0}
+
+                where_clauses = []
+                params: List = []
+
+                if shop_names is not None:
+                    placeholders = ','.join('?' * len(shop_names))
+                    where_clauses.append(f"p.shop_name IN ({placeholders})")
+                    params.extend(shop_names)
+
+                if shop_name and shop_name != '__ALL__':
+                    where_clauses.append("p.shop_name = ?")
+                    params.append(shop_name)
+
+                if keyword:
+                    keyword = keyword.strip()
+                if keyword:
+                    keyword_lower = keyword.lower()
+                    like = f"%{keyword_lower}%"
+
+                    if search_type == 'id':
+                        where_clauses.append("(CAST(p.id AS TEXT) = ? OR LOWER(p.product_url) LIKE ?)")
+                        params.extend([keyword, f"%itemid={keyword_lower}%"])
+                    elif search_type == 'keyword':
+                        where_clauses.append("LOWER(p.english_title) LIKE ?")
+                        params.append(like)
+                    elif search_type == 'chinese':
+                        where_clauses.append("LOWER(p.title) LIKE ?")
+                        params.append(like)
                     else:
-                        # 分页查询 - 使用子查询优化性能
-                        query = '''
-                            SELECT p.*,
-                                   GROUP_CONCAT(pi.image_index) as image_indices,
-                                   COUNT(pi.id) as image_count,
-                                   p.custom_reply_text, p.custom_reply_images, p.custom_image_urls, p.image_source
-                            FROM products p
-                            LEFT JOIN product_images pi ON p.id = pi.product_id
-                            GROUP BY p.id
-                            ORDER BY p.created_at DESC
-                            LIMIT ? OFFSET ?
-                        '''
-                        cursor.execute(query, [limit, offset])
-                    rows = cursor.fetchall()
+                        where_clauses.append(
+                            "(CAST(p.id AS TEXT) = ? OR LOWER(p.title) LIKE ? OR LOWER(p.english_title) LIKE ? OR LOWER(p.product_url) LIKE ?)"
+                        )
+                        params.extend([keyword, like, like, f"%itemid={keyword_lower}%"])
 
-                    # 获取总数
-                    cursor.execute('SELECT COUNT(*) FROM products')
-                    total = cursor.fetchone()[0]
+                where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
-                    products = []
-                    for row in rows:
-                        prod = dict(row)
-                        # 处理图片路径 - 直接使用预查询的image_indices
-                        if prod.get('image_indices'):
-                            image_indices = [int(idx) for idx in prod['image_indices'].split(',') if idx]
-                            prod['images'] = [f"/api/image/{prod['id']}/{idx}" for idx in image_indices]
-                        else:
-                            prod['images'] = []
+                query = f'''
+                    SELECT p.*,
+                           GROUP_CONCAT(pi.image_index) as image_indices,
+                           COUNT(pi.id) as image_count,
+                           p.custom_reply_text, p.custom_reply_images, p.custom_image_urls, p.image_source
+                    FROM products p
+                    LEFT JOIN product_images pi ON p.id = pi.product_id
+                    {where_sql}
+                    GROUP BY p.id
+                    ORDER BY p.created_at DESC
+                '''
 
-                        # 格式化字段名以兼容前端
-                        prod['weidianUrl'] = prod.get('product_url')
-                        prod['englishTitle'] = prod.get('english_title') or ''
-                        prod['cnfansUrl'] = prod.get('cnfans_url') or ''
-                        prod['acbuyUrl'] = prod.get('acbuy_url') or ''
-                        prod['createdAt'] = prod.get('created_at')
-                        prod['autoReplyEnabled'] = prod.get('ruleEnabled', True)
-                        prod['shopName'] = prod.get('shop_name') or '未知店铺'
+                query_params = list(params)
+                if limit is not None and limit > 0:
+                    query += " LIMIT ? OFFSET ?"
+                    query_params.extend([limit, offset])
 
-                        # 提取微店ID
-                        try:
-                            import re
-                            m = re.search(r'itemID=(\d+)', prod.get('product_url') or '')
-                            prod['weidianId'] = m.group(1) if m else ''
-                        except:
-                            prod['weidianId'] = ''
-
-                        products.append(prod)
-
-                    return {'products': products, 'total': total}
-
-                elif not user_shops:
-                    # 如果用户没有店铺权限，返回空结果
-                    return {'products': [], 'total': 0}
-
-                # 确保user_shops是list类型
-                if not isinstance(user_shops, list):
-                    user_shops = []
-
-                # 根据shop_id找到对应的shop_name
-                shop_names = []
-                for shop_id in user_shops:
-                    cursor.execute("SELECT name FROM shops WHERE shop_id = ?", (shop_id,))
-                    shop_row = cursor.fetchone()
-                    if shop_row:
-                        shop_names.append(shop_row[0])
-
-                if not shop_names:
-                    # 如果没有找到对应的店铺名称，返回空结果
-                    return {'products': [], 'total': 0}
-
-                # 构建IN查询 - 优化性能
-                placeholders = ','.join('?' * len(shop_names))
-                if limit is None or limit <= 0:
-                    query = f'''
-                        SELECT p.*,
-                               GROUP_CONCAT(pi.image_index) as image_indices,
-                               COUNT(pi.id) as image_count,
-                               p.custom_reply_text, p.custom_reply_images, p.custom_image_urls, p.image_source
-                        FROM products p
-                        LEFT JOIN product_images pi ON p.id = pi.product_id
-                        WHERE p.shop_name IN ({placeholders})
-                        GROUP BY p.id
-                        ORDER BY p.created_at DESC
-                    '''
-                    cursor.execute(query, shop_names)
-                    rows = cursor.fetchall()
-
-                    # 获取总数
-                    count_query = f'SELECT COUNT(*) FROM products WHERE shop_name IN ({placeholders})'
-                    cursor.execute(count_query, shop_names)
-                    total = cursor.fetchone()[0]
-                else:
-                    query = f'''
-                        SELECT p.*,
-                               GROUP_CONCAT(pi.image_index) as image_indices,
-                               COUNT(pi.id) as image_count,
-                               p.custom_reply_text, p.custom_reply_images, p.custom_image_urls, p.image_source
-                        FROM products p
-                        LEFT JOIN product_images pi ON p.id = pi.product_id
-                        WHERE p.shop_name IN ({placeholders})
-                        GROUP BY p.id
-                        ORDER BY p.created_at DESC
-                        LIMIT ? OFFSET ?
-                    '''
-                    cursor.execute(query, shop_names + [limit, offset])
+                cursor.execute(query, query_params)
                 rows = cursor.fetchall()
 
-                # 获取总数
-                count_query = f'SELECT COUNT(*) FROM products WHERE shop_name IN ({placeholders})'
-                cursor.execute(count_query, shop_names)
+                count_query = f"SELECT COUNT(*) FROM products p {where_sql}"
+                cursor.execute(count_query, params)
                 total = cursor.fetchone()[0]
 
                 products = []
                 for row in rows:
                     prod = dict(row)
-                    # 处理图片路径 - 直接使用预查询的image_indices
                     if prod.get('image_indices'):
                         image_indices = [int(idx) for idx in prod['image_indices'].split(',') if idx]
                         prod['images'] = [f"/api/image/{prod['id']}/{idx}" for idx in image_indices]
                     else:
                         prod['images'] = []
 
-                    # 格式化字段名以兼容前端
                     prod['weidianUrl'] = prod.get('product_url')
                     prod['englishTitle'] = prod.get('english_title') or ''
                     prod['cnfansUrl'] = prod.get('cnfans_url') or ''
@@ -12630,34 +12637,30 @@ class Database:
                     prod['autoReplyEnabled'] = prod.get('ruleEnabled', True)
                     prod['shopName'] = prod.get('shop_name') or '未知店铺'
                     prod['customReplyText'] = prod.get('custom_reply_text') or ''
-                    # 解析自定义回复图片索引
+
                     try:
                         custom_reply_images = prod.get('custom_reply_images')
                         if custom_reply_images:
                             prod['selectedImageIndexes'] = json.loads(custom_reply_images)
                         else:
                             prod['selectedImageIndexes'] = []
-                    except:
+                    except Exception:
                         prod['selectedImageIndexes'] = []
 
-                    # 修复：解析本地上传的自定义回复图片 (uploaded_reply_images)
-                    # 前端组件 ScraperView 需要 uploadedImages 字段 (URL列表) 来显示"已保存图片"
                     try:
                         if prod.get('uploaded_reply_images'):
-                            import json
                             filenames = json.loads(prod['uploaded_reply_images'])
                             prod['uploadedImages'] = [f"/api/custom_reply_image/{prod['id']}/{fn}" for fn in filenames]
                         else:
                             prod['uploadedImages'] = []
-                    except:
+                    except Exception:
                         prod['uploadedImages'] = []
 
-                    # 提取微店ID
                     try:
                         import re
                         m = re.search(r'itemID=(\d+)', prod.get('product_url') or '')
                         prod['weidianId'] = m.group(1) if m else ''
-                    except:
+                    except Exception:
                         prod['weidianId'] = ''
 
                     products.append(prod)
@@ -12670,6 +12673,79 @@ class Database:
             print(f"DEBUG: Full traceback: {traceback.format_exc()}")
             logger.error("获取用户商品失败: %s", str(e))
             return {'products': [], 'total': 0}
+
+    def get_product_ids_by_user_shops(
+        self,
+        user_shops: List[str],
+        keyword: str = None,
+        search_type: str = 'all',
+        shop_name: str = None
+    ) -> List[int]:
+        """根据用户店铺权限获取商品ID（支持搜索过滤）"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                shop_names = None
+                if user_shops is not None:
+                    if not isinstance(user_shops, list):
+                        user_shops = []
+                    if not user_shops:
+                        return []
+
+                    shop_names = []
+                    for shop_id in user_shops:
+                        cursor.execute("SELECT name FROM shops WHERE shop_id = ?", (shop_id,))
+                        shop_row = cursor.fetchone()
+                        if shop_row:
+                            shop_names.append(shop_row[0])
+
+                    if not shop_names:
+                        return []
+
+                where_clauses = []
+                params: List = []
+
+                if shop_names is not None:
+                    placeholders = ','.join('?' * len(shop_names))
+                    where_clauses.append(f"p.shop_name IN ({placeholders})")
+                    params.extend(shop_names)
+
+                if shop_name and shop_name != '__ALL__':
+                    where_clauses.append("p.shop_name = ?")
+                    params.append(shop_name)
+
+                if keyword:
+                    keyword = keyword.strip()
+                if keyword:
+                    keyword_lower = keyword.lower()
+                    like = f"%{keyword_lower}%"
+
+                    if search_type == 'id':
+                        where_clauses.append("(CAST(p.id AS TEXT) = ? OR LOWER(p.product_url) LIKE ?)")
+                        params.extend([keyword, f"%itemid={keyword_lower}%"])
+                    elif search_type == 'keyword':
+                        where_clauses.append("LOWER(p.english_title) LIKE ?")
+                        params.append(like)
+                    elif search_type == 'chinese':
+                        where_clauses.append("LOWER(p.title) LIKE ?")
+                        params.append(like)
+                    else:
+                        where_clauses.append(
+                            "(CAST(p.id AS TEXT) = ? OR LOWER(p.title) LIKE ? OR LOWER(p.english_title) LIKE ? OR LOWER(p.product_url) LIKE ?)"
+                        )
+                        params.extend([keyword, like, like, f"%itemid={keyword_lower}%"])
+
+                where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+                query = f"SELECT p.id FROM products p {where_sql} ORDER BY p.created_at DESC"
+
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+                return [row[0] for row in rows]
+
+        except Exception as e:
+            logger.error("获取用户商品ID失败: %s", str(e))
+            return []
 
     def get_global_reply_config(self) -> Dict[str, float]:
         """获取全局回复延迟配置"""
@@ -15455,6 +15531,8 @@ class DINOv2FeatureExtractor:
 
     def __init__(self):
         self.device = torch.device(config.DEVICE)
+        # 保护 YOLO/DINO 推理，避免多线程同时访问导致模型状态损坏
+        self.inference_lock = threading.Lock()
         logger.info(f"正在初始化猎鹰AI引擎，使用设备: {self.device}")
 
         # 加载YOLOv8-Nano (眼睛 - 主体检测)
@@ -15502,8 +15580,7 @@ class DINOv2FeatureExtractor:
                 "toy", "box", "bottle", "cup", "lamp"
             ]
 
-            # 将这些类别注入模型
-            self.detector.set_classes(self.target_classes)
+            # 不在初始化时设置类别，避免某些版本出现副作用
 
             logger.info("🎉 YOLO-World模型加载成功！")
             logger.info(f"🎯 支持自动识别 {len(self.target_classes)} 种商品类别")
@@ -15564,27 +15641,12 @@ class DINOv2FeatureExtractor:
 
             self.processor = AutoImageProcessor.from_pretrained(model_name)
             self.model = AutoModel.from_pretrained(model_name)
-
-            # 安全地将模型移动到设备，避免meta tensor错误
             try:
-                if hasattr(self.model, 'to'):
-                    self.model = self.model.to(self.device)
-                else:
-                    logger.warning("模型没有to()方法，使用原模型")
+                self.model.to(self.device)
             except Exception as device_error:
-                logger.warning(f"模型移动到设备失败: {device_error}，尝试其他方法...")
-                try:
-                    # 尝试使用to_empty方法
-                    if hasattr(self.model, 'to_empty'):
-                        self.model = self.model.to_empty(device=self.device)
-                    else:
-                        logger.error("模型不支持to_empty方法，使用CPU")
-                        self.device = torch.device('cpu')
-                        self.model = self.model.to(self.device)
-                except Exception as fallback_error:
-                    logger.error(f"所有设备移动方法都失败: {fallback_error}")
-                    raise
-
+                logger.warning(f"模型移动到设备失败: {device_error}，改用CPU")
+                self.device = torch.device('cpu')
+                self.model.to(self.device)
             self.model.eval()
             logger.info("✅ DINOv2模型加载成功")
         except Exception as e:
@@ -15601,7 +15663,7 @@ class DINOv2FeatureExtractor:
         4. [新增] 缩小图片尺寸以加快AI推理速度
         """
         try:
-            if not config.USE_YOLO_CROP:
+            if not config.USE_YOLO_CROP or self.detector is None:
                 return self._resize_for_ai(Image.open(image_path).convert("RGB"))
 
             # 检查缓存
@@ -15616,7 +15678,8 @@ class DINOv2FeatureExtractor:
                 return cached_result
 
             # conf=0.1: 降低门槛，宁可多检不要漏检，反正我们有逻辑过滤
-            results = self.detector(image_path, conf=0.1, verbose=False)
+            with self.inference_lock:
+                results = self.detector(image_path, conf=0.1, verbose=False)
 
             if not results or len(results[0].boxes) == 0:
                 logger.info("未检测到通用商品，降级使用原图")
@@ -15735,11 +15798,11 @@ class DINOv2FeatureExtractor:
             img = self._crop_main_object(image_path)
 
             # 2. 预处理（DINOv2会自动处理）
-            inputs = self.processor(images=img, return_tensors="pt").to(self.device)
-
-            # 3. 特征提取
-            with torch.no_grad():
-                outputs = self.model(**inputs)
+            with self.inference_lock:
+                inputs = self.processor(images=img, return_tensors="pt").to(self.device)
+                # 3. 特征提取
+                with torch.no_grad():
+                    outputs = self.model(**inputs)
 
             # 4. 获取CLS token特征 (DINOv2的最佳实践)
             # outputs.last_hidden_state.shape: [1, num_patches+1, dim]
@@ -15958,6 +16021,12 @@ class VectorEngine:
                 self.index = faiss.read_index(self.index_file)
                 with open(self.id_map_file, 'rb') as f:
                     self.id_map = pickle.load(f)
+                if getattr(self.index, 'd', None) != self.dimension:
+                    logger.error(
+                        f"索引维度不匹配: index.d={getattr(self.index, 'd', None)} != config={self.dimension}，重新创建索引"
+                    )
+                    self._create_new_index()
+                    return
                 if hasattr(self.index, 'efSearch'):
                     self.index.efSearch = config.FAISS_EF_SEARCH
                     logger.info(f"设置efSearch = {config.FAISS_EF_SEARCH}")
@@ -16597,6 +16666,8 @@ import uuid
 
 # === 全局状态变量 ===
 ai_model_ready = False  # AI模型是否已就绪
+# 全局 AI 并发控制（跨商品），避免 CPU 被同时推理任务打满
+GLOBAL_AI_SEMAPHORE = threading.Semaphore(4)
 
 # 在应用启动时从数据库加载系统配置
 def load_system_config():
@@ -18403,17 +18474,34 @@ def list_products():
         page = int(request.args.get('page', 1))
         limit = int(request.args.get('limit', 50))  # 默认每页50条
         offset = (page - 1) * limit
+        keyword = (request.args.get('keyword') or '').strip()
+        search_type = request.args.get('search_type', 'all')
+        shop_name = (request.args.get('shop_name') or '').strip() or None
 
         # 根据用户权限获取商品（支持分页）
         if current_user['role'] == 'admin':
             # 管理员可以看到所有商品
             logger.info(f"管理员用户 {current_user['username']} 获取商品列表 (页{page}, 每页{limit}条)")
-            result = db.get_products_by_user_shops(None, limit=limit, offset=offset)
+            result = db.get_products_by_user_shops(
+                None,
+                limit=limit,
+                offset=offset,
+                keyword=keyword,
+                search_type=search_type,
+                shop_name=shop_name
+            )
         else:
             # 普通用户只能看到自己管理的店铺的商品
             user_shops = current_user.get('shops', [])
             logger.info(f"普通用户 {current_user['username']} 获取店铺商品 (页{page}, 每页{limit}条)，分配的店铺: {user_shops}")
-            result = db.get_products_by_user_shops(user_shops, limit=limit, offset=offset)
+            result = db.get_products_by_user_shops(
+                user_shops,
+                limit=limit,
+                offset=offset,
+                keyword=keyword,
+                search_type=search_type,
+                shop_name=shop_name
+            )
 
             # 调试：检查数据库中的商品和店铺匹配情况
             if user_shops:
@@ -18438,7 +18526,10 @@ def list_products():
             'debug': {
                 'user_role': current_user['role'],
                 'user_shops': current_user.get('shops', []),
-                'is_admin': current_user['role'] == 'admin'
+                'is_admin': current_user['role'] == 'admin',
+                'keyword': keyword,
+                'search_type': search_type,
+                'shop_name': shop_name
             }
         }
 
@@ -19359,7 +19450,7 @@ def batch_delete_products():
 
         # 使用多线程删除
         import concurrent.futures
-        max_threads = min(5, len(ids))  # 删除用较少的线程，避免IO冲突
+        max_threads = min(16, len(ids))  # 提高并发删除速度，同时避免过多线程
 
         deleted_count = 0
         failed_ids = []
@@ -19404,11 +19495,30 @@ def batch_delete_products():
 def batch_delete_all_products():
     """删除所有商品（全选删除）"""
     try:
-        # 获取所有商品ID
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT id FROM products")
-            all_ids = [row['id'] for row in cursor.fetchall()]
+        if not require_login():
+            return jsonify({'error': '需要登录'}), 401
+
+        current_user = get_current_user()
+        data = request.get_json(silent=True) or {}
+        keyword = (request.args.get('keyword') or data.get('keyword') or '').strip()
+        search_type = request.args.get('search_type') or data.get('search_type') or 'all'
+        shop_name = (request.args.get('shop_name') or data.get('shop_name') or '').strip() or None
+
+        if current_user['role'] == 'admin':
+            all_ids = db.get_product_ids_by_user_shops(
+                None,
+                keyword=keyword,
+                search_type=search_type,
+                shop_name=shop_name
+            )
+        else:
+            user_shops = current_user.get('shops', [])
+            all_ids = db.get_product_ids_by_user_shops(
+                user_shops,
+                keyword=keyword,
+                search_type=search_type,
+                shop_name=shop_name
+            )
 
         if not all_ids:
             return jsonify({'success': True, 'count': 0, 'message': '没有商品需要删除'})
@@ -19417,7 +19527,7 @@ def batch_delete_all_products():
 
         # 使用多线程删除所有商品
         import concurrent.futures
-        max_threads = min(5, len(all_ids))
+        max_threads = min(16, len(all_ids))
 
         deleted_count = 0
         failed_ids = []
@@ -21630,79 +21740,6 @@ def process_products_multithreaded(products_list):
     logger.info(f'多线程处理完成，共处理 {len(processed_products)} 个商品')
     return processed_products
 
-def process_page_multithreaded(products_list, page_num):
-    """
-    多线程处理整个页面：获取详情 + 插入数据库 + 下载图片
-    每个线程负责一个商品的完整处理流程
-    """
-    import concurrent.futures
-
-    processed_count = 0
-
-    # 获取配置的线程数
-    max_workers = config.DOWNLOAD_THREADS
-
-    logger.info(f'第 {page_num} 页开始多线程处理 {len(products_list)} 个商品')
-
-    def process_and_save_product(product):
-        """处理单个商品的完整流程：获取详情 -> 插入数据库 -> 下载图片"""
-        try:
-            # 1. 获取商品详情
-            product_data = process_single_product(product)
-            if not product_data:
-                logger.warning(f'商品详情获取失败: {product}')
-                return 0
-
-            # 2. 检查商品是否已存在
-            existing = db.get_product_by_url(product_data['product_url'])
-            if existing:
-                logger.info(f'商品已存在，跳过: {product_data["title"]} (URL: {product_data["product_url"]})')
-                return 0
-
-            # 3. 插入商品到数据库
-            product_id = db.insert_product(product_data)
-            logger.info(f'✅ 成功插入新商品: {product_data["title"]} (ID: {product_id})')
-
-            # 4. 下载并保存图片
-            if product_data.get('images'):
-                save_product_images(product_id, product_data['images'])
-                logger.info(f'📸 商品图片下载完成: {product_data["title"]} ({len(product_data["images"])}张)')
-
-            return 1  # 成功处理一个商品
-
-        except Exception as e:
-            logger.error(f'处理商品失败: {e}')
-            return 0
-
-    # 降低并发数避免内存爆炸，YOLO模型现在是单例模式
-    max_workers_page = min(2, len(products_list))  # 最多2个并发
-    logger.info(f"页面处理使用 {max_workers_page} 个线程")
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers_page) as executor:
-        # 提交所有任务，每个商品一个任务
-        future_to_product = {
-            executor.submit(process_and_save_product, product): product
-            for product in products_list
-        }
-
-        # 收集结果
-        for future in concurrent.futures.as_completed(future_to_product):
-            try:
-                result = future.result()
-                processed_count += result
-            except Exception as e:
-                logger.error(f'页面处理任务失败: {e}')
-
-    logger.info(f'第 {page_num} 页处理完成，成功新增 {processed_count} 个商品')
-    return processed_count
-
-def save_product_images(product_id, image_urls):
-    """
-    统一的图片保存入口（向后兼容的别名）
-    实际调用 save_product_images_unified
-    """
-    return save_product_images_unified(product_id, image_urls)
-
 def save_product_images_unified(product_id, image_urls, max_workers=None, shutdown_event=None):
     """
     【性能优化版】统一的批量图片处理函数
@@ -21711,7 +21748,7 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
     解决 CPU 争抢和 GIL 锁导致的假死/卡顿问题。
 
     - 下载阶段：IO 密集，允许高并发
-    - AI 阶段：CPU 密集，使用有限并发（并发数建议与 config.AI_MAX_WORKERS 对齐）
+    - AI 阶段：CPU 密集，使用全局信号量限制并发，避免 CPU 冲突
     - FAISS：一个商品只写入/保存一次，减少锁竞争
     """
     if not image_urls:
@@ -21735,33 +21772,48 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
     logger.info(f"🚀 [商品 {product_id}] 阶段1: 开始并发下载 {len(image_urls)} 张图片...")
 
     def download_task(index, url):
-        try:
-            if shutdown_event and shutdown_event.is_set():
-                return None
+        max_retries = 10
+        for attempt in range(1, max_retries + 1):
+            try:
+                if shutdown_event and shutdown_event.is_set():
+                    return None
 
-            timestamp = int(time.time() * 1000000)
-            filename = f"{product_id}_{index}_{timestamp}.jpg"
-            save_path = os.path.join(save_dir, filename)
+                timestamp = int(time.time() * 1000000)
+                filename = f"{product_id}_{index}_{timestamp}.jpg"
+                save_path = os.path.join(save_dir, filename)
 
-            resp = requests.get(url, timeout=config.REQUEST_TIMEOUT, proxies={'http': None, 'https': None})
-            if resp.status_code != 200:
-                return None
+                resp = requests.get(
+                    url,
+                    timeout=config.REQUEST_TIMEOUT,
+                    proxies={'http': None, 'https': None}
+                )
+                if resp.status_code != 200:
+                    if attempt < max_retries:
+                        time.sleep(0.2 * attempt)
+                        continue
+                    return None
 
-            with open(save_path, 'wb') as f:
-                f.write(resp.content)
+                with open(save_path, 'wb') as f:
+                    f.write(resp.content)
 
-            if os.path.getsize(save_path) == 0:
-                try:
-                    os.remove(save_path)
-                except Exception:
-                    pass
-                return None
+                if os.path.getsize(save_path) == 0:
+                    try:
+                        os.remove(save_path)
+                    except Exception:
+                        pass
+                    if attempt < max_retries:
+                        time.sleep(0.2 * attempt)
+                        continue
+                    return None
 
-            return (index, save_path)
+                return (index, save_path)
 
-        except Exception as e:
-            logger.warning(f"下载失败 {url}: {e}")
-            return None
+            except Exception as e:
+                if attempt == max_retries:
+                    logger.warning(f"下载失败 {url}: {e}")
+                else:
+                    time.sleep(0.2 * attempt)
+        return None
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=download_workers) as executor:
         futures = [executor.submit(download_task, i, url) for i, url in enumerate(image_urls)]
@@ -21789,70 +21841,39 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
     processed_count = 0
     vectors_to_add = []  # (db_id, features)
 
-    # AI 并发数优先级：显式参数 > config.AI_MAX_WORKERS > 默认 3
-    ai_max_workers = getattr(config, 'AI_MAX_WORKERS', 3)
-    if max_workers is not None:
-        try:
-            ai_max_workers = max(1, int(max_workers))
-        except Exception:
-            ai_max_workers = getattr(config, 'AI_MAX_WORKERS', 3)
+    logger.info(f"🧠 [商品 {product_id}] 阶段2: 顺序处理图片 (全局并发受控)...")
 
-    # 保护：不要超过待处理数量
-    ai_max_workers = min(ai_max_workers, len(downloaded_images)) if downloaded_images else 1
-
-    results_lock = threading.Lock()
-
-    logger.info(f"🧠 [商品 {product_id}] 阶段2: 启动 {ai_max_workers} 个 AI 线程进行特征提取...")
-
-    def process_image_task(args):
-        index, save_path = args
-
+    for index, save_path in downloaded_images:
         if shutdown_event and shutdown_event.is_set():
-            return None
+            break
 
-        try:
-            features = extractor.extract_feature(save_path)
-            if features is None:
-                try:
-                    os.remove(save_path)
-                except Exception:
-                    pass
-                return None
+        with GLOBAL_AI_SEMAPHORE:
+            try:
+                features = extractor.extract_feature(save_path)
+                if features is None:
+                    try:
+                        os.remove(save_path)
+                    except Exception:
+                        pass
+                    continue
 
-            # 查重：必须加锁同步读写 existing_feats
-            with results_lock:
                 is_dup, score = check_duplicate_image(features, existing_feats, threshold=0.995)
-                if not is_dup:
-                    existing_feats.append(features)
+                if is_dup:
+                    logger.info(f"♻️ [商品 {product_id}] 图片重复 (相似度 {score:.3f})，跳过")
+                    try:
+                        os.remove(save_path)
+                    except Exception:
+                        pass
+                    continue
 
-            if is_dup:
-                logger.info(f"♻️ [商品 {product_id}] 图片重复 (相似度 {score:.3f})，跳过")
-                try:
-                    os.remove(save_path)
-                except Exception:
-                    pass
-                return None
-
-            img_db_id = db.insert_image_record(product_id, save_path, index, features)
-            if img_db_id:
-                logger.info(f"📸 [商品 {product_id}] 图片 {index} 处理完毕 (ID: {img_db_id})")
-                return (img_db_id, features)
-
-            return None
-
-        except Exception as e:
-            logger.error(f"处理图片异常: {e}")
-            return None
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=ai_max_workers) as ai_executor:
-        future_to_img = {ai_executor.submit(process_image_task, item): item for item in downloaded_images}
-
-        for future in concurrent.futures.as_completed(future_to_img):
-            result = future.result()
-            if result:
-                db_id, feats = result
-                vectors_to_add.append((db_id, feats))
-                processed_count += 1
+                existing_feats.append(features)
+                img_db_id = db.insert_image_record(product_id, save_path, index, features)
+                if img_db_id:
+                    logger.info(f"📸 [商品 {product_id}] 图片 {index} 处理完毕 (ID: {img_db_id})")
+                    vectors_to_add.append((img_db_id, features))
+                    processed_count += 1
+            except Exception as e:
+                logger.error(f"处理图片异常: {e}")
 
     # --- 阶段 3: 批量写入 FAISS (内存/磁盘操作) ---
     if vectors_to_add:
@@ -21872,10 +21893,6 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
 
     logger.info(f"商品 {product_id} 成功处理 {processed_count}/{len(image_urls)} 张图片")
     return processed_count
-
-def save_product_images_multithreaded(product_id, image_urls):
-    """向后兼容的别名"""
-    return save_product_images_unified(product_id, image_urls)
 
 def run_cleanup_task():
     """后台清理任务，定期清理数据库和内存中的过期记录"""

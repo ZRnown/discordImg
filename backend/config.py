@@ -53,10 +53,10 @@ class Config:
 
     # === 多线程配置 (针对 10核 CPU 优化) ===
     # 商品信息抓取是IO密集型，可以开大
-    SCRAPE_THREADS = int(os.getenv('SCRAPE_THREADS', '10'))
+    SCRAPE_THREADS = int(os.getenv('SCRAPE_THREADS', '5'))
     
     # 图片下载也是IO密集型，可以开更大
-    DOWNLOAD_THREADS = int(os.getenv('DOWNLOAD_THREADS', '16'))
+    DOWNLOAD_THREADS = int(os.getenv('DOWNLOAD_THREADS', '8'))
 
     # AI 推理的并发控制 (CPU密集型)：
     # - AI_INTRA_THREADS：单个推理任务内部使用的 CPU 核心数
