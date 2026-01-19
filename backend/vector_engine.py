@@ -40,6 +40,9 @@ class VectorEngine:
                 self.index = faiss.read_index(self.index_file)
                 with open(self.id_map_file, 'rb') as f:
                     self.id_map = pickle.load(f)
+                if hasattr(self.index, 'efSearch'):
+                    self.index.efSearch = config.FAISS_EF_SEARCH
+                    logger.info(f"设置efSearch = {config.FAISS_EF_SEARCH}")
                 logger.info(f"✅ FAISS索引加载完成，当前包含 {self.index.ntotal} 个向量")
             except Exception as e:
                 logger.error(f"加载索引失败，将创建新索引: {e}")

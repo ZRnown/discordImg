@@ -73,7 +73,7 @@ class Config:
     # === FAISS ===
     FAISS_HNSW_M = 64
     FAISS_EF_CONSTRUCTION = 80
-    FAISS_EF_SEARCH = 64
+    FAISS_EF_SEARCH = 80
 
     # === 路径 ===
     BASE_DIR = os.path.dirname(os.path.dirname(__file__))

@@ -513,13 +513,18 @@ class DiscordBotClient(discord.Client):
                                                 logger.error(f"下载商品图片失败: {e}")
 
                             # === 2. 发送文字和所有图片（合并为一条消息） ===
-                            if response_content or files:
-                                await target_channel.send(
-                                    content=response_content if response_content else None,
-                                    files=files if files else None,
-                                    reference=message,
-                                    mention_author=True
+                            if not response_content and not files:
+                                logger.warning(
+                                    f"⚠️ 无可发送内容: 商品ID={product.get('id')}，未生成文字且无图片"
                                 )
+                                return
+
+                            await target_channel.send(
+                                content=response_content if response_content else None,
+                                files=files if files else None,
+                                reference=message,
+                                mention_author=True
+                            )
 
                             if hasattr(target_client, 'account_id') and target_client.account_id:
                                 set_account_cooldown(target_client.account_id, message.channel.id)
@@ -1116,30 +1121,52 @@ class DiscordBotClient(discord.Client):
                     return
 
                 # === 关键修复逻辑 ===
-                # 检查规则是否启用
+                # 检查规则是否启用（兼容字符串/数字）
                 # 注意：后端API返回的 autoReplyEnabled 即 ruleEnabled
                 rule_enabled = product.get('autoReplyEnabled', True)
+                if isinstance(rule_enabled, str):
+                    rule_enabled = rule_enabled.strip().lower() not in {'0', 'false', 'no', 'off'}
+                elif isinstance(rule_enabled, (int, float)):
+                    rule_enabled = bool(rule_enabled)
 
                 custom_reply = None
 
                 # 检查是否配置了自定义图片
+                def _coerce_list(value):
+                    if not value:
+                        return []
+                    if isinstance(value, str):
+                        try:
+                            parsed = json.loads(value)
+                        except json.JSONDecodeError:
+                            return []
+                        return parsed if isinstance(parsed, list) else []
+                    if isinstance(value, list):
+                        return value
+                    return []
+
                 has_custom_images = False
                 image_source = product.get('imageSource') or product.get('image_source')
 
                 if image_source == 'upload':
-                    uploaded_imgs = product.get('uploaded_reply_images', [])
+                    uploaded_imgs = _coerce_list(product.get('uploaded_reply_images'))
+                    product['uploaded_reply_images'] = uploaded_imgs
                     has_custom_images = bool(uploaded_imgs)
                 elif image_source == 'custom':
-                    custom_urls = product.get('customImageUrls', []) or product.get('custom_image_urls', [])
+                    custom_urls = _coerce_list(product.get('customImageUrls')) or _coerce_list(product.get('custom_image_urls'))
+                    if custom_urls:
+                        product['customImageUrls'] = custom_urls
                     has_custom_images = bool(custom_urls)
                 elif image_source == 'product':
-                    selected_indexes = product.get('selectedImageIndexes', []) or product.get('custom_reply_images', [])
+                    selected_indexes = _coerce_list(product.get('selectedImageIndexes')) or _coerce_list(product.get('custom_reply_images'))
+                    if selected_indexes:
+                        product['selectedImageIndexes'] = selected_indexes
                     has_custom_images = bool(selected_indexes)
 
                 # 如果规则禁用了，或者配置了自定义图片，都需要创建 custom_reply
                 if not rule_enabled or has_custom_images:
                     # 构造 custom_reply 对象供 schedule_reply 使用
-                    custom_text = product.get('custom_reply_text', '').strip()
+                    custom_text = (product.get('custom_reply_text') or '').strip()
 
                     # 即使没有文本，只要是要发图片，也需要传递 custom_reply 信号
                     # schedule_reply 会进一步处理图片逻辑

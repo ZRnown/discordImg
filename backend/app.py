@@ -608,9 +608,9 @@ def search_similar():
             # 【优化】使用 FAISS HNSW 向量搜索 + 综合评分重排序
             print(f"DEBUG: Searching with threshold: {threshold}, vector length: {len(query_features)}")
 
-            # 1. 扩大召回范围：FAISS 先找前 20 个候选 (Primary Search)
+            # 1. 扩大召回范围：FAISS 先找前 30 个候选 (Primary Search)
             # 使用较低的阈值召回，防止漏掉可能的匹配
-            candidates_limit = 20
+            candidates_limit = 30
             raw_results = db.search_similar_images(query_features, limit=candidates_limit, threshold=0.05)
             print(f"DEBUG: FAISS recalled {len(raw_results) if raw_results else 0} candidates")
 
@@ -620,6 +620,7 @@ def search_similar():
             if raw_results:
                 # 获取全局特征提取器实例用来计算颜色/结构
                 extractor = get_global_feature_extractor()
+                query_signature = extractor.prepare_hybrid_query(image_path) if extractor else None
 
                 for res in raw_results:
                     # 获取候选图片的本地路径
@@ -635,7 +636,8 @@ def search_similar():
                         hybrid_data = extractor.calculate_hybrid_similarity(
                             image_path,  # 上传的查询图 (临时文件)
                             candidate_img_path,  # 数据库里的图
-                            res['similarity']  # 原始 DINO 分数
+                            res['similarity'],  # 原始 DINO 分数
+                            query_signature
                         )
                         final_score = hybrid_data['score']
                         breakdown = hybrid_data.get('details', {})
@@ -4826,8 +4828,7 @@ def scrape_shop_products(shop_id):
 
     return {
         "total_products": processed_count,
-        "success_count": success_count,
-        "pages_processed": page_count
+        "success_count": success_count
     }
 
 def process_and_save_single_product_sync(product_info):
