@@ -74,7 +74,12 @@ const BACKEND_URL = 'http://127.0.0.1:5001'
 
 export async function GET(request: Request) {
   try {
-    const response = await fetch(`${BACKEND_URL}/api/products`, {
+    const url = new URL(request.url)
+    const query = url.searchParams.toString()
+    const backendUrl = query
+      ? `${BACKEND_URL}/api/products?${query}`
+      : `${BACKEND_URL}/api/products`
+    const response = await fetch(backendUrl, {
       method: 'GET',
       headers: {
         'Cookie': request.headers.get('cookie') || ''
@@ -6094,7 +6099,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
       {/* Product List */}
       <div className="space-y-4">
-        <Card className="shadow-sm">
+        <Card className="shadow-sm overflow-x-hidden">
             <CardHeader className="py-4 border-b">
                 <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4">
             <div className="flex flex-col gap-1">
@@ -6728,6 +6733,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     </div>
   )
 }
+
 --- File: ./frontend/components/logs-view.tsx ---
 "use client"
 
@@ -10325,7 +10331,7 @@ class Config:
     # === FAISS ===
     FAISS_HNSW_M = 64
     FAISS_EF_CONSTRUCTION = 80
-    FAISS_EF_SEARCH = 64
+    FAISS_EF_SEARCH = 80
 
     # === 路径 ===
     BASE_DIR = os.path.dirname(os.path.dirname(__file__))
@@ -10350,6 +10356,7 @@ class Config:
 # 初始化
 config = Config()
 config.init_dirs()
+
 --- File: ./backend/database.py ---
 import sqlite3
 import numpy as np
@@ -10864,6 +10871,9 @@ class Database:
             conn.execute('PRAGMA synchronous=NORMAL;') # 稍微降低安全性以换取性能
 
             yield conn
+        except sqlite3.IntegrityError:
+            # 这是一个逻辑控制信号（如唯一性约束），直接抛出给上层处理，不记录为连接错误
+            raise
         except Exception as e:
             logger.error("数据库连接失败: %s", str(e))
             raise
@@ -14491,13 +14501,18 @@ class DiscordBotClient(discord.Client):
                                                 logger.error(f"下载商品图片失败: {e}")
 
                             # === 2. 发送文字和所有图片（合并为一条消息） ===
-                            if response_content or files:
-                                await target_channel.send(
-                                    content=response_content if response_content else None,
-                                    files=files if files else None,
-                                    reference=message,
-                                    mention_author=True
+                            if not response_content and not files:
+                                logger.warning(
+                                    f"⚠️ 无可发送内容: 商品ID={product.get('id')}，未生成文字且无图片"
                                 )
+                                return
+
+                            await target_channel.send(
+                                content=response_content if response_content else None,
+                                files=files if files else None,
+                                reference=message,
+                                mention_author=True
+                            )
 
                             if hasattr(target_client, 'account_id') and target_client.account_id:
                                 set_account_cooldown(target_client.account_id, message.channel.id)
@@ -14689,7 +14704,21 @@ class DiscordBotClient(discord.Client):
     async def on_ready(self):
         logger.info(f'Discord机器人已登录: {self.user} (ID: {self.user.id})')
         logger.info(f'机器人已就绪，开始监听消息')
-        logger.info(f'监听频道: {config.DISCORD_CHANNEL_ID or "所有频道"}')
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+            bound_channels = await asyncio.get_event_loop().run_in_executor(None, db.get_all_bound_channel_ids)
+            if bound_channels:
+                bound_list = sorted(bound_channels)
+                preview = ", ".join(bound_list[:5])
+                suffix = " ..." if len(bound_list) > 5 else ""
+                logger.info(f'监听频道: 已绑定 {len(bound_list)} 个 ({preview}{suffix})')
+            else:
+                logger.info('监听频道: 未绑定频道')
+        except Exception as e:
+            logger.error(f'获取监听频道失败: {e}')
         self.running = True
 
         # 更新数据库中的账号状态为在线
@@ -14962,7 +14991,6 @@ class DiscordBotClient(discord.Client):
                             # 发送选中的商品图片
                             try:
                                 import aiofiles
-                                import os
                                 from database import db
 
                                 for image_index in custom_image_indexes:
@@ -15095,30 +15123,52 @@ class DiscordBotClient(discord.Client):
                     return
 
                 # === 关键修复逻辑 ===
-                # 检查规则是否启用
+                # 检查规则是否启用（兼容字符串/数字）
                 # 注意：后端API返回的 autoReplyEnabled 即 ruleEnabled
                 rule_enabled = product.get('autoReplyEnabled', True)
+                if isinstance(rule_enabled, str):
+                    rule_enabled = rule_enabled.strip().lower() not in {'0', 'false', 'no', 'off'}
+                elif isinstance(rule_enabled, (int, float)):
+                    rule_enabled = bool(rule_enabled)
 
                 custom_reply = None
 
                 # 检查是否配置了自定义图片
+                def _coerce_list(value):
+                    if not value:
+                        return []
+                    if isinstance(value, str):
+                        try:
+                            parsed = json.loads(value)
+                        except json.JSONDecodeError:
+                            return []
+                        return parsed if isinstance(parsed, list) else []
+                    if isinstance(value, list):
+                        return value
+                    return []
+
                 has_custom_images = False
                 image_source = product.get('imageSource') or product.get('image_source')
 
                 if image_source == 'upload':
-                    uploaded_imgs = product.get('uploaded_reply_images', [])
+                    uploaded_imgs = _coerce_list(product.get('uploaded_reply_images'))
+                    product['uploaded_reply_images'] = uploaded_imgs
                     has_custom_images = bool(uploaded_imgs)
                 elif image_source == 'custom':
-                    custom_urls = product.get('customImageUrls', []) or product.get('custom_image_urls', [])
+                    custom_urls = _coerce_list(product.get('customImageUrls')) or _coerce_list(product.get('custom_image_urls'))
+                    if custom_urls:
+                        product['customImageUrls'] = custom_urls
                     has_custom_images = bool(custom_urls)
                 elif image_source == 'product':
-                    selected_indexes = product.get('selectedImageIndexes', []) or product.get('custom_reply_images', [])
+                    selected_indexes = _coerce_list(product.get('selectedImageIndexes')) or _coerce_list(product.get('custom_reply_images'))
+                    if selected_indexes:
+                        product['selectedImageIndexes'] = selected_indexes
                     has_custom_images = bool(selected_indexes)
 
                 # 如果规则禁用了，或者配置了自定义图片，都需要创建 custom_reply
                 if not rule_enabled or has_custom_images:
                     # 构造 custom_reply 对象供 schedule_reply 使用
-                    custom_text = product.get('custom_reply_text', '').strip()
+                    custom_text = (product.get('custom_reply_text') or '').strip()
 
                     # 即使没有文本，只要是要发图片，也需要传递 custom_reply 信号
                     # schedule_reply 会进一步处理图片逻辑
@@ -15718,7 +15768,34 @@ class DINOv2FeatureExtractor:
             results.append(feature)
         return results
 
-    def calculate_hybrid_similarity(self, img_path1: str, img_path2: str, dino_score: float) -> dict:
+    def prepare_hybrid_query(self, img_path: str) -> Optional[Dict]:
+        """预先计算查询图的颜色/结构特征，便于重排序阶段复用"""
+        try:
+            img = cv2.imread(img_path)
+            if img is None:
+                logger.warning(f"无法读取查询图片: {img_path}")
+                return None
+            return self._build_hybrid_signature(img)
+        except Exception as e:
+            logger.warning(f"查询图特征预计算失败: {e}")
+            return None
+
+    def _build_hybrid_signature(self, img: np.ndarray) -> Dict:
+        """构建用于混合相似度的颜色/结构签名"""
+        hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+        hist = cv2.calcHist([hsv], [0, 1], None, [180, 256], [0, 180, 0, 256])
+        cv2.normalize(hist, hist, 0, 1, cv2.NORM_MINMAX)
+
+        img_small = cv2.resize(img, (64, 64))
+        gray_small = cv2.cvtColor(img_small, cv2.COLOR_BGR2GRAY)
+
+        return {
+            'hsv_hist': hist,
+            'gray_small': gray_small
+        }
+
+    def calculate_hybrid_similarity(self, img_path1: str, img_path2: str, dino_score: float,
+                                    query_signature: Optional[Dict] = None) -> dict:
         """
         【新增】计算综合相似度 (Re-ranking)
 
@@ -15733,42 +15810,26 @@ class DINOv2FeatureExtractor:
             dict: {'score': 综合分数, 'details': {'dino': ..., 'color': ..., 'structure': ...}}
         """
         try:
-            # 读取图片 (OpenCV)
-            img1 = cv2.imread(img_path1)
-            img2 = cv2.imread(img_path2)
+            if query_signature is None:
+                img1 = cv2.imread(img_path1)
+                if img1 is None:
+                    logger.warning(f"无法读取图片，使用原始DINO分数: {img_path1}")
+                    return {'score': dino_score, 'details': {}}
+                query_signature = self._build_hybrid_signature(img1)
 
-            if img1 is None or img2 is None:
-                logger.warning(f"无法读取图片，使用原始DINO分数: {img_path1} or {img_path2}")
+            img2 = cv2.imread(img_path2)
+            if img2 is None:
+                logger.warning(f"无法读取图片，使用原始DINO分数: {img_path2}")
                 return {'score': dino_score, 'details': {}}
 
-            # 1. 颜色相似度 (基于 HSV 直方图)
-            # 转换到 HSV 空间，对光照更鲁棒
-            hsv1 = cv2.cvtColor(img1, cv2.COLOR_BGR2HSV)
-            hsv2 = cv2.cvtColor(img2, cv2.COLOR_BGR2HSV)
-
-            # 计算直方图 (H:色调, S:饱和度)
-            hist1 = cv2.calcHist([hsv1], [0, 1], None, [180, 256], [0, 180, 0, 256])
-            hist2 = cv2.calcHist([hsv2], [0, 1], None, [180, 256], [0, 180, 0, 256])
-
-            # 归一化
-            cv2.normalize(hist1, hist1, 0, 1, cv2.NORM_MINMAX)
-            cv2.normalize(hist2, hist2, 0, 1, cv2.NORM_MINMAX)
+            candidate_signature = self._build_hybrid_signature(img2)
 
             # 巴氏距离比较 (结果 0-1, 1为完全匹配)
-            color_score = cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL)
+            color_score = cv2.compareHist(query_signature['hsv_hist'], candidate_signature['hsv_hist'], cv2.HISTCMP_CORREL)
             color_score = max(0.0, color_score)  # 修正可能的负值
 
             # 2. 轮廓/结构相似度 (简化版：缩小后比较像素差异)
-            # 将两图统一缩放到 64x64
-            img1_small = cv2.resize(img1, (64, 64))
-            img2_small = cv2.resize(img2, (64, 64))
-
-            # 转灰度
-            gray1 = cv2.cvtColor(img1_small, cv2.COLOR_BGR2GRAY)
-            gray2 = cv2.cvtColor(img2_small, cv2.COLOR_BGR2GRAY)
-
-            # 计算差异
-            diff = cv2.absdiff(gray1, gray2)
+            diff = cv2.absdiff(query_signature['gray_small'], candidate_signature['gray_small'])
             structure_score = 1.0 - (np.mean(diff) / 255.0)
 
             # === 综合评分公式 (可调优) ===
@@ -15897,6 +15958,9 @@ class VectorEngine:
                 self.index = faiss.read_index(self.index_file)
                 with open(self.id_map_file, 'rb') as f:
                     self.id_map = pickle.load(f)
+                if hasattr(self.index, 'efSearch'):
+                    self.index.efSearch = config.FAISS_EF_SEARCH
+                    logger.info(f"设置efSearch = {config.FAISS_EF_SEARCH}")
                 logger.info(f"✅ FAISS索引加载完成，当前包含 {self.index.ntotal} 个向量")
             except Exception as e:
                 logger.error(f"加载索引失败，将创建新索引: {e}")
@@ -17086,9 +17150,9 @@ def search_similar():
             # 【优化】使用 FAISS HNSW 向量搜索 + 综合评分重排序
             print(f"DEBUG: Searching with threshold: {threshold}, vector length: {len(query_features)}")
 
-            # 1. 扩大召回范围：FAISS 先找前 20 个候选 (Primary Search)
+            # 1. 扩大召回范围：FAISS 先找前 30 个候选 (Primary Search)
             # 使用较低的阈值召回，防止漏掉可能的匹配
-            candidates_limit = 20
+            candidates_limit = 30
             raw_results = db.search_similar_images(query_features, limit=candidates_limit, threshold=0.05)
             print(f"DEBUG: FAISS recalled {len(raw_results) if raw_results else 0} candidates")
 
@@ -17098,6 +17162,7 @@ def search_similar():
             if raw_results:
                 # 获取全局特征提取器实例用来计算颜色/结构
                 extractor = get_global_feature_extractor()
+                query_signature = extractor.prepare_hybrid_query(image_path) if extractor else None
 
                 for res in raw_results:
                     # 获取候选图片的本地路径
@@ -17113,7 +17178,8 @@ def search_similar():
                         hybrid_data = extractor.calculate_hybrid_similarity(
                             image_path,  # 上传的查询图 (临时文件)
                             candidate_img_path,  # 数据库里的图
-                            res['similarity']  # 原始 DINO 分数
+                            res['similarity'],  # 原始 DINO 分数
+                            query_signature
                         )
                         final_score = hybrid_data['score']
                         breakdown = hybrid_data.get('details', {})
@@ -21304,8 +21370,7 @@ def scrape_shop_products(shop_id):
 
     return {
         "total_products": processed_count,
-        "success_count": success_count,
-        "pages_processed": page_count
+        "success_count": success_count
     }
 
 def process_and_save_single_product_sync(product_info):

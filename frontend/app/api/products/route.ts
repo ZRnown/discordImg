@@ -1,10 +1,18 @@
 // 强制使用内网回环地址，速度最快且最稳定
+export const dynamic = 'force-dynamic'
+
 const BACKEND_URL = 'http://127.0.0.1:5001'
 
 export async function GET(request: Request) {
   try {
-    const response = await fetch(`${BACKEND_URL}/api/products`, {
+    const url = new URL(request.url)
+    const query = url.searchParams.toString()
+    const backendUrl = query
+      ? `${BACKEND_URL}/api/products?${query}`
+      : `${BACKEND_URL}/api/products`
+    const response = await fetch(backendUrl, {
       method: 'GET',
+      cache: 'no-store',
       headers: {
         'Cookie': request.headers.get('cookie') || ''
       }
@@ -20,7 +28,7 @@ export async function GET(request: Request) {
     const data = await response.json()
     return new Response(JSON.stringify(data), {
       status: 200,
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }
     })
   } catch (error) {
     console.error('Error fetching products:', error)

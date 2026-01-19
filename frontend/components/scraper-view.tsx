@@ -737,7 +737,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   const totalPages = Math.ceil(totalProducts / itemsPerPage)
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 overflow-x-hidden">
       {/* ... 顶部标题和管理员/普通用户上传区域 (保持不变) ... */}
 
       <div>
@@ -856,7 +856,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
       {/* Product List */}
       <div className="space-y-4">
-        <Card className="shadow-sm">
+        <Card className="shadow-sm overflow-x-hidden">
             <CardHeader className="py-4 border-b">
                 <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4">
             <div className="flex flex-col gap-1">
@@ -1070,7 +1070,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                   </div>
                 </div>
                             {/* 链接显示区域 */}
-                <div className="flex items-center gap-4">
+                <div className="flex items-center gap-4 min-w-0 flex-1">
                                 <div className="flex flex-col gap-1 min-w-0 flex-1 max-w-md">
                                     {displayedLinks.map((link) => (
                       <div key={link.name} className="flex items-center gap-1.5">
