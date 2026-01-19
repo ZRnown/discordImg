@@ -227,7 +227,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         clearInterval(statusInterval)
       }
     }
-  }, [isShopScraping, isBatchScraping])
+  }, [isShopScraping, isBatchScraping, currentPage, itemsPerPage, keywordSearch, shopFilter, searchType])
 
   const fetchProducts = async (page: number = currentPage) => {
     try {
