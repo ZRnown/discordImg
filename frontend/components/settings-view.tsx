@@ -4,6 +4,7 @@ import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
@@ -25,6 +26,7 @@ interface UserSettings {
   keyword_filters: string
   keyword_reply_enabled: boolean
   image_reply_enabled: boolean
+  global_reply_template: string
 }
 
 interface SystemSettings {
@@ -42,6 +44,7 @@ export function SettingsView() {
     keyword_filters: '',
     keyword_reply_enabled: true,
     image_reply_enabled: true,
+    global_reply_template: '',
   })
   const [systemSettings, setSystemSettings] = useState<SystemSettings>({
     scrape_threads: 2,
@@ -77,6 +80,7 @@ export function SettingsView() {
           keyword_filters: data.keyword_filters ?? '',
           keyword_reply_enabled: data.keyword_reply_enabled === 1 || data.keyword_reply_enabled === true,
           image_reply_enabled: data.image_reply_enabled === 1 || data.image_reply_enabled === true,
+          global_reply_template: data.global_reply_template ?? '',
         })
       } else {
         toast.error("获取设置失败")
@@ -483,6 +487,24 @@ export function SettingsView() {
                   onCheckedChange={(checked) => setSettings(prev => ({ ...prev, image_reply_enabled: checked }))}
                 />
               </div>
+            </div>
+          </div>
+
+          {/* 全局回复模板 */}
+          <div className="space-y-2">
+            <Label htmlFor="global-reply-template" className="text-sm font-medium">全局回复模板</Label>
+            <div className="space-y-1">
+              <Textarea
+                id="global-reply-template"
+                value={settings.global_reply_template}
+                onChange={(e) => setSettings(prev => ({ ...prev, global_reply_template: e.target.value }))}
+                placeholder="例如：找到啦！链接在这里：{url}"
+                rows={3}
+              />
+              <p className="text-xs text-muted-foreground">
+                使用 <span className="font-mono">{`{url}`}</span> 作为链接占位符。
+                未包含占位符时会自动追加链接。
+              </p>
             </div>
           </div>
 

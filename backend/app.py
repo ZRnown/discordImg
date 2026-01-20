@@ -754,6 +754,7 @@ def search_similar():
                             # 修复：机器人需要 imageSource 和 uploaded_reply_images 才能发送本地图片
                             'imageSource': product_info.get('image_source', 'product') if product_info else 'product',
                             'custom_reply_text': product_info.get('custom_reply_text', '') if product_info else '',
+                            'replyScope': product_info.get('reply_scope', 'all') if product_info else 'all',
                             'uploaded_reply_images': json.loads(product_info.get('uploaded_reply_images', '[]')) if product_info and product_info.get('uploaded_reply_images') else [],
                             'images': actual_images if actual_images else [f"/api/image/{result['id']}/{result['image_index']}"],  # 使用实际图片列表
                             'websiteUrls': website_urls  # 添加所有网站的链接
@@ -827,6 +828,22 @@ def scrape_product():
             return jsonify({'error': '只支持微店商品链接'}), 400
 
         logger.info(f"开始抓取商品: {url}")
+
+        item_id = None
+        if weidian_id:
+            item_id = str(weidian_id)
+        else:
+            try:
+                import re
+                item_id_match = re.search(r'itemID=(\d+)', url)
+                if item_id_match:
+                    item_id = item_id_match.group(1)
+            except Exception:
+                item_id = None
+
+        # 先按item_id去重，避免无效抓取
+        if item_id and db.get_product_by_item_id(item_id):
+            return jsonify({'error': '商品已存在', 'existing': True}), 409
 
         # 检查商品是否已存在
         existing = db.get_product_by_url(url)
@@ -1245,11 +1262,12 @@ def add_website_config():
         url_template = data.get('url_template')
         id_pattern = data.get('id_pattern')
         badge_color = data.get('badge_color', 'blue')
+        reply_template = data.get('reply_template') or '{url}'
 
         if not all([name, display_name, url_template, id_pattern]):
             return jsonify({'error': '所有字段都是必填的'}), 400
 
-        if db.add_website_config(name, display_name, url_template, id_pattern, badge_color):
+        if db.add_website_config(name, display_name, url_template, id_pattern, badge_color, reply_template):
             return jsonify({'success': True, 'message': '网站配置已添加'})
         else:
             return jsonify({'error': '添加失败'}), 500
@@ -1270,11 +1288,12 @@ def update_website_config(config_id):
         url_template = data.get('url_template')
         id_pattern = data.get('id_pattern')
         badge_color = data.get('badge_color', 'blue')
+        reply_template = data.get('reply_template') or '{url}'
 
         if not all([name, display_name, url_template, id_pattern]):
             return jsonify({'error': '所有字段都是必填的'}), 400
 
-        if db.update_website_config(config_id, name, display_name, url_template, id_pattern, badge_color):
+        if db.update_website_config(config_id, name, display_name, url_template, id_pattern, badge_color, reply_template):
             return jsonify({'success': True, 'message': '网站配置已更新'})
         else:
             return jsonify({'error': '更新失败'}), 500
@@ -2036,6 +2055,7 @@ def update_product():
             'ruleEnabled': bool(product.get('ruleEnabled', True)),
             'customReplyText': product.get('custom_reply_text', ''),
             'imageSource': product.get('image_source', 'product'),
+            'replyScope': product.get('reply_scope', 'all'),
 
             # 图片相关
             'selectedImageIndexes': selected_indexes,
@@ -2112,7 +2132,7 @@ def update_product():
             # 如果有上传的自定义回复图片（已有的或新上传的），将文件名列表存储到数据库
             if all_uploaded_filenames:
                 updates['uploaded_reply_images'] = json.dumps(all_uploaded_filenames)
-            for key in ['title', 'englishTitle', 'ruleEnabled', 'customReplyText', 'imageSource']:
+            for key in ['title', 'englishTitle', 'ruleEnabled', 'customReplyText', 'imageSource', 'replyScope']:
                 value = request.form.get(key)
                 if value is not None:
                     if key == 'englishTitle':
@@ -2127,6 +2147,8 @@ def update_product():
                         updates['custom_reply_text'] = value
                     elif key == 'imageSource':
                         updates['image_source'] = value
+                    elif key == 'replyScope':
+                        updates['reply_scope'] = value
                     else:
                         updates[key] = value
 
@@ -2173,6 +2195,8 @@ def update_product():
                 updates['ruleEnabled'] = 1 if data['ruleEnabled'] else 0
             if 'customReplyText' in data:
                 updates['custom_reply_text'] = data['customReplyText']
+            if 'replyScope' in data:
+                updates['reply_scope'] = data['replyScope']
             if 'selectedImageIndexes' in data:
                 updates['custom_reply_images'] = json.dumps(data['selectedImageIndexes'])
             if 'customImageUrls' in data:
@@ -2797,7 +2821,8 @@ def update_user_settings():
             user_blacklist=data.get('user_blacklist'),
             keyword_filters=data.get('keyword_filters'),
             keyword_reply_enabled=keyword_reply,
-            image_reply_enabled=image_reply
+            image_reply_enabled=image_reply,
+            global_reply_template=data.get('global_reply_template')
         )
 
         if success:
@@ -3560,6 +3585,7 @@ def search_similar_text():
                        ruleEnabled, min_delay, max_delay, created_at,
                        cnfans_url, shop_name, custom_reply_text,
                        custom_reply_images, custom_image_urls, image_source,
+                       reply_scope,
                        uploaded_reply_images
                 FROM products
                 WHERE (LOWER(english_title) LIKE ? OR LOWER(title) LIKE ?)
@@ -3584,6 +3610,7 @@ def search_similar_text():
                 # 补充 Bot 需要的字段
                 prod['weidianUrl'] = prod.get('product_url')
                 prod['autoReplyEnabled'] = bool(prod.get('ruleEnabled', True))
+                prod['replyScope'] = prod.get('reply_scope') or 'all'
 
                 # 解析 JSON 字段供 Bot 使用
                 try:
@@ -4345,6 +4372,10 @@ def batch_scrape_products():
                     logger.info(f"🔴 处理商品前检测到停止信号，取消处理商品 {product_id}")
                     return {'status': 'cancelled', 'product_id': product_id, 'message': '任务已取消'}
 
+                # 先按item_id快速去重，避免无效请求
+                if db.get_product_by_item_id(str(product_id)):
+                    return {'status': 'skipped', 'product_id': product_id, 'message': '商品已存在'}
+
                 # 调用现有的单个商品处理逻辑
                 from app import process_single_product
 
@@ -4434,7 +4465,7 @@ def batch_scrape_products():
                                 logger.info(f"商品 {product_id} 处理成功")
                             elif result['status'] == 'skipped':
                                 results['skipped'] += 1
-                                logger.info(f"商品 {product_id} 已存在，跳过")
+                                logger.debug(f"商品 {product_id} 已存在，跳过")
                             elif result['status'] == 'cancelled':
                                 results['cancelled'] += 1
                                 logger.info(f"商品 {product_id} 处理被取消")

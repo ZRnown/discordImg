@@ -558,25 +558,75 @@ class DiscordBotClient(discord.Client):
             logger.error(f"❌ 严重错误: {e}")
 
     def _generate_reply_content(self, product, channel_id, custom_reply=None):
-        """生成回复内容"""
-        if custom_reply:
-            reply_type = custom_reply.get('reply_type')
+        """生成回复内容（支持 {url}、范围与全局模板）"""
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
 
-            if reply_type == 'custom_only':
-                # 只发送自定义内容，不发送链接
-                return custom_reply.get('content', '')
+            channel_id_str = str(channel_id)
+            website_config = db.get_website_config_by_channel(channel_id_str, self.user_id)
+            channel_scope = None
+            if website_config:
+                channel_scope = (website_config.get('name') or '').strip().lower()
+                if not channel_scope:
+                    channel_scope = (website_config.get('display_name') or '').strip().lower()
 
-            elif reply_type == 'text_and_link':
-                # 发送文字 + 链接
-                response = get_response_url_for_channel(product, channel_id, self.user_id)
-                return f"{custom_reply.get('content', '')}\n{response}".strip()
+            if not channel_scope:
+                if config.CNFANS_CHANNEL_ID and channel_id_str == str(config.CNFANS_CHANNEL_ID):
+                    channel_scope = 'cnfans'
+                elif config.ACBUY_CHANNEL_ID and channel_id_str == str(config.ACBUY_CHANNEL_ID):
+                    channel_scope = 'acbuy'
+                else:
+                    channel_scope = 'weidian'
 
-            elif reply_type == 'text':
-                # 只发送文字
-                return custom_reply.get('content', '')
+            product_scope = (product.get('replyScope') or product.get('reply_scope') or 'all').strip().lower()
+            scope_match = (product_scope == 'all') or (product_scope == channel_scope)
 
-        # 默认行为：发送链接
-        return get_response_url_for_channel(product, channel_id, self.user_id)
+            response_url = get_response_url_for_channel(product, channel_id, self.user_id)
+
+            def apply_template(template: str, append_link: bool) -> str:
+                if not template:
+                    return ''
+                if '{url}' in template:
+                    return template.replace('{url}', response_url).strip()
+                if append_link:
+                    return f"{template}\n{response_url}".strip()
+                return template.strip()
+
+            # 1) 商品级自定义回复（优先级最高）
+            is_product_custom = bool(custom_reply and custom_reply.get('product_data'))
+            if is_product_custom and scope_match:
+                reply_type = custom_reply.get('reply_type')
+                content = custom_reply.get('content', '') or ''
+                if reply_type == 'custom_only' or reply_type == 'text':
+                    return apply_template(content, append_link=False)
+                if reply_type == 'text_and_link':
+                    return apply_template(content, append_link=True)
+
+            # 2) 网站级回复模板（默认 {url}）
+            if website_config:
+                website_template = (website_config.get('reply_template') or '{url}').strip()
+                if website_template:
+                    return apply_template(website_template, append_link=True)
+
+            # 3) 原有自定义回复（全局随机）
+            if custom_reply and not is_product_custom:
+                reply_type = custom_reply.get('reply_type')
+                content = custom_reply.get('content', '') or ''
+
+                if reply_type == 'custom_only' or reply_type == 'text':
+                    return apply_template(content, append_link=False)
+                if reply_type == 'text_and_link':
+                    return apply_template(content, append_link=True)
+
+            # 4) 默认行为：发送链接
+            return response_url
+
+        except Exception as e:
+            logger.error(f"生成回复内容失败: {e}")
+            return get_response_url_for_channel(product, channel_id, self.user_id)
 
     def get_website_config_by_channel(self, channel_id):
         """根据频道ID获取对应的网站配置"""

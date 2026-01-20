@@ -130,6 +130,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   const [lightboxOpen, setLightboxOpen] = useState(false)
   const [lightboxImages, setLightboxImages] = useState<string[]>([])
   const [lightboxIndex, setLightboxIndex] = useState(0)
+  const [openGalleryId, setOpenGalleryId] = useState<number | null>(null)
 
   // 使用API缓存hook
   const { cachedFetch, invalidateCache } = useApiCache()
@@ -258,6 +259,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         weidianId: product.weidianId || '',
         ruleEnabled: product.ruleEnabled !== undefined ? product.ruleEnabled : true,
         customReplyText: product.customReplyText || product.custom_reply_text || '',
+        replyScope: product.replyScope || product.reply_scope || 'all',
         customReplyImages: product.customReplyImages || product.custom_reply_images || [],
         selectedImageIndexes: product.selectedImageIndexes || [],
         customImageUrls: product.customImageUrls || product.custom_image_urls || [],
@@ -519,6 +521,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         if (updatedProduct.ruleEnabled !== undefined) formData.append('ruleEnabled', updatedProduct.ruleEnabled.toString());
         if (updatedProduct.customReplyText) formData.append('customReplyText', updatedProduct.customReplyText);
         if (updatedProduct.imageSource) formData.append('imageSource', updatedProduct.imageSource);
+        if (updatedProduct.replyScope) formData.append('replyScope', updatedProduct.replyScope);
 
         // 添加数组数据（序列化为JSON）
         if (updatedProduct.selectedImageIndexes) {
@@ -1003,7 +1006,19 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                             {/* 图片与基本信息 */}
                 <div className="flex gap-3 items-center flex-1">
                                 {/* 图片弹窗 (保持原逻辑) */}
-                  <Dialog>
+                  <Dialog
+                    modal={false}
+                    open={openGalleryId === product.id}
+                    onOpenChange={(open) => {
+                      if (open) {
+                        setOpenGalleryId(product.id)
+                        return
+                      }
+                      if (!lightboxOpen) {
+                        setOpenGalleryId(null)
+                      }
+                    }}
+                  >
                     <DialogTrigger asChild>
                                         <Button variant="ghost" className="size-10 p-0 rounded bg-muted flex items-center justify-center flex-shrink-0 border shadow-sm">
                         {product.images && product.images.length > 0 ? (
@@ -1190,6 +1205,26 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                           {!editingProduct?.ruleEnabled && (
                             <div className="space-y-4 p-4 border rounded-lg bg-blue-50/30">
                               <div className="space-y-2">
+                                <Label className="text-sm font-medium">应用范围</Label>
+                                <Select
+                                  value={editingProduct?.replyScope || 'all'}
+                                  onValueChange={(value) => setEditingProduct({ ...editingProduct, replyScope: value })}
+                                >
+                                  <SelectTrigger className="bg-white">
+                                    <SelectValue placeholder="选择回复范围" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="all">所有网站</SelectItem>
+                                    <SelectItem value="cnfans">仅 CNFans</SelectItem>
+                                    <SelectItem value="acbuy">仅 ACBuy</SelectItem>
+                                    <SelectItem value="weidian">仅 Weidian</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                                <p className="text-xs text-muted-foreground">
+                                  控制自定义回复在指定网站频道生效。
+                                </p>
+                              </div>
+                              <div className="space-y-2">
                                 <Label className="text-sm font-medium">自定义回复消息</Label>
                                 <Textarea
                                   value={editingProduct?.customReplyText || ""}
@@ -1197,7 +1232,9 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                   placeholder="输入自定义回复消息内容..."
                                   rows={3}
                                 />
-                                <p className="text-xs text-muted-foreground">如果留空，将只发送选中的图片</p>
+                                <p className="text-xs text-muted-foreground">
+                                  支持 <span className="font-mono">{`{url}`}</span> 占位符；留空将只发送选中的图片
+                                </p>
                               </div>
 
                               <div className="space-y-3">

@@ -6407,7 +6407,15 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                             ) : <ImageIcon className="size-4 text-muted-foreground" />}
                       </Button>
                     </DialogTrigger>
-                    <DialogContent className="max-w-4xl">
+                    <DialogContent
+                      className="max-w-4xl"
+                      onInteractOutside={(event) => {
+                        if (lightboxOpen) event.preventDefault()
+                      }}
+                      onEscapeKeyDown={(event) => {
+                        if (lightboxOpen) event.preventDefault()
+                      }}
+                    >
                       <DialogHeader>
                         <DialogTitle className="text-xl">商品图集 - {product.weidianId}</DialogTitle>
                         <div className="flex gap-2 mt-2">
@@ -13462,6 +13470,8 @@ from urllib.parse import urlparse, parse_qs, quote
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+logging.getLogger('urllib3').setLevel(logging.ERROR)
+logging.getLogger('urllib3.connectionpool').setLevel(logging.ERROR)
 
 class WeidianScraper:
     """微店商品信息爬虫 - 使用官方API"""
@@ -13508,17 +13518,18 @@ class WeidianScraper:
         headers: Optional[Dict] = None,
         cookies: Optional[Dict] = None,
         timeout: int = 10,
-        max_retries: int = 5,
+        max_retries: int = 3,
         backoff: float = 0.5
     ) -> Optional[requests.Response]:
         last_error = None
+        current_timeout = timeout if isinstance(timeout, tuple) else (5, 10)
         for attempt in range(1, max_retries + 1):
             try:
                 response = self.session.get(
                     url,
                     headers=headers,
                     cookies=cookies,
-                    timeout=timeout,
+                    timeout=current_timeout,
                     proxies={'http': None, 'https': None}
                 )
                 response.raise_for_status()
@@ -13537,17 +13548,18 @@ class WeidianScraper:
         headers: Optional[Dict] = None,
         cookies: Optional[Dict] = None,
         timeout: int = 10,
-        max_retries: int = 5,
+        max_retries: int = 3,
         backoff: float = 0.5
     ) -> Optional[Dict]:
         last_error = None
+        current_timeout = timeout if isinstance(timeout, tuple) else (5, 10)
         for attempt in range(1, max_retries + 1):
             try:
                 response = self.session.get(
                     url,
                     headers=headers,
                     cookies=cookies,
-                    timeout=timeout,
+                    timeout=current_timeout,
                     proxies={'http': None, 'https': None}
                 )
                 response.raise_for_status()
@@ -13874,7 +13886,7 @@ class WeidianScraper:
             logger.debug(f"开始获取SKU图片，商品ID: {item_id}")
             title_info = self._get_item_title_and_sku(item_id)
             if not title_info or 'sku_info' not in title_info:
-                logger.warning(f"无法获取SKU信息，跳过图片提取: {item_id}")
+                logger.debug(f"无法获取SKU信息，跳过图片提取: {item_id}")
                 return []
 
             result = title_info['sku_info']
@@ -16184,7 +16196,7 @@ class DINOv2FeatureExtractor:
             return None
 
     def _build_hybrid_signature(self, img: np.ndarray) -> Dict:
-        """构建用于混合相似度的颜色/比例签名"""
+        """构建用于混合相似度的签名: 颜色 + 版型 + 细节 + 轮廓"""
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         hist = cv2.calcHist([hsv], [0, 1], None, [18, 4], [0, 180, 0, 256])
         cv2.normalize(hist, hist, 0, 1, cv2.NORM_MINMAX)
@@ -16192,9 +16204,27 @@ class DINOv2FeatureExtractor:
         h, w = img.shape[:2]
         aspect_ratio = float(w) / float(h) if h else 1.0
 
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray_small = cv2.resize(gray, (256, 256), interpolation=cv2.INTER_AREA)
+
+        # 细节强度：拉普拉斯方差（越大越细节丰富）
+        detail_value = float(cv2.Laplacian(gray_small, cv2.CV_64F).var())
+
+        # 轮廓特征：边缘图缩放后做归一化向量
+        edges = cv2.Canny(gray_small, 80, 200)
+        edges_small = cv2.resize(edges, (32, 32), interpolation=cv2.INTER_AREA)
+        edge_vec = (edges_small > 0).astype(np.float32).flatten()
+        edge_norm = float(np.linalg.norm(edge_vec))
+        if edge_norm > 0:
+            edge_vec = edge_vec / edge_norm
+        else:
+            edge_vec = None
+
         return {
             'hist': hist,
-            'aspect_ratio': aspect_ratio
+            'aspect_ratio': aspect_ratio,
+            'detail': detail_value,
+            'edge_vec': edge_vec
         }
 
     def calculate_hybrid_similarity(self, img_path1: str, img_path2: str, dino_score: float,
@@ -16202,7 +16232,7 @@ class DINOv2FeatureExtractor:
         """
         【新增】计算综合相似度 (Re-ranking)
 
-        综合分 = DINO语义分(70%) + 颜色分(15%) + 宽高比分(15%)
+        综合分 = DINO语义分 + 颜色分 + 版型分 + 细节分 + 轮廓分
 
         Args:
             img_path1: 查询图片路径
@@ -16228,7 +16258,11 @@ class DINOv2FeatureExtractor:
             candidate_signature = self._build_hybrid_signature(img2)
 
             # 颜色相似度 (H+S, 降低光照影响)
-            color_score = cv2.compareHist(query_signature['hist'], candidate_signature['hist'], cv2.HISTCMP_CORREL)
+            color_score = cv2.compareHist(
+                query_signature['hist'],
+                candidate_signature['hist'],
+                cv2.HISTCMP_CORREL
+            )
             color_score = max(0.0, color_score)
 
             # 宽高比相似度 (过滤跨品类误报)
@@ -16236,20 +16270,58 @@ class DINOv2FeatureExtractor:
             ratio2 = candidate_signature['aspect_ratio']
             ratio_score = min(ratio1, ratio2) / max(ratio1, ratio2) if ratio1 > 0 and ratio2 > 0 else 0.0
 
+            # 细节相似度 (纹理/清晰度强度)
+            detail1 = float(query_signature.get('detail', 0.0) or 0.0)
+            detail2 = float(candidate_signature.get('detail', 0.0) or 0.0)
+            detail_score = min(detail1, detail2) / max(detail1, detail2) if detail1 > 0 and detail2 > 0 else 0.0
+
+            # 轮廓相似度 (边缘分布)
+            edge_vec1 = query_signature.get('edge_vec')
+            edge_vec2 = candidate_signature.get('edge_vec')
+            if edge_vec1 is not None and edge_vec2 is not None and edge_vec1.size == edge_vec2.size:
+                contour_score = float(np.dot(edge_vec1, edge_vec2))
+                contour_score = max(0.0, min(1.0, contour_score))
+            else:
+                contour_score = 0.0
+
             # 如果DINO很高，优先尊重语义/结构鲁棒性
             if dino_score > 0.85:
                 final_score = dino_score
             else:
-                final_score = (dino_score * 0.70) + (color_score * 0.15) + (ratio_score * 0.15)
+                # 权重可按需要调整
+                weights = {
+                    'dino': 0.50,
+                    'color': 0.25,
+                    'ratio': 0.10,
+                    'detail': 0.10,
+                    'contour': 0.05
+                }
+                final_score = (
+                    (dino_score * weights['dino']) +
+                    (color_score * weights['color']) +
+                    (ratio_score * weights['ratio']) +
+                    (detail_score * weights['detail']) +
+                    (contour_score * weights['contour'])
+                )
 
-            logger.debug(f"综合评分: DINO={dino_score:.3f}, Color={color_score:.3f}, Ratio={ratio_score:.3f}, Final={final_score:.3f}")
+            logger.debug(
+                "综合评分: DINO=%.3f, Color=%.3f, Ratio=%.3f, Detail=%.3f, Contour=%.3f, Final=%.3f",
+                dino_score,
+                color_score,
+                ratio_score,
+                detail_score,
+                contour_score,
+                final_score
+            )
 
             return {
                 'score': float(final_score),
                 'details': {
                     'dino': float(dino_score),
                     'color': float(color_score),
-                    'ratio': float(ratio_score)
+                    'ratio': float(ratio_score),
+                    'detail': float(detail_score),
+                    'contour': float(contour_score)
                 }
             }
 
@@ -17779,6 +17851,22 @@ def scrape_product():
 
         logger.info(f"开始抓取商品: {url}")
 
+        item_id = None
+        if weidian_id:
+            item_id = str(weidian_id)
+        else:
+            try:
+                import re
+                item_id_match = re.search(r'itemID=(\d+)', url)
+                if item_id_match:
+                    item_id = item_id_match.group(1)
+            except Exception:
+                item_id = None
+
+        # 先按item_id去重，避免无效抓取
+        if item_id and db.get_product_by_item_id(item_id):
+            return jsonify({'error': '商品已存在', 'existing': True}), 409
+
         # 检查商品是否已存在
         existing = db.get_product_by_url(url)
         if existing:
@@ -18839,7 +18927,7 @@ def list_products():
         # 根据用户权限获取商品（支持分页）
         if current_user['role'] == 'admin':
             # 管理员可以看到所有商品
-            logger.debug(f"管理员用户 {current_user['username']} 获取商品列表 (页{page}, 每页{limit}条)")
+            # 避免刷屏：不记录常规列表查询
             result = db.get_products_by_user_shops(
                 None,
                 limit=limit,
@@ -18875,7 +18963,7 @@ def list_products():
                     all_shop_names = [row[0] for row in cursor.fetchall()]
                     logger.info(f"数据库中的所有店铺名称: {all_shop_names}")
 
-        logger.debug(f"返回商品数量: {len(result['products'])}")
+        # 避免刷屏：不记录常规列表查询结果
 
         # 添加调试信息到响应中
         response_data = {
@@ -21296,6 +21384,10 @@ def batch_scrape_products():
                     logger.info(f"🔴 处理商品前检测到停止信号，取消处理商品 {product_id}")
                     return {'status': 'cancelled', 'product_id': product_id, 'message': '任务已取消'}
 
+                # 先按item_id快速去重，避免无效请求
+                if db.get_product_by_item_id(str(product_id)):
+                    return {'status': 'skipped', 'product_id': product_id, 'message': '商品已存在'}
+
                 # 调用现有的单个商品处理逻辑
                 from app import process_single_product
 
@@ -21385,7 +21477,7 @@ def batch_scrape_products():
                                 logger.info(f"商品 {product_id} 处理成功")
                             elif result['status'] == 'skipped':
                                 results['skipped'] += 1
-                                logger.info(f"商品 {product_id} 已存在，跳过")
+                                logger.debug(f"商品 {product_id} 已存在，跳过")
                             elif result['status'] == 'cancelled':
                                 results['cancelled'] += 1
                                 logger.info(f"商品 {product_id} 处理被取消")
@@ -21762,21 +21854,46 @@ def scrape_shop_products(shop_id):
                 # 使用线程池并发扫描分类
                 # 分类扫描主要是网络请求，可以开较高的并发
                 cate_workers = min(10, len(categories))
-                with concurrent.futures.ThreadPoolExecutor(max_workers=cate_workers) as cate_executor:
+                cate_executor = concurrent.futures.ThreadPoolExecutor(max_workers=cate_workers)
+                cate_stop_requested = False
+                try:
                     # 提交任务
                     future_to_cate = {cate_executor.submit(process_category, cate): cate for cate in categories}
+                    pending_futures = set(future_to_cate.keys())
 
                     completed_cates = 0
-                    for future in concurrent.futures.as_completed(future_to_cate):
-                        cate = future_to_cate[future]
-                        try:
-                            count = future.result()
-                            completed_cates += 1
-                            logger.info(f"[{completed_cates}/{len(categories)}] 分类 '{cate['name']}' 扫描完成，新增 {count} 个商品")
-                            # 实时更新前端显示的总数
-                            db.update_scrape_status(total=len(unique_product_tasks), message=f"正在并发扫描分类 ({completed_cates}/{len(categories)})...")
-                        except Exception as e:
-                            logger.error(f"扫描分类 '{cate['name']}' 失败: {e}")
+                    while pending_futures:
+                        if scrape_stop_event.is_set() or db.get_scrape_status().get('stop_signal', False):
+                            cate_stop_requested = True
+                            for future in pending_futures:
+                                future.cancel()
+                            db.update_scrape_status(message="正在停止任务...")
+                            cate_executor.shutdown(wait=False, cancel_futures=True)
+                            pending_futures.clear()
+                            break
+
+                        done, pending_futures = concurrent.futures.wait(
+                            pending_futures,
+                            timeout=1.0,
+                            return_when=concurrent.futures.FIRST_COMPLETED
+                        )
+
+                        for future in done:
+                            cate = future_to_cate[future]
+                            try:
+                                count = future.result()
+                                completed_cates += 1
+                                logger.debug(f"[{completed_cates}/{len(categories)}] 分类 '{cate['name']}' 扫描完成，新增 {count} 个商品")
+                                # 实时更新前端显示的总数
+                                db.update_scrape_status(
+                                    total=len(unique_product_tasks),
+                                    message=f"正在并发扫描分类 ({completed_cates}/{len(categories)})..."
+                                )
+                            except Exception as e:
+                                logger.error(f"扫描分类 '{cate['name']}' 失败: {e}")
+                finally:
+                    if not cate_stop_requested:
+                        cate_executor.shutdown(wait=True)
 
         except Exception as e:
             logger.error(f"分类遍历过程异常: {e}")
@@ -21806,63 +21923,85 @@ def scrape_shop_products(shop_id):
     image_failed_count = 0
     index_failed_count = 0
 
+    stop_requested = False
     if all_product_tasks:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_threads)
+        try:
             # 提交所有商品任务到线程池
             future_to_product = {
                 executor.submit(process_and_save_single_product_sync, product_info): product_info
                 for product_info in all_product_tasks
             }
 
-            # 处理完成的任务
-            for future in concurrent.futures.as_completed(future_to_product):
+            pending_futures = set(future_to_product.keys())
+
+            # 轮询等待，确保可中断
+            while pending_futures:
                 # 检查停止事件或停止信号
                 if scrape_stop_event.is_set() or db.get_scrape_status().get('stop_signal', False):
                     logger.info("🔴 检测到停止事件/信号，正在取消剩余任务...")
-                    # 取消所有待处理的任务
-                    for f in future_to_product:
-                        if not f.done():
-                            f.cancel()
+                    stop_requested = True
+                    for future in pending_futures:
+                        future.cancel()
+                    db.update_scrape_status(message="正在停止任务...")
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    pending_futures.clear()
                     break
 
-                try:
-                    product_info = future_to_product[future]
-                    result = future.result() or {}
-                    processed_count += 1
+                done, pending_futures = concurrent.futures.wait(
+                    pending_futures,
+                    timeout=1.0,
+                    return_when=concurrent.futures.FIRST_COMPLETED
+                )
 
-                    if not result:
-                        failed_count += 1
-                    elif result.get('failed'):
-                        failed_count += 1
-                        if result.get('image_failed'):
-                            image_failed_count += 1
-                        if result.get('index_failed'):
-                            index_failed_count += 1
-                    else:
-                        success_count += 1
+                for future in done:
+                    try:
+                        result = future.result() or {}
+                        processed_count += 1
 
-                    # 改为每5个更新一次，反馈更及时
-                    if processed_count % 5 == 0 or processed_count == total_products:
-                        # 计算进度 (避免除以0)
-                        progress = int((processed_count / total_products) * 100) if total_products > 0 else 100
-                        db.update_scrape_status(
-                            processed=processed_count,
-                            success=success_count,
-                            failed=failed_count,
-                            image_failed=image_failed_count,
-                            index_failed=index_failed_count,
-                            progress=progress,
-                            message=f'正在抓取详情与图片... ({processed_count}/{total_products})'
-                        )
-                        logger.info(
-                            f'已处理 {processed_count}/{total_products} 个商品，成功 {success_count} 个，失败 {failed_count} 个'
-                        )
+                        if not result:
+                            failed_count += 1
+                        elif result.get('failed'):
+                            failed_count += 1
+                            if result.get('image_failed'):
+                                image_failed_count += 1
+                            if result.get('index_failed'):
+                                index_failed_count += 1
+                        else:
+                            success_count += 1
 
-                except Exception as e:
-                    logger.error(f"商品处理异常: {e}")
-                    processed_count += 1
+                        # 改为每5个更新一次，反馈更及时
+                        if processed_count % 5 == 0 or processed_count == total_products:
+                            # 计算进度 (避免除以0)
+                            progress = int((processed_count / total_products) * 100) if total_products > 0 else 100
+                            db.update_scrape_status(
+                                processed=processed_count,
+                                success=success_count,
+                                failed=failed_count,
+                                image_failed=image_failed_count,
+                                index_failed=index_failed_count,
+                                progress=progress,
+                                message=f'正在抓取详情与图片... ({processed_count}/{total_products})'
+                            )
+                    except Exception as e:
+                        logger.error(f"商品处理异常: {e}")
+                        processed_count += 1
+        finally:
+            if not stop_requested:
+                executor.shutdown(wait=True)
 
     # 结束
+    if stop_requested or scrape_stop_event.is_set() or db.get_scrape_status().get('stop_signal', False):
+        final_message = f'抓取已停止，已处理 {processed_count} 个商品'
+    else:
+        if failed_count > 0 or image_failed_count > 0 or index_failed_count > 0:
+            final_message = (
+                f'抓取完成，共处理 {processed_count} 个商品，成功 {success_count} 个，'
+                f'失败 {failed_count} 个 (图片失败 {image_failed_count} / 索引失败 {index_failed_count})'
+            )
+        else:
+            final_message = f'抓取完成，共处理 {processed_count} 个商品，成功 {success_count} 个'
+
     db.update_scrape_status(
         is_scraping=False,
         completed=True,
@@ -21872,14 +22011,16 @@ def scrape_shop_products(shop_id):
         failed=failed_count,
         image_failed=image_failed_count,
         index_failed=index_failed_count,
-        message=(
-            f'抓取完成，共处理 {processed_count} 个商品，成功 {success_count} 个，'
-            f'失败 {failed_count} 个 (图片失败 {image_failed_count} / 索引失败 {index_failed_count})'
+        message=final_message
+    )
+    if failed_count > 0 or image_failed_count > 0 or index_failed_count > 0:
+        logger.info(
+            f"✅ 店铺 {shop_id} 抓取任务完成: 成功 {success_count} / 失败 {failed_count} / 总计 {processed_count}"
         )
-    )
-    logger.info(
-        f"✅ 店铺 {shop_id} 抓取任务完成: 成功 {success_count} / 失败 {failed_count} / 总计 {processed_count}"
-    )
+    else:
+        logger.info(
+            f"✅ 店铺 {shop_id} 抓取任务完成: 成功 {success_count} / 总计 {processed_count}"
+        )
 
     return {
         "total_products": processed_count,
@@ -21897,7 +22038,7 @@ def process_and_save_single_product_sync(product_info):
         # === 检查停止事件或停止信号 ===
         global scrape_stop_event
         if scrape_stop_event.is_set():
-            logger.info(f"🔴 处理商品前检测到停止事件，取消处理商品 {item_id}")
+            logger.debug(f"🔴 处理商品前检测到停止事件，取消处理商品 {item_id}")
             return {
                 'status': 'cancelled',
                 'item_id': item_id,
@@ -21908,7 +22049,7 @@ def process_and_save_single_product_sync(product_info):
 
         current_status = db.get_scrape_status()
         if current_status.get('stop_signal', False):
-            logger.info(f"🔴 处理商品前检测到停止信号，取消处理商品 {item_id}")
+            logger.debug(f"🔴 处理商品前检测到停止信号，取消处理商品 {item_id}")
             return {
                 'status': 'cancelled',
                 'item_id': item_id,
@@ -21919,7 +22060,7 @@ def process_and_save_single_product_sync(product_info):
 
         # === 0. 基于item_id的强力去重 ===
         if db.get_product_by_item_id(item_id):
-            logger.info(f"⏭️ 商品 {item_id} 已存在，跳过重复处理")
+            logger.debug(f"⏭️ 商品 {item_id} 已存在，跳过重复处理")
             return {
                 'status': 'skipped',
                 'item_id': item_id,
@@ -21946,7 +22087,7 @@ def process_and_save_single_product_sync(product_info):
         # === 再次检查停止状态 ===
         current_status = db.get_scrape_status()
         if current_status.get('stop_signal', False):
-            logger.info(f"🔴 抓取详情后检测到停止信号，取消处理商品 {item_id}")
+            logger.debug(f"🔴 抓取详情后检测到停止信号，取消处理商品 {item_id}")
             return {
                 'status': 'cancelled',
                 'item_id': item_id,
@@ -21957,7 +22098,7 @@ def process_and_save_single_product_sync(product_info):
 
         # 2. 再次查重 (双重保险)
         if db.get_product_by_url(product_data['product_url']):
-            logger.info(f"⏭️ 商品URL已存在: {product_data['product_url']}")
+            logger.debug(f"⏭️ 商品URL已存在: {product_data['product_url']}")
             return {
                 'status': 'skipped',
                 'item_id': item_id,
@@ -21975,7 +22116,7 @@ def process_and_save_single_product_sync(product_info):
         # === 再次检查停止状态 ===
         current_status = db.get_scrape_status()
         if current_status.get('stop_signal', False):
-            logger.info(f"🔴 入库后检测到停止信号，商品 {item_id} 已入库但跳过图片处理")
+            logger.debug(f"🔴 入库后检测到停止信号，商品 {item_id} 已入库但跳过图片处理")
             return {
                 'status': 'partial',
                 'item_id': item_id,

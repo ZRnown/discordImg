@@ -423,7 +423,7 @@ class WeidianScraper:
             logger.debug(f"开始获取SKU图片，商品ID: {item_id}")
             title_info = self._get_item_title_and_sku(item_id)
             if not title_info or 'sku_info' not in title_info:
-                logger.warning(f"无法获取SKU信息，跳过图片提取: {item_id}")
+                logger.debug(f"无法获取SKU信息，跳过图片提取: {item_id}")
                 return []
 
             result = title_info['sku_info']

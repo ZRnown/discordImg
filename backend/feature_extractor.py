@@ -432,17 +432,13 @@ class DINOv2FeatureExtractor:
             return None
 
     def _build_hybrid_signature(self, img: np.ndarray) -> Dict:
-        """构建用于混合相似度的颜色/比例签名"""
+        """构建用于混合相似度的签名: 颜色"""
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         hist = cv2.calcHist([hsv], [0, 1], None, [18, 4], [0, 180, 0, 256])
         cv2.normalize(hist, hist, 0, 1, cv2.NORM_MINMAX)
 
-        h, w = img.shape[:2]
-        aspect_ratio = float(w) / float(h) if h else 1.0
-
         return {
-            'hist': hist,
-            'aspect_ratio': aspect_ratio
+            'hist': hist
         }
 
     def calculate_hybrid_similarity(self, img_path1: str, img_path2: str, dino_score: float,
@@ -450,7 +446,7 @@ class DINOv2FeatureExtractor:
         """
         【新增】计算综合相似度 (Re-ranking)
 
-        综合分 = DINO语义分(70%) + 颜色分(15%) + 宽高比分(15%)
+        综合分 = DINO语义分 + 颜色分
 
         Args:
             img_path1: 查询图片路径
@@ -476,28 +472,32 @@ class DINOv2FeatureExtractor:
             candidate_signature = self._build_hybrid_signature(img2)
 
             # 颜色相似度 (H+S, 降低光照影响)
-            color_score = cv2.compareHist(query_signature['hist'], candidate_signature['hist'], cv2.HISTCMP_CORREL)
+            color_score = cv2.compareHist(
+                query_signature['hist'],
+                candidate_signature['hist'],
+                cv2.HISTCMP_CORREL
+            )
             color_score = max(0.0, color_score)
-
-            # 宽高比相似度 (过滤跨品类误报)
-            ratio1 = query_signature['aspect_ratio']
-            ratio2 = candidate_signature['aspect_ratio']
-            ratio_score = min(ratio1, ratio2) / max(ratio1, ratio2) if ratio1 > 0 and ratio2 > 0 else 0.0
 
             # 如果DINO很高，优先尊重语义/结构鲁棒性
             if dino_score > 0.85:
                 final_score = dino_score
             else:
-                final_score = (dino_score * 0.70) + (color_score * 0.15) + (ratio_score * 0.15)
+                # 仅使用 DINO + 颜色
+                final_score = (dino_score * 0.70) + (color_score * 0.30)
 
-            logger.debug(f"综合评分: DINO={dino_score:.3f}, Color={color_score:.3f}, Ratio={ratio_score:.3f}, Final={final_score:.3f}")
+            logger.debug(
+                "综合评分: DINO=%.3f, Color=%.3f, Final=%.3f",
+                dino_score,
+                color_score,
+                final_score
+            )
 
             return {
                 'score': float(final_score),
                 'details': {
                     'dino': float(dino_score),
-                    'color': float(color_score),
-                    'ratio': float(ratio_score)
+                    'color': float(color_score)
                 }
             }
 

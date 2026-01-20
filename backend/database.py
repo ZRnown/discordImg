@@ -40,6 +40,7 @@ class Database:
                     acbuy_url TEXT,
                     shop_name TEXT,
                     ruleEnabled BOOLEAN DEFAULT 1,
+                    reply_scope TEXT DEFAULT 'all',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
@@ -116,6 +117,11 @@ class Database:
 
             try:
                 cursor.execute('ALTER TABLE products ADD COLUMN image_source TEXT DEFAULT \'product\'')  # 图片来源：'product'(商品图片), 'upload'(本地上传), 'custom'(URL)
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE products ADD COLUMN reply_scope TEXT DEFAULT \'all\'')
             except sqlite3.OperationalError:
                 pass
 
@@ -295,6 +301,7 @@ class Database:
                     url_template TEXT NOT NULL,
                     id_pattern TEXT NOT NULL,
                     badge_color TEXT DEFAULT 'blue',
+                    reply_template TEXT DEFAULT '{url}',
                     rotation_interval INTEGER DEFAULT 180,
                     rotation_enabled INTEGER DEFAULT 1,  -- 是否启用轮换功能 (1=启用, 0=禁用)
                     message_filters TEXT DEFAULT '[]',  -- JSON格式存储过滤条件数组
@@ -305,6 +312,11 @@ class Database:
             # 为website_configs表添加rotation_interval字段
             try:
                 cursor.execute('ALTER TABLE website_configs ADD COLUMN rotation_interval INTEGER DEFAULT 180')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE website_configs ADD COLUMN reply_template TEXT DEFAULT \'{url}\'')
             except sqlite3.OperationalError:
                 pass
 
@@ -412,6 +424,7 @@ class Database:
                     keyword_filters TEXT DEFAULT '',  -- 关键词过滤，逗号分隔
                     keyword_reply_enabled INTEGER DEFAULT 1,  -- 是否启用关键词回复
                     image_reply_enabled INTEGER DEFAULT 1,  -- 是否启用图片回复
+                    global_reply_template TEXT DEFAULT '',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
@@ -427,6 +440,11 @@ class Database:
 
             try:
                 cursor.execute('ALTER TABLE user_settings ADD COLUMN image_reply_enabled INTEGER DEFAULT 1')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN global_reply_template TEXT DEFAULT \'\'')
             except sqlite3.OperationalError:
                 pass
 
@@ -482,11 +500,11 @@ class Database:
 
             # 插入默认网站配置
             cursor.execute('''
-                INSERT OR IGNORE INTO website_configs (name, display_name, url_template, id_pattern, badge_color)
+                INSERT OR IGNORE INTO website_configs (name, display_name, url_template, id_pattern, badge_color, reply_template)
                 VALUES
-                    ('cnfans', 'CNFans', 'https://cnfans.com/product?id={id}&platform=WEIDIAN', '{id}', 'blue'),
-                    ('acbuy', 'AcBuy', 'https://www.acbuy.com/product?url=https%3A%2F%2Fweidian.com%2Fitem.html%3FitemID%3D{id}&id={id}&source=WD', '{id}', 'orange'),
-                    ('weidian', '微店', 'https://weidian.com/item.html?itemID={id}', '{id}', 'gray')
+                    ('cnfans', 'CNFans', 'https://cnfans.com/product?id={id}&platform=WEIDIAN', '{id}', 'blue', '{url}'),
+                    ('acbuy', 'AcBuy', 'https://www.acbuy.com/product?url=https%3A%2F%2Fweidian.com%2Fitem.html%3FitemID%3D{id}&id={id}&source=WD', '{id}', 'orange', '{url}'),
+                    ('weidian', '微店', 'https://weidian.com/item.html?itemID={id}', '{id}', 'gray', '{url}')
             ''')
 
             # 插入默认状态记录
@@ -1312,7 +1330,7 @@ class Database:
                 allowed_fields = [
                     'title', 'english_title', 'ruleEnabled',
                     'custom_reply_text', 'custom_reply_images', 'custom_image_urls',
-                    'image_source', 'uploaded_reply_images'
+                    'image_source', 'uploaded_reply_images', 'reply_scope'
                 ]
 
                 for field in allowed_fields:
@@ -1401,11 +1419,11 @@ class Database:
                 cursor.execute('''
                     SELECT
                         wc.id, wc.name, wc.display_name, wc.url_template,
-                        wc.id_pattern, wc.badge_color, wc.rotation_interval, wc.rotation_enabled, wc.message_filters, wc.created_at,
+                        wc.id_pattern, wc.badge_color, wc.reply_template, wc.rotation_interval, wc.rotation_enabled, wc.message_filters, wc.created_at,
                         GROUP_CONCAT(wcb.channel_id) as channels
                     FROM website_configs wc
                     LEFT JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
-                    GROUP BY wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.rotation_interval, wc.rotation_enabled, wc.message_filters, wc.created_at
+                    GROUP BY wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.reply_template, wc.rotation_interval, wc.rotation_enabled, wc.message_filters, wc.created_at
                     ORDER BY wc.created_at
                 ''')
 
@@ -1424,31 +1442,31 @@ class Database:
             logger.error(f"获取网站配置失败: {e}")
             return []
 
-    def add_website_config(self, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str = 'blue', rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> bool:
+    def add_website_config(self, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str = 'blue', reply_template: str = '{url}', rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> bool:
         """添加网站配置"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    INSERT INTO website_configs (name, display_name, url_template, id_pattern, badge_color, rotation_interval, rotation_enabled, message_filters)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (name, display_name, url_template, id_pattern, badge_color, rotation_interval, rotation_enabled, message_filters))
+                    INSERT INTO website_configs (name, display_name, url_template, id_pattern, badge_color, reply_template, rotation_interval, rotation_enabled, message_filters)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (name, display_name, url_template, id_pattern, badge_color, reply_template, rotation_interval, rotation_enabled, message_filters))
                 conn.commit()
                 return True
         except Exception as e:
             logger.error(f"添加网站配置失败: {e}")
             return False
 
-    def update_website_config(self, config_id: int, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str, rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> bool:
+    def update_website_config(self, config_id: int, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str, reply_template: str, rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> bool:
         """更新网站配置"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     UPDATE website_configs
-                    SET name = ?, display_name = ?, url_template = ?, id_pattern = ?, badge_color = ?, rotation_interval = ?, rotation_enabled = ?, message_filters = ?
+                    SET name = ?, display_name = ?, url_template = ?, id_pattern = ?, badge_color = ?, reply_template = ?, rotation_interval = ?, rotation_enabled = ?, message_filters = ?
                     WHERE id = ?
-                ''', (name, display_name, url_template, id_pattern, badge_color, rotation_interval, rotation_enabled, message_filters, config_id))
+                ''', (name, display_name, url_template, id_pattern, badge_color, reply_template, rotation_interval, rotation_enabled, message_filters, config_id))
                 conn.commit()
                 return cursor.rowcount > 0
         except Exception as e:
@@ -1558,7 +1576,7 @@ class Database:
                 cursor = conn.cursor()
                 if user_id:
                     cursor.execute('''
-                        SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color
+                        SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.reply_template
                         FROM website_configs wc
                         JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
                         WHERE wcb.channel_id = ? AND wcb.user_id = ?
@@ -1566,7 +1584,7 @@ class Database:
                     ''', (str(channel_id), user_id))
                 else:
                     cursor.execute('''
-                        SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color
+                        SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.reply_template
                         FROM website_configs wc
                         JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
                         WHERE wcb.channel_id = ?
@@ -2265,6 +2283,7 @@ class Database:
                     prod['autoReplyEnabled'] = prod.get('ruleEnabled', True)
                     prod['shopName'] = prod.get('shop_name') or '未知店铺'
                     prod['customReplyText'] = prod.get('custom_reply_text') or ''
+                    prod['replyScope'] = prod.get('reply_scope') or 'all'
 
                     try:
                         custom_reply_images = prod.get('custom_reply_images')
@@ -2457,7 +2476,7 @@ class Database:
                 cursor.execute('''
                     SELECT download_threads, feature_extract_threads, discord_similarity_threshold,
                            global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
-                           keyword_reply_enabled, image_reply_enabled
+                           keyword_reply_enabled, image_reply_enabled, global_reply_template
                     FROM user_settings WHERE user_id = ?
                 ''', (user_id,))
                 row = cursor.fetchone()
@@ -2472,6 +2491,7 @@ class Database:
                         'keyword_filters': row[6] or '',
                         'keyword_reply_enabled': row[7] if row[7] is not None else 1,
                         'image_reply_enabled': row[8] if row[8] is not None else 1,
+                        'global_reply_template': row[9] or '',
                     }
                 # 如果用户没有设置，返回默认值
                 return {
@@ -2484,6 +2504,7 @@ class Database:
                     'keyword_filters': '',
                     'keyword_reply_enabled': 1,
                     'image_reply_enabled': 1,
+                    'global_reply_template': '',
                 }
         except Exception as e:
             logger.error(f"获取用户设置失败: {e}")
@@ -2497,13 +2518,15 @@ class Database:
                 'keyword_filters': '',
                 'keyword_reply_enabled': 1,
                 'image_reply_enabled': 1,
+                'global_reply_template': '',
             }
 
     def update_user_settings(self, user_id: int, download_threads: int = None,
                            feature_extract_threads: int = None, discord_similarity_threshold: float = None,
                            global_reply_min_delay: float = None, global_reply_max_delay: float = None,
                            user_blacklist: str = None, keyword_filters: str = None,
-                           keyword_reply_enabled: int = None, image_reply_enabled: int = None) -> bool:
+                           keyword_reply_enabled: int = None, image_reply_enabled: int = None,
+                           global_reply_template: str = None) -> bool:
         """更新用户个性化设置"""
         try:
             with self.get_connection() as conn:
@@ -2554,6 +2577,10 @@ class Database:
                         update_fields.append('image_reply_enabled = ?')
                         params.append(image_reply_enabled)
 
+                    if global_reply_template is not None:
+                        update_fields.append('global_reply_template = ?')
+                        params.append(global_reply_template)
+
                     if update_fields:
                         update_fields.append('updated_at = CURRENT_TIMESTAMP')
                         sql = f'UPDATE user_settings SET {", ".join(update_fields)} WHERE user_id = ?'
@@ -2565,8 +2592,8 @@ class Database:
                         INSERT INTO user_settings
                         (user_id, download_threads, feature_extract_threads, discord_similarity_threshold,
                          global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
-                         keyword_reply_enabled, image_reply_enabled)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         keyword_reply_enabled, image_reply_enabled, global_reply_template)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         user_id,
                         download_threads or 4,
@@ -2577,7 +2604,8 @@ class Database:
                         user_blacklist or '',
                         keyword_filters or '',
                         keyword_reply_enabled if keyword_reply_enabled is not None else 1,
-                        image_reply_enabled if image_reply_enabled is not None else 1
+                        image_reply_enabled if image_reply_enabled is not None else 1,
+                        global_reply_template or ''
                     ))
 
                 conn.commit()

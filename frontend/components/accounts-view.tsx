@@ -55,7 +55,8 @@ export function AccountsView() {
     display_name: '',
     url_template: '',
     id_pattern: '',
-    badge_color: 'blue'
+    badge_color: 'blue',
+    reply_template: '{url}'
   })
   const [websiteChannels, setWebsiteChannels] = useState<{[key: number]: string[]}>({})
   const [channelInputs, setChannelInputs] = useState<{[key: number]: string}>({})
@@ -416,8 +417,8 @@ export function AccountsView() {
       if (res.ok) {
         toast.success('网站配置已添加')
         setShowAddWebsite(false)
-        setNewWebsite({ name: '', display_name: '', url_template: '', id_pattern: '', badge_color: 'blue' })
-        fetchWebsites()
+        setNewWebsite({ name: '', display_name: '', url_template: '', id_pattern: '', badge_color: 'blue', reply_template: '{url}' })
+        fetchWebsites(true)
       } else {
         toast.error('添加失败')
       }
@@ -438,7 +439,7 @@ export function AccountsView() {
       if (res.ok) {
         toast.success('网站配置已更新')
         setEditingWebsite(null)
-        fetchWebsites()
+        fetchWebsites(true)
       } else {
         toast.error('更新失败')
       }
@@ -456,7 +457,7 @@ export function AccountsView() {
       })
       if (res.ok) {
         toast.success('网站配置已删除')
-        fetchWebsites()
+        fetchWebsites(true)
       } else {
         toast.error('删除失败')
       }
@@ -942,13 +943,24 @@ export function AccountsView() {
                     onChange={e => setEditingWebsite(prev => ({ ...prev, display_name: e.target.value }))}
                   />
                 </div>
-                <div>
-                  <Label>URL模板</Label>
-                  <Input
-                    value={editingWebsite.url_template}
-                    onChange={e => setEditingWebsite(prev => ({ ...prev, url_template: e.target.value }))}
-                  />
-                </div>
+              <div>
+                <Label>URL模板</Label>
+                <Input
+                  value={editingWebsite.url_template}
+                  onChange={e => setEditingWebsite(prev => ({ ...prev, url_template: e.target.value }))}
+                />
+              </div>
+              <div>
+                <Label>回复模板</Label>
+                <Textarea
+                  value={editingWebsite.reply_template || '{url}'}
+                  onChange={e => setEditingWebsite(prev => ({ ...prev, reply_template: e.target.value }))}
+                  rows={3}
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  使用 <span className="font-mono">{`{url}`}</span> 作为链接占位符。
+                </p>
+              </div>
                 <div>
                   <Label>ID提取模式</Label>
                   <Input
@@ -1127,6 +1139,18 @@ export function AccountsView() {
                           onChange={e => setNewWebsite(prev => ({ ...prev, url_template: e.target.value }))}
                           placeholder="https://www.kakobuy.com/item/details?url=https%3A%2F%2Fweidian.com%2Fitem.html%3FitemID%3D{id}&id={id}&source=WD"
                         />
+                      </div>
+                      <div>
+                        <Label>回复模板</Label>
+                        <Textarea
+                          value={newWebsite.reply_template}
+                          onChange={e => setNewWebsite(prev => ({ ...prev, reply_template: e.target.value }))}
+                          placeholder="{url}"
+                          rows={3}
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                          使用 <span className="font-mono">{`{url}`}</span> 作为链接占位符。
+                        </p>
                       </div>
                       <div>
                         <Label>ID提取模式</Label>
