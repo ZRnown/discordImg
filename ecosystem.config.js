@@ -17,7 +17,7 @@ module.exports = {
       // 脚本路径，相对于下面的 cwd
       script: "app.py",
       // 直接使用系统 python 解释器，避免 shell 产生多余进程
-      interpreter: "python",
+      interpreter: "python3",
       cwd: "./backend",
       // 必须确保 kill_timeout 足够，防止重启时旧进程没杀掉
       kill_timeout: 3000,
