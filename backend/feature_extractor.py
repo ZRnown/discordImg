@@ -106,18 +106,21 @@ class DINOv2FeatureExtractor:
             # 优化后的商品类别，覆盖微店/代购场景95%的商品
             # YOLO-World 会自动忽略人脸、手、家具、背景
             self.target_classes = [
-                # 鞋类 (高优先级)
-                "shoe", "sneaker", "boot", "sandal", "slipper", "heel",
-                # 服装 (高优先级)
-                "shirt", "t-shirt", "jacket", "coat", "pants", "jeans",
-                "dress", "skirt", "shorts", "hoodie", "sweater", "suit",
-                # 包袋配饰 (中优先级)
-                "bag", "handbag", "backpack", "wallet", "belt", "hat", "cap",
-                "watch", "jewelry", "necklace", "ring", "glasses",
-                # 电子产品 (中优先级)
-                "phone", "laptop", "headphone", "camera", "watch",
-                # 家居用品 (低优先级)
-                "toy", "box", "bottle", "cup", "lamp"
+                # 鞋类
+                "shoe", "sneaker", "boot", "sandal", "slipper", "high heels",
+                # 上装
+                "t-shirt", "shirt", "jacket", "coat", "hoodie", "sweater", "suit", "vest", "jersey",
+                # 下装
+                "pants", "jeans", "shorts", "skirt", "trousers", "sweatpants",
+                # 包袋
+                "bag", "handbag", "backpack", "wallet", "purse", "suitcase", "tote bag",
+                # 配饰/小件
+                "watch", "wristwatch", "glasses", "sunglasses", "hat", "cap", "beanie",
+                "belt", "tie", "scarf", "gloves", "socks",
+                # 首饰
+                "necklace", "ring", "earrings", "bracelet", "jewelry",
+                # 其他
+                "toy", "box", "packaging"
             ]
 
             # 不在初始化时设置类别，避免某些版本出现副作用
@@ -239,8 +242,11 @@ class DINOv2FeatureExtractor:
         4. [新增] 缩小图片尺寸以加快AI推理速度
         """
         try:
+            img = Image.open(image_path).convert("RGB")
+            img_w, img_h = img.size
+
             if not config.USE_YOLO_CROP or self.detector is None:
-                return self._resize_for_ai(Image.open(image_path).convert("RGB"))
+                return self._center_crop(img)
 
             # 检查缓存
             image_hash = self._get_image_hash(image_path)
@@ -248,24 +254,20 @@ class DINOv2FeatureExtractor:
                 logger.debug("使用缓存的检测结果")
                 cached_result = self._detection_cache[image_hash]
                 if cached_result is None:
-                    # 缓存中表示未检测到商品
-                    return self._resize_for_ai(Image.open(image_path).convert("RGB"))
+                    return self._center_crop(img)
                 # 返回缓存的裁剪结果
                 return cached_result
 
-            # conf=0.1: 降低门槛，宁可多检不要漏检，反正我们有逻辑过滤
+            # conf=0.05: 降低门槛，宁可多检不要漏检，反正我们有逻辑过滤
             with self.inference_lock:
-                results = self.detector(image_path, conf=0.1, verbose=False)
+                results = self.detector(image_path, conf=0.05, verbose=False)
 
             if not results or len(results[0].boxes) == 0:
-                logger.info("未检测到通用商品，降级使用原图")
-                # 缓存未检测到商品的结果
+                logger.debug("未检测到通用商品，使用中心裁剪兜底")
                 self._detection_cache[image_hash] = None
-                return self._resize_for_ai(Image.open(image_path).convert("RGB"))
+                return self._center_crop(img)
 
             boxes = results[0].boxes
-            img = Image.open(image_path).convert("RGB")
-            img_w, img_h = img.size
             center_x, center_y = img_w / 2, img_h / 2
 
             # --- 智能评分逻辑 ---
@@ -283,6 +285,8 @@ class DINOv2FeatureExtractor:
                 width = x2 - x1
                 height = y2 - y1
                 area = width * height
+                if area < (img_w * img_h * 0.02):
+                    continue
 
                 # 3. 计算离图片中心的距离
                 box_center_x = x1 + width / 2
@@ -290,23 +294,22 @@ class DINOv2FeatureExtractor:
                 dist_to_center = ((box_center_x - center_x)**2 + (box_center_y - center_y)**2) ** 0.5
 
                 # 4. 综合评分公式：
-                # 面积越大越好 (权重 0.7)
-                # 越靠中心越好 (权重 0.3)
+                # 面积越大越好 (权重 0.6)
+                # 越靠中心越好 (权重 0.4)
                 # 这个公式能保证：即使角落里有个大包，也会优先选中间的小鞋子
                 norm_area = area / (img_w * img_h)
                 norm_dist = 1 - (dist_to_center / ((img_w**2 + img_h**2)**0.5))
 
-                score = (norm_area * 0.7) + (norm_dist * 0.3) + (float(box.conf) * 0.1)
+                score = (norm_area * 0.6) + (norm_dist * 0.4) + (float(box.conf) * 0.1)
 
                 if score > max_score:
                     max_score = score
                     best_box = coords
 
             if best_box is None:
-                logger.info("未找到合适的商品框，使用原图")
-                # 缓存失败结果
+                logger.info("未找到合适的商品框，使用中心裁剪兜底")
                 self._detection_cache[image_hash] = None
-                return self._resize_for_ai(img)
+                return self._center_crop(img)
 
             # 执行裁剪
             x1, y1, x2, y2 = best_box
@@ -323,7 +326,7 @@ class DINOv2FeatureExtractor:
             )
 
             cropped_img = img.crop(crop_box)
-            logger.info(f"成功裁剪商品区域: {crop_box}")
+            logger.debug(f"成功裁剪商品区域: {crop_box}")
 
             # 优化：Resize 裁剪后的图片
             final_img = self._resize_for_ai(cropped_img)
@@ -334,21 +337,30 @@ class DINOv2FeatureExtractor:
             return final_img
 
         except Exception as e:
-            logger.warning(f"自动裁剪出错: {e}, 使用原图")
+            logger.warning(f"自动裁剪出错: {e}, 使用中心裁剪")
             # 缓存失败结果
             try:
                 image_hash = self._get_image_hash(image_path)
                 self._detection_cache[image_hash] = None
             except:
                 pass
-            return self._resize_for_ai(Image.open(image_path).convert("RGB"))
+            return self._center_crop(Image.open(image_path).convert("RGB"))
 
-    def _resize_for_ai(self, img: Image.Image, max_size: int = 640) -> Image.Image:
+    def _center_crop(self, img: Image.Image) -> Image.Image:
+        """中心裁剪：保留中间 80% 区域，降低背景干扰"""
+        w, h = img.size
+        left = int(w * 0.1)
+        top = int(h * 0.1)
+        right = int(w * 0.9)
+        bottom = int(h * 0.9)
+        return self._resize_for_ai(img.crop((left, top, right, bottom)))
+
+    def _resize_for_ai(self, img: Image.Image, max_size: int = 448) -> Image.Image:
         """[新增] 将图片缩小到适合 AI 推理的尺寸，大幅提升速度
 
         Args:
             img: 输入图片
-            max_size: 最大尺寸（默认640px），对于特征提取任务已经足够精确
+            max_size: 最大尺寸（默认448px），适合DINOv2特征提取
 
         Returns:
             缩放后的图片
@@ -408,7 +420,7 @@ class DINOv2FeatureExtractor:
         return results
 
     def prepare_hybrid_query(self, img_path: str) -> Optional[Dict]:
-        """预先计算查询图的颜色/结构特征，便于重排序阶段复用"""
+        """预先计算查询图的颜色/比例特征，便于重排序阶段复用"""
         try:
             img = cv2.imread(img_path)
             if img is None:
@@ -420,17 +432,17 @@ class DINOv2FeatureExtractor:
             return None
 
     def _build_hybrid_signature(self, img: np.ndarray) -> Dict:
-        """构建用于混合相似度的颜色/结构签名"""
+        """构建用于混合相似度的颜色/比例签名"""
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-        hist = cv2.calcHist([hsv], [0, 1], None, [180, 256], [0, 180, 0, 256])
+        hist = cv2.calcHist([hsv], [0, 1], None, [18, 4], [0, 180, 0, 256])
         cv2.normalize(hist, hist, 0, 1, cv2.NORM_MINMAX)
 
-        img_small = cv2.resize(img, (64, 64))
-        gray_small = cv2.cvtColor(img_small, cv2.COLOR_BGR2GRAY)
+        h, w = img.shape[:2]
+        aspect_ratio = float(w) / float(h) if h else 1.0
 
         return {
-            'hsv_hist': hist,
-            'gray_small': gray_small
+            'hist': hist,
+            'aspect_ratio': aspect_ratio
         }
 
     def calculate_hybrid_similarity(self, img_path1: str, img_path2: str, dino_score: float,
@@ -438,7 +450,7 @@ class DINOv2FeatureExtractor:
         """
         【新增】计算综合相似度 (Re-ranking)
 
-        综合分 = DINO语义分(50%) + 颜色分(30%) + 轮廓分(20%)
+        综合分 = DINO语义分(70%) + 颜色分(15%) + 宽高比分(15%)
 
         Args:
             img_path1: 查询图片路径
@@ -446,7 +458,7 @@ class DINOv2FeatureExtractor:
             dino_score: DINOv2原始相似度分数
 
         Returns:
-            dict: {'score': 综合分数, 'details': {'dino': ..., 'color': ..., 'structure': ...}}
+            dict: {'score': 综合分数, 'details': {'dino': ..., 'color': ..., 'ratio': ...}}
         """
         try:
             if query_signature is None:
@@ -463,33 +475,29 @@ class DINOv2FeatureExtractor:
 
             candidate_signature = self._build_hybrid_signature(img2)
 
-            # 巴氏距离比较 (结果 0-1, 1为完全匹配)
-            color_score = cv2.compareHist(query_signature['hsv_hist'], candidate_signature['hsv_hist'], cv2.HISTCMP_CORREL)
-            color_score = max(0.0, color_score)  # 修正可能的负值
+            # 颜色相似度 (H+S, 降低光照影响)
+            color_score = cv2.compareHist(query_signature['hist'], candidate_signature['hist'], cv2.HISTCMP_CORREL)
+            color_score = max(0.0, color_score)
 
-            # 2. 轮廓/结构相似度 (简化版：缩小后比较像素差异)
-            diff = cv2.absdiff(query_signature['gray_small'], candidate_signature['gray_small'])
-            structure_score = 1.0 - (np.mean(diff) / 255.0)
+            # 宽高比相似度 (过滤跨品类误报)
+            ratio1 = query_signature['aspect_ratio']
+            ratio2 = candidate_signature['aspect_ratio']
+            ratio_score = min(ratio1, ratio2) / max(ratio1, ratio2) if ratio1 > 0 and ratio2 > 0 else 0.0
 
-            # === 综合评分公式 (可调优) ===
-            # DINO (语义/版型): 权重 0.5
-            # Color (颜色): 权重 0.3 (对区分不同配色的同款鞋很有用)
-            # Structure (细节): 权重 0.2
+            # 如果DINO很高，优先尊重语义/结构鲁棒性
+            if dino_score > 0.85:
+                final_score = dino_score
+            else:
+                final_score = (dino_score * 0.70) + (color_score * 0.15) + (ratio_score * 0.15)
 
-            final_score = (dino_score * 0.5) + (color_score * 0.3) + (structure_score * 0.2)
-
-            # 如果颜色明显不一致，适当降分，降低跨品牌误报
-            if color_score < 0.5:
-                final_score *= 0.8
-
-            logger.debug(f"综合评分: DINO={dino_score:.3f}, Color={color_score:.3f}, Structure={structure_score:.3f}, Final={final_score:.3f}")
+            logger.debug(f"综合评分: DINO={dino_score:.3f}, Color={color_score:.3f}, Ratio={ratio_score:.3f}, Final={final_score:.3f}")
 
             return {
                 'score': float(final_score),
                 'details': {
                     'dino': float(dino_score),
                     'color': float(color_score),
-                    'structure': float(structure_score)
+                    'ratio': float(ratio_score)
                 }
             }
 

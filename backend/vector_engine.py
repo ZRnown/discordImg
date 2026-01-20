@@ -116,7 +116,7 @@ class VectorEngine:
             faiss.write_index(self.index, self.index_file)
             with open(self.id_map_file, 'wb') as f:
                 pickle.dump(self.id_map, f)
-            logger.info("FAISS索引已保存到磁盘")
+            logger.debug("FAISS索引已保存到磁盘")
         except Exception as e:
             logger.error(f"保存索引失败: {e}")
 

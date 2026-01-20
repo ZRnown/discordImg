@@ -46,8 +46,8 @@ class Config:
     COMMAND_PREFIX = '!'
 
     # === AI 模型 ===
-    DINO_MODEL_NAME = 'facebook/dinov2-base'
-    VECTOR_DIMENSION = 768
+    DINO_MODEL_NAME = 'facebook/dinov2-small'
+    VECTOR_DIMENSION = 384
     YOLO_MODEL_PATH = 'yolov8s-world.pt'
     USE_YOLO_CROP = True
 

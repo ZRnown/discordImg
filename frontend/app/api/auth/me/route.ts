@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
+import { fetchFromBackend } from '../../_utils/backend';
 
 export async function GET(request: NextRequest) {
   try {
@@ -8,13 +7,11 @@ export async function GET(request: NextRequest) {
     const cookies = request.headers.get('cookie') || '';
 
     // 调用后端验证 Session 有效性
-    const backendResponse = await fetch(`${BACKEND_URL}/api/auth/me`, {
+    const { response: backendResponse, rawText } = await fetchFromBackend('/api/auth/me', {
       headers: {
         'Cookie': cookies // 关键：转发 Cookie 给后端
       }
-    });
-
-    const rawText = await backendResponse.text();
+    }, request.headers.get('host'), 3000);
     let data: any = null;
     let parsed = false;
     try {
@@ -44,6 +41,6 @@ export async function GET(request: NextRequest) {
     }
   } catch (error: any) {
     console.error('Auth me API error:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: 'Backend unreachable' }, { status: 401 });
   }
 }

@@ -1,16 +1,19 @@
 # ============================================================
-# 【优化修复】移除全局单线程限制，允许 PyTorch/DINOv2 使用多核加速
-# FAISS 的死锁保护已在 vector_engine.py 中通过 faiss.omp_set_num_threads(1) 单独处理
-# 移除这些限制可以让 AI 推理速度提升 3-5 倍
+# 【启动稳定性修复】必须在 import torch 之前设置线程/代理环境变量
+# 避免 OpenMP 与多线程冲突导致 Socket 关闭
 # ============================================================
 import os
 import multiprocessing  # Windows多进程兼容性必需
-# 已移除全局线程限制，让 PyTorch 能够利用多核 CPU
-# os.environ["OMP_NUM_THREADS"] = "1"
-# os.environ["MKL_NUM_THREADS"] = "1"
-# os.environ["OPENBLAS_NUM_THREADS"] = "1"
-# os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-# os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
+if 'AI_INTRA_THREADS' not in os.environ:
+    os.environ['AI_INTRA_THREADS'] = '1'
+_ai_threads = os.environ.get('AI_INTRA_THREADS', '1')
+os.environ["OMP_NUM_THREADS"] = _ai_threads
+os.environ["MKL_NUM_THREADS"] = _ai_threads
+os.environ["OPENBLAS_NUM_THREADS"] = _ai_threads
+os.environ["VECLIB_MAXIMUM_THREADS"] = _ai_threads
+os.environ["NUMEXPR_NUM_THREADS"] = _ai_threads
+os.environ.setdefault("NO_PROXY", "localhost,127.0.0.1")
 
 from flask import Flask, request, jsonify, Response, session
 import numpy as np
@@ -452,8 +455,10 @@ def initialize_runtime():
     root_logger.addHandler(queue_handler)
 
     # 屏蔽噪音日志
-    for lib in ['werkzeug', 'urllib3', 'requests', 'ultralytics', 'aiohttp']:
+    for lib in ['werkzeug', 'requests', 'ultralytics', 'aiohttp']:
         logging.getLogger(lib).setLevel(logging.WARNING)
+    logging.getLogger('urllib3').setLevel(logging.ERROR)
+    logging.getLogger('urllib3.connectionpool').setLevel(logging.ERROR)
 
     # 3. 重置数据库状态
     print("🧹 [系统] 正在重置抓取任务状态...")
@@ -1883,7 +1888,7 @@ def list_products():
         # 根据用户权限获取商品（支持分页）
         if current_user['role'] == 'admin':
             # 管理员可以看到所有商品
-            logger.info(f"管理员用户 {current_user['username']} 获取商品列表 (页{page}, 每页{limit}条)")
+            # 避免刷屏：不记录常规列表查询
             result = db.get_products_by_user_shops(
                 None,
                 limit=limit,
@@ -1919,7 +1924,7 @@ def list_products():
                     all_shop_names = [row[0] for row in cursor.fetchall()]
                     logger.info(f"数据库中的所有店铺名称: {all_shop_names}")
 
-        logger.info(f"返回商品数量: {len(result['products'])}")
+        # 避免刷屏：不记录常规列表查询结果
 
         # 添加调试信息到响应中
         response_data = {
@@ -4732,6 +4737,9 @@ def scrape_shop_products(shop_id):
         total=0,
         processed=0,
         success=0,
+        failed=0,
+        image_failed=0,
+        index_failed=0,
         message='正在初始化...'
     )
 
@@ -4803,21 +4811,46 @@ def scrape_shop_products(shop_id):
                 # 使用线程池并发扫描分类
                 # 分类扫描主要是网络请求，可以开较高的并发
                 cate_workers = min(10, len(categories))
-                with concurrent.futures.ThreadPoolExecutor(max_workers=cate_workers) as cate_executor:
+                cate_executor = concurrent.futures.ThreadPoolExecutor(max_workers=cate_workers)
+                cate_stop_requested = False
+                try:
                     # 提交任务
                     future_to_cate = {cate_executor.submit(process_category, cate): cate for cate in categories}
+                    pending_futures = set(future_to_cate.keys())
 
                     completed_cates = 0
-                    for future in concurrent.futures.as_completed(future_to_cate):
-                        cate = future_to_cate[future]
-                        try:
-                            count = future.result()
-                            completed_cates += 1
-                            logger.info(f"[{completed_cates}/{len(categories)}] 分类 '{cate['name']}' 扫描完成，新增 {count} 个商品")
-                            # 实时更新前端显示的总数
-                            db.update_scrape_status(total=len(unique_product_tasks), message=f"正在并发扫描分类 ({completed_cates}/{len(categories)})...")
-                        except Exception as e:
-                            logger.error(f"扫描分类 '{cate['name']}' 失败: {e}")
+                    while pending_futures:
+                        if scrape_stop_event.is_set() or db.get_scrape_status().get('stop_signal', False):
+                            cate_stop_requested = True
+                            for future in pending_futures:
+                                future.cancel()
+                            db.update_scrape_status(message="正在停止任务...")
+                            cate_executor.shutdown(wait=False, cancel_futures=True)
+                            pending_futures.clear()
+                            break
+
+                        done, pending_futures = concurrent.futures.wait(
+                            pending_futures,
+                            timeout=1.0,
+                            return_when=concurrent.futures.FIRST_COMPLETED
+                        )
+
+                        for future in done:
+                            cate = future_to_cate[future]
+                            try:
+                                count = future.result()
+                                completed_cates += 1
+                                logger.debug(f"[{completed_cates}/{len(categories)}] 分类 '{cate['name']}' 扫描完成，新增 {count} 个商品")
+                                # 实时更新前端显示的总数
+                                db.update_scrape_status(
+                                    total=len(unique_product_tasks),
+                                    message=f"正在并发扫描分类 ({completed_cates}/{len(categories)})..."
+                                )
+                            except Exception as e:
+                                logger.error(f"扫描分类 '{cate['name']}' 失败: {e}")
+                finally:
+                    if not cate_stop_requested:
+                        cate_executor.shutdown(wait=True)
 
         except Exception as e:
             logger.error(f"分类遍历过程异常: {e}")
@@ -4843,62 +4876,115 @@ def scrape_shop_products(shop_id):
     # 第二阶段：使用全局线程池并发处理所有商品
     processed_count = 0
     success_count = 0
+    failed_count = 0
+    image_failed_count = 0
+    index_failed_count = 0
 
+    stop_requested = False
     if all_product_tasks:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_threads)
+        try:
             # 提交所有商品任务到线程池
             future_to_product = {
                 executor.submit(process_and_save_single_product_sync, product_info): product_info
                 for product_info in all_product_tasks
             }
 
-            # 处理完成的任务
-            for future in concurrent.futures.as_completed(future_to_product):
+            pending_futures = set(future_to_product.keys())
+
+            # 轮询等待，确保可中断
+            while pending_futures:
                 # 检查停止事件或停止信号
                 if scrape_stop_event.is_set() or db.get_scrape_status().get('stop_signal', False):
                     logger.info("🔴 检测到停止事件/信号，正在取消剩余任务...")
-                    # 取消所有待处理的任务
-                    for f in future_to_product:
-                        if not f.done():
-                            f.cancel()
+                    stop_requested = True
+                    for future in pending_futures:
+                        future.cancel()
+                    db.update_scrape_status(message="正在停止任务...")
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    pending_futures.clear()
                     break
 
-                try:
-                    product_info = future_to_product[future]
-                    success = future.result()
-                    processed_count += 1
+                done, pending_futures = concurrent.futures.wait(
+                    pending_futures,
+                    timeout=1.0,
+                    return_when=concurrent.futures.FIRST_COMPLETED
+                )
 
-                    if success:
-                        success_count += 1
+                for future in done:
+                    try:
+                        result = future.result() or {}
+                        processed_count += 1
 
-                    # 改为每5个更新一次，反馈更及时
-                    if processed_count % 5 == 0 or processed_count == total_products:
-                        # 计算进度 (避免除以0)
-                        progress = int((processed_count / total_products) * 100) if total_products > 0 else 100
-                        db.update_scrape_status(
-                            processed=processed_count,
-                            success=success_count,
-                            progress=progress,
-                            message=f'正在抓取详情与图片... ({processed_count}/{total_products})'
-                        )
-                        logger.info(f'已处理 {processed_count}/{total_products} 个商品，成功 {success_count} 个')
+                        if not result:
+                            failed_count += 1
+                        elif result.get('failed'):
+                            failed_count += 1
+                            if result.get('image_failed'):
+                                image_failed_count += 1
+                            if result.get('index_failed'):
+                                index_failed_count += 1
+                        else:
+                            success_count += 1
 
-                except Exception as e:
-                    logger.error(f"商品处理异常: {e}")
-                    processed_count += 1
+                        # 改为每5个更新一次，反馈更及时
+                        if processed_count % 5 == 0 or processed_count == total_products:
+                            # 计算进度 (避免除以0)
+                            progress = int((processed_count / total_products) * 100) if total_products > 0 else 100
+                            db.update_scrape_status(
+                                processed=processed_count,
+                                success=success_count,
+                                failed=failed_count,
+                                image_failed=image_failed_count,
+                                index_failed=index_failed_count,
+                                progress=progress,
+                                message=f'正在抓取详情与图片... ({processed_count}/{total_products})'
+                            )
+                    except Exception as e:
+                        logger.error(f"商品处理异常: {e}")
+                        processed_count += 1
+        finally:
+            if not stop_requested:
+                executor.shutdown(wait=True)
 
     # 结束
+    if stop_requested or scrape_stop_event.is_set() or db.get_scrape_status().get('stop_signal', False):
+        final_message = f'抓取已停止，已处理 {processed_count} 个商品'
+    else:
+        if failed_count > 0 or image_failed_count > 0 or index_failed_count > 0:
+            final_message = (
+                f'抓取完成，共处理 {processed_count} 个商品，成功 {success_count} 个，'
+                f'失败 {failed_count} 个 (图片失败 {image_failed_count} / 索引失败 {index_failed_count})'
+            )
+        else:
+            final_message = f'抓取完成，共处理 {processed_count} 个商品，成功 {success_count} 个'
+
     db.update_scrape_status(
         is_scraping=False,
         completed=True,
         progress=100,
-        message=f'抓取完成，共处理 {processed_count} 个商品，成功 {success_count} 个'
+        processed=processed_count,
+        success=success_count,
+        failed=failed_count,
+        image_failed=image_failed_count,
+        index_failed=index_failed_count,
+        message=final_message
     )
-    logger.info(f"✅ 店铺 {shop_id} 抓取任务完成: {success_count}/{processed_count} 商品成功处理")
+    if failed_count > 0 or image_failed_count > 0 or index_failed_count > 0:
+        logger.info(
+            f"✅ 店铺 {shop_id} 抓取任务完成: 成功 {success_count} / 失败 {failed_count} / 总计 {processed_count}"
+        )
+    else:
+        logger.info(
+            f"✅ 店铺 {shop_id} 抓取任务完成: 成功 {success_count} / 总计 {processed_count}"
+        )
 
     return {
         "total_products": processed_count,
-        "success_count": success_count
+        "success_count": success_count,
+        "failed_count": failed_count,
+        "image_failed_count": image_failed_count,
+        "index_failed_count": index_failed_count
     }
 
 def process_and_save_single_product_sync(product_info):
@@ -4909,63 +4995,155 @@ def process_and_save_single_product_sync(product_info):
         # === 检查停止事件或停止信号 ===
         global scrape_stop_event
         if scrape_stop_event.is_set():
-            logger.info(f"🔴 处理商品前检测到停止事件，取消处理商品 {item_id}")
-            return False
+            logger.debug(f"🔴 处理商品前检测到停止事件，取消处理商品 {item_id}")
+            return {
+                'status': 'cancelled',
+                'item_id': item_id,
+                'failed': False,
+                'image_failed': False,
+                'index_failed': False
+            }
 
         current_status = db.get_scrape_status()
         if current_status.get('stop_signal', False):
-            logger.info(f"🔴 处理商品前检测到停止信号，取消处理商品 {item_id}")
-            return False
+            logger.debug(f"🔴 处理商品前检测到停止信号，取消处理商品 {item_id}")
+            return {
+                'status': 'cancelled',
+                'item_id': item_id,
+                'failed': False,
+                'image_failed': False,
+                'index_failed': False
+            }
 
         # === 0. 基于item_id的强力去重 ===
         if db.get_product_by_item_id(item_id):
-            logger.info(f"⏭️ 商品 {item_id} 已存在，跳过重复处理")
-            return True  # 已存在算处理成功
+            logger.debug(f"⏭️ 商品 {item_id} 已存在，跳过重复处理")
+            return {
+                'status': 'skipped',
+                'item_id': item_id,
+                'failed': False,
+                'image_failed': False,
+                'index_failed': False
+            }
 
         # 1. 抓取详情
         from app import process_single_product  # 引用 app.py 中的逻辑
         product_data = process_single_product(product_info)
 
         if not product_data:
-            return False
+            logger.warning(f"❌ 商品 {item_id} 抓取失败：未获取到商品详情")
+            return {
+                'status': 'failed',
+                'item_id': item_id,
+                'failed': True,
+                'image_failed': False,
+                'index_failed': False
+            }
 
+        product_title = product_data.get('title', '')
         # === 再次检查停止状态 ===
         current_status = db.get_scrape_status()
         if current_status.get('stop_signal', False):
-            logger.info(f"🔴 抓取详情后检测到停止信号，取消处理商品 {item_id}")
-            return False
+            logger.debug(f"🔴 抓取详情后检测到停止信号，取消处理商品 {item_id}")
+            return {
+                'status': 'cancelled',
+                'item_id': item_id,
+                'failed': False,
+                'image_failed': False,
+                'index_failed': False
+            }
 
         # 2. 再次查重 (双重保险)
         if db.get_product_by_url(product_data['product_url']):
-            logger.info(f"⏭️ 商品URL已存在: {product_data['product_url']}")
-            return True  # 已存在算处理成功
+            logger.debug(f"⏭️ 商品URL已存在: {product_data['product_url']}")
+            return {
+                'status': 'skipped',
+                'item_id': item_id,
+                'failed': False,
+                'image_failed': False,
+                'index_failed': False
+            }
 
         # 3. 入库 (添加item_id字段)
         product_data['item_id'] = item_id  # 确保item_id被保存
         product_id = db.insert_product(product_data)
 
-        logger.info(f"✅ 商品 {item_id} 成功入库，数据库ID: {product_id}")
+        logger.debug(f"商品 {item_id} 入库完成，数据库ID: {product_id}")
 
         # === 再次检查停止状态 ===
         current_status = db.get_scrape_status()
         if current_status.get('stop_signal', False):
-            logger.info(f"🔴 入库后检测到停止信号，商品 {item_id} 已入库但跳过图片处理")
-            return True  # 商品已入库，算成功
+            logger.debug(f"🔴 入库后检测到停止信号，商品 {item_id} 已入库但跳过图片处理")
+            return {
+                'status': 'partial',
+                'item_id': item_id,
+                'failed': False,
+                'image_failed': False,
+                'index_failed': False
+            }
 
         # 4. 图片处理 (使用多线程版本)
+        image_stats = {
+            'total_urls': 0,
+            'downloaded': 0,
+            'download_failed': 0,
+            'processed': 0,
+            'faiss_failed': False
+        }
         if product_data.get('images'):
             from app import save_product_images_unified
-            processed_count = save_product_images_unified(
+            processed_count, image_stats = save_product_images_unified(
                 product_id,
                 product_data['images'],
                 shutdown_event=scrape_stop_event
             )
-            logger.info(f"🖼️ 商品 {item_id} 图片处理完成，共处理 {processed_count} 张图片")
+        else:
+            processed_count = 0
 
-        return True
+        image_total = len(product_data.get('images') or [])
+        image_failed = image_total == 0 or image_stats.get('downloaded', 0) == 0
+        index_failed = bool(image_stats.get('faiss_failed'))
+        failed = image_failed or index_failed
+
+        if failed:
+            reasons = []
+            if image_failed:
+                if image_total == 0:
+                    reasons.append("未抓取到图片URL")
+                else:
+                    reasons.append(f"图片下载失败 {image_stats.get('download_failed', image_total)}/{image_total}")
+            if index_failed:
+                reasons.append("索引写入失败")
+            logger.warning(
+                f"❌ 商品 {item_id} {product_title} 处理失败：{'，'.join(reasons)}"
+            )
+        else:
+            download_failed = image_stats.get('download_failed', 0)
+            extra = f"，下载失败 {download_failed}" if download_failed else ""
+            logger.info(
+                f"✅ 商品 {item_id} {product_title} 抓取完成，图片 {processed_count}/{image_total}{extra}"
+            )
+
+        return {
+            'status': 'success' if not failed else 'failed',
+            'item_id': item_id,
+            'title': product_title,
+            'images_total': image_total,
+            'images_processed': processed_count,
+            'download_failed': image_stats.get('download_failed', 0),
+            'failed': failed,
+            'image_failed': image_failed,
+            'index_failed': index_failed
+        }
     except Exception as e:
         logger.error(f"❌ 处理商品出错 {product_info.get('item_id')}: {e}")
-        return False
+        return {
+            'status': 'failed',
+            'item_id': product_info.get('item_id'),
+            'failed': True,
+            'image_failed': False,
+            'index_failed': False
+        }
 
 def scrape_product_info(product_url):
     """根据商品URL获取商品详细信息"""
@@ -5173,8 +5351,16 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
     - AI 阶段：CPU 密集，使用全局信号量限制并发，避免 CPU 冲突
     - FAISS：一个商品只写入/保存一次，减少锁竞争
     """
+    stats = {
+        'total_urls': len(image_urls) if image_urls else 0,
+        'downloaded': 0,
+        'download_failed': 0,
+        'processed': 0,
+        'faiss_failed': False
+    }
+
     if not image_urls:
-        return 0
+        return 0, stats
 
     import os
     import time
@@ -5191,7 +5377,7 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
 
     downloaded_images = []  # (index, save_path)
 
-    logger.info(f"🚀 [商品 {product_id}] 阶段1: 开始并发下载 {len(image_urls)} 张图片...")
+    logger.debug(f"🚀 [商品 {product_id}] 开始下载 {len(image_urls)} 张图片...")
 
     def download_task(index, url):
         max_retries = 10
@@ -5232,7 +5418,7 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
 
             except Exception as e:
                 if attempt == max_retries:
-                    logger.warning(f"下载失败 {url}: {e}")
+                    logger.debug(f"下载失败 {url}: {e}")
                 else:
                     time.sleep(0.2 * attempt)
         return None
@@ -5244,18 +5430,24 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
             if res:
                 downloaded_images.append(res)
 
+    stats['downloaded'] = len(downloaded_images)
+    stats['download_failed'] = max(0, len(image_urls) - len(downloaded_images))
+
     if not downloaded_images:
-        logger.warning(f"⚠️ [商品 {product_id}] 没有成功下载任何图片")
-        return 0
+        logger.warning(f"⚠️ [商品 {product_id}] 图片下载失败: 0/{len(image_urls)}")
+        return 0, stats
 
     downloaded_images.sort(key=lambda x: x[0])
-    logger.info(f"✅ [商品 {product_id}] 下载完成，准备处理 {len(downloaded_images)} 张图片")
+    if stats['download_failed'] > 0:
+        logger.warning(f"⚠️ [商品 {product_id}] 下载完成: {len(downloaded_images)}/{len(image_urls)}，失败 {stats['download_failed']}")
+    else:
+        logger.debug(f"✅ [商品 {product_id}] 下载完成: {len(downloaded_images)}/{len(image_urls)}")
 
     # --- 阶段 2: 有限并发 AI 特征提取 (CPU 密集) ---
     extractor = get_global_feature_extractor()
     if extractor is None:
         logger.error("特征提取器未初始化")
-        return 0
+        return 0, stats
 
     existing_images = db.get_product_images(product_id)
     existing_feats = [img['features'] for img in existing_images if img.get('features') is not None]
@@ -5263,7 +5455,7 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
     processed_count = 0
     vectors_to_add = []  # (db_id, features)
 
-    logger.info(f"🧠 [商品 {product_id}] 阶段2: 顺序处理图片 (全局并发受控)...")
+    logger.debug(f"🧠 [商品 {product_id}] 开始特征提取...")
 
     for index, save_path in downloaded_images:
         if shutdown_event and shutdown_event.is_set():
@@ -5281,7 +5473,7 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
 
                 is_dup, score = check_duplicate_image(features, existing_feats, threshold=0.995)
                 if is_dup:
-                    logger.info(f"♻️ [商品 {product_id}] 图片重复 (相似度 {score:.3f})，跳过")
+                    logger.debug(f"♻️ [商品 {product_id}] 图片重复 (相似度 {score:.3f})，跳过")
                     try:
                         os.remove(save_path)
                     except Exception:
@@ -5291,7 +5483,6 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
                 existing_feats.append(features)
                 img_db_id = db.insert_image_record(product_id, save_path, index, features)
                 if img_db_id:
-                    logger.info(f"📸 [商品 {product_id}] 图片 {index} 处理完毕 (ID: {img_db_id})")
                     vectors_to_add.append((img_db_id, features))
                     processed_count += 1
             except Exception as e:
@@ -5308,13 +5499,15 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
                     engine.add_vector(img_id, feats)
                 engine.save()
 
-            logger.info(f"💾 [商品 {product_id}] FAISS 索引已更新，新增 {len(vectors_to_add)} 个向量")
+            logger.debug(f"💾 [商品 {product_id}] FAISS 索引已更新，新增 {len(vectors_to_add)} 个向量")
 
         except Exception as e:
             logger.error(f"FAISS 批量写入失败: {e}")
+            stats['faiss_failed'] = True
 
-    logger.info(f"商品 {product_id} 成功处理 {processed_count}/{len(image_urls)} 张图片")
-    return processed_count
+    stats['processed'] = processed_count
+    logger.debug(f"✅ [商品 {product_id}] 图片处理完成: {processed_count}/{len(image_urls)}")
+    return processed_count, stats
 
 def run_cleanup_task():
     """后台清理任务，定期清理数据库和内存中的过期记录"""

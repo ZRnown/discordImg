@@ -839,16 +839,21 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                     {scrapeStatus.message || '正在处理中...'}
                                   </span>
                                 </div>
-                                <div className="grid grid-cols-2 gap-2 text-xs">
+                                <div className="grid grid-cols-1 gap-2 text-xs">
                                   <div className="text-center">
                                     <div className="font-semibold text-green-700">{scrapeStatus.success || 0}</div>
                                     <div className="text-muted-foreground">成功</div>
                                   </div>
-                                  <div className="text-center">
-                                    <div className="font-semibold text-red-600">{(scrapeStatus.processed || 0) - (scrapeStatus.success || 0)}</div>
-                                    <div className="text-muted-foreground">剩余</div>
-                                  </div>
                                 </div>
+                                {((scrapeStatus.failed || 0) > 0 ||
+                                  (scrapeStatus.image_failed || 0) > 0 ||
+                                  (scrapeStatus.index_failed || 0) > 0) && (
+                                  <div className="mt-2 text-[11px] text-muted-foreground flex items-center justify-between">
+                                    <span>失败: {scrapeStatus.failed || 0}</span>
+                                    <span>图片失败: {scrapeStatus.image_failed || 0}</span>
+                                    <span>索引失败: {scrapeStatus.index_failed || 0}</span>
+                                  </div>
+                                )}
                               </div>
                             )}
               </div>

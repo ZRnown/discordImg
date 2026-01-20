@@ -457,6 +457,9 @@ class Database:
                     total INTEGER DEFAULT 0,
                     processed INTEGER DEFAULT 0,
                     success INTEGER DEFAULT 0,
+                    failed INTEGER DEFAULT 0,
+                    image_failed INTEGER DEFAULT 0,
+                    index_failed INTEGER DEFAULT 0,
                     progress REAL DEFAULT 0,
                     message TEXT DEFAULT '等待开始...',
                     completed BOOLEAN DEFAULT 0,
@@ -464,6 +467,18 @@ class Database:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            try:
+                cursor.execute('ALTER TABLE scrape_status ADD COLUMN failed INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute('ALTER TABLE scrape_status ADD COLUMN image_failed INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute('ALTER TABLE scrape_status ADD COLUMN index_failed INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
 
             # 插入默认网站配置
             cursor.execute('''
@@ -503,12 +518,13 @@ class Database:
         """获取 SQLite 数据库连接的上下文管理器"""
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path, timeout=30.0) # 增加超时时间
+            conn = sqlite3.connect(self.db_path, timeout=60.0)
             conn.row_factory = sqlite3.Row
 
             # 关键优化：开启 WAL 模式
             conn.execute('PRAGMA journal_mode=WAL;')
             conn.execute('PRAGMA synchronous=NORMAL;') # 稍微降低安全性以换取性能
+            conn.execute('PRAGMA cache_size=-64000;') # 64MB cache
 
             yield conn
         except sqlite3.IntegrityError:
@@ -574,7 +590,7 @@ class Database:
                 ''', (product_id, image_path, image_index, features_str))
                 conn.commit()
                 record_id = cursor.lastrowid
-                logger.info(f"图像记录插入成功: product_id={product_id}, image_index={image_index}, record_id={record_id}")
+                logger.debug(f"图像记录插入成功: product_id={product_id}, image_index={image_index}, record_id={record_id}")
                 return record_id
 
         except Exception as e:
@@ -2723,18 +2739,21 @@ class Database:
 
                 if row:
                     return {
-                        'id': row[0],
-                        'is_scraping': bool(row[1]),
-                        'stop_signal': bool(row[2]),
-                        'current_shop_id': row[3],
-                        'total': row[4] or 0,
-                        'processed': row[5] or 0,
-                        'success': row[6] or 0,
-                        'progress': row[7] or 0.0,
-                        'message': row[8] or '等待开始...',
-                        'completed': bool(row[9]),
-                        'thread_id': row[10],
-                        'updated_at': row[11]
+                        'id': row['id'],
+                        'is_scraping': bool(row['is_scraping']),
+                        'stop_signal': bool(row['stop_signal']),
+                        'current_shop_id': row['current_shop_id'],
+                        'total': row['total'] or 0,
+                        'processed': row['processed'] or 0,
+                        'success': row['success'] or 0,
+                        'failed': (row['failed'] if 'failed' in row.keys() else 0) or 0,
+                        'image_failed': (row['image_failed'] if 'image_failed' in row.keys() else 0) or 0,
+                        'index_failed': (row['index_failed'] if 'index_failed' in row.keys() else 0) or 0,
+                        'progress': row['progress'] or 0.0,
+                        'message': row['message'] or '等待开始...',
+                        'completed': bool(row['completed']),
+                        'thread_id': row['thread_id'],
+                        'updated_at': row['updated_at']
                     }
                 else:
                     # 如果没有记录，创建默认记录
@@ -2749,6 +2768,9 @@ class Database:
                 'total': 0,
                 'processed': 0,
                 'success': 0,
+                'failed': 0,
+                'image_failed': 0,
+                'index_failed': 0,
                 'progress': 0.0,
                 'message': '获取状态失败',
                 'completed': False,
@@ -2769,7 +2791,7 @@ class Database:
                     if key in ['is_scraping', 'stop_signal', 'completed']:
                         fields.append(f'{key} = ?')
                         values.append(1 if value else 0)
-                    elif key in ['total', 'processed', 'success']:
+                    elif key in ['total', 'processed', 'success', 'failed', 'image_failed', 'index_failed']:
                         fields.append(f'{key} = ?')
                         values.append(int(value) if value is not None else 0)
                     elif key == 'progress':
@@ -2805,6 +2827,9 @@ class Database:
                         total = 0,
                         processed = 0,
                         success = 0,
+                        failed = 0,
+                        image_failed = 0,
+                        index_failed = 0,
                         progress = 0,
                         message = '等待开始...',
                         completed = 0,
@@ -2821,6 +2846,9 @@ class Database:
                     'total': 0,
                     'processed': 0,
                     'success': 0,
+                    'failed': 0,
+                    'image_failed': 0,
+                    'index_failed': 0,
                     'progress': 0.0,
                     'message': '等待开始...',
                     'completed': False,
@@ -2837,6 +2865,9 @@ class Database:
                 'total': 0,
                 'processed': 0,
                 'success': 0,
+                'failed': 0,
+                'image_failed': 0,
+                'index_failed': 0,
                 'progress': 0.0,
                 'message': '重置失败',
                 'completed': False,

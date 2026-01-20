@@ -46,6 +46,98 @@ export default function RootLayout({
   )
 }
 
+--- File: ./frontend/app/api/_utils/backend.ts ---
+const DEFAULT_BACKEND_CANDIDATES = [
+  process.env.NEXT_PUBLIC_BACKEND_URL,
+  process.env.NEXT_PUBLIC_API_URL ? process.env.NEXT_PUBLIC_API_URL.replace(/\/api\/?$/, '') : undefined,
+  'http://127.0.0.1:5001',
+  'http://localhost:5001',
+  'http://host.docker.internal:5001'
+].filter(Boolean) as string[]
+
+const UNIQUE_CANDIDATES = Array.from(new Set(DEFAULT_BACKEND_CANDIDATES))
+
+const ensureNoProxyForLocal = () => {
+  const localHosts = ['localhost', '127.0.0.1', 'host.docker.internal', '0.0.0.0']
+  const current = process.env.NO_PROXY || process.env.no_proxy || ''
+  const entries = current.split(',').map(item => item.trim()).filter(Boolean)
+  let changed = false
+
+  for (const host of localHosts) {
+    if (!entries.includes(host)) {
+      entries.push(host)
+      changed = true
+    }
+  }
+
+  if (changed) {
+    const updated = entries.join(',')
+    process.env.NO_PROXY = updated
+    process.env.no_proxy = updated
+  }
+
+  process.env.HTTP_PROXY = ''
+  process.env.HTTPS_PROXY = ''
+  process.env.ALL_PROXY = ''
+  process.env.http_proxy = ''
+  process.env.https_proxy = ''
+  process.env.all_proxy = ''
+  process.env.GLOBAL_AGENT_HTTP_PROXY = ''
+  process.env.GLOBAL_AGENT_HTTPS_PROXY = ''
+  process.env.GLOBAL_AGENT_NO_PROXY = '*'
+}
+
+const buildHostCandidate = (hostHeader?: string | null) => {
+  if (!hostHeader) return null
+  const hostname = hostHeader.split(':')[0]
+  if (!hostname) return null
+  return `http://${hostname}:5001`
+}
+
+type BackendFetchResult = {
+  response: Response
+  rawText: string
+  baseUrl: string
+}
+
+export async function fetchFromBackend(
+  path: string,
+  init?: RequestInit,
+  hostHeader?: string | null,
+  timeoutMs?: number
+): Promise<BackendFetchResult> {
+  let lastError: Error | null = null
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`
+  ensureNoProxyForLocal()
+  const hostCandidate = buildHostCandidate(hostHeader)
+  const candidates = Array.from(new Set([hostCandidate, ...UNIQUE_CANDIDATES].filter(Boolean))) as string[]
+
+  for (const baseUrl of candidates) {
+    try {
+      const controller = timeoutMs ? new AbortController() : null
+      const timeoutId = timeoutMs
+        ? setTimeout(() => controller?.abort(), timeoutMs)
+        : null
+      const response = await fetch(`${baseUrl}${normalizedPath}`, {
+        ...(init || {}),
+        signal: controller?.signal
+      })
+      if (timeoutId) clearTimeout(timeoutId)
+      const rawText = await response.text()
+      const trimmed = rawText.trim().toLowerCase()
+      if (response.status === 404 && (trimmed.startsWith('<!doctype') || trimmed.startsWith('<html'))) {
+        lastError = new Error(`Backend ${baseUrl} returned HTML 404`)
+        continue
+      }
+      return { response, rawText, baseUrl }
+    } catch (error) {
+      lastError = error as Error
+    }
+  }
+
+  throw lastError || new Error(`Backend unreachable. Tried: ${candidates.join(', ')}`)
+}
+
 --- File: ./frontend/app/api/products/count/route.ts ---
 import { NextResponse } from 'next/server'
 
@@ -649,9 +741,7 @@ export async function POST(request: NextRequest) {
 
 --- File: ./frontend/app/api/auth/me/route.ts ---
 import { NextRequest, NextResponse } from 'next/server';
-
-// 强制使用内网回环地址，速度最快且最稳定
-const BACKEND_URL = 'http://127.0.0.1:5001';
+import { fetchFromBackend } from '../../_utils/backend';
 
 export async function GET(request: NextRequest) {
   try {
@@ -659,49 +749,72 @@ export async function GET(request: NextRequest) {
     const cookies = request.headers.get('cookie') || '';
 
     // 调用后端验证 Session 有效性
-    const backendResponse = await fetch(`${BACKEND_URL}/api/auth/me`, {
+    const { response: backendResponse, rawText } = await fetchFromBackend('/api/auth/me', {
       headers: {
         'Cookie': cookies // 关键：转发 Cookie 给后端
       }
-    });
+    }, request.headers.get('host'), 3000);
+    let data: any = null;
+    let parsed = false;
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+      parsed = true;
+    } catch {
+      data = { error: rawText || 'Backend error' };
+    }
+
+    if (!parsed) {
+      return NextResponse.json({
+        error: 'Backend returned non-JSON response',
+        details: rawText ? rawText.slice(0, 200) : ''
+      }, { status: backendResponse.status || 502 });
+    }
 
     if (backendResponse.ok) {
-      const data = await backendResponse.json();
       return NextResponse.json(data);
     } else {
       // 如果后端验证失败 (401)，前端也要清除 user_session
-      const errorData = await backendResponse.json().catch(() => ({ error: 'Not authenticated' }));
-      const response = NextResponse.json(errorData, { status: backendResponse.status });
+      const response = NextResponse.json(data, { status: backendResponse.status });
 
       if (backendResponse.status === 401) {
-      response.cookies.set('user_session', '', { maxAge: 0 });
+        response.cookies.set('user_session', '', { maxAge: 0 });
       }
       return response;
     }
   } catch (error: any) {
     console.error('Auth me API error:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: 'Backend unreachable' }, { status: 401 });
   }
 }
 
 --- File: ./frontend/app/api/auth/login/route.ts ---
 import { NextRequest, NextResponse } from 'next/server';
-
-// 强制使用内网回环地址，速度最快且最稳定
-const BACKEND_URL = 'http://127.0.0.1:5001';
+import { fetchFromBackend } from '../../_utils/backend';
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    // 调用后端登录API
-    const backendResponse = await fetch(`${BACKEND_URL}/api/auth/login`, {
+    const { response: backendResponse, rawText } = await fetchFromBackend('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
-    });
+    }, request.headers.get('host'), 5000);
+    let data: any = null;
+    let parsed = false;
+    try {
+      data = rawText ? JSON.parse(rawText) : null;
+      parsed = true;
+    } catch {
+      data = { error: rawText || 'Backend error' };
+    }
 
-    const data = await backendResponse.json();
+    if (!parsed) {
+      return NextResponse.json({
+        error: 'Backend returned non-JSON response',
+        details: rawText ? rawText.slice(0, 200) : ''
+      }, { status: backendResponse.status || 502 });
+    }
 
     if (backendResponse.ok) {
       const response = NextResponse.json(data);
@@ -751,7 +864,7 @@ export async function POST(request: NextRequest) {
     }
   } catch (error: any) {
     console.error('Login API error:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: 'Backend unreachable' }, { status: 503 });
   }
 }
 
@@ -1612,9 +1725,14 @@ import { NextRequest, NextResponse } from 'next/server'
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001'
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const response = await fetch(`${BACKEND_URL}/api/system/stats`)
+    const cookieHeader = request.headers.get('cookie') || ''
+    const response = await fetch(`${BACKEND_URL}/api/system/stats`, {
+      headers: {
+        'Cookie': cookieHeader
+      }
+    })
     if (!response.ok) {
       const errorData = await response.json()
       return NextResponse.json(errorData, { status: response.status })
@@ -2205,23 +2323,26 @@ export async function DELETE(
 
 --- File: ./frontend/app/api/bot/cooldowns/route.ts ---
 import { NextRequest, NextResponse } from 'next/server'
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001'
+import { fetchFromBackend } from '../../_utils/backend'
 
 export async function GET(request: NextRequest) {
   try {
     const cookieHeader = request.headers.get('cookie') || ''
 
-    const response = await fetch(`${BACKEND_URL}/api/bot/cooldowns`, {
+    const { response, rawText } = await fetchFromBackend('/api/bot/cooldowns', {
       headers: { 'Cookie': cookieHeader }
-    })
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}))
-      return NextResponse.json(errorData, { status: response.status })
+    }, request.headers.get('host'))
+    let data: any = null
+    try {
+      data = rawText ? JSON.parse(rawText) : null
+    } catch {
+      data = { error: rawText || 'Backend error' }
     }
 
-    const data = await response.json()
+    if (!response.ok) {
+      return NextResponse.json(data, { status: response.status })
+    }
+
     return NextResponse.json(data)
   } catch (error: any) {
     console.error('GET /api/bot/cooldowns failed:', error)
@@ -2305,23 +2426,26 @@ export async function POST(request: NextRequest) {
 
 --- File: ./frontend/app/api/bot/status/route.ts ---
 import { NextRequest, NextResponse } from 'next/server'
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001'
+import { fetchFromBackend } from '../../_utils/backend'
 
 export async function GET(request: NextRequest) {
   try {
     const cookieHeader = request.headers.get('cookie') || '';
 
-    const response = await fetch(`${BACKEND_URL}/api/bot/status`, {
+    const { response, rawText } = await fetchFromBackend('/api/bot/status', {
       headers: { 'Cookie': cookieHeader }
-    })
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      return NextResponse.json(errorData, { status: response.status })
+    }, request.headers.get('host'))
+    let data: any = null
+    try {
+      data = rawText ? JSON.parse(rawText) : null
+    } catch {
+      data = { error: rawText || 'Backend error' }
     }
 
-    const data = await response.json()
+    if (!response.ok) {
+      return NextResponse.json(data, { status: response.status })
+    }
+
     return NextResponse.json(data)
   } catch (error: any) {
     console.error('GET /api/bot/status failed:', error)
@@ -6111,16 +6235,21 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                     {scrapeStatus.message || '正在处理中...'}
                                   </span>
                                 </div>
-                                <div className="grid grid-cols-2 gap-2 text-xs">
+                                <div className="grid grid-cols-1 gap-2 text-xs">
                                   <div className="text-center">
                                     <div className="font-semibold text-green-700">{scrapeStatus.success || 0}</div>
                                     <div className="text-muted-foreground">成功</div>
                                   </div>
-                                  <div className="text-center">
-                                    <div className="font-semibold text-red-600">{(scrapeStatus.processed || 0) - (scrapeStatus.success || 0)}</div>
-                                    <div className="text-muted-foreground">剩余</div>
-                                  </div>
                                 </div>
+                                {((scrapeStatus.failed || 0) > 0 ||
+                                  (scrapeStatus.image_failed || 0) > 0 ||
+                                  (scrapeStatus.index_failed || 0) > 0) && (
+                                  <div className="mt-2 text-[11px] text-muted-foreground flex items-center justify-between">
+                                    <span>失败: {scrapeStatus.failed || 0}</span>
+                                    <span>图片失败: {scrapeStatus.image_failed || 0}</span>
+                                    <span>索引失败: {scrapeStatus.index_failed || 0}</span>
+                                  </div>
+                                )}
                               </div>
                             )}
               </div>
@@ -10389,8 +10518,8 @@ class Config:
     COMMAND_PREFIX = '!'
 
     # === AI 模型 ===
-    DINO_MODEL_NAME = 'facebook/dinov2-base'
-    VECTOR_DIMENSION = 768
+    DINO_MODEL_NAME = 'facebook/dinov2-small'
+    VECTOR_DIMENSION = 384
     YOLO_MODEL_PATH = 'yolov8s-world.pt'
     USE_YOLO_CROP = True
 
@@ -10902,6 +11031,9 @@ class Database:
                     total INTEGER DEFAULT 0,
                     processed INTEGER DEFAULT 0,
                     success INTEGER DEFAULT 0,
+                    failed INTEGER DEFAULT 0,
+                    image_failed INTEGER DEFAULT 0,
+                    index_failed INTEGER DEFAULT 0,
                     progress REAL DEFAULT 0,
                     message TEXT DEFAULT '等待开始...',
                     completed BOOLEAN DEFAULT 0,
@@ -10909,6 +11041,18 @@ class Database:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            try:
+                cursor.execute('ALTER TABLE scrape_status ADD COLUMN failed INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute('ALTER TABLE scrape_status ADD COLUMN image_failed INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute('ALTER TABLE scrape_status ADD COLUMN index_failed INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
 
             # 插入默认网站配置
             cursor.execute('''
@@ -10948,12 +11092,13 @@ class Database:
         """获取 SQLite 数据库连接的上下文管理器"""
         conn = None
         try:
-            conn = sqlite3.connect(self.db_path, timeout=30.0) # 增加超时时间
+            conn = sqlite3.connect(self.db_path, timeout=60.0)
             conn.row_factory = sqlite3.Row
 
             # 关键优化：开启 WAL 模式
             conn.execute('PRAGMA journal_mode=WAL;')
             conn.execute('PRAGMA synchronous=NORMAL;') # 稍微降低安全性以换取性能
+            conn.execute('PRAGMA cache_size=-64000;') # 64MB cache
 
             yield conn
         except sqlite3.IntegrityError:
@@ -11019,7 +11164,7 @@ class Database:
                 ''', (product_id, image_path, image_index, features_str))
                 conn.commit()
                 record_id = cursor.lastrowid
-                logger.info(f"图像记录插入成功: product_id={product_id}, image_index={image_index}, record_id={record_id}")
+                logger.debug(f"图像记录插入成功: product_id={product_id}, image_index={image_index}, record_id={record_id}")
                 return record_id
 
         except Exception as e:
@@ -12325,30 +12470,61 @@ class Database:
             logger.error(f"更新用户网站消息过滤失败: {e}")
             return False
 
-    def get_system_stats(self) -> Dict:
-        """获取系统统计信息"""
+    def get_system_stats(self, user_id: int = None, role: str = 'user') -> Dict:
+        """获取系统统计信息 (支持权限隔离)"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
 
-                # 获取店铺数量（从shops表统计）
-                cursor.execute("SELECT COUNT(*) FROM shops")
-                shop_count = cursor.fetchone()[0] or 0
+                # 1. 统计店铺
+                if role == 'admin' or user_id is None:
+                    cursor.execute("SELECT COUNT(*), GROUP_CONCAT(name) FROM shops")
+                else:
+                    cursor.execute("""
+                        SELECT COUNT(*), GROUP_CONCAT(s.name)
+                        FROM shops s
+                        JOIN user_shop_permissions usp ON s.shop_id = usp.shop_id
+                        WHERE usp.user_id = ?
+                    """, (user_id,))
 
-                # 获取商品数量
-                cursor.execute("SELECT COUNT(*) FROM products")
-                product_count = cursor.fetchone()[0] or 0
+                shop_result = cursor.fetchone()
+                shop_count = shop_result[0] or 0
+                shop_names_str = shop_result[1]
+                shop_names = shop_names_str.split(',') if shop_names_str else []
 
-                # 获取图片数量（只统计有对应商品的图片）
-                cursor.execute("""
-                    SELECT COUNT(*) FROM product_images
-                    WHERE product_id IN (SELECT id FROM products)
-                """)
-                image_count = cursor.fetchone()[0] or 0
+                if shop_count == 0 and role != 'admin':
+                    return {'shop_count': 0, 'product_count': 0, 'image_count': 0, 'user_count': 0}
 
-                # 获取用户数量
-                cursor.execute("SELECT COUNT(*) FROM users WHERE is_active = 1")
-                user_count = cursor.fetchone()[0] or 0
+                # 2. 统计商品
+                if role == 'admin' or user_id is None:
+                    cursor.execute("SELECT COUNT(*) FROM products")
+                    product_count = cursor.fetchone()[0] or 0
+                else:
+                    placeholders = ','.join('?' * len(shop_names))
+                    query = f"SELECT COUNT(*) FROM products WHERE shop_name IN ({placeholders})"
+                    cursor.execute(query, shop_names)
+                    product_count = cursor.fetchone()[0] or 0
+
+                # 3. 统计图片
+                if role == 'admin' or user_id is None:
+                    cursor.execute("SELECT COUNT(*) FROM product_images")
+                    image_count = cursor.fetchone()[0] or 0
+                else:
+                    placeholders = ','.join('?' * len(shop_names))
+                    query = f"""
+                        SELECT COUNT(*) FROM product_images pi
+                        JOIN products p ON pi.product_id = p.id
+                        WHERE p.shop_name IN ({placeholders})
+                    """
+                    cursor.execute(query, shop_names)
+                    image_count = cursor.fetchone()[0] or 0
+
+                # 4. 统计用户
+                if role == 'admin' or user_id is None:
+                    cursor.execute("SELECT COUNT(*) FROM users WHERE is_active = 1")
+                    user_count = cursor.fetchone()[0] or 0
+                else:
+                    user_count = 1
 
                 return {
                     'shop_count': shop_count,
@@ -13137,18 +13313,21 @@ class Database:
 
                 if row:
                     return {
-                        'id': row[0],
-                        'is_scraping': bool(row[1]),
-                        'stop_signal': bool(row[2]),
-                        'current_shop_id': row[3],
-                        'total': row[4] or 0,
-                        'processed': row[5] or 0,
-                        'success': row[6] or 0,
-                        'progress': row[7] or 0.0,
-                        'message': row[8] or '等待开始...',
-                        'completed': bool(row[9]),
-                        'thread_id': row[10],
-                        'updated_at': row[11]
+                        'id': row['id'],
+                        'is_scraping': bool(row['is_scraping']),
+                        'stop_signal': bool(row['stop_signal']),
+                        'current_shop_id': row['current_shop_id'],
+                        'total': row['total'] or 0,
+                        'processed': row['processed'] or 0,
+                        'success': row['success'] or 0,
+                        'failed': (row['failed'] if 'failed' in row.keys() else 0) or 0,
+                        'image_failed': (row['image_failed'] if 'image_failed' in row.keys() else 0) or 0,
+                        'index_failed': (row['index_failed'] if 'index_failed' in row.keys() else 0) or 0,
+                        'progress': row['progress'] or 0.0,
+                        'message': row['message'] or '等待开始...',
+                        'completed': bool(row['completed']),
+                        'thread_id': row['thread_id'],
+                        'updated_at': row['updated_at']
                     }
                 else:
                     # 如果没有记录，创建默认记录
@@ -13163,6 +13342,9 @@ class Database:
                 'total': 0,
                 'processed': 0,
                 'success': 0,
+                'failed': 0,
+                'image_failed': 0,
+                'index_failed': 0,
                 'progress': 0.0,
                 'message': '获取状态失败',
                 'completed': False,
@@ -13183,7 +13365,7 @@ class Database:
                     if key in ['is_scraping', 'stop_signal', 'completed']:
                         fields.append(f'{key} = ?')
                         values.append(1 if value else 0)
-                    elif key in ['total', 'processed', 'success']:
+                    elif key in ['total', 'processed', 'success', 'failed', 'image_failed', 'index_failed']:
                         fields.append(f'{key} = ?')
                         values.append(int(value) if value is not None else 0)
                     elif key == 'progress':
@@ -13219,6 +13401,9 @@ class Database:
                         total = 0,
                         processed = 0,
                         success = 0,
+                        failed = 0,
+                        image_failed = 0,
+                        index_failed = 0,
                         progress = 0,
                         message = '等待开始...',
                         completed = 0,
@@ -13235,6 +13420,9 @@ class Database:
                     'total': 0,
                     'processed': 0,
                     'success': 0,
+                    'failed': 0,
+                    'image_failed': 0,
+                    'index_failed': 0,
                     'progress': 0.0,
                     'message': '等待开始...',
                     'completed': False,
@@ -13251,6 +13439,9 @@ class Database:
                 'total': 0,
                 'processed': 0,
                 'success': 0,
+                'failed': 0,
+                'image_failed': 0,
+                'index_failed': 0,
                 'progress': 0.0,
                 'message': '重置失败',
                 'completed': False,
@@ -13277,6 +13468,7 @@ class WeidianScraper:
 
     def __init__(self):
         self.session = requests.Session()
+        self.session.trust_env = False
 
         # [新增] 优化连接池，防止多线程抓取时连接数不够
         from requests.adapters import HTTPAdapter
@@ -13336,7 +13528,7 @@ class WeidianScraper:
                 if attempt < max_retries:
                     time.sleep(backoff * attempt)
                 else:
-                    logger.warning(f"请求失败({max_retries}次): {url} | {e}")
+                    logger.debug(f"请求失败({max_retries}次): {url} | {e}")
         return None
 
     def _request_json_with_retry(
@@ -13365,7 +13557,7 @@ class WeidianScraper:
                 if attempt < max_retries:
                     time.sleep(backoff * attempt)
                 else:
-                    logger.warning(f"JSON请求失败({max_retries}次): {url} | {e}")
+                    logger.debug(f"JSON请求失败({max_retries}次): {url} | {e}")
         return None
 
     def extract_item_id(self, url: str) -> Optional[str]:
@@ -13402,12 +13594,12 @@ class WeidianScraper:
                 logger.error(f"无法从URL提取商品ID: {url}")
                 return None
 
-            logger.info(f"开始抓取商品: {item_id}")
+            logger.debug(f"开始抓取商品: {item_id}")
 
             # 获取店铺信息
             shop_name = self._get_shop_name(url)
             if shop_name == "未知店铺":
-                logger.info("店铺名称获取失败，尝试从页面HTML提取")
+                logger.debug("店铺名称获取失败，尝试从页面HTML提取")
                 try:
                     page_response = self._request_with_retry(url, timeout=10, headers={
                         'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
@@ -13437,14 +13629,14 @@ class WeidianScraper:
                         match = re.search(shop_name_pattern, page_response.text, re.DOTALL | re.IGNORECASE)
                         if match:
                             shop_name = match.group(1).strip()
-                            logger.info(f"✅ 从JavaScript数据获取到店铺名称: {shop_name}")
+                            logger.debug(f"✅ 从JavaScript数据获取到店铺名称: {shop_name}")
                 except Exception as e:
                     logger.warning(f"从页面提取店铺名称失败: {e}")
 
             # 使用官方API获取商品信息
             product_info = self._scrape_by_api(item_id, url, shop_name)
             if product_info:
-                logger.info(f"✅ 商品信息抓取成功: {product_info.get('title', 'Unknown')}")
+                logger.debug(f"✅ 商品信息抓取成功: {product_info.get('title', 'Unknown')}")
                 return product_info
 
             # 如果API失败，返回None
@@ -13464,7 +13656,7 @@ class WeidianScraper:
 
             # 如果API获取失败，尝试从页面HTML中提取商品标题
             if not title:
-                logger.info("API获取标题失败，尝试从页面HTML提取")
+                logger.debug("API获取标题失败，尝试从页面HTML提取")
                 try:
                     page_response = self._request_with_retry(url, timeout=10, headers={
                         'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
@@ -13494,7 +13686,7 @@ class WeidianScraper:
                         match = re.search(title_pattern, page_response.text, re.DOTALL | re.IGNORECASE)
                         if match:
                             title = match.group(1).strip()
-                            logger.info(f"✅ 从页面HTML获取到商品标题: {title}")
+                            logger.debug(f"✅ 从页面HTML获取到商品标题: {title}")
                         else:
                             title = f'微店商品 {item_id}'
                 except Exception as e:
@@ -13541,7 +13733,7 @@ class WeidianScraper:
 
             api_url = f"https://thor.weidian.com/detail/getItemSkuInfo/1.0?param={encoded_param}&wdtoken=8ea9315c&_={timestamp}"
 
-            logger.info(f"调用SKU API: {api_url}")  # 修改日志级别为 INFO 以便调试
+            logger.debug(f"调用SKU API: {api_url}")
 
             # 使用与前端 fetch 完全一致的 headers
             headers = {
@@ -13603,9 +13795,9 @@ class WeidianScraper:
                     unique_images.append(img_url)
                     seen_urls.add(img_url)
 
-            logger.info(f"✅ 商品 {item_id} 图片获取完成: 共 {len(unique_images)} 张 (详情:{len(detail_images)}, SKU:{len(sku_images)})")
+            logger.debug(f"✅ 商品 {item_id} 图片获取完成: 共 {len(unique_images)} 张 (详情:{len(detail_images)}, SKU:{len(sku_images)})")
             if len(unique_images) > 0:
-                logger.info(f"📸 图片URL样例: {unique_images[:3]}")
+                logger.debug(f"📸 图片URL样例: {unique_images[:3]}")
             return unique_images
 
         except Exception as e:
@@ -13679,7 +13871,7 @@ class WeidianScraper:
     def _get_sku_images(self, item_id: str) -> List[str]:
         """获取SKU属性图片 (新API + attrList解析)"""
         try:
-            logger.info(f"开始获取SKU图片，商品ID: {item_id}")
+            logger.debug(f"开始获取SKU图片，商品ID: {item_id}")
             title_info = self._get_item_title_and_sku(item_id)
             if not title_info or 'sku_info' not in title_info:
                 logger.warning(f"无法获取SKU信息，跳过图片提取: {item_id}")
@@ -13692,7 +13884,7 @@ class WeidianScraper:
             # 1. 尝试从 attrList 中提取 (这是你提供的JSON中的结构)
             attr_list = result.get('attrList', [])
             if attr_list:
-                logger.info(f"解析 attrList，共 {len(attr_list)} 组属性")
+                logger.debug(f"解析 attrList，共 {len(attr_list)} 组属性")
                 for attr in attr_list:
                     attr_values = attr.get('attrValues', [])
                     for val in attr_values:
@@ -13709,7 +13901,7 @@ class WeidianScraper:
             # 2. 尝试从 skuInfos 中提取 (作为补充)
             sku_infos = result.get('skuInfos', [])
             if sku_infos:
-                logger.info(f"解析 skuInfos，共 {len(sku_infos)} 个SKU")
+                logger.debug(f"解析 skuInfos，共 {len(sku_infos)} 个SKU")
                 for sku in sku_infos:
                     # 注意：skuInfo 对象可能嵌套
                     info = sku.get('skuInfo', {})
@@ -13721,7 +13913,7 @@ class WeidianScraper:
                             images.append(img_url)
                             seen_urls.add(img_url)
 
-            logger.info(f"从SKU属性中成功提取 {len(images)} 张图片")
+            logger.debug(f"从SKU属性中成功提取 {len(images)} 张图片")
             return images
         except Exception as e:
             logger.error(f"获取SKU图片失败: {e}")
@@ -13861,7 +14053,7 @@ class WeidianScraper:
 
         # 移除图片数量限制，抓取所有可用的图片
         # SKU图片通常排在详情图之后，现在可以获取所有图片
-        logger.info(f"准备下载 {len(image_urls)} 张图片（无数量限制）")
+        logger.debug(f"准备下载 {len(image_urls)} 张图片（无数量限制）")
 
         def download_single_image(args):
             """下载单张图片的函数"""
@@ -13880,7 +14072,7 @@ class WeidianScraper:
                 with open(img_path, 'wb') as f:
                     f.write(response.content)
 
-                logger.info(f"图片下载成功: {img_path}")
+                logger.debug(f"图片下载成功: {img_path}")
                 return img_path
 
             except Exception as e:
@@ -13960,7 +14152,7 @@ class WeidianScraper:
             match = re.search(shop_name_pattern1, html_content, re.DOTALL | re.IGNORECASE)
             if match:
                 shop_name = match.group(1).strip()
-                logger.info(f"✅ 获取到店铺名称 (em shop-name-str): {shop_name}")
+                logger.debug(f"✅ 获取到店铺名称 (em shop-name-str): {shop_name}")
                 return shop_name
 
             # 然后尝试更宽泛的匹配，查找包含shop-name-str类的任何元素
@@ -13968,7 +14160,7 @@ class WeidianScraper:
             match = re.search(shop_name_pattern2, html_content, re.DOTALL | re.IGNORECASE)
             if match:
                 shop_name = match.group(1).strip()
-                logger.info(f"✅ 获取到店铺名称 (通用shop-name-str): {shop_name}")
+                logger.debug(f"✅ 获取到店铺名称 (通用shop-name-str): {shop_name}")
                 return shop_name
 
             # 尝试匹配class="shop-name-str"的元素（不限定标签类型）
@@ -13976,7 +14168,7 @@ class WeidianScraper:
             match = re.search(shop_name_pattern3, html_content, re.DOTALL | re.IGNORECASE)
             if match:
                 shop_name = match.group(1).strip()
-                logger.info(f"✅ 获取到店铺名称 (shop-name-str): {shop_name}")
+                logger.debug(f"✅ 获取到店铺名称 (shop-name-str): {shop_name}")
                 return shop_name
 
             # 尝试从JavaScript数据中提取店铺名称（多种格式）
@@ -13985,7 +14177,7 @@ class WeidianScraper:
             match = re.search(shop_name_pattern4, html_content, re.DOTALL | re.IGNORECASE)
             if match:
                 shop_name = match.group(1).strip()
-                logger.info(f"✅ 获取到店铺名称 (JavaScript): {shop_name}")
+                logger.debug(f"✅ 获取到店铺名称 (JavaScript): {shop_name}")
                 return shop_name
 
             # 格式2: \"shopName\":\"Aiseo\" (在HTML中被转义)
@@ -13993,7 +14185,7 @@ class WeidianScraper:
             match = re.search(shop_name_pattern5, html_content, re.DOTALL | re.IGNORECASE)
             if match:
                 shop_name = match.group(1).strip()
-                logger.info(f"✅ 获取到店铺名称 (JavaScript转义): {shop_name}")
+                logger.debug(f"✅ 获取到店铺名称 (JavaScript转义): {shop_name}")
                 return shop_name
 
             # 格式3: shopName:"Aiseo" (无引号)
@@ -14001,7 +14193,7 @@ class WeidianScraper:
             match = re.search(shop_name_pattern6, html_content, re.DOTALL | re.IGNORECASE)
             if match:
                 shop_name = match.group(1).strip()
-                logger.info(f"✅ 获取到店铺名称 (JavaScript无引号): {shop_name}")
+                logger.debug(f"✅ 获取到店铺名称 (JavaScript无引号): {shop_name}")
                 return shop_name
 
             logger.warning("未找到店铺名称，使用默认名称")
@@ -15666,18 +15858,21 @@ class DINOv2FeatureExtractor:
             # 优化后的商品类别，覆盖微店/代购场景95%的商品
             # YOLO-World 会自动忽略人脸、手、家具、背景
             self.target_classes = [
-                # 鞋类 (高优先级)
-                "shoe", "sneaker", "boot", "sandal", "slipper", "heel",
-                # 服装 (高优先级)
-                "shirt", "t-shirt", "jacket", "coat", "pants", "jeans",
-                "dress", "skirt", "shorts", "hoodie", "sweater", "suit",
-                # 包袋配饰 (中优先级)
-                "bag", "handbag", "backpack", "wallet", "belt", "hat", "cap",
-                "watch", "jewelry", "necklace", "ring", "glasses",
-                # 电子产品 (中优先级)
-                "phone", "laptop", "headphone", "camera", "watch",
-                # 家居用品 (低优先级)
-                "toy", "box", "bottle", "cup", "lamp"
+                # 鞋类
+                "shoe", "sneaker", "boot", "sandal", "slipper", "high heels",
+                # 上装
+                "t-shirt", "shirt", "jacket", "coat", "hoodie", "sweater", "suit", "vest", "jersey",
+                # 下装
+                "pants", "jeans", "shorts", "skirt", "trousers", "sweatpants",
+                # 包袋
+                "bag", "handbag", "backpack", "wallet", "purse", "suitcase", "tote bag",
+                # 配饰/小件
+                "watch", "wristwatch", "glasses", "sunglasses", "hat", "cap", "beanie",
+                "belt", "tie", "scarf", "gloves", "socks",
+                # 首饰
+                "necklace", "ring", "earrings", "bracelet", "jewelry",
+                # 其他
+                "toy", "box", "packaging"
             ]
 
             # 不在初始化时设置类别，避免某些版本出现副作用
@@ -15799,8 +15994,11 @@ class DINOv2FeatureExtractor:
         4. [新增] 缩小图片尺寸以加快AI推理速度
         """
         try:
+            img = Image.open(image_path).convert("RGB")
+            img_w, img_h = img.size
+
             if not config.USE_YOLO_CROP or self.detector is None:
-                return self._resize_for_ai(Image.open(image_path).convert("RGB"))
+                return self._center_crop(img)
 
             # 检查缓存
             image_hash = self._get_image_hash(image_path)
@@ -15808,24 +16006,20 @@ class DINOv2FeatureExtractor:
                 logger.debug("使用缓存的检测结果")
                 cached_result = self._detection_cache[image_hash]
                 if cached_result is None:
-                    # 缓存中表示未检测到商品
-                    return self._resize_for_ai(Image.open(image_path).convert("RGB"))
+                    return self._center_crop(img)
                 # 返回缓存的裁剪结果
                 return cached_result
 
-            # conf=0.1: 降低门槛，宁可多检不要漏检，反正我们有逻辑过滤
+            # conf=0.05: 降低门槛，宁可多检不要漏检，反正我们有逻辑过滤
             with self.inference_lock:
-                results = self.detector(image_path, conf=0.1, verbose=False)
+                results = self.detector(image_path, conf=0.05, verbose=False)
 
             if not results or len(results[0].boxes) == 0:
-                logger.info("未检测到通用商品，降级使用原图")
-                # 缓存未检测到商品的结果
+                logger.debug("未检测到通用商品，使用中心裁剪兜底")
                 self._detection_cache[image_hash] = None
-                return self._resize_for_ai(Image.open(image_path).convert("RGB"))
+                return self._center_crop(img)
 
             boxes = results[0].boxes
-            img = Image.open(image_path).convert("RGB")
-            img_w, img_h = img.size
             center_x, center_y = img_w / 2, img_h / 2
 
             # --- 智能评分逻辑 ---
@@ -15843,6 +16037,8 @@ class DINOv2FeatureExtractor:
                 width = x2 - x1
                 height = y2 - y1
                 area = width * height
+                if area < (img_w * img_h * 0.02):
+                    continue
 
                 # 3. 计算离图片中心的距离
                 box_center_x = x1 + width / 2
@@ -15850,23 +16046,22 @@ class DINOv2FeatureExtractor:
                 dist_to_center = ((box_center_x - center_x)**2 + (box_center_y - center_y)**2) ** 0.5
 
                 # 4. 综合评分公式：
-                # 面积越大越好 (权重 0.7)
-                # 越靠中心越好 (权重 0.3)
+                # 面积越大越好 (权重 0.6)
+                # 越靠中心越好 (权重 0.4)
                 # 这个公式能保证：即使角落里有个大包，也会优先选中间的小鞋子
                 norm_area = area / (img_w * img_h)
                 norm_dist = 1 - (dist_to_center / ((img_w**2 + img_h**2)**0.5))
 
-                score = (norm_area * 0.7) + (norm_dist * 0.3) + (float(box.conf) * 0.1)
+                score = (norm_area * 0.6) + (norm_dist * 0.4) + (float(box.conf) * 0.1)
 
                 if score > max_score:
                     max_score = score
                     best_box = coords
 
             if best_box is None:
-                logger.info("未找到合适的商品框，使用原图")
-                # 缓存失败结果
+                logger.info("未找到合适的商品框，使用中心裁剪兜底")
                 self._detection_cache[image_hash] = None
-                return self._resize_for_ai(img)
+                return self._center_crop(img)
 
             # 执行裁剪
             x1, y1, x2, y2 = best_box
@@ -15883,7 +16078,7 @@ class DINOv2FeatureExtractor:
             )
 
             cropped_img = img.crop(crop_box)
-            logger.info(f"成功裁剪商品区域: {crop_box}")
+            logger.debug(f"成功裁剪商品区域: {crop_box}")
 
             # 优化：Resize 裁剪后的图片
             final_img = self._resize_for_ai(cropped_img)
@@ -15894,21 +16089,30 @@ class DINOv2FeatureExtractor:
             return final_img
 
         except Exception as e:
-            logger.warning(f"自动裁剪出错: {e}, 使用原图")
+            logger.warning(f"自动裁剪出错: {e}, 使用中心裁剪")
             # 缓存失败结果
             try:
                 image_hash = self._get_image_hash(image_path)
                 self._detection_cache[image_hash] = None
             except:
                 pass
-            return self._resize_for_ai(Image.open(image_path).convert("RGB"))
+            return self._center_crop(Image.open(image_path).convert("RGB"))
 
-    def _resize_for_ai(self, img: Image.Image, max_size: int = 640) -> Image.Image:
+    def _center_crop(self, img: Image.Image) -> Image.Image:
+        """中心裁剪：保留中间 80% 区域，降低背景干扰"""
+        w, h = img.size
+        left = int(w * 0.1)
+        top = int(h * 0.1)
+        right = int(w * 0.9)
+        bottom = int(h * 0.9)
+        return self._resize_for_ai(img.crop((left, top, right, bottom)))
+
+    def _resize_for_ai(self, img: Image.Image, max_size: int = 448) -> Image.Image:
         """[新增] 将图片缩小到适合 AI 推理的尺寸，大幅提升速度
 
         Args:
             img: 输入图片
-            max_size: 最大尺寸（默认640px），对于特征提取任务已经足够精确
+            max_size: 最大尺寸（默认448px），适合DINOv2特征提取
 
         Returns:
             缩放后的图片
@@ -15968,7 +16172,7 @@ class DINOv2FeatureExtractor:
         return results
 
     def prepare_hybrid_query(self, img_path: str) -> Optional[Dict]:
-        """预先计算查询图的颜色/结构特征，便于重排序阶段复用"""
+        """预先计算查询图的颜色/比例特征，便于重排序阶段复用"""
         try:
             img = cv2.imread(img_path)
             if img is None:
@@ -15980,17 +16184,17 @@ class DINOv2FeatureExtractor:
             return None
 
     def _build_hybrid_signature(self, img: np.ndarray) -> Dict:
-        """构建用于混合相似度的颜色/结构签名"""
+        """构建用于混合相似度的颜色/比例签名"""
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-        hist = cv2.calcHist([hsv], [0, 1], None, [180, 256], [0, 180, 0, 256])
+        hist = cv2.calcHist([hsv], [0, 1], None, [18, 4], [0, 180, 0, 256])
         cv2.normalize(hist, hist, 0, 1, cv2.NORM_MINMAX)
 
-        img_small = cv2.resize(img, (64, 64))
-        gray_small = cv2.cvtColor(img_small, cv2.COLOR_BGR2GRAY)
+        h, w = img.shape[:2]
+        aspect_ratio = float(w) / float(h) if h else 1.0
 
         return {
-            'hsv_hist': hist,
-            'gray_small': gray_small
+            'hist': hist,
+            'aspect_ratio': aspect_ratio
         }
 
     def calculate_hybrid_similarity(self, img_path1: str, img_path2: str, dino_score: float,
@@ -15998,7 +16202,7 @@ class DINOv2FeatureExtractor:
         """
         【新增】计算综合相似度 (Re-ranking)
 
-        综合分 = DINO语义分(50%) + 颜色分(30%) + 轮廓分(20%)
+        综合分 = DINO语义分(70%) + 颜色分(15%) + 宽高比分(15%)
 
         Args:
             img_path1: 查询图片路径
@@ -16006,7 +16210,7 @@ class DINOv2FeatureExtractor:
             dino_score: DINOv2原始相似度分数
 
         Returns:
-            dict: {'score': 综合分数, 'details': {'dino': ..., 'color': ..., 'structure': ...}}
+            dict: {'score': 综合分数, 'details': {'dino': ..., 'color': ..., 'ratio': ...}}
         """
         try:
             if query_signature is None:
@@ -16023,35 +16227,29 @@ class DINOv2FeatureExtractor:
 
             candidate_signature = self._build_hybrid_signature(img2)
 
-            # 巴氏距离比较 (结果 0-1, 1为完全匹配)
-            color_score = cv2.compareHist(query_signature['hsv_hist'], candidate_signature['hsv_hist'], cv2.HISTCMP_CORREL)
-            color_score = max(0.0, color_score)  # 修正可能的负值
+            # 颜色相似度 (H+S, 降低光照影响)
+            color_score = cv2.compareHist(query_signature['hist'], candidate_signature['hist'], cv2.HISTCMP_CORREL)
+            color_score = max(0.0, color_score)
 
-            # 2. 轮廓/结构相似度 (简化版：缩小后比较像素差异)
-            diff = cv2.absdiff(query_signature['gray_small'], candidate_signature['gray_small'])
-            structure_score = 1.0 - (np.mean(diff) / 255.0)
+            # 宽高比相似度 (过滤跨品类误报)
+            ratio1 = query_signature['aspect_ratio']
+            ratio2 = candidate_signature['aspect_ratio']
+            ratio_score = min(ratio1, ratio2) / max(ratio1, ratio2) if ratio1 > 0 and ratio2 > 0 else 0.0
 
-            # === 综合评分公式 (可调优) ===
-            # DINO (语义/版型): 权重 0.5
-            # Color (颜色): 权重 0.3 (对区分不同配色的同款鞋很有用)
-            # Structure (细节): 权重 0.2
+            # 如果DINO很高，优先尊重语义/结构鲁棒性
+            if dino_score > 0.85:
+                final_score = dino_score
+            else:
+                final_score = (dino_score * 0.70) + (color_score * 0.15) + (ratio_score * 0.15)
 
-            final_score = (dino_score * 0.5) + (color_score * 0.3) + (structure_score * 0.2)
-
-            # 如果颜色/结构明显不一致，适当降分，降低跨品牌误报
-            if color_score < 0.2:
-                final_score *= 0.9
-            if structure_score < 0.2:
-                final_score *= 0.9
-
-            logger.debug(f"综合评分: DINO={dino_score:.3f}, Color={color_score:.3f}, Structure={structure_score:.3f}, Final={final_score:.3f}")
+            logger.debug(f"综合评分: DINO={dino_score:.3f}, Color={color_score:.3f}, Ratio={ratio_score:.3f}, Final={final_score:.3f}")
 
             return {
                 'score': float(final_score),
                 'details': {
                     'dino': float(dino_score),
                     'color': float(color_score),
-                    'structure': float(structure_score)
+                    'ratio': float(ratio_score)
                 }
             }
 
@@ -16239,7 +16437,7 @@ class VectorEngine:
             faiss.write_index(self.index, self.index_file)
             with open(self.id_map_file, 'wb') as f:
                 pickle.dump(self.id_map, f)
-            logger.info("FAISS索引已保存到磁盘")
+            logger.debug("FAISS索引已保存到磁盘")
         except Exception as e:
             logger.error(f"保存索引失败: {e}")
 
@@ -16752,18 +16950,21 @@ if __name__ == '__main__':
 
 --- File: ./backend/app.py ---
 # ============================================================
-# 【优化修复】移除全局单线程限制，允许 PyTorch/DINOv2 使用多核加速
-# FAISS 的死锁保护已在 vector_engine.py 中通过 faiss.omp_set_num_threads(1) 单独处理
-# 移除这些限制可以让 AI 推理速度提升 3-5 倍
+# 【启动稳定性修复】必须在 import torch 之前设置线程/代理环境变量
+# 避免 OpenMP 与多线程冲突导致 Socket 关闭
 # ============================================================
 import os
 import multiprocessing  # Windows多进程兼容性必需
-# 已移除全局线程限制，让 PyTorch 能够利用多核 CPU
-# os.environ["OMP_NUM_THREADS"] = "1"
-# os.environ["MKL_NUM_THREADS"] = "1"
-# os.environ["OPENBLAS_NUM_THREADS"] = "1"
-# os.environ["VECLIB_MAXIMUM_THREADS"] = "1"
-# os.environ["NUMEXPR_NUM_THREADS"] = "1"
+
+if 'AI_INTRA_THREADS' not in os.environ:
+    os.environ['AI_INTRA_THREADS'] = '1'
+_ai_threads = os.environ.get('AI_INTRA_THREADS', '1')
+os.environ["OMP_NUM_THREADS"] = _ai_threads
+os.environ["MKL_NUM_THREADS"] = _ai_threads
+os.environ["OPENBLAS_NUM_THREADS"] = _ai_threads
+os.environ["VECLIB_MAXIMUM_THREADS"] = _ai_threads
+os.environ["NUMEXPR_NUM_THREADS"] = _ai_threads
+os.environ.setdefault("NO_PROXY", "localhost,127.0.0.1")
 
 from flask import Flask, request, jsonify, Response, session
 import numpy as np
@@ -17205,8 +17406,10 @@ def initialize_runtime():
     root_logger.addHandler(queue_handler)
 
     # 屏蔽噪音日志
-    for lib in ['werkzeug', 'urllib3', 'requests', 'ultralytics', 'aiohttp']:
+    for lib in ['werkzeug', 'requests', 'ultralytics', 'aiohttp']:
         logging.getLogger(lib).setLevel(logging.WARNING)
+    logging.getLogger('urllib3').setLevel(logging.ERROR)
+    logging.getLogger('urllib3.connectionpool').setLevel(logging.ERROR)
 
     # 3. 重置数据库状态
     print("🧹 [系统] 正在重置抓取任务状态...")
@@ -17373,9 +17576,9 @@ def search_similar():
             # 【优化】使用 FAISS HNSW 向量搜索 + 综合评分重排序
             print(f"DEBUG: Searching with threshold: {threshold}, vector length: {len(query_features)}")
 
-            # 1. 扩大召回范围：FAISS 先找前 30 个候选 (Primary Search)
+            # 1. 扩大召回范围：FAISS 先找前 50 个候选 (Primary Search)
             # 使用较低的阈值召回，防止漏掉可能的匹配
-            candidates_limit = 30
+            candidates_limit = 50
             raw_results = db.search_similar_images(query_features, limit=candidates_limit, threshold=0.05)
             print(f"DEBUG: FAISS recalled {len(raw_results) if raw_results else 0} candidates")
 
@@ -18335,9 +18538,12 @@ def health_check():
 # === 新增：系统统计信息API ===
 @app.route('/api/system/stats', methods=['GET'])
 def get_system_stats():
-    """获取系统统计信息"""
+    """获取系统统计信息 (带权限隔离)"""
     try:
-        stats = db.get_system_stats()
+        user = get_current_user()
+        if not user:
+            return jsonify({'shop_count': 0, 'product_count': 0, 'image_count': 0, 'user_count': 0})
+        stats = db.get_system_stats(user['id'], user['role'])
         return jsonify(stats)
     except Exception as e:
         logger.error(f"获取系统统计信息失败: {e}")
@@ -18633,7 +18839,7 @@ def list_products():
         # 根据用户权限获取商品（支持分页）
         if current_user['role'] == 'admin':
             # 管理员可以看到所有商品
-            logger.info(f"管理员用户 {current_user['username']} 获取商品列表 (页{page}, 每页{limit}条)")
+            logger.debug(f"管理员用户 {current_user['username']} 获取商品列表 (页{page}, 每页{limit}条)")
             result = db.get_products_by_user_shops(
                 None,
                 limit=limit,
@@ -18669,7 +18875,7 @@ def list_products():
                     all_shop_names = [row[0] for row in cursor.fetchall()]
                     logger.info(f"数据库中的所有店铺名称: {all_shop_names}")
 
-        logger.info(f"返回商品数量: {len(result['products'])}")
+        logger.debug(f"返回商品数量: {len(result['products'])}")
 
         # 添加调试信息到响应中
         response_data = {
@@ -21482,6 +21688,9 @@ def scrape_shop_products(shop_id):
         total=0,
         processed=0,
         success=0,
+        failed=0,
+        image_failed=0,
+        index_failed=0,
         message='正在初始化...'
     )
 
@@ -21593,6 +21802,9 @@ def scrape_shop_products(shop_id):
     # 第二阶段：使用全局线程池并发处理所有商品
     processed_count = 0
     success_count = 0
+    failed_count = 0
+    image_failed_count = 0
+    index_failed_count = 0
 
     if all_product_tasks:
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
@@ -21615,10 +21827,18 @@ def scrape_shop_products(shop_id):
 
                 try:
                     product_info = future_to_product[future]
-                    success = future.result()
+                    result = future.result() or {}
                     processed_count += 1
 
-                    if success:
+                    if not result:
+                        failed_count += 1
+                    elif result.get('failed'):
+                        failed_count += 1
+                        if result.get('image_failed'):
+                            image_failed_count += 1
+                        if result.get('index_failed'):
+                            index_failed_count += 1
+                    else:
                         success_count += 1
 
                     # 改为每5个更新一次，反馈更及时
@@ -21628,10 +21848,15 @@ def scrape_shop_products(shop_id):
                         db.update_scrape_status(
                             processed=processed_count,
                             success=success_count,
+                            failed=failed_count,
+                            image_failed=image_failed_count,
+                            index_failed=index_failed_count,
                             progress=progress,
                             message=f'正在抓取详情与图片... ({processed_count}/{total_products})'
                         )
-                        logger.info(f'已处理 {processed_count}/{total_products} 个商品，成功 {success_count} 个')
+                        logger.info(
+                            f'已处理 {processed_count}/{total_products} 个商品，成功 {success_count} 个，失败 {failed_count} 个'
+                        )
 
                 except Exception as e:
                     logger.error(f"商品处理异常: {e}")
@@ -21642,13 +21867,26 @@ def scrape_shop_products(shop_id):
         is_scraping=False,
         completed=True,
         progress=100,
-        message=f'抓取完成，共处理 {processed_count} 个商品，成功 {success_count} 个'
+        processed=processed_count,
+        success=success_count,
+        failed=failed_count,
+        image_failed=image_failed_count,
+        index_failed=index_failed_count,
+        message=(
+            f'抓取完成，共处理 {processed_count} 个商品，成功 {success_count} 个，'
+            f'失败 {failed_count} 个 (图片失败 {image_failed_count} / 索引失败 {index_failed_count})'
+        )
     )
-    logger.info(f"✅ 店铺 {shop_id} 抓取任务完成: {success_count}/{processed_count} 商品成功处理")
+    logger.info(
+        f"✅ 店铺 {shop_id} 抓取任务完成: 成功 {success_count} / 失败 {failed_count} / 总计 {processed_count}"
+    )
 
     return {
         "total_products": processed_count,
-        "success_count": success_count
+        "success_count": success_count,
+        "failed_count": failed_count,
+        "image_failed_count": image_failed_count,
+        "index_failed_count": index_failed_count
     }
 
 def process_and_save_single_product_sync(product_info):
@@ -21660,62 +21898,154 @@ def process_and_save_single_product_sync(product_info):
         global scrape_stop_event
         if scrape_stop_event.is_set():
             logger.info(f"🔴 处理商品前检测到停止事件，取消处理商品 {item_id}")
-            return False
+            return {
+                'status': 'cancelled',
+                'item_id': item_id,
+                'failed': False,
+                'image_failed': False,
+                'index_failed': False
+            }
 
         current_status = db.get_scrape_status()
         if current_status.get('stop_signal', False):
             logger.info(f"🔴 处理商品前检测到停止信号，取消处理商品 {item_id}")
-            return False
+            return {
+                'status': 'cancelled',
+                'item_id': item_id,
+                'failed': False,
+                'image_failed': False,
+                'index_failed': False
+            }
 
         # === 0. 基于item_id的强力去重 ===
         if db.get_product_by_item_id(item_id):
             logger.info(f"⏭️ 商品 {item_id} 已存在，跳过重复处理")
-            return True  # 已存在算处理成功
+            return {
+                'status': 'skipped',
+                'item_id': item_id,
+                'failed': False,
+                'image_failed': False,
+                'index_failed': False
+            }
 
         # 1. 抓取详情
         from app import process_single_product  # 引用 app.py 中的逻辑
         product_data = process_single_product(product_info)
 
         if not product_data:
-            return False
+            logger.warning(f"❌ 商品 {item_id} 抓取失败：未获取到商品详情")
+            return {
+                'status': 'failed',
+                'item_id': item_id,
+                'failed': True,
+                'image_failed': False,
+                'index_failed': False
+            }
 
+        product_title = product_data.get('title', '')
         # === 再次检查停止状态 ===
         current_status = db.get_scrape_status()
         if current_status.get('stop_signal', False):
             logger.info(f"🔴 抓取详情后检测到停止信号，取消处理商品 {item_id}")
-            return False
+            return {
+                'status': 'cancelled',
+                'item_id': item_id,
+                'failed': False,
+                'image_failed': False,
+                'index_failed': False
+            }
 
         # 2. 再次查重 (双重保险)
         if db.get_product_by_url(product_data['product_url']):
             logger.info(f"⏭️ 商品URL已存在: {product_data['product_url']}")
-            return True  # 已存在算处理成功
+            return {
+                'status': 'skipped',
+                'item_id': item_id,
+                'failed': False,
+                'image_failed': False,
+                'index_failed': False
+            }
 
         # 3. 入库 (添加item_id字段)
         product_data['item_id'] = item_id  # 确保item_id被保存
         product_id = db.insert_product(product_data)
 
-        logger.info(f"✅ 商品 {item_id} 成功入库，数据库ID: {product_id}")
+        logger.debug(f"商品 {item_id} 入库完成，数据库ID: {product_id}")
 
         # === 再次检查停止状态 ===
         current_status = db.get_scrape_status()
         if current_status.get('stop_signal', False):
             logger.info(f"🔴 入库后检测到停止信号，商品 {item_id} 已入库但跳过图片处理")
-            return True  # 商品已入库，算成功
+            return {
+                'status': 'partial',
+                'item_id': item_id,
+                'failed': False,
+                'image_failed': False,
+                'index_failed': False
+            }
 
         # 4. 图片处理 (使用多线程版本)
+        image_stats = {
+            'total_urls': 0,
+            'downloaded': 0,
+            'download_failed': 0,
+            'processed': 0,
+            'faiss_failed': False
+        }
         if product_data.get('images'):
             from app import save_product_images_unified
-            processed_count = save_product_images_unified(
+            processed_count, image_stats = save_product_images_unified(
                 product_id,
                 product_data['images'],
                 shutdown_event=scrape_stop_event
             )
-            logger.info(f"🖼️ 商品 {item_id} 图片处理完成，共处理 {processed_count} 张图片")
+        else:
+            processed_count = 0
 
-        return True
+        image_total = len(product_data.get('images') or [])
+        image_failed = image_total == 0 or image_stats.get('downloaded', 0) == 0
+        index_failed = bool(image_stats.get('faiss_failed'))
+        failed = image_failed or index_failed
+
+        if failed:
+            reasons = []
+            if image_failed:
+                if image_total == 0:
+                    reasons.append("未抓取到图片URL")
+                else:
+                    reasons.append(f"图片下载失败 {image_stats.get('download_failed', image_total)}/{image_total}")
+            if index_failed:
+                reasons.append("索引写入失败")
+            logger.warning(
+                f"❌ 商品 {item_id} {product_title} 处理失败：{'，'.join(reasons)}"
+            )
+        else:
+            download_failed = image_stats.get('download_failed', 0)
+            extra = f"，下载失败 {download_failed}" if download_failed else ""
+            logger.info(
+                f"✅ 商品 {item_id} {product_title} 抓取完成，图片 {processed_count}/{image_total}{extra}"
+            )
+
+        return {
+            'status': 'success' if not failed else 'failed',
+            'item_id': item_id,
+            'title': product_title,
+            'images_total': image_total,
+            'images_processed': processed_count,
+            'download_failed': image_stats.get('download_failed', 0),
+            'failed': failed,
+            'image_failed': image_failed,
+            'index_failed': index_failed
+        }
     except Exception as e:
         logger.error(f"❌ 处理商品出错 {product_info.get('item_id')}: {e}")
-        return False
+        return {
+            'status': 'failed',
+            'item_id': product_info.get('item_id'),
+            'failed': True,
+            'image_failed': False,
+            'index_failed': False
+        }
 
 def scrape_product_info(product_url):
     """根据商品URL获取商品详细信息"""
@@ -21923,8 +22253,16 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
     - AI 阶段：CPU 密集，使用全局信号量限制并发，避免 CPU 冲突
     - FAISS：一个商品只写入/保存一次，减少锁竞争
     """
+    stats = {
+        'total_urls': len(image_urls) if image_urls else 0,
+        'downloaded': 0,
+        'download_failed': 0,
+        'processed': 0,
+        'faiss_failed': False
+    }
+
     if not image_urls:
-        return 0
+        return 0, stats
 
     import os
     import time
@@ -21941,7 +22279,7 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
 
     downloaded_images = []  # (index, save_path)
 
-    logger.info(f"🚀 [商品 {product_id}] 阶段1: 开始并发下载 {len(image_urls)} 张图片...")
+    logger.debug(f"🚀 [商品 {product_id}] 开始下载 {len(image_urls)} 张图片...")
 
     def download_task(index, url):
         max_retries = 10
@@ -21982,7 +22320,7 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
 
             except Exception as e:
                 if attempt == max_retries:
-                    logger.warning(f"下载失败 {url}: {e}")
+                    logger.debug(f"下载失败 {url}: {e}")
                 else:
                     time.sleep(0.2 * attempt)
         return None
@@ -21994,18 +22332,24 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
             if res:
                 downloaded_images.append(res)
 
+    stats['downloaded'] = len(downloaded_images)
+    stats['download_failed'] = max(0, len(image_urls) - len(downloaded_images))
+
     if not downloaded_images:
-        logger.warning(f"⚠️ [商品 {product_id}] 没有成功下载任何图片")
-        return 0
+        logger.warning(f"⚠️ [商品 {product_id}] 图片下载失败: 0/{len(image_urls)}")
+        return 0, stats
 
     downloaded_images.sort(key=lambda x: x[0])
-    logger.info(f"✅ [商品 {product_id}] 下载完成，准备处理 {len(downloaded_images)} 张图片")
+    if stats['download_failed'] > 0:
+        logger.warning(f"⚠️ [商品 {product_id}] 下载完成: {len(downloaded_images)}/{len(image_urls)}，失败 {stats['download_failed']}")
+    else:
+        logger.debug(f"✅ [商品 {product_id}] 下载完成: {len(downloaded_images)}/{len(image_urls)}")
 
     # --- 阶段 2: 有限并发 AI 特征提取 (CPU 密集) ---
     extractor = get_global_feature_extractor()
     if extractor is None:
         logger.error("特征提取器未初始化")
-        return 0
+        return 0, stats
 
     existing_images = db.get_product_images(product_id)
     existing_feats = [img['features'] for img in existing_images if img.get('features') is not None]
@@ -22013,7 +22357,7 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
     processed_count = 0
     vectors_to_add = []  # (db_id, features)
 
-    logger.info(f"🧠 [商品 {product_id}] 阶段2: 顺序处理图片 (全局并发受控)...")
+    logger.debug(f"🧠 [商品 {product_id}] 开始特征提取...")
 
     for index, save_path in downloaded_images:
         if shutdown_event and shutdown_event.is_set():
@@ -22031,7 +22375,7 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
 
                 is_dup, score = check_duplicate_image(features, existing_feats, threshold=0.995)
                 if is_dup:
-                    logger.info(f"♻️ [商品 {product_id}] 图片重复 (相似度 {score:.3f})，跳过")
+                    logger.debug(f"♻️ [商品 {product_id}] 图片重复 (相似度 {score:.3f})，跳过")
                     try:
                         os.remove(save_path)
                     except Exception:
@@ -22041,7 +22385,6 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
                 existing_feats.append(features)
                 img_db_id = db.insert_image_record(product_id, save_path, index, features)
                 if img_db_id:
-                    logger.info(f"📸 [商品 {product_id}] 图片 {index} 处理完毕 (ID: {img_db_id})")
                     vectors_to_add.append((img_db_id, features))
                     processed_count += 1
             except Exception as e:
@@ -22058,13 +22401,15 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
                     engine.add_vector(img_id, feats)
                 engine.save()
 
-            logger.info(f"💾 [商品 {product_id}] FAISS 索引已更新，新增 {len(vectors_to_add)} 个向量")
+            logger.debug(f"💾 [商品 {product_id}] FAISS 索引已更新，新增 {len(vectors_to_add)} 个向量")
 
         except Exception as e:
             logger.error(f"FAISS 批量写入失败: {e}")
+            stats['faiss_failed'] = True
 
-    logger.info(f"商品 {product_id} 成功处理 {processed_count}/{len(image_urls)} 张图片")
-    return processed_count
+    stats['processed'] = processed_count
+    logger.debug(f"✅ [商品 {product_id}] 图片处理完成: {processed_count}/{len(image_urls)}")
+    return processed_count, stats
 
 def run_cleanup_task():
     """后台清理任务，定期清理数据库和内存中的过期记录"""

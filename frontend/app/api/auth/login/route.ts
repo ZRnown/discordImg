@@ -1,19 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
-
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001';
+import { fetchFromBackend } from '../../_utils/backend';
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    // 调用后端登录API
-    const backendResponse = await fetch(`${BACKEND_URL}/api/auth/login`, {
+    const { response: backendResponse, rawText } = await fetchFromBackend('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body)
-    });
-
-    const rawText = await backendResponse.text();
+    }, request.headers.get('host'), 5000);
     let data: any = null;
     let parsed = false;
     try {
@@ -78,6 +74,6 @@ export async function POST(request: NextRequest) {
     }
   } catch (error: any) {
     console.error('Login API error:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: 'Backend unreachable' }, { status: 503 });
   }
 }

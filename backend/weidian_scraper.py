@@ -7,12 +7,15 @@ from urllib.parse import urlparse, parse_qs, quote
 from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
+logging.getLogger('urllib3').setLevel(logging.ERROR)
+logging.getLogger('urllib3.connectionpool').setLevel(logging.ERROR)
 
 class WeidianScraper:
     """微店商品信息爬虫 - 使用官方API"""
 
     def __init__(self):
         self.session = requests.Session()
+        self.session.trust_env = False
 
         # [新增] 优化连接池，防止多线程抓取时连接数不够
         from requests.adapters import HTTPAdapter
@@ -52,17 +55,18 @@ class WeidianScraper:
         headers: Optional[Dict] = None,
         cookies: Optional[Dict] = None,
         timeout: int = 10,
-        max_retries: int = 5,
+        max_retries: int = 3,
         backoff: float = 0.5
     ) -> Optional[requests.Response]:
         last_error = None
+        current_timeout = timeout if isinstance(timeout, tuple) else (5, 10)
         for attempt in range(1, max_retries + 1):
             try:
                 response = self.session.get(
                     url,
                     headers=headers,
                     cookies=cookies,
-                    timeout=timeout,
+                    timeout=current_timeout,
                     proxies={'http': None, 'https': None}
                 )
                 response.raise_for_status()
@@ -72,7 +76,7 @@ class WeidianScraper:
                 if attempt < max_retries:
                     time.sleep(backoff * attempt)
                 else:
-                    logger.warning(f"请求失败({max_retries}次): {url} | {e}")
+                    logger.debug(f"请求失败({max_retries}次): {url} | {e}")
         return None
 
     def _request_json_with_retry(
@@ -81,17 +85,18 @@ class WeidianScraper:
         headers: Optional[Dict] = None,
         cookies: Optional[Dict] = None,
         timeout: int = 10,
-        max_retries: int = 5,
+        max_retries: int = 3,
         backoff: float = 0.5
     ) -> Optional[Dict]:
         last_error = None
+        current_timeout = timeout if isinstance(timeout, tuple) else (5, 10)
         for attempt in range(1, max_retries + 1):
             try:
                 response = self.session.get(
                     url,
                     headers=headers,
                     cookies=cookies,
-                    timeout=timeout,
+                    timeout=current_timeout,
                     proxies={'http': None, 'https': None}
                 )
                 response.raise_for_status()
@@ -101,7 +106,7 @@ class WeidianScraper:
                 if attempt < max_retries:
                     time.sleep(backoff * attempt)
                 else:
-                    logger.warning(f"JSON请求失败({max_retries}次): {url} | {e}")
+                    logger.debug(f"JSON请求失败({max_retries}次): {url} | {e}")
         return None
 
     def extract_item_id(self, url: str) -> Optional[str]:
@@ -138,12 +143,12 @@ class WeidianScraper:
                 logger.error(f"无法从URL提取商品ID: {url}")
                 return None
 
-            logger.info(f"开始抓取商品: {item_id}")
+            logger.debug(f"开始抓取商品: {item_id}")
 
             # 获取店铺信息
             shop_name = self._get_shop_name(url)
             if shop_name == "未知店铺":
-                logger.info("店铺名称获取失败，尝试从页面HTML提取")
+                logger.debug("店铺名称获取失败，尝试从页面HTML提取")
                 try:
                     page_response = self._request_with_retry(url, timeout=10, headers={
                         'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
@@ -173,14 +178,14 @@ class WeidianScraper:
                         match = re.search(shop_name_pattern, page_response.text, re.DOTALL | re.IGNORECASE)
                         if match:
                             shop_name = match.group(1).strip()
-                            logger.info(f"✅ 从JavaScript数据获取到店铺名称: {shop_name}")
+                            logger.debug(f"✅ 从JavaScript数据获取到店铺名称: {shop_name}")
                 except Exception as e:
                     logger.warning(f"从页面提取店铺名称失败: {e}")
 
             # 使用官方API获取商品信息
             product_info = self._scrape_by_api(item_id, url, shop_name)
             if product_info:
-                logger.info(f"✅ 商品信息抓取成功: {product_info.get('title', 'Unknown')}")
+                logger.debug(f"✅ 商品信息抓取成功: {product_info.get('title', 'Unknown')}")
                 return product_info
 
             # 如果API失败，返回None
@@ -200,7 +205,7 @@ class WeidianScraper:
 
             # 如果API获取失败，尝试从页面HTML中提取商品标题
             if not title:
-                logger.info("API获取标题失败，尝试从页面HTML提取")
+                logger.debug("API获取标题失败，尝试从页面HTML提取")
                 try:
                     page_response = self._request_with_retry(url, timeout=10, headers={
                         'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
@@ -230,7 +235,7 @@ class WeidianScraper:
                         match = re.search(title_pattern, page_response.text, re.DOTALL | re.IGNORECASE)
                         if match:
                             title = match.group(1).strip()
-                            logger.info(f"✅ 从页面HTML获取到商品标题: {title}")
+                            logger.debug(f"✅ 从页面HTML获取到商品标题: {title}")
                         else:
                             title = f'微店商品 {item_id}'
                 except Exception as e:
@@ -277,7 +282,7 @@ class WeidianScraper:
 
             api_url = f"https://thor.weidian.com/detail/getItemSkuInfo/1.0?param={encoded_param}&wdtoken=8ea9315c&_={timestamp}"
 
-            logger.info(f"调用SKU API: {api_url}")  # 修改日志级别为 INFO 以便调试
+            logger.debug(f"调用SKU API: {api_url}")
 
             # 使用与前端 fetch 完全一致的 headers
             headers = {
@@ -339,9 +344,9 @@ class WeidianScraper:
                     unique_images.append(img_url)
                     seen_urls.add(img_url)
 
-            logger.info(f"✅ 商品 {item_id} 图片获取完成: 共 {len(unique_images)} 张 (详情:{len(detail_images)}, SKU:{len(sku_images)})")
+            logger.debug(f"✅ 商品 {item_id} 图片获取完成: 共 {len(unique_images)} 张 (详情:{len(detail_images)}, SKU:{len(sku_images)})")
             if len(unique_images) > 0:
-                logger.info(f"📸 图片URL样例: {unique_images[:3]}")
+                logger.debug(f"📸 图片URL样例: {unique_images[:3]}")
             return unique_images
 
         except Exception as e:
@@ -415,7 +420,7 @@ class WeidianScraper:
     def _get_sku_images(self, item_id: str) -> List[str]:
         """获取SKU属性图片 (新API + attrList解析)"""
         try:
-            logger.info(f"开始获取SKU图片，商品ID: {item_id}")
+            logger.debug(f"开始获取SKU图片，商品ID: {item_id}")
             title_info = self._get_item_title_and_sku(item_id)
             if not title_info or 'sku_info' not in title_info:
                 logger.warning(f"无法获取SKU信息，跳过图片提取: {item_id}")
@@ -428,7 +433,7 @@ class WeidianScraper:
             # 1. 尝试从 attrList 中提取 (这是你提供的JSON中的结构)
             attr_list = result.get('attrList', [])
             if attr_list:
-                logger.info(f"解析 attrList，共 {len(attr_list)} 组属性")
+                logger.debug(f"解析 attrList，共 {len(attr_list)} 组属性")
                 for attr in attr_list:
                     attr_values = attr.get('attrValues', [])
                     for val in attr_values:
@@ -445,7 +450,7 @@ class WeidianScraper:
             # 2. 尝试从 skuInfos 中提取 (作为补充)
             sku_infos = result.get('skuInfos', [])
             if sku_infos:
-                logger.info(f"解析 skuInfos，共 {len(sku_infos)} 个SKU")
+                logger.debug(f"解析 skuInfos，共 {len(sku_infos)} 个SKU")
                 for sku in sku_infos:
                     # 注意：skuInfo 对象可能嵌套
                     info = sku.get('skuInfo', {})
@@ -457,7 +462,7 @@ class WeidianScraper:
                             images.append(img_url)
                             seen_urls.add(img_url)
 
-            logger.info(f"从SKU属性中成功提取 {len(images)} 张图片")
+            logger.debug(f"从SKU属性中成功提取 {len(images)} 张图片")
             return images
         except Exception as e:
             logger.error(f"获取SKU图片失败: {e}")
@@ -597,7 +602,7 @@ class WeidianScraper:
 
         # 移除图片数量限制，抓取所有可用的图片
         # SKU图片通常排在详情图之后，现在可以获取所有图片
-        logger.info(f"准备下载 {len(image_urls)} 张图片（无数量限制）")
+        logger.debug(f"准备下载 {len(image_urls)} 张图片（无数量限制）")
 
         def download_single_image(args):
             """下载单张图片的函数"""
@@ -616,7 +621,7 @@ class WeidianScraper:
                 with open(img_path, 'wb') as f:
                     f.write(response.content)
 
-                logger.info(f"图片下载成功: {img_path}")
+                logger.debug(f"图片下载成功: {img_path}")
                 return img_path
 
             except Exception as e:
@@ -696,7 +701,7 @@ class WeidianScraper:
             match = re.search(shop_name_pattern1, html_content, re.DOTALL | re.IGNORECASE)
             if match:
                 shop_name = match.group(1).strip()
-                logger.info(f"✅ 获取到店铺名称 (em shop-name-str): {shop_name}")
+                logger.debug(f"✅ 获取到店铺名称 (em shop-name-str): {shop_name}")
                 return shop_name
 
             # 然后尝试更宽泛的匹配，查找包含shop-name-str类的任何元素
@@ -704,7 +709,7 @@ class WeidianScraper:
             match = re.search(shop_name_pattern2, html_content, re.DOTALL | re.IGNORECASE)
             if match:
                 shop_name = match.group(1).strip()
-                logger.info(f"✅ 获取到店铺名称 (通用shop-name-str): {shop_name}")
+                logger.debug(f"✅ 获取到店铺名称 (通用shop-name-str): {shop_name}")
                 return shop_name
 
             # 尝试匹配class="shop-name-str"的元素（不限定标签类型）
@@ -712,7 +717,7 @@ class WeidianScraper:
             match = re.search(shop_name_pattern3, html_content, re.DOTALL | re.IGNORECASE)
             if match:
                 shop_name = match.group(1).strip()
-                logger.info(f"✅ 获取到店铺名称 (shop-name-str): {shop_name}")
+                logger.debug(f"✅ 获取到店铺名称 (shop-name-str): {shop_name}")
                 return shop_name
 
             # 尝试从JavaScript数据中提取店铺名称（多种格式）
@@ -721,7 +726,7 @@ class WeidianScraper:
             match = re.search(shop_name_pattern4, html_content, re.DOTALL | re.IGNORECASE)
             if match:
                 shop_name = match.group(1).strip()
-                logger.info(f"✅ 获取到店铺名称 (JavaScript): {shop_name}")
+                logger.debug(f"✅ 获取到店铺名称 (JavaScript): {shop_name}")
                 return shop_name
 
             # 格式2: \"shopName\":\"Aiseo\" (在HTML中被转义)
@@ -729,7 +734,7 @@ class WeidianScraper:
             match = re.search(shop_name_pattern5, html_content, re.DOTALL | re.IGNORECASE)
             if match:
                 shop_name = match.group(1).strip()
-                logger.info(f"✅ 获取到店铺名称 (JavaScript转义): {shop_name}")
+                logger.debug(f"✅ 获取到店铺名称 (JavaScript转义): {shop_name}")
                 return shop_name
 
             # 格式3: shopName:"Aiseo" (无引号)
@@ -737,7 +742,7 @@ class WeidianScraper:
             match = re.search(shop_name_pattern6, html_content, re.DOTALL | re.IGNORECASE)
             if match:
                 shop_name = match.group(1).strip()
-                logger.info(f"✅ 获取到店铺名称 (JavaScript无引号): {shop_name}")
+                logger.debug(f"✅ 获取到店铺名称 (JavaScript无引号): {shop_name}")
                 return shop_name
 
             logger.warning("未找到店铺名称，使用默认名称")
