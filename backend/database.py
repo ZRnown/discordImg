@@ -1880,30 +1880,61 @@ class Database:
             logger.error(f"更新用户网站消息过滤失败: {e}")
             return False
 
-    def get_system_stats(self) -> Dict:
-        """获取系统统计信息"""
+    def get_system_stats(self, user_id: int = None, role: str = 'user') -> Dict:
+        """获取系统统计信息 (支持权限隔离)"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
 
-                # 获取店铺数量（从shops表统计）
-                cursor.execute("SELECT COUNT(*) FROM shops")
-                shop_count = cursor.fetchone()[0] or 0
+                # 1. 统计店铺
+                if role == 'admin' or user_id is None:
+                    cursor.execute("SELECT COUNT(*), GROUP_CONCAT(name) FROM shops")
+                else:
+                    cursor.execute("""
+                        SELECT COUNT(*), GROUP_CONCAT(s.name)
+                        FROM shops s
+                        JOIN user_shop_permissions usp ON s.shop_id = usp.shop_id
+                        WHERE usp.user_id = ?
+                    """, (user_id,))
 
-                # 获取商品数量
-                cursor.execute("SELECT COUNT(*) FROM products")
-                product_count = cursor.fetchone()[0] or 0
+                shop_result = cursor.fetchone()
+                shop_count = shop_result[0] or 0
+                shop_names_str = shop_result[1]
+                shop_names = shop_names_str.split(',') if shop_names_str else []
 
-                # 获取图片数量（只统计有对应商品的图片）
-                cursor.execute("""
-                    SELECT COUNT(*) FROM product_images
-                    WHERE product_id IN (SELECT id FROM products)
-                """)
-                image_count = cursor.fetchone()[0] or 0
+                if shop_count == 0 and role != 'admin':
+                    return {'shop_count': 0, 'product_count': 0, 'image_count': 0, 'user_count': 0}
 
-                # 获取用户数量
-                cursor.execute("SELECT COUNT(*) FROM users WHERE is_active = 1")
-                user_count = cursor.fetchone()[0] or 0
+                # 2. 统计商品
+                if role == 'admin' or user_id is None:
+                    cursor.execute("SELECT COUNT(*) FROM products")
+                    product_count = cursor.fetchone()[0] or 0
+                else:
+                    placeholders = ','.join('?' * len(shop_names))
+                    query = f"SELECT COUNT(*) FROM products WHERE shop_name IN ({placeholders})"
+                    cursor.execute(query, shop_names)
+                    product_count = cursor.fetchone()[0] or 0
+
+                # 3. 统计图片
+                if role == 'admin' or user_id is None:
+                    cursor.execute("SELECT COUNT(*) FROM product_images")
+                    image_count = cursor.fetchone()[0] or 0
+                else:
+                    placeholders = ','.join('?' * len(shop_names))
+                    query = f"""
+                        SELECT COUNT(*) FROM product_images pi
+                        JOIN products p ON pi.product_id = p.id
+                        WHERE p.shop_name IN ({placeholders})
+                    """
+                    cursor.execute(query, shop_names)
+                    image_count = cursor.fetchone()[0] or 0
+
+                # 4. 统计用户
+                if role == 'admin' or user_id is None:
+                    cursor.execute("SELECT COUNT(*) FROM users WHERE is_active = 1")
+                    user_count = cursor.fetchone()[0] or 0
+                else:
+                    user_count = 1
 
                 return {
                     'shop_count': shop_count,

@@ -46,6 +46,64 @@ class WeidianScraper:
             '__spider__sessionid': 'e0e858ac8efb20a2'
         })
 
+    def _request_with_retry(
+        self,
+        url: str,
+        headers: Optional[Dict] = None,
+        cookies: Optional[Dict] = None,
+        timeout: int = 10,
+        max_retries: int = 5,
+        backoff: float = 0.5
+    ) -> Optional[requests.Response]:
+        last_error = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = self.session.get(
+                    url,
+                    headers=headers,
+                    cookies=cookies,
+                    timeout=timeout,
+                    proxies={'http': None, 'https': None}
+                )
+                response.raise_for_status()
+                return response
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries:
+                    time.sleep(backoff * attempt)
+                else:
+                    logger.warning(f"请求失败({max_retries}次): {url} | {e}")
+        return None
+
+    def _request_json_with_retry(
+        self,
+        url: str,
+        headers: Optional[Dict] = None,
+        cookies: Optional[Dict] = None,
+        timeout: int = 10,
+        max_retries: int = 5,
+        backoff: float = 0.5
+    ) -> Optional[Dict]:
+        last_error = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = self.session.get(
+                    url,
+                    headers=headers,
+                    cookies=cookies,
+                    timeout=timeout,
+                    proxies={'http': None, 'https': None}
+                )
+                response.raise_for_status()
+                return response.json()
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries:
+                    time.sleep(backoff * attempt)
+                else:
+                    logger.warning(f"JSON请求失败({max_retries}次): {url} | {e}")
+        return None
+
     def extract_item_id(self, url: str) -> Optional[str]:
         """从微店URL中提取商品ID"""
         try:
@@ -87,7 +145,7 @@ class WeidianScraper:
             if shop_name == "未知店铺":
                 logger.info("店铺名称获取失败，尝试从页面HTML提取")
                 try:
-                    page_response = requests.get(url, timeout=10, proxies={'http': None, 'https': None}, headers={
+                    page_response = self._request_with_retry(url, timeout=10, headers={
                         'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
                         'accept-language': 'en-US,en;q=0.9,zh-HK;q=0.8,zh-CN;q=0.7,zh;q=0.6',
                         'cache-control': 'max-age=0',
@@ -109,7 +167,7 @@ class WeidianScraper:
                         '__spider__sessionid': 'e55c6458ac1fdba4'
                     })
 
-                    if page_response.status_code == 200:
+                    if page_response and page_response.status_code == 200:
                         # 尝试从JavaScript数据中提取店铺名称
                         shop_name_pattern = r'"shopName"[^:]*:[^"]*"([^"]+)"'
                         match = re.search(shop_name_pattern, page_response.text, re.DOTALL | re.IGNORECASE)
@@ -144,7 +202,7 @@ class WeidianScraper:
             if not title:
                 logger.info("API获取标题失败，尝试从页面HTML提取")
                 try:
-                    page_response = requests.get(url, timeout=10, proxies={'http': None, 'https': None}, headers={
+                    page_response = self._request_with_retry(url, timeout=10, headers={
                         'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
                         'accept-language': 'en-US,en;q=0.9,zh-HK;q=0.8,zh-CN;q=0.7,zh;q=0.6',
                         'cache-control': 'max-age=0',
@@ -166,7 +224,7 @@ class WeidianScraper:
                         '__spider__sessionid': 'e55c6458ac1fdba4'
                     })
 
-                    if page_response.status_code == 200:
+                    if page_response and page_response.status_code == 200:
                         # 从页面HTML中提取商品标题
                         title_pattern = r'<span[^>]*class="[^"]*item-name[^"]*"[^>]*>([^<]+)</span>'
                         match = re.search(title_pattern, page_response.text, re.DOTALL | re.IGNORECASE)
@@ -237,19 +295,22 @@ class WeidianScraper:
             }
 
             # 不带 cookies 发送请求 (有时候 cookies 会导致校验失败)
-            response = requests.get(api_url, headers=headers, timeout=15)
-            response.raise_for_status()
+            max_retries = 5
+            for attempt in range(1, max_retries + 1):
+                data = self._request_json_with_retry(api_url, headers=headers, timeout=15, max_retries=1)
+                if not data:
+                    time.sleep(0.3 * attempt)
+                    continue
 
-            data = response.json()
-            logger.debug(f"标题API返回状态: {data.get('status', {}).get('code')}")
+                logger.debug(f"标题API返回状态: {data.get('status', {}).get('code')}")
 
-            if data.get('status', {}).get('code') == 0:
-                result = data.get('result', {})
-                title = result.get('itemTitle', '')
-                if title:
-                    return {'title': title, 'sku_info': result}
+                if data.get('status', {}).get('code') == 0:
+                    result = data.get('result', {})
+                    title = result.get('itemTitle', '')
+                    if title:
+                        return {'title': title, 'sku_info': result}
 
-            # API调用失败，记录警告但不尝试HTML fallback
+                time.sleep(0.3 * attempt)
 
             return None
 
@@ -325,10 +386,15 @@ class WeidianScraper:
                 '__spider__sessionid': 'e55c6458ac1fdba4'
             }
 
-            response = requests.get(api_url, timeout=15, proxies={'http': None, 'https': None}, headers=headers, cookies=cookies)
-            response.raise_for_status()
-
-            data = response.json()
+            data = self._request_json_with_retry(
+                api_url,
+                headers=headers,
+                cookies=cookies,
+                timeout=15,
+                max_retries=5
+            )
+            if not data:
+                return []
             logger.debug(f"详情图片API返回状态: {data.get('status', {}).get('code')}")
 
             images = []
@@ -611,8 +677,15 @@ class WeidianScraper:
             }
 
             # 请求商品页面（使用HTML专用headers）
-            response = requests.get(url, headers=html_headers, cookies=html_cookies, timeout=10, proxies={'http': None, 'https': None})
-            response.raise_for_status()
+            response = self._request_with_retry(
+                url,
+                headers=html_headers,
+                cookies=html_cookies,
+                timeout=10,
+                max_retries=5
+            )
+            if not response:
+                return "未知店铺"
 
             # 解码HTML实体（&#34; -> " 等）
             html_content = response.text

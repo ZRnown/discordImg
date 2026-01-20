@@ -2203,6 +2203,32 @@ export async function DELETE(
 
 }
 
+--- File: ./frontend/app/api/bot/cooldowns/route.ts ---
+import { NextRequest, NextResponse } from 'next/server'
+
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001'
+
+export async function GET(request: NextRequest) {
+  try {
+    const cookieHeader = request.headers.get('cookie') || ''
+
+    const response = await fetch(`${BACKEND_URL}/api/bot/cooldowns`, {
+      headers: { 'Cookie': cookieHeader }
+    })
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}))
+      return NextResponse.json(errorData, { status: response.status })
+    }
+
+    const data = await response.json()
+    return NextResponse.json(data)
+  } catch (error: any) {
+    console.error('GET /api/bot/cooldowns failed:', error)
+    return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+}
+
 --- File: ./frontend/app/api/bot/start/route.ts ---
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -5473,7 +5499,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         clearInterval(statusInterval)
       }
     }
-  }, [isShopScraping, isBatchScraping])
+  }, [isShopScraping, isBatchScraping, currentPage, itemsPerPage, keywordSearch, shopFilter, searchType])
 
   const fetchProducts = async (page: number = currentPage) => {
     try {
@@ -10363,8 +10389,8 @@ class Config:
     COMMAND_PREFIX = '!'
 
     # === AI 模型 ===
-    DINO_MODEL_NAME = 'facebook/dinov2-small'
-    VECTOR_DIMENSION = 384
+    DINO_MODEL_NAME = 'facebook/dinov2-base'
+    VECTOR_DIMENSION = 768
     YOLO_MODEL_PATH = 'yolov8s-world.pt'
     USE_YOLO_CROP = True
 
@@ -10389,8 +10415,8 @@ class Config:
 
     # === FAISS ===
     FAISS_HNSW_M = 64
-    FAISS_EF_CONSTRUCTION = 80
-    FAISS_EF_SEARCH = 80
+    FAISS_EF_CONSTRUCTION = 128
+    FAISS_EF_SEARCH = 128
 
     # === 路径 ===
     BASE_DIR = os.path.dirname(os.path.dirname(__file__))
@@ -13284,6 +13310,64 @@ class WeidianScraper:
             '__spider__sessionid': 'e0e858ac8efb20a2'
         })
 
+    def _request_with_retry(
+        self,
+        url: str,
+        headers: Optional[Dict] = None,
+        cookies: Optional[Dict] = None,
+        timeout: int = 10,
+        max_retries: int = 5,
+        backoff: float = 0.5
+    ) -> Optional[requests.Response]:
+        last_error = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = self.session.get(
+                    url,
+                    headers=headers,
+                    cookies=cookies,
+                    timeout=timeout,
+                    proxies={'http': None, 'https': None}
+                )
+                response.raise_for_status()
+                return response
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries:
+                    time.sleep(backoff * attempt)
+                else:
+                    logger.warning(f"请求失败({max_retries}次): {url} | {e}")
+        return None
+
+    def _request_json_with_retry(
+        self,
+        url: str,
+        headers: Optional[Dict] = None,
+        cookies: Optional[Dict] = None,
+        timeout: int = 10,
+        max_retries: int = 5,
+        backoff: float = 0.5
+    ) -> Optional[Dict]:
+        last_error = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = self.session.get(
+                    url,
+                    headers=headers,
+                    cookies=cookies,
+                    timeout=timeout,
+                    proxies={'http': None, 'https': None}
+                )
+                response.raise_for_status()
+                return response.json()
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries:
+                    time.sleep(backoff * attempt)
+                else:
+                    logger.warning(f"JSON请求失败({max_retries}次): {url} | {e}")
+        return None
+
     def extract_item_id(self, url: str) -> Optional[str]:
         """从微店URL中提取商品ID"""
         try:
@@ -13325,7 +13409,7 @@ class WeidianScraper:
             if shop_name == "未知店铺":
                 logger.info("店铺名称获取失败，尝试从页面HTML提取")
                 try:
-                    page_response = requests.get(url, timeout=10, proxies={'http': None, 'https': None}, headers={
+                    page_response = self._request_with_retry(url, timeout=10, headers={
                         'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
                         'accept-language': 'en-US,en;q=0.9,zh-HK;q=0.8,zh-CN;q=0.7,zh;q=0.6',
                         'cache-control': 'max-age=0',
@@ -13347,7 +13431,7 @@ class WeidianScraper:
                         '__spider__sessionid': 'e55c6458ac1fdba4'
                     })
 
-                    if page_response.status_code == 200:
+                    if page_response and page_response.status_code == 200:
                         # 尝试从JavaScript数据中提取店铺名称
                         shop_name_pattern = r'"shopName"[^:]*:[^"]*"([^"]+)"'
                         match = re.search(shop_name_pattern, page_response.text, re.DOTALL | re.IGNORECASE)
@@ -13382,7 +13466,7 @@ class WeidianScraper:
             if not title:
                 logger.info("API获取标题失败，尝试从页面HTML提取")
                 try:
-                    page_response = requests.get(url, timeout=10, proxies={'http': None, 'https': None}, headers={
+                    page_response = self._request_with_retry(url, timeout=10, headers={
                         'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
                         'accept-language': 'en-US,en;q=0.9,zh-HK;q=0.8,zh-CN;q=0.7,zh;q=0.6',
                         'cache-control': 'max-age=0',
@@ -13404,7 +13488,7 @@ class WeidianScraper:
                         '__spider__sessionid': 'e55c6458ac1fdba4'
                     })
 
-                    if page_response.status_code == 200:
+                    if page_response and page_response.status_code == 200:
                         # 从页面HTML中提取商品标题
                         title_pattern = r'<span[^>]*class="[^"]*item-name[^"]*"[^>]*>([^<]+)</span>'
                         match = re.search(title_pattern, page_response.text, re.DOTALL | re.IGNORECASE)
@@ -13475,19 +13559,22 @@ class WeidianScraper:
             }
 
             # 不带 cookies 发送请求 (有时候 cookies 会导致校验失败)
-            response = requests.get(api_url, headers=headers, timeout=15)
-            response.raise_for_status()
+            max_retries = 5
+            for attempt in range(1, max_retries + 1):
+                data = self._request_json_with_retry(api_url, headers=headers, timeout=15, max_retries=1)
+                if not data:
+                    time.sleep(0.3 * attempt)
+                    continue
 
-            data = response.json()
-            logger.debug(f"标题API返回状态: {data.get('status', {}).get('code')}")
+                logger.debug(f"标题API返回状态: {data.get('status', {}).get('code')}")
 
-            if data.get('status', {}).get('code') == 0:
-                result = data.get('result', {})
-                title = result.get('itemTitle', '')
-                if title:
-                    return {'title': title, 'sku_info': result}
+                if data.get('status', {}).get('code') == 0:
+                    result = data.get('result', {})
+                    title = result.get('itemTitle', '')
+                    if title:
+                        return {'title': title, 'sku_info': result}
 
-            # API调用失败，记录警告但不尝试HTML fallback
+                time.sleep(0.3 * attempt)
 
             return None
 
@@ -13563,10 +13650,15 @@ class WeidianScraper:
                 '__spider__sessionid': 'e55c6458ac1fdba4'
             }
 
-            response = requests.get(api_url, timeout=15, proxies={'http': None, 'https': None}, headers=headers, cookies=cookies)
-            response.raise_for_status()
-
-            data = response.json()
+            data = self._request_json_with_retry(
+                api_url,
+                headers=headers,
+                cookies=cookies,
+                timeout=15,
+                max_retries=5
+            )
+            if not data:
+                return []
             logger.debug(f"详情图片API返回状态: {data.get('status', {}).get('code')}")
 
             images = []
@@ -13849,8 +13941,15 @@ class WeidianScraper:
             }
 
             # 请求商品页面（使用HTML专用headers）
-            response = requests.get(url, headers=html_headers, cookies=html_cookies, timeout=10, proxies={'http': None, 'https': None})
-            response.raise_for_status()
+            response = self._request_with_retry(
+                url,
+                headers=html_headers,
+                cookies=html_cookies,
+                timeout=10,
+                max_retries=5
+            )
+            if not response:
+                return "未知店铺"
 
             # 解码HTML实体（&#34; -> " 等）
             html_content = response.text
@@ -15503,6 +15602,7 @@ except Exception:
 import numpy as np
 import cv2  # OpenCV for color histogram and structure comparison
 import threading
+import inspect
 from typing import List, Optional, Union, Dict
 import logging
 from pathlib import Path
@@ -15640,18 +15740,54 @@ class DINOv2FeatureExtractor:
             logger.info(f"加载DINOv2特征模型: {model_name}...")
 
             self.processor = AutoImageProcessor.from_pretrained(model_name)
-            self.model = AutoModel.from_pretrained(model_name)
+            self.model = self._load_pretrained_model(model_name, force_no_safetensors=False)
+            if self._model_has_meta(self.model):
+                logger.warning("检测到 meta tensor，尝试禁用 safetensors 重新加载")
+                self.model = self._load_pretrained_model(model_name, force_no_safetensors=True)
+            if self._model_has_meta(self.model):
+                raise RuntimeError("模型仍处于 meta 状态，请检查 transformers/torch 版本或缓存")
             try:
                 self.model.to(self.device)
             except Exception as device_error:
-                logger.warning(f"模型移动到设备失败: {device_error}，改用CPU")
-                self.device = torch.device('cpu')
-                self.model.to(self.device)
+                if "meta" in str(device_error).lower():
+                    logger.warning("检测到 meta tensor，改用CPU并重新加载模型")
+                    self.device = torch.device('cpu')
+                    self.model = self._load_pretrained_model(model_name, force_no_safetensors=True)
+                    self.model.to(self.device)
+                else:
+                    logger.warning(f"模型移动到设备失败: {device_error}，改用CPU")
+                    self.device = torch.device('cpu')
+                    self.model.to(self.device)
             self.model.eval()
             logger.info("✅ DINOv2模型加载成功")
         except Exception as e:
             logger.error(f"❌ DINOv2模型加载失败: {e}")
             raise RuntimeError("DINOv2模型加载失败") from e
+
+    def _load_pretrained_model(self, model_name: str, force_no_safetensors: bool) -> AutoModel:
+        load_kwargs = {
+            'low_cpu_mem_usage': False,
+            'torch_dtype': torch.float32,
+            'device_map': None
+        }
+        if force_no_safetensors:
+            load_kwargs['use_safetensors'] = False
+
+        try:
+            sig = inspect.signature(AutoModel.from_pretrained)
+            allowed = set(sig.parameters.keys())
+            load_kwargs = {k: v for k, v in load_kwargs.items() if k in allowed}
+        except Exception:
+            pass
+
+        return AutoModel.from_pretrained(model_name, **load_kwargs)
+
+    @staticmethod
+    def _model_has_meta(model: AutoModel) -> bool:
+        try:
+            return any(getattr(p, 'is_meta', False) for p in model.parameters())
+        except Exception:
+            return False
 
     def _crop_main_object(self, image_path: str) -> Image.Image:
         """全自动裁剪商品主体 + [新增] 尺寸优化
@@ -15862,7 +15998,7 @@ class DINOv2FeatureExtractor:
         """
         【新增】计算综合相似度 (Re-ranking)
 
-        综合分 = DINO语义分(60%) + 颜色分(25%) + 轮廓分(15%)
+        综合分 = DINO语义分(50%) + 颜色分(30%) + 轮廓分(20%)
 
         Args:
             img_path1: 查询图片路径
@@ -15896,11 +16032,17 @@ class DINOv2FeatureExtractor:
             structure_score = 1.0 - (np.mean(diff) / 255.0)
 
             # === 综合评分公式 (可调优) ===
-            # DINO (语义/版型): 权重 0.6
-            # Color (颜色): 权重 0.25 (对区分不同配色的同款鞋很有用)
-            # Structure (细节): 权重 0.15
+            # DINO (语义/版型): 权重 0.5
+            # Color (颜色): 权重 0.3 (对区分不同配色的同款鞋很有用)
+            # Structure (细节): 权重 0.2
 
-            final_score = (dino_score * 0.6) + (color_score * 0.25) + (structure_score * 0.15)
+            final_score = (dino_score * 0.5) + (color_score * 0.3) + (structure_score * 0.2)
+
+            # 如果颜色/结构明显不一致，适当降分，降低跨品牌误报
+            if color_score < 0.2:
+                final_score *= 0.9
+            if structure_score < 0.2:
+                final_score *= 0.9
 
             logger.debug(f"综合评分: DINO={dino_score:.3f}, Color={color_score:.3f}, Structure={structure_score:.3f}, Final={final_score:.3f}")
 
@@ -16972,19 +17114,29 @@ bot_running = False  # 标记机器人是否正在运行
 
 # 全局特征提取器实例（在应用启动时创建）
 feature_extractor_instance = None
+feature_extractor_lock = threading.Lock()
+feature_extractor_failed_at = 0.0
 
 def initialize_feature_extractor():
     """在应用启动时初始化特征提取器，确保单例模式"""
-    global feature_extractor_instance
+    global feature_extractor_instance, feature_extractor_failed_at
     if feature_extractor_instance is None:
-        print("🚀 初始化全局特征提取器实例...")
-        try:
-            from feature_extractor import DINOv2FeatureExtractor
-            feature_extractor_instance = DINOv2FeatureExtractor()
-            print("✅ 全局特征提取器实例初始化完成")
-        except Exception as e:
-            print(f"❌ 特征提取器初始化失败: {e}")
-            feature_extractor_instance = None
+        with feature_extractor_lock:
+            if feature_extractor_instance is None:
+                if feature_extractor_failed_at:
+                    now = time.time()
+                    if now - feature_extractor_failed_at < 60:
+                        print("⚠️ 特征提取器初始化失败后冷却中，稍后再试")
+                        return None
+                print("🚀 初始化全局特征提取器实例...")
+                try:
+                    from feature_extractor import DINOv2FeatureExtractor
+                    feature_extractor_instance = DINOv2FeatureExtractor()
+                    print("✅ 全局特征提取器实例初始化完成")
+                except Exception as e:
+                    print(f"❌ 特征提取器初始化失败: {e}")
+                    feature_extractor_instance = None
+                    feature_extractor_failed_at = time.time()
     return feature_extractor_instance
 
 def get_global_feature_extractor():
@@ -17397,7 +17549,7 @@ def scrape_product():
     """抓取商品并建立索引"""
     try:
         logger.info("收到商品抓取请求")
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         if data is None:
             logger.error("请求体为空")
             return jsonify({'error': 'Invalid request body'}), 400
@@ -20699,7 +20851,7 @@ def get_shop_info_from_api(shop_id):
 
         api_url = f"https://thor.weidian.com/decorate/customSharePage.getPageInfo/1.0?param={encoded_param}&wdtoken=8ea9315c&_={int(time.time() * 1000)}"
 
-        response = requests.get(api_url, headers={
+        headers = {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
             'Accept': 'application/json, text/plain, */*',
             'Accept-Language': 'en-US,en;q=0.9,zh-HK;q=0.8,zh-CN;q=0.7,zh;q=0.6',
@@ -20711,21 +20863,36 @@ def get_shop_info_from_api(shop_id):
             'Sec-Fetch-Dest': 'empty',
             'Sec-Fetch-Mode': 'cors',
             'Sec-Fetch-Site': 'same-site',
-        }, cookies={
+        }
+        cookies = {
             'wdtoken': '8ea9315c',
             '__spider__visitorid': '0dcf6a5b878847ec',
             'visitor_id': '4d36e980-4128-451c-8178-a976b6303114',
             'v-components/cpn-coupon-dialog@nologinshop': '2',
             '__spider__sessionid': 'c7da7d6e06b1f1ac'
-        }, timeout=10, proxies={'http': None, 'https': None})
+        }
 
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('status', {}).get('code') == 0:
-                result = data.get('result', {})
-                shop_name = result.get('shareTitle', '')
-                if shop_name:
-                    return {'shopName': shop_name}
+        for attempt in range(1, 5):
+            try:
+                response = requests.get(
+                    api_url,
+                    headers=headers,
+                    cookies=cookies,
+                    timeout=10,
+                    proxies={'http': None, 'https': None}
+                )
+                response.raise_for_status()
+                data = response.json()
+                if data.get('status', {}).get('code') == 0:
+                    result = data.get('result', {})
+                    shop_name = result.get('shareTitle', '')
+                    if shop_name:
+                        return {'shopName': shop_name}
+            except Exception as e:
+                if attempt < 4:
+                    time.sleep(0.4 * attempt)
+                    continue
+                raise e
 
     except Exception as e:
         logger.warning(f'获取店铺信息失败: {e}')
@@ -20787,8 +20954,9 @@ def scrape_shop():
 @app.route('/api/scrape/shop/control', methods=['POST'])
 def control_shop_scrape():
     """控制抓取任务: start, stop"""
-    action = request.json.get('action')
-    shop_id = request.json.get('shopId')  # 可选参数
+    data = request.get_json(silent=True) or {}
+    action = data.get('action')
+    shop_id = data.get('shopId')  # 可选参数
 
     global current_scrape_thread, scrape_thread_lock, scrape_stop_event
 
@@ -21537,7 +21705,11 @@ def process_and_save_single_product_sync(product_info):
         # 4. 图片处理 (使用多线程版本)
         if product_data.get('images'):
             from app import save_product_images_unified
-            processed_count = save_product_images_unified(product_id, product_data['images'])
+            processed_count = save_product_images_unified(
+                product_id,
+                product_data['images'],
+                shutdown_event=scrape_stop_event
+            )
             logger.info(f"🖼️ 商品 {item_id} 图片处理完成，共处理 {processed_count} 张图片")
 
         return True

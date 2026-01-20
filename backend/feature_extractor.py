@@ -42,6 +42,7 @@ except Exception:
 import numpy as np
 import cv2  # OpenCV for color histogram and structure comparison
 import threading
+import inspect
 from typing import List, Optional, Union, Dict
 import logging
 from pathlib import Path
@@ -179,18 +180,54 @@ class DINOv2FeatureExtractor:
             logger.info(f"加载DINOv2特征模型: {model_name}...")
 
             self.processor = AutoImageProcessor.from_pretrained(model_name)
-            self.model = AutoModel.from_pretrained(model_name)
+            self.model = self._load_pretrained_model(model_name, force_no_safetensors=False)
+            if self._model_has_meta(self.model):
+                logger.warning("检测到 meta tensor，尝试禁用 safetensors 重新加载")
+                self.model = self._load_pretrained_model(model_name, force_no_safetensors=True)
+            if self._model_has_meta(self.model):
+                raise RuntimeError("模型仍处于 meta 状态，请检查 transformers/torch 版本或缓存")
             try:
                 self.model.to(self.device)
             except Exception as device_error:
-                logger.warning(f"模型移动到设备失败: {device_error}，改用CPU")
-                self.device = torch.device('cpu')
-                self.model.to(self.device)
+                if "meta" in str(device_error).lower():
+                    logger.warning("检测到 meta tensor，改用CPU并重新加载模型")
+                    self.device = torch.device('cpu')
+                    self.model = self._load_pretrained_model(model_name, force_no_safetensors=True)
+                    self.model.to(self.device)
+                else:
+                    logger.warning(f"模型移动到设备失败: {device_error}，改用CPU")
+                    self.device = torch.device('cpu')
+                    self.model.to(self.device)
             self.model.eval()
             logger.info("✅ DINOv2模型加载成功")
         except Exception as e:
             logger.error(f"❌ DINOv2模型加载失败: {e}")
             raise RuntimeError("DINOv2模型加载失败") from e
+
+    def _load_pretrained_model(self, model_name: str, force_no_safetensors: bool) -> AutoModel:
+        load_kwargs = {
+            'low_cpu_mem_usage': False,
+            'torch_dtype': torch.float32,
+            'device_map': None
+        }
+        if force_no_safetensors:
+            load_kwargs['use_safetensors'] = False
+
+        try:
+            sig = inspect.signature(AutoModel.from_pretrained)
+            allowed = set(sig.parameters.keys())
+            load_kwargs = {k: v for k, v in load_kwargs.items() if k in allowed}
+        except Exception:
+            pass
+
+        return AutoModel.from_pretrained(model_name, **load_kwargs)
+
+    @staticmethod
+    def _model_has_meta(model: AutoModel) -> bool:
+        try:
+            return any(getattr(p, 'is_meta', False) for p in model.parameters())
+        except Exception:
+            return False
 
     def _crop_main_object(self, image_path: str) -> Image.Image:
         """全自动裁剪商品主体 + [新增] 尺寸优化
@@ -401,7 +438,7 @@ class DINOv2FeatureExtractor:
         """
         【新增】计算综合相似度 (Re-ranking)
 
-        综合分 = DINO语义分(60%) + 颜色分(25%) + 轮廓分(15%)
+        综合分 = DINO语义分(50%) + 颜色分(30%) + 轮廓分(20%)
 
         Args:
             img_path1: 查询图片路径
@@ -435,11 +472,15 @@ class DINOv2FeatureExtractor:
             structure_score = 1.0 - (np.mean(diff) / 255.0)
 
             # === 综合评分公式 (可调优) ===
-            # DINO (语义/版型): 权重 0.6
-            # Color (颜色): 权重 0.25 (对区分不同配色的同款鞋很有用)
-            # Structure (细节): 权重 0.15
+            # DINO (语义/版型): 权重 0.5
+            # Color (颜色): 权重 0.3 (对区分不同配色的同款鞋很有用)
+            # Structure (细节): 权重 0.2
 
-            final_score = (dino_score * 0.6) + (color_score * 0.25) + (structure_score * 0.15)
+            final_score = (dino_score * 0.5) + (color_score * 0.3) + (structure_score * 0.2)
+
+            # 如果颜色明显不一致，适当降分，降低跨品牌误报
+            if color_score < 0.5:
+                final_score *= 0.8
 
             logger.debug(f"综合评分: DINO={dino_score:.3f}, Color={color_score:.3f}, Structure={structure_score:.3f}, Final={final_score:.3f}")
 

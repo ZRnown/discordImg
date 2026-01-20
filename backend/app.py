@@ -361,19 +361,29 @@ bot_running = False  # 标记机器人是否正在运行
 
 # 全局特征提取器实例（在应用启动时创建）
 feature_extractor_instance = None
+feature_extractor_lock = threading.Lock()
+feature_extractor_failed_at = 0.0
 
 def initialize_feature_extractor():
     """在应用启动时初始化特征提取器，确保单例模式"""
-    global feature_extractor_instance
+    global feature_extractor_instance, feature_extractor_failed_at
     if feature_extractor_instance is None:
-        print("🚀 初始化全局特征提取器实例...")
-        try:
-            from feature_extractor import DINOv2FeatureExtractor
-            feature_extractor_instance = DINOv2FeatureExtractor()
-            print("✅ 全局特征提取器实例初始化完成")
-        except Exception as e:
-            print(f"❌ 特征提取器初始化失败: {e}")
-            feature_extractor_instance = None
+        with feature_extractor_lock:
+            if feature_extractor_instance is None:
+                if feature_extractor_failed_at:
+                    now = time.time()
+                    if now - feature_extractor_failed_at < 60:
+                        print("⚠️ 特征提取器初始化失败后冷却中，稍后再试")
+                        return None
+                print("🚀 初始化全局特征提取器实例...")
+                try:
+                    from feature_extractor import DINOv2FeatureExtractor
+                    feature_extractor_instance = DINOv2FeatureExtractor()
+                    print("✅ 全局特征提取器实例初始化完成")
+                except Exception as e:
+                    print(f"❌ 特征提取器初始化失败: {e}")
+                    feature_extractor_instance = None
+                    feature_extractor_failed_at = time.time()
     return feature_extractor_instance
 
 def get_global_feature_extractor():
@@ -610,9 +620,9 @@ def search_similar():
             # 【优化】使用 FAISS HNSW 向量搜索 + 综合评分重排序
             print(f"DEBUG: Searching with threshold: {threshold}, vector length: {len(query_features)}")
 
-            # 1. 扩大召回范围：FAISS 先找前 30 个候选 (Primary Search)
+            # 1. 扩大召回范围：FAISS 先找前 50 个候选 (Primary Search)
             # 使用较低的阈值召回，防止漏掉可能的匹配
-            candidates_limit = 30
+            candidates_limit = 50
             raw_results = db.search_similar_images(query_features, limit=candidates_limit, threshold=0.05)
             print(f"DEBUG: FAISS recalled {len(raw_results) if raw_results else 0} candidates")
 
@@ -786,7 +796,7 @@ def scrape_product():
     """抓取商品并建立索引"""
     try:
         logger.info("收到商品抓取请求")
-        data = request.get_json()
+        data = request.get_json(silent=True) or {}
         if data is None:
             logger.error("请求体为空")
             return jsonify({'error': 'Invalid request body'}), 400
@@ -1572,9 +1582,12 @@ def health_check():
 # === 新增：系统统计信息API ===
 @app.route('/api/system/stats', methods=['GET'])
 def get_system_stats():
-    """获取系统统计信息"""
+    """获取系统统计信息 (带权限隔离)"""
     try:
-        stats = db.get_system_stats()
+        user = get_current_user()
+        if not user:
+            return jsonify({'shop_count': 0, 'product_count': 0, 'image_count': 0, 'user_count': 0})
+        stats = db.get_system_stats(user['id'], user['role'])
         return jsonify(stats)
     except Exception as e:
         logger.error(f"获取系统统计信息失败: {e}")
@@ -4088,7 +4101,7 @@ def get_shop_info_from_api(shop_id):
 
         api_url = f"https://thor.weidian.com/decorate/customSharePage.getPageInfo/1.0?param={encoded_param}&wdtoken=8ea9315c&_={int(time.time() * 1000)}"
 
-        response = requests.get(api_url, headers={
+        headers = {
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36',
             'Accept': 'application/json, text/plain, */*',
             'Accept-Language': 'en-US,en;q=0.9,zh-HK;q=0.8,zh-CN;q=0.7,zh;q=0.6',
@@ -4100,21 +4113,36 @@ def get_shop_info_from_api(shop_id):
             'Sec-Fetch-Dest': 'empty',
             'Sec-Fetch-Mode': 'cors',
             'Sec-Fetch-Site': 'same-site',
-        }, cookies={
+        }
+        cookies = {
             'wdtoken': '8ea9315c',
             '__spider__visitorid': '0dcf6a5b878847ec',
             'visitor_id': '4d36e980-4128-451c-8178-a976b6303114',
             'v-components/cpn-coupon-dialog@nologinshop': '2',
             '__spider__sessionid': 'c7da7d6e06b1f1ac'
-        }, timeout=10, proxies={'http': None, 'https': None})
+        }
 
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('status', {}).get('code') == 0:
-                result = data.get('result', {})
-                shop_name = result.get('shareTitle', '')
-                if shop_name:
-                    return {'shopName': shop_name}
+        for attempt in range(1, 5):
+            try:
+                response = requests.get(
+                    api_url,
+                    headers=headers,
+                    cookies=cookies,
+                    timeout=10,
+                    proxies={'http': None, 'https': None}
+                )
+                response.raise_for_status()
+                data = response.json()
+                if data.get('status', {}).get('code') == 0:
+                    result = data.get('result', {})
+                    shop_name = result.get('shareTitle', '')
+                    if shop_name:
+                        return {'shopName': shop_name}
+            except Exception as e:
+                if attempt < 4:
+                    time.sleep(0.4 * attempt)
+                    continue
+                raise e
 
     except Exception as e:
         logger.warning(f'获取店铺信息失败: {e}')
@@ -4176,8 +4204,9 @@ def scrape_shop():
 @app.route('/api/scrape/shop/control', methods=['POST'])
 def control_shop_scrape():
     """控制抓取任务: start, stop"""
-    action = request.json.get('action')
-    shop_id = request.json.get('shopId')  # 可选参数
+    data = request.get_json(silent=True) or {}
+    action = data.get('action')
+    shop_id = data.get('shopId')  # 可选参数
 
     global current_scrape_thread, scrape_thread_lock, scrape_stop_event
 
@@ -4926,7 +4955,11 @@ def process_and_save_single_product_sync(product_info):
         # 4. 图片处理 (使用多线程版本)
         if product_data.get('images'):
             from app import save_product_images_unified
-            processed_count = save_product_images_unified(product_id, product_data['images'])
+            processed_count = save_product_images_unified(
+                product_id,
+                product_data['images'],
+                shutdown_event=scrape_stop_event
+            )
             logger.info(f"🖼️ 商品 {item_id} 图片处理完成，共处理 {processed_count} 张图片")
 
         return True

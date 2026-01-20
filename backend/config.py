@@ -46,8 +46,8 @@ class Config:
     COMMAND_PREFIX = '!'
 
     # === AI 模型 ===
-    DINO_MODEL_NAME = 'facebook/dinov2-small'
-    VECTOR_DIMENSION = 384
+    DINO_MODEL_NAME = 'facebook/dinov2-base'
+    VECTOR_DIMENSION = 768
     YOLO_MODEL_PATH = 'yolov8s-world.pt'
     USE_YOLO_CROP = True
 
@@ -72,8 +72,8 @@ class Config:
 
     # === FAISS ===
     FAISS_HNSW_M = 64
-    FAISS_EF_CONSTRUCTION = 80
-    FAISS_EF_SEARCH = 80
+    FAISS_EF_CONSTRUCTION = 128
+    FAISS_EF_SEARCH = 128
 
     # === 路径 ===
     BASE_DIR = os.path.dirname(os.path.dirname(__file__))
