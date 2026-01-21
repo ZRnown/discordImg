@@ -711,25 +711,39 @@ class DiscordBotClient(discord.Client):
 
             user_settings = None
 
-            # 0. 尺码过滤逻辑
-            min_size = 35
-            max_size = 46
+            # 0. 数字范围过滤逻辑（可配置关键词）
+            filter_keyword = ''
+            min_value = 35
+            max_value = 46
 
             if self.user_id:
                 user_settings = db.get_user_settings(self.user_id)
                 if user_settings:
-                    min_size = user_settings.get('filter_size_min', 35)
-                    max_size = user_settings.get('filter_size_max', 46)
+                    filter_keyword = (user_settings.get('numeric_filter_keyword') or '').strip()
+                    min_value = user_settings.get('filter_size_min', 35)
+                    max_value = user_settings.get('filter_size_max', 46)
 
-            size_matches = re.findall(r'(?i)size\s*[:=-]?\s*(\d+)', message.content or '')
-            for size_str in size_matches:
+            if filter_keyword:
                 try:
-                    size = int(size_str)
-                    if size < min_size or size > max_size:
-                        logger.info(f'🚫 消息被过滤: 尺码 {size} 超出范围 ({min_size}-{max_size})')
-                        return True
-                except ValueError:
-                    continue
+                    min_value = int(min_value)
+                    max_value = int(max_value)
+                except (TypeError, ValueError):
+                    min_value = None
+                    max_value = None
+
+                if min_value is not None and max_value is not None and min_value < max_value:
+                    pattern = rf'(?i){re.escape(filter_keyword)}\s*[:=-]?\s*(\d+)'
+                    value_matches = re.findall(pattern, message.content or '')
+                    for value_str in value_matches:
+                        try:
+                            value = int(value_str)
+                            if value < min_value or value > max_value:
+                                logger.info(
+                                    f'🚫 消息被过滤: {filter_keyword} {value} 超出范围 ({min_value}-{max_value})'
+                                )
+                                return True
+                        except ValueError:
+                            continue
 
             # 1. 检查全局消息过滤规则
             filters = db.get_message_filters()

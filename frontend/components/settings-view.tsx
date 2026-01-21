@@ -27,6 +27,7 @@ interface UserSettings {
   keyword_reply_enabled: boolean
   image_reply_enabled: boolean
   global_reply_template: string
+  numeric_filter_keyword: string
   filter_size_min: number
   filter_size_max: number
 }
@@ -47,6 +48,7 @@ export function SettingsView() {
     keyword_reply_enabled: true,
     image_reply_enabled: true,
     global_reply_template: '',
+    numeric_filter_keyword: 'size',
     filter_size_min: 35,
     filter_size_max: 46,
   })
@@ -85,6 +87,7 @@ export function SettingsView() {
           keyword_reply_enabled: data.keyword_reply_enabled === 1 || data.keyword_reply_enabled === true,
           image_reply_enabled: data.image_reply_enabled === 1 || data.image_reply_enabled === true,
           global_reply_template: data.global_reply_template ?? '',
+          numeric_filter_keyword: data.numeric_filter_keyword ?? 'size',
           filter_size_min: data.filter_size_min ?? 35,
           filter_size_max: data.filter_size_max ?? 46,
         })
@@ -164,10 +167,12 @@ export function SettingsView() {
         return
       }
 
-      if (settings.filter_size_min >= settings.filter_size_max) {
-        toast.error("最小尺码必须小于最大尺码")
-        setSaving(false)
-        return
+      if (settings.numeric_filter_keyword.trim()) {
+        if (settings.filter_size_min >= settings.filter_size_max) {
+          toast.error("最小数字必须小于最大数字")
+          setSaving(false)
+          return
+        }
       }
 
       // 保存用户个性化设置
@@ -556,9 +561,19 @@ export function SettingsView() {
             </div>
           </div>
 
-          {/* 尺码过滤设置 */}
+          {/* 数字范围过滤设置 */}
           <div className="space-y-2 pt-4 border-t">
-            <Label className="text-sm font-medium">尺码过滤范围 (Size Filter)</Label>
+            <Label className="text-sm font-medium">数字范围过滤</Label>
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">匹配关键词</Label>
+              <Input
+                type="text"
+                value={settings.numeric_filter_keyword}
+                onChange={(e) => setSettings(prev => ({ ...prev, numeric_filter_keyword: e.target.value }))}
+                placeholder="例如: size"
+                className="h-9"
+              />
+            </div>
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-2">
                 <span className="text-sm text-muted-foreground">小于</span>
@@ -582,7 +597,7 @@ export function SettingsView() {
               </div>
             </div>
             <p className="text-xs text-muted-foreground mt-1">
-              当消息包含 "size 48" 等内容时，如果数字超出此范围，机器人将忽略该消息。
+              匹配关键词后面的数字（如 "size 49"）。超出范围将忽略该消息；清空关键词可禁用该规则。
             </p>
           </div>
         </CardContent>

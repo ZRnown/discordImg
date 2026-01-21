@@ -2823,6 +2823,7 @@ def update_user_settings():
             keyword_reply_enabled=keyword_reply,
             image_reply_enabled=image_reply,
             global_reply_template=data.get('global_reply_template'),
+            numeric_filter_keyword=data.get('numeric_filter_keyword'),
             filter_size_min=data.get('filter_size_min'),
             filter_size_max=data.get('filter_size_max')
         )
