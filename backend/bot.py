@@ -534,8 +534,14 @@ class DiscordBotClient(discord.Client):
                             if hasattr(target_client, 'account_id') and target_client.account_id:
                                 set_account_cooldown(target_client.account_id, message.channel.id)
 
+                            reply_preview = (response_content or '').replace('\n', ' ').strip()
+                            if not reply_preview and files:
+                                reply_preview = f"[图片 {len(files)}]"
+                            if len(reply_preview) > 120:
+                                reply_preview = f"{reply_preview[:120]}..."
+                            author_label = f"{message.author.name}({message.author.id})"
                             logger.info(
-                                f"✅ [回复成功] 真实发送账号: {target_client.user.name} (ID: {target_client.account_id}) | 商品ID: {product.get('id')} | 图片数量: {len(files)}"
+                                f"✅ [回复成功] {target_client.user.name} -> {author_label}: {reply_preview} | 商品ID: {product.get('id')}"
                             )
                             try:
                                 has_text = bool(response_content)
@@ -559,8 +565,12 @@ class DiscordBotClient(discord.Client):
                             if hasattr(target_client, 'account_id') and target_client.account_id:
                                 set_account_cooldown(target_client.account_id, message.channel.id)
 
+                            reply_preview = (response_content or '').replace('\n', ' ').strip()
+                            if len(reply_preview) > 120:
+                                reply_preview = f"{reply_preview[:120]}..."
+                            author_label = f"{message.author.name}({message.author.id})"
                             logger.info(
-                                f"✅ [发送成功] 真实发送账号: {target_client.user.name} | 商品ID: {product.get('id')}"
+                                f"✅ [发送成功] {target_client.user.name} -> {author_label}: {reply_preview} | 商品ID: {product.get('id')}"
                             )
                             try:
                                 if website_config and website_config.get('id') and response_content:

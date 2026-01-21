@@ -22,15 +22,32 @@ export function LogsView() {
   const [isPaused, setIsPaused] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
-  const logsBaseUrl = (process.env.NEXT_PUBLIC_BACKEND_URL || '').replace(/\/+$/, '')
+  const logLimit = 500
+
+  const isRelevantLog = (log: LogEntry) => {
+    const message = log.message || ''
+    return (
+      message.includes('回复成功') ||
+      message.includes('发送成功') ||
+      message.includes('抓取完成') ||
+      message.includes('抓取失败') ||
+      message.includes('严格模式失败') ||
+      message.includes('处理失败') ||
+      message.includes('启动Discord机器人') ||
+      message.includes('Discord机器人启动成功') ||
+      message.includes('Discord机器人已登录') ||
+      message.includes('正在启动机器人账号')
+    )
+  }
 
   // 加载历史日志
   const loadRecentLogs = async () => {
     try {
-      const response = await fetch(`${logsBaseUrl}/api/logs/recent`)
+      const response = await fetch('/api/logs/recent')
       if (response.ok) {
         const data = await response.json()
-        setLogs(data.logs || [])
+        const filtered = (data.logs || []).filter(isRelevantLog)
+        setLogs(filtered.slice(-logLimit))
       }
     } catch (error) {
       console.error('加载历史日志失败:', error)
@@ -43,7 +60,7 @@ export function LogsView() {
       eventSourceRef.current.close()
     }
 
-    const eventSource = new EventSource(`${logsBaseUrl}/api/logs/stream`)
+    const eventSource = new EventSource('/api/logs/stream')
     eventSourceRef.current = eventSource
 
     eventSource.onopen = () => {
@@ -60,7 +77,10 @@ export function LogsView() {
           return
         }
 
-        setLogs((prev) => [...prev, logEntry].slice(-200)) // 保持最近200条日志
+        if (!isRelevantLog(logEntry)) {
+          return
+        }
+        setLogs((prev) => [...prev, logEntry].slice(-logLimit))
       } catch (error) {
         console.error('解析日志数据失败:', error, event.data)
       }
@@ -180,16 +200,16 @@ export function LogsView() {
         <CardHeader>
           <CardTitle>系统日志流</CardTitle>
           <CardDescription>
-            共 {logs.length} 条记录 • {isPaused ? '已暂停' : '实时监控中'}
+            共 {logs.length} 条记录（最多保留 {logLimit} 条） • {isPaused ? '已暂停' : '实时监控中'}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <ScrollArea className="h-[600px] w-full rounded-md border bg-black/90 p-4">
-            <div className="space-y-3 font-mono text-[11px] leading-relaxed">
+            <div className="space-y-1 font-mono text-[10px] leading-tight">
               {logs.map((log, index) => (
                 <div
                   key={`${log.timestamp}-${index}`}
-                  className="flex items-start gap-3 text-green-400 hover:bg-white/5 p-2 rounded transition-colors border-b border-white/5 last:border-0"
+                  className="flex items-start gap-2 text-green-400 hover:bg-white/5 p-1 rounded transition-colors border-b border-white/5 last:border-0"
                 >
                   <span className="text-gray-500 shrink-0 font-bold">
                     {formatTimestamp(log.timestamp)}

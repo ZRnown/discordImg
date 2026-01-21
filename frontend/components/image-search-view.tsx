@@ -26,6 +26,34 @@ export function ImageSearchView() {
   const [hasMoreHistory, setHasMoreHistory] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
 
+  const copyToClipboard = async (text: string) => {
+    if (!text) return
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text)
+        toast.success("链接已复制")
+        return
+      }
+    } catch {
+      // fallback below
+    }
+
+    try {
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.focus()
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+      toast.success("链接已复制")
+    } catch {
+      toast.error("复制失败")
+    }
+  }
+
   // 加载搜索历史
   useEffect(() => {
     fetchSearchHistory()
@@ -439,9 +467,10 @@ export function ImageSearchView() {
                                 variant="ghost"
                                 size="icon"
                                 className="h-5 w-5 shrink-0 opacity-50 hover:opacity-100"
-                                onClick={() => {
-                                  navigator.clipboard.writeText(site.url)
-                                  toast.success("已复制链接")
+                                onClick={(event) => {
+                                  event.preventDefault()
+                                  event.stopPropagation()
+                                  copyToClipboard(site.url)
                                 }}
                               >
                                 <Copy className="h-3 w-3"/>
@@ -450,11 +479,7 @@ export function ImageSearchView() {
                           </div>
                         ))}
                       </div>
-                      {(result.product.websiteUrls || []).length > 8 && (
-                        <div className="mt-2 text-xs text-muted-foreground">
-                          还有 {(result.product.websiteUrls || []).length - 8} 个网站链接...
-                        </div>
-                      )}
+                      {/* 超过 8 个时不显示额外链接 */}
                     </div>
                   </div>
                 ))}
@@ -501,6 +526,7 @@ export function ImageSearchView() {
                         { display_name: 'CNFans', url: history.cnfans_url, badge_color: 'blue' },
                         { display_name: 'ACBuy', url: history.acbuy_url, badge_color: 'purple' }
                       ].filter(site => site.url)
+                  const limitedHistoryLinks = historyLinks.slice(0, 8)
 
                   return (
                     <div key={history.id} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3">
@@ -555,7 +581,7 @@ export function ImageSearchView() {
                       {/* 链接显示区域 */}
                       <div className="w-full lg:w-1/2 mt-2 lg:mt-0 flex items-start gap-2">
                         <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 flex-1 min-w-0">
-                          {historyLinks.map((site: any, index: number) => (
+                          {limitedHistoryLinks.map((site: any, index: number) => (
                             <div
                               key={`${history.id}-${index}`}
                               className="flex items-center gap-1 min-w-0 bg-muted/40 p-1 rounded border border-transparent hover:border-border transition-colors"
@@ -579,9 +605,10 @@ export function ImageSearchView() {
                                   variant="ghost"
                                   size="icon"
                                   className="h-5 w-5 shrink-0 opacity-50 hover:opacity-100"
-                                  onClick={() => {
-                                    navigator.clipboard.writeText(site.url)
-                                    toast.success("链接已复制")
+                                  onClick={(event) => {
+                                    event.preventDefault()
+                                    event.stopPropagation()
+                                    copyToClipboard(site.url)
                                   }}
                                 >
                                   <Copy className="h-3 w-3"/>

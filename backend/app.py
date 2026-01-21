@@ -299,7 +299,7 @@ class QueueHandler(logging.Handler):
 
             # 添加到日志列表（限制大小）
             all_logs.append(log_entry)
-            if len(all_logs) > 200:  # 最多保存200条日志
+            if len(all_logs) > 500:  # 最多保存500条日志
                 all_logs.pop(0)
 
             log_queue.put(log_entry)
@@ -1610,7 +1610,7 @@ def get_system_stats():
     try:
         user = get_current_user()
         if not user:
-            return jsonify({'shop_count': 0, 'product_count': 0, 'image_count': 0, 'user_count': 0})
+            return jsonify({'shop_count': 0, 'product_count': 0, 'image_count': 0, 'user_count': 0, 'total_replies': 0})
         stats = db.get_system_stats(user['id'], user['role'])
         return jsonify(stats)
     except Exception as e:
@@ -3726,7 +3726,7 @@ def log_stream():
 
         try:
             # 发送最近的日志历史
-            for log_entry in all_logs[-20:]:  # 发送最近20条历史日志
+            for log_entry in all_logs[-50:]:  # 发送最近50条历史日志
                 yield f"data: {json.dumps(log_entry)}\n\n"
 
             # 持续监听新日志
@@ -3756,9 +3756,9 @@ def log_stream():
 def get_recent_logs():
     """获取最近的日志记录"""
     try:
-        # 从日志列表中返回最近50条日志
+        # 从日志列表中返回最近500条日志
         return jsonify({
-            'logs': all_logs[-50:],
+            'logs': all_logs[-500:],
             'total': len(all_logs)
         })
     except Exception as e:
@@ -3784,7 +3784,7 @@ def add_external_log():
 
         # 添加到日志列表
         all_logs.append(log_entry)
-        if len(all_logs) > 200:
+        if len(all_logs) > 500:
             all_logs.pop(0)
 
         # 添加到队列

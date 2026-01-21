@@ -561,45 +561,6 @@ export function SettingsView() {
             </div>
           </div>
 
-          {/* 数字范围过滤设置 */}
-          <div className="space-y-2 pt-4 border-t">
-            <Label className="text-sm font-medium">数字范围过滤</Label>
-            <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">匹配关键词</Label>
-              <Input
-                type="text"
-                value={settings.numeric_filter_keyword}
-                onChange={(e) => setSettings(prev => ({ ...prev, numeric_filter_keyword: e.target.value }))}
-                placeholder="例如: size"
-                className="h-9"
-              />
-            </div>
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground">小于</span>
-                <Input
-                  type="number"
-                  value={settings.filter_size_min}
-                  onChange={(e) => setSettings(prev => ({ ...prev, filter_size_min: parseInt(e.target.value) || 0 }))}
-                  className="w-20 h-9"
-                />
-                <span className="text-sm text-muted-foreground">不回复</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground">大于</span>
-                <Input
-                  type="number"
-                  value={settings.filter_size_max}
-                  onChange={(e) => setSettings(prev => ({ ...prev, filter_size_max: parseInt(e.target.value) || 0 }))}
-                  className="w-20 h-9"
-                />
-                <span className="text-sm text-muted-foreground">不回复</span>
-              </div>
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              匹配关键词后面的数字（如 "size 49"）。超出范围将忽略该消息；清空关键词可禁用该规则。
-            </p>
-          </div>
         </CardContent>
       </Card>
 

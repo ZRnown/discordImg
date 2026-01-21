@@ -1372,58 +1372,62 @@ export function AccountsView() {
               <div className="space-y-4">
                 {websites.map((website: any) => (
                   <div key={website.id} className="border rounded-lg p-4">
-                    <div className="flex justify-between items-start mb-3">
-                      <div className="flex items-center gap-2">
-                        <span className={`inline-flex items-center rounded-md border font-medium w-fit whitespace-nowrap text-[9px] px-1 py-0 h-4 border-none shrink-0 text-white ${
-                          website.badge_color === 'blue' ? 'bg-blue-600' :
-                          website.badge_color === 'green' ? 'bg-green-600' :
-                          website.badge_color === 'orange' ? 'bg-orange-600' :
-                          website.badge_color === 'red' ? 'bg-red-600' :
-                          website.badge_color === 'purple' ? 'bg-purple-600' :
-                          'bg-gray-600'
-                        }`}>
-                          {website.display_name}
-                        </span>
-                        <span className="text-sm font-medium">{website.name}</span>
-                      </div>
-                      {/* 只有管理员可以编辑/删除网站定义 */}
-                      {currentUser?.role === 'admin' && (
-                        <div className="flex gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setEditingWebsite(website)}
-                          >
-                            <Edit className="w-4 h-4" />
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleDeleteWebsite(website)}
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
+                    <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3 mb-3">
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <span className={`inline-flex items-center rounded-md border font-medium w-fit whitespace-nowrap text-[9px] px-1 py-0 h-4 border-none shrink-0 text-white ${
+                            website.badge_color === 'blue' ? 'bg-blue-600' :
+                            website.badge_color === 'green' ? 'bg-green-600' :
+                            website.badge_color === 'orange' ? 'bg-orange-600' :
+                            website.badge_color === 'red' ? 'bg-red-600' :
+                            website.badge_color === 'purple' ? 'bg-purple-600' :
+                            'bg-gray-600'
+                          }`}>
+                            {website.display_name}
+                          </span>
+                          <span className="text-sm font-medium">{website.name}</span>
                         </div>
-                      )}
-                    </div>
-
-                    <div className="text-xs text-muted-foreground mb-3">
-                      <div>URL模板: {website.url_template}</div>
-                      <div>ID模式: {website.id_pattern}</div>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-2 text-center mb-3">
-                      <div className="bg-muted/30 p-2 rounded">
-                        <div className="text-xs text-muted-foreground">总回复</div>
-                        <div className="text-lg font-bold">{website.stat_replies_total || 0}</div>
+                        <div className="text-xs text-muted-foreground">
+                          <div>URL模板: {website.url_template}</div>
+                          <div>ID模式: {website.id_pattern}</div>
+                        </div>
                       </div>
-                      <div className="bg-blue-50/50 p-2 rounded">
-                        <div className="text-xs text-blue-600">文本回复</div>
-                        <div className="text-lg font-bold text-blue-700">{website.stat_replies_text || 0}</div>
-                      </div>
-                      <div className="bg-green-50/50 p-2 rounded">
-                        <div className="text-xs text-green-600">图片回复</div>
-                        <div className="text-lg font-bold text-green-700">{website.stat_replies_image || 0}</div>
+
+                      <div className="flex flex-col items-start lg:items-end gap-2">
+                        {/* 只有管理员可以编辑/删除网站定义 */}
+                        {currentUser?.role === 'admin' && (
+                          <div className="flex gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setEditingWebsite(website)}
+                            >
+                              <Edit className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleDeleteWebsite(website)}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-3 gap-2 text-center">
+                          <div className="bg-muted/40 px-2 py-1 rounded">
+                            <div className="text-[10px] text-muted-foreground">总回复</div>
+                            <div className="text-sm font-semibold">{website.stat_replies_total || 0}</div>
+                          </div>
+                          <div className="bg-muted/40 px-2 py-1 rounded">
+                            <div className="text-[10px] text-muted-foreground">文本回复</div>
+                            <div className="text-sm font-semibold">{website.stat_replies_text || 0}</div>
+                          </div>
+                          <div className="bg-muted/40 px-2 py-1 rounded">
+                            <div className="text-[10px] text-muted-foreground">图片回复</div>
+                            <div className="text-sm font-semibold">{website.stat_replies_image || 0}</div>
+                          </div>
+                        </div>
                       </div>
                     </div>
 

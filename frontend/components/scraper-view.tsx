@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { Copy, ChevronLeft, ChevronRight, Trash2, ImageIcon, Edit, X, Download, Loader2, List, Upload, Store, CheckSquare, Square, Search, ChevronDown, ChevronUp, Pause, Play, StopCircle, AlertCircle } from "lucide-react"
+import { Copy, ChevronLeft, ChevronRight, Trash2, ImageIcon, Edit, X, Download, Loader2, List, Upload, Store, CheckSquare, Square, Search, Pause, Play, StopCircle, AlertCircle } from "lucide-react"
 import { toast } from "sonner"
 import {
   Dialog,
@@ -125,8 +125,6 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   // 图片上传 ref
   const uploadInputRef = useRef<HTMLInputElement>(null)
   const [isUploadingImg, setIsUploadingImg] = useState(false)
-  const [productUrls, setProductUrls] = useState<{[key: number]: any[]}>({})
-  const [expandedProducts, setExpandedProducts] = useState<Set<number>>(new Set())
   const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null)
   const [batchUploading, setBatchUploading] = useState(false)
   const [lightboxOpen, setLightboxOpen] = useState(false)
@@ -148,6 +146,34 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   const [totalProductsCount, setTotalProductsCount] = useState(0)
   // 搜索类型状态
   const [searchType, setSearchType] = useState<'all' | 'id' | 'keyword' | 'chinese'>('all')
+
+  const copyToClipboard = async (text: string) => {
+    if (!text) return
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text)
+        toast.success("链接已复制")
+        return
+      }
+    } catch {
+      // fallback below
+    }
+
+    try {
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.focus()
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+      toast.success("链接已复制")
+    } catch {
+      toast.error("复制失败")
+    }
+  }
 
   // 优化：分离不同类型的加载逻辑
   useEffect(() => {
@@ -526,15 +552,6 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     if (totalProducts === 0) return
     setSelectAllAcrossPages(true)
     setSelectedProducts(currentProducts.map(p => p.id))
-  }
-
-  const toggleProductExpansion = (productId: number) => {
-    setExpandedProducts(prev => {
-      const newSet = new Set(prev)
-      if (newSet.has(productId)) newSet.delete(productId)
-      else newSet.add(productId)
-      return newSet
-    })
   }
 
   const handleDeleteProduct = async (id: number) => {
@@ -1085,8 +1102,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
           <div className="divide-y overflow-x-hidden">
                     {currentProducts.map((product) => {
                         const links = getProductLinks(product);
-                        const showAllLinks = expandedProducts.has(product.id);
-                        const displayedLinks = showAllLinks ? links : links.slice(0, 6);
+                        const displayedLinks = links.slice(0, 8)
                         return (
               <div key={product.id} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3 min-w-0">
                 <div className="flex gap-3 items-center">
@@ -1269,9 +1285,10 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                             variant="ghost"
                             size="icon"
                             className="h-5 w-5 shrink-0 opacity-50 hover:opacity-100"
-                            onClick={() => {
-                              navigator.clipboard.writeText(link.url)
-                              toast.success("链接已复制")
+                            onClick={(event) => {
+                              event.preventDefault()
+                              event.stopPropagation()
+                              copyToClipboard(link.url)
                             }}
                           >
                             <Copy className="h-3 w-3"/>
@@ -1279,17 +1296,6 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                         </div>
                       </div>
                     ))}
-                    {links.length > 6 && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 text-xs col-span-2 sm:col-span-3"
-                        onClick={() => toggleProductExpansion(product.id)}
-                      >
-                        {showAllLinks ? <ChevronUp className="h-3 w-3"/> : <ChevronDown className="h-3 w-3"/>}
-                        {showAllLinks ? "收起" : `显示更多 (${links.length - 6})`}
-                      </Button>
-                    )}
                   </div>
                                 {/* 操作按钮组 */}
                                 <div className="flex items-center gap-1 ml-auto shrink-0">

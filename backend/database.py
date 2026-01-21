@@ -2066,8 +2066,17 @@ class Database:
                 shop_names_str = shop_result[1]
                 shop_names = shop_names_str.split(',') if shop_names_str else []
 
+                cursor.execute("SELECT COALESCE(SUM(stat_replies_total), 0) FROM website_configs")
+                total_replies = cursor.fetchone()[0] or 0
+
                 if shop_count == 0 and role != 'admin':
-                    return {'shop_count': 0, 'product_count': 0, 'image_count': 0, 'user_count': 0}
+                    return {
+                        'shop_count': 0,
+                        'product_count': 0,
+                        'image_count': 0,
+                        'user_count': 0,
+                        'total_replies': total_replies
+                    }
 
                 # 2. 统计商品
                 if role == 'admin' or user_id is None:
@@ -2104,11 +2113,12 @@ class Database:
                     'shop_count': shop_count,
                     'product_count': product_count,
                     'image_count': image_count,
-                    'user_count': user_count
+                    'user_count': user_count,
+                    'total_replies': total_replies
                 }
         except Exception as e:
             logger.error(f"获取系统统计信息失败: {e}")
-            return {'shop_count': 0, 'product_count': 0, 'image_count': 0, 'user_count': 0}
+            return {'shop_count': 0, 'product_count': 0, 'image_count': 0, 'user_count': 0, 'total_replies': 0}
 
     def cleanup_orphaned_images(self) -> int:
         """清理孤立的图片记录（没有对应商品的图片）"""
