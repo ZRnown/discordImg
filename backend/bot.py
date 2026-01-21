@@ -1253,6 +1253,10 @@ class DiscordBotClient(discord.Client):
                 english_title = (product.get('english_title') or product.get('englishTitle') or '').lower()
                 if query_lower and (query_lower in title or query_lower in english_title):
                     return True
+                if title and len(title) >= 2 and title in query_lower:
+                    return True
+                if english_title and len(english_title) >= 2 and english_title in query_lower:
+                    return True
                 keywords = [kw for kw in re.findall(r'\w+', query_lower) if len(kw) >= 2]
                 return any(kw in title or kw in english_title for kw in keywords)
 

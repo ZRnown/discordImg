@@ -3597,6 +3597,29 @@ def search_similar_text():
             """, (f'%{query_lower}%', f'%{query_lower}%', limit))
 
             rows = cursor.fetchall()
+            if not rows:
+                cursor.execute("""
+                    SELECT id, product_url, title, english_title, description,
+                           ruleEnabled, min_delay, max_delay, created_at,
+                           cnfans_url, shop_name, custom_reply_text,
+                           custom_reply_images, custom_image_urls, image_source,
+                           reply_scope,
+                           uploaded_reply_images
+                    FROM products
+                    WHERE (
+                        english_title IS NOT NULL
+                        AND LENGTH(TRIM(english_title)) >= 2
+                        AND INSTR(?, LOWER(english_title)) > 0
+                    )
+                    OR (
+                        title IS NOT NULL
+                        AND LENGTH(TRIM(title)) >= 2
+                        AND INSTR(?, LOWER(title)) > 0
+                    )
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                """, (query_lower, query_lower, limit))
+                rows = cursor.fetchall()
 
             products = []
             for row in rows:
