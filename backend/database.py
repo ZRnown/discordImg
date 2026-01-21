@@ -359,6 +359,53 @@ class Database:
             except sqlite3.OperationalError:
                 pass
 
+            # 检测并迁移旧的唯一约束 (UNIQUE(website_id, channel_id) -> UNIQUE(website_id, channel_id, user_id))
+            needs_migration = False
+            table_exists = False
+            try:
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='website_channel_bindings'")
+                table_exists = cursor.fetchone() is not None
+            except sqlite3.OperationalError:
+                table_exists = False
+
+            if table_exists:
+                try:
+                    cursor.execute("PRAGMA index_list(website_channel_bindings)")
+                    for idx in cursor.fetchall():
+                        if len(idx) > 2 and idx[2]:
+                            index_name = idx[1]
+                            cursor.execute(f'PRAGMA index_info("{index_name}")')
+                            col_names = [row[2] for row in cursor.fetchall()]
+                            if 'website_id' in col_names and 'channel_id' in col_names and 'user_id' not in col_names:
+                                needs_migration = True
+                                break
+                except sqlite3.OperationalError:
+                    pass
+
+            if needs_migration:
+                logger.info("🔄 检测到旧的频道绑定表结构，正在迁移以支持多用户绑定...")
+                try:
+                    cursor.execute("ALTER TABLE website_channel_bindings RENAME TO website_channel_bindings_old")
+                    cursor.execute('''
+                        CREATE TABLE IF NOT EXISTS website_channel_bindings (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            website_id INTEGER NOT NULL,
+                            channel_id TEXT NOT NULL,
+                            user_id INTEGER,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE,
+                            UNIQUE(website_id, channel_id, user_id)
+                        )
+                    ''')
+                    cursor.execute('''
+                        INSERT OR IGNORE INTO website_channel_bindings (id, website_id, channel_id, user_id, created_at)
+                        SELECT id, website_id, channel_id, user_id, created_at FROM website_channel_bindings_old
+                    ''')
+                    cursor.execute("DROP TABLE website_channel_bindings_old")
+                    logger.info("✅ 频道绑定表结构迁移完成")
+                except Exception as e:
+                    logger.error(f"❌ 表结构迁移失败: {e}")
+
             # 创建网站频道绑定表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS website_channel_bindings (
@@ -368,7 +415,7 @@ class Database:
                     user_id INTEGER,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE,
-                    UNIQUE(website_id, channel_id)
+                    UNIQUE(website_id, channel_id, user_id)
                 )
             ''')
 
