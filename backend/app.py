@@ -3598,6 +3598,31 @@ def search_similar_text():
 
             rows = cursor.fetchall()
             if not rows:
+                import re
+                tokens = [kw for kw in re.findall(r'\w+', query_lower) if len(kw) >= 2]
+                tokens = tokens[:6]
+                if tokens:
+                    conditions = []
+                    params = []
+                    for token in tokens:
+                        like = f"%{token}%"
+                        conditions.append("(LOWER(english_title) LIKE ? OR LOWER(title) LIKE ?)")
+                        params.extend([like, like])
+                    where_clause = " OR ".join(conditions)
+                    cursor.execute(f"""
+                        SELECT id, product_url, title, english_title, description,
+                               ruleEnabled, min_delay, max_delay, created_at,
+                               cnfans_url, shop_name, custom_reply_text,
+                               custom_reply_images, custom_image_urls, image_source,
+                               reply_scope,
+                               uploaded_reply_images
+                        FROM products
+                        WHERE {where_clause}
+                        ORDER BY created_at DESC
+                        LIMIT ?
+                    """, (*params, limit))
+                    rows = cursor.fetchall()
+            if not rows:
                 cursor.execute("""
                     SELECT id, product_url, title, english_title, description,
                            ruleEnabled, min_delay, max_delay, created_at,
