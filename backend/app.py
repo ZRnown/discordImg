@@ -4413,60 +4413,30 @@ def batch_scrape_products():
             'errors': 0,
             'start_time': time.time()
         }
+        details = []
 
         def process_single_product_batch(product_id):
             """处理单个商品（用于线程池）"""
             try:
-                # === 检查停止信号 ===
                 current_status = db.get_scrape_status()
                 if current_status.get('stop_signal', False):
                     logger.info(f"🔴 处理商品前检测到停止信号，取消处理商品 {product_id}")
                     return {'status': 'cancelled', 'product_id': product_id, 'message': '任务已取消'}
 
-                # 先按item_id快速去重，避免无效请求
-                if db.get_product_by_item_id(str(product_id)):
-                    return {'status': 'skipped', 'product_id': product_id, 'message': '商品已存在'}
-
-                # 调用现有的单个商品处理逻辑
-                from app import process_single_product
-
-                # 构建商品信息
                 product_info = {
                     'item_id': str(product_id),
                     'item_url': f'https://weidian.com/item.html?itemID={product_id}',
                     'shop_name': '批量上传'
                 }
 
-                # 处理商品
-                product_data = process_single_product(product_info)
+                result = process_and_save_single_product_sync(product_info) or {}
+                status = result.get('status', 'failed')
 
-                if product_data:
-                    # === 再次检查停止信号 ===
-                    current_status = db.get_scrape_status()
-                    if current_status.get('stop_signal', False):
-                        logger.info(f"🔴 获取商品数据后检测到停止信号，跳过商品 {product_id}")
-                        return {'status': 'cancelled', 'product_id': product_id, 'message': '任务已取消'}
-
-                    # 检查是否已存在
-                    if db.get_product_by_url(product_data['product_url']):
-                        return {'status': 'skipped', 'product_id': product_id, 'message': '商品已存在'}
-
-                    # 入库
-                    product_id_db = db.insert_product(product_data)
-
-                    # === 再次检查停止信号 ===
-                    current_status = db.get_scrape_status()
-                    if current_status.get('stop_signal', False):
-                        logger.info(f"🔴 入库后检测到停止信号，商品 {product_id} 已入库但跳过图片处理")
-                        return {'status': 'partial', 'product_id': product_id, 'message': '商品已入库，图片处理被取消'}
-
-                    # 处理图片（使用优化后的多线程图片处理）
-                    if product_data.get('images'):
-                        save_product_images_unified(product_id_db, product_data['images'], shutdown_event=shutdown_event)
-
-                    return {'status': 'success', 'product_id': product_id, 'message': '处理成功'}
-                else:
-                    return {'status': 'error', 'product_id': product_id, 'message': '获取商品数据失败'}
+                return {
+                    'status': status,
+                    'product_id': product_id,
+                    'message': result.get('message', '')
+                }
 
             except Exception as e:
                 logger.error(f"处理商品 {product_id} 失败: {e}")
@@ -4511,6 +4481,12 @@ def batch_scrape_products():
                             result = future.result()
                             results['processed'] += 1
 
+                            details.append({
+                                'id': product_id,
+                                'status': result.get('status'),
+                                'message': result.get('message', '')
+                            })
+
                             if result['status'] == 'success':
                                 results['success'] += 1
                                 logger.info(f"商品 {product_id} 处理成功")
@@ -4530,6 +4506,11 @@ def batch_scrape_products():
                         except Exception as e:
                             results['processed'] += 1
                             results['errors'] += 1
+                            details.append({
+                                'id': product_id,
+                                'status': 'error',
+                                'message': str(e)
+                            })
                             logger.error(f"处理商品 {product_id} 时发生异常: {e}")
 
                     # 如果检测到停止信号且没有待处理的任务，退出循环
@@ -4557,7 +4538,8 @@ def batch_scrape_products():
 
         return jsonify({
             'message': f'批量处理完成，共处理 {results["total"]} 个商品，成功 {results["success"]} 个，跳过 {results["skipped"]} 个，取消 {results["cancelled"]} 个，部分完成 {results["partial"]} 个，失败 {results["errors"]} 个',
-            'results': results
+            'results': results,
+            'details': details
         })
 
     except Exception as e:
@@ -5083,7 +5065,8 @@ def process_and_save_single_product_sync(product_info):
                 'item_id': item_id,
                 'failed': False,
                 'image_failed': False,
-                'index_failed': False
+                'index_failed': False,
+                'message': '任务已取消'
             }
 
         current_status = db.get_scrape_status()
@@ -5094,7 +5077,8 @@ def process_and_save_single_product_sync(product_info):
                 'item_id': item_id,
                 'failed': False,
                 'image_failed': False,
-                'index_failed': False
+                'index_failed': False,
+                'message': '任务已取消'
             }
 
         # === 0. 基于item_id的强力去重 ===
@@ -5105,7 +5089,8 @@ def process_and_save_single_product_sync(product_info):
                 'item_id': item_id,
                 'failed': False,
                 'image_failed': False,
-                'index_failed': False
+                'index_failed': False,
+                'message': '商品已存在'
             }
 
         # 1. 抓取详情
@@ -5119,7 +5104,8 @@ def process_and_save_single_product_sync(product_info):
                 'item_id': item_id,
                 'failed': True,
                 'image_failed': False,
-                'index_failed': False
+                'index_failed': False,
+                'message': '未获取到商品详情'
             }
 
         product_title = product_data.get('title', '')
@@ -5132,7 +5118,8 @@ def process_and_save_single_product_sync(product_info):
                 'item_id': item_id,
                 'failed': False,
                 'image_failed': False,
-                'index_failed': False
+                'index_failed': False,
+                'message': '任务已取消'
             }
 
         # 2. 再次查重 (双重保险)
@@ -5143,7 +5130,8 @@ def process_and_save_single_product_sync(product_info):
                 'item_id': item_id,
                 'failed': False,
                 'image_failed': False,
-                'index_failed': False
+                'index_failed': False,
+                'message': '商品已存在'
             }
 
         # 3. 入库 (添加item_id字段)
@@ -5161,7 +5149,8 @@ def process_and_save_single_product_sync(product_info):
                 'item_id': item_id,
                 'failed': False,
                 'image_failed': False,
-                'index_failed': False
+                'index_failed': False,
+                'message': '商品已入库，图片处理被取消'
             }
 
         # 4. 图片处理 (使用多线程版本)
@@ -5183,37 +5172,63 @@ def process_and_save_single_product_sync(product_info):
             processed_count = 0
 
         image_total = len(product_data.get('images') or [])
-        image_failed = image_total == 0 or image_stats.get('downloaded', 0) == 0
+        download_failed = image_stats.get('download_failed', 0)
         index_failed = bool(image_stats.get('faiss_failed'))
-        failed = image_failed or index_failed
 
-        if failed:
-            reasons = []
-            if image_failed:
-                if image_total == 0:
-                    reasons.append("未抓取到图片URL")
-                else:
-                    reasons.append(f"图片下载失败 {image_stats.get('download_failed', image_total)}/{image_total}")
-            if index_failed:
-                reasons.append("索引写入失败")
+        image_failed = False
+        failure_reason = ""
+        is_strict_failure = False
+
+        if image_total == 0:
+            image_failed = True
+            is_strict_failure = True
+            failure_reason = "未找到任何图片"
+        elif download_failed > 0:
+            image_failed = True
+            is_strict_failure = True
+            failure_reason = f"图片下载不完整 (失败 {download_failed}/{image_total})"
+        elif processed_count < image_total:
+            image_failed = True
+            is_strict_failure = True
+            failure_reason = f"特征提取不完整 ({processed_count}/{image_total})"
+        elif index_failed:
+            is_strict_failure = True
+            failure_reason = "向量索引写入失败"
+
+        if is_strict_failure:
             logger.warning(
-                f"❌ 商品 {item_id} {product_title} 处理失败：{'，'.join(reasons)}"
+                f"❌ 商品 {item_id} {product_title} 严格模式失败：{failure_reason} -> 回滚删除"
             )
-        else:
-            download_failed = image_stats.get('download_failed', 0)
-            extra = f"，下载失败 {download_failed}" if download_failed else ""
-            logger.info(
-                f"✅ 商品 {item_id} {product_title} 抓取完成，图片 {processed_count}/{image_total}{extra}"
-            )
+            try:
+                db.delete_product_images(product_id)
+            except Exception as delete_error:
+                logger.error(f"回滚删除商品失败: {delete_error}")
+
+            return {
+                'status': 'failed',
+                'item_id': item_id,
+                'title': product_title,
+                'images_total': image_total,
+                'images_processed': processed_count,
+                'download_failed': download_failed,
+                'failed': True,
+                'image_failed': image_failed,
+                'index_failed': index_failed,
+                'message': failure_reason
+            }
+
+        logger.info(
+            f"✅ 商品 {item_id} {product_title} 抓取完成，图片 {processed_count}/{image_total}"
+        )
 
         return {
-            'status': 'success' if not failed else 'failed',
+            'status': 'success',
             'item_id': item_id,
             'title': product_title,
             'images_total': image_total,
             'images_processed': processed_count,
-            'download_failed': image_stats.get('download_failed', 0),
-            'failed': failed,
+            'download_failed': download_failed,
+            'failed': False,
             'image_failed': image_failed,
             'index_failed': index_failed
         }
@@ -5224,7 +5239,8 @@ def process_and_save_single_product_sync(product_info):
             'item_id': product_info.get('item_id'),
             'failed': True,
             'image_failed': False,
-            'index_failed': False
+            'index_failed': False,
+            'message': str(e)
         }
 
 def scrape_product_info(product_url):

@@ -413,35 +413,38 @@ export function ImageSearchView() {
                     </div>
 
                     {/* 网站链接网格显示区域 */}
-                    <div className="w-full">
-                      <div className="grid grid-cols-2 gap-1 max-w-md">
+                    <div className="w-full lg:w-1/2 mt-2 lg:mt-0">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                         {(result.product.websiteUrls || []).slice(0, 8).map((site: any, index: number) => (
-                          <div key={index} className="flex items-center gap-1">
+                          <div
+                            key={index}
+                            className="flex items-center gap-1 min-w-0 bg-muted/40 p-1 rounded border border-transparent hover:border-border transition-colors"
+                          >
                             <Badge
-                              className="text-[8px] px-1 py-0 h-3 border-none min-w-[40px] justify-center shrink-0 text-white"
+                              className="text-[9px] px-1.5 py-0.5 h-5 border-none justify-center shrink-0 text-white font-normal w-14"
                               style={{ backgroundColor: site.badge_color || '#6b7280' }}
                             >
                               {site.display_name}
                             </Badge>
-                            <div className="flex-1 bg-muted/30 p-0.5 px-1.5 rounded border text-[9px] flex items-center justify-between overflow-hidden min-w-0">
+                            <div className="flex-1 min-w-0 flex items-center justify-between">
                               <a
                                 href={site.url}
                                 target="_blank"
-                                className="truncate hover:underline"
-                                style={{ color: site.badge_color || '#6b7280' }}
+                                className="text-[10px] truncate hover:underline text-foreground/80 px-1"
+                                title={site.url}
                               >
                                 {site.url}
                               </a>
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                className="h-3 w-3 shrink-0"
+                                className="h-5 w-5 shrink-0 opacity-50 hover:opacity-100"
                                 onClick={() => {
                                   navigator.clipboard.writeText(site.url)
                                   toast.success("已复制链接")
                                 }}
                               >
-                                <Copy className="h-2 w-2"/>
+                                <Copy className="h-3 w-3"/>
                               </Button>
                             </div>
                           </div>
@@ -490,29 +493,38 @@ export function ImageSearchView() {
               </div>
             ) : (
               <div className="space-y-3">
-                {searchHistory.map((history) => (
-                  <div key={history.id} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3">
-                    {/* 匹配图片和基本信息 */}
-                    <div className="flex gap-3 items-center flex-1">
-                      {/* 匹配的商品图片 */}
-                      {history.matched_product_id && (
-                        <div className="flex-shrink-0">
-                          <div className="w-16 h-16 bg-muted rounded-lg overflow-hidden">
-                            <img
-                              src={`/api/image/${history.matched_product_id}/${history.matched_image_index}`}
-                              alt="匹配的商品图片"
-                              className="w-full h-full object-cover"
-                              onError={(e) => {
-                                e.currentTarget.src = '/placeholder.jpg'
-                              }}
-                            />
-                          </div>
-                        </div>
-                      )}
+                {searchHistory.map((history) => {
+                  const historyLinks = (history.websiteUrls && history.websiteUrls.length > 0)
+                    ? history.websiteUrls
+                    : [
+                        { display_name: '微店', url: history.weidian_url, badge_color: 'gray' },
+                        { display_name: 'CNFans', url: history.cnfans_url, badge_color: 'blue' },
+                        { display_name: 'ACBuy', url: history.acbuy_url, badge_color: 'purple' }
+                      ].filter(site => site.url)
 
-                      <div className="space-y-0.5 min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <h4 className="font-bold text-base truncate max-w-[200px] sm:max-w-[400px]">{history.title}</h4>
+                  return (
+                    <div key={history.id} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3">
+                      {/* 匹配图片和基本信息 */}
+                      <div className="flex gap-3 items-center flex-1">
+                        {/* 匹配的商品图片 */}
+                        {history.matched_product_id && (
+                          <div className="flex-shrink-0">
+                            <div className="w-16 h-16 bg-muted rounded-lg overflow-hidden">
+                              <img
+                                src={`/api/image/${history.matched_product_id}/${history.matched_image_index}`}
+                                alt="匹配的商品图片"
+                                className="w-full h-full object-cover"
+                                onError={(e) => {
+                                  e.currentTarget.src = '/placeholder.jpg'
+                                }}
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="space-y-0.5 min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-bold text-base truncate max-w-[200px] sm:max-w-[400px]">{history.title}</h4>
                             <Badge
                               className={
                                 history.similarity >= 0.95
@@ -525,81 +537,73 @@ export function ImageSearchView() {
                               {(history.similarity * 100).toFixed(1)}% 相似度
                             </Badge>
                           </div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <p className="text-sm font-bold text-blue-600 truncate max-w-[240px] sm:max-w-[500px]">{history.english_title || "No English Title"}</p>
-                        </div>
-                        <div className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground">
-                          <span className="font-mono">ID: {history.weidian_url?.split('itemID=')?.[1] || 'N/A'}</span>
-                          <span>|</span>
-                          <span>匹配图片: #{history.matched_image_index}</span>
-                          <span>|</span>
-                          <span>阈值: {history.threshold * 100}%</span>
-                          <span>|</span>
-                          <span>搜索时间: {new Date(history.search_time).toLocaleString('zh-CN')}</span>
-                        </div>
-                              </div>
-                            </div>
-
-                    {/* 链接显示区域 */}
-                    <div className="flex items-center gap-4">
-                      <div className="flex flex-col gap-1 min-w-[300px]">
-                        <div className="flex items-center gap-1.5">
-                          <Badge className="text-[9px] px-1 py-0 h-4 border-none w-12 justify-center shrink-0 text-white bg-gray-600">
-                            微店
-                          </Badge>
-                          <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
-                            <a href={history.weidian_url} target="_blank" className="font-mono truncate hover:underline text-muted-foreground">
-                              {history.weidian_url}
-                            </a>
-                            <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(history.weidian_url); toast.success("Copied")}}>
-                              <Copy className="h-2.5 w-2.5"/>
-                            </Button>
+                          <div className="flex items-center gap-2 mt-1">
+                            <p className="text-sm font-bold text-blue-600 truncate max-w-[240px] sm:max-w-[500px]">{history.english_title || "No English Title"}</p>
+                          </div>
+                          <div className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground">
+                            <span className="font-mono">ID: {history.weidian_url?.split('itemID=')?.[1] || 'N/A'}</span>
+                            <span>|</span>
+                            <span>匹配图片: #{history.matched_image_index}</span>
+                            <span>|</span>
+                            <span>阈值: {history.threshold * 100}%</span>
+                            <span>|</span>
+                            <span>搜索时间: {new Date(history.search_time).toLocaleString('zh-CN')}</span>
                           </div>
                         </div>
-                        {history.cnfans_url && (
-                          <div className="flex items-center gap-1.5">
-                            <Badge className="text-[9px] px-1 py-0 h-4 border-none w-12 justify-center shrink-0 text-white bg-blue-600">
-                              CNFans
-                            </Badge>
-                            <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
-                              <a href={history.cnfans_url} target="_blank" className="font-mono truncate hover:underline text-blue-500">
-                                {history.cnfans_url}
-                              </a>
-                              <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(history.cnfans_url); toast.success("Copied")}}>
-                                <Copy className="h-2.5 w-2.5"/>
-                            </Button>
-                            </div>
-                          </div>
-                        )}
-                        {history.acbuy_url && (
-                          <div className="flex items-center gap-1.5">
-                            <Badge className="text-[9px] px-1 py-0 h-4 border-none w-12 justify-center shrink-0 text-white bg-purple-600">
-                              ACBuy
-                            </Badge>
-                            <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
-                              <a href={history.acbuy_url} target="_blank" className="font-mono truncate hover:underline text-purple-500">
-                                {history.acbuy_url}
-                              </a>
-                              <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(history.acbuy_url); toast.success("Copied")}}>
-                                <Copy className="h-2.5 w-2.5"/>
-                            </Button>
-                            </div>
-                          </div>
-                        )}
                       </div>
 
-                      {/* 删除按钮 */}
+                      {/* 链接显示区域 */}
+                      <div className="w-full lg:w-1/2 mt-2 lg:mt-0 flex items-start gap-2">
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 flex-1 min-w-0">
+                          {historyLinks.map((site: any, index: number) => (
+                            <div
+                              key={`${history.id}-${index}`}
+                              className="flex items-center gap-1 min-w-0 bg-muted/40 p-1 rounded border border-transparent hover:border-border transition-colors"
+                            >
+                              <Badge
+                                className="text-[9px] px-1.5 py-0.5 h-5 border-none justify-center shrink-0 text-white font-normal w-14"
+                                style={{ backgroundColor: site.badge_color || '#6b7280' }}
+                              >
+                                {site.display_name}
+                              </Badge>
+                              <div className="flex-1 min-w-0 flex items-center justify-between">
+                                <a
+                                  href={site.url}
+                                  target="_blank"
+                                  className="text-[10px] truncate hover:underline text-foreground/80 px-1"
+                                  title={site.url}
+                                >
+                                  {site.url}
+                                </a>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-5 w-5 shrink-0 opacity-50 hover:opacity-100"
+                                  onClick={() => {
+                                    navigator.clipboard.writeText(site.url)
+                                    toast.success("链接已复制")
+                                  }}
+                                >
+                                  <Copy className="h-3 w-3"/>
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* 删除按钮 */}
                         <Button
-                        variant="outline"
+                          variant="outline"
                           size="icon"
-                        className="h-8 w-8 hover:bg-red-50 hover:text-red-600"
+                          className="h-8 w-8 shrink-0 hover:bg-red-50 hover:text-red-600"
                           onClick={() => handleDeleteHistory(history.id)}
                         >
-                        <X className="size-3.5" />
+                          <X className="size-3.5" />
                         </Button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
 
                 {/* 分页控件 */}
                 {searchHistory.length > 0 && (

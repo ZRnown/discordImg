@@ -22,11 +22,12 @@ export function LogsView() {
   const [isPaused, setIsPaused] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
+  const logsBaseUrl = (process.env.NEXT_PUBLIC_BACKEND_URL || '').replace(/\/+$/, '')
 
   // 加载历史日志
   const loadRecentLogs = async () => {
     try {
-      const response = await fetch('/api/logs?endpoint=recent')
+      const response = await fetch(`${logsBaseUrl}/api/logs/recent`)
       if (response.ok) {
         const data = await response.json()
         setLogs(data.logs || [])
@@ -42,7 +43,7 @@ export function LogsView() {
       eventSourceRef.current.close()
     }
 
-    const eventSource = new EventSource('/api/logs/stream')
+    const eventSource = new EventSource(`${logsBaseUrl}/api/logs/stream`)
     eventSourceRef.current = eventSource
 
     eventSource.onopen = () => {
@@ -210,4 +211,3 @@ export function LogsView() {
     </div>
   )
 }
-

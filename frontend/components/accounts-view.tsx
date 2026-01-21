@@ -14,6 +14,50 @@ import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit, Clock } from "lucide-react"
 
+type NumericRangeFilterValue = {
+  keyword: string
+  min: string
+  max: string
+}
+
+const parseNumericRangeFilterValue = (value: string): NumericRangeFilterValue => {
+  if (!value) {
+    return { keyword: '', min: '', max: '' }
+  }
+  try {
+    const parsed = JSON.parse(value)
+    return {
+      keyword: String(parsed?.keyword || ''),
+      min: parsed?.min === null || parsed?.min === undefined ? '' : String(parsed.min),
+      max: parsed?.max === null || parsed?.max === undefined ? '' : String(parsed.max)
+    }
+  } catch {
+    const parts = value.split(/[|,]/).map(part => part.trim())
+    if (parts.length >= 3) {
+      return { keyword: parts[0] || '', min: parts[1] || '', max: parts[2] || '' }
+    }
+    return { keyword: '', min: '', max: '' }
+  }
+}
+
+const buildNumericRangeFilterValue = (value: NumericRangeFilterValue) => {
+  const keyword = value.keyword.trim()
+  const min = value.min === '' ? null : Number(value.min)
+  const max = value.max === '' ? null : Number(value.max)
+  return JSON.stringify({ keyword, min, max })
+}
+
+const formatMessageFilterLabel = (filter: any) => {
+  if (filter.filter_type === 'numeric_range') {
+    const fields = parseNumericRangeFilterValue(filter.filter_value || '')
+    const keyword = fields.keyword || '未设置关键词'
+    const minLabel = fields.min !== '' ? fields.min : '不限'
+    const maxLabel = fields.max !== '' ? fields.max : '不限'
+    return `数字范围: ${keyword} (${minLabel}-${maxLabel})`
+  }
+  return `${filter.filter_type} "${filter.filter_value}"`
+}
+
 function CooldownTimer({ remaining }: { remaining: number }) {
   if (remaining <= 0) return null
   return (
@@ -696,13 +740,73 @@ export function AccountsView() {
   }
 
   // 消息过滤处理函数
+  const normalizeNumericRangeFilter = (rawValue: string) => {
+    const fields = parseNumericRangeFilterValue(rawValue)
+    const keyword = fields.keyword.trim()
+
+    if (!keyword) {
+      return { ok: false, error: '请输入匹配关键词' }
+    }
+    if (fields.min === '' || fields.max === '') {
+      return { ok: false, error: '请输入完整的数字范围' }
+    }
+
+    const minValue = Number(fields.min)
+    const maxValue = Number(fields.max)
+
+    if (Number.isNaN(minValue) || Number.isNaN(maxValue)) {
+      return { ok: false, error: '请输入有效的数字范围' }
+    }
+    if (minValue >= maxValue) {
+      return { ok: false, error: '最小值必须小于最大值' }
+    }
+
+    return {
+      ok: true,
+      value: buildNumericRangeFilterValue({
+        keyword,
+        min: String(minValue),
+        max: String(maxValue)
+      })
+    }
+  }
+
+  const updateNewNumericFilter = (patch: Partial<NumericRangeFilterValue>) => {
+    const current = parseNumericRangeFilterValue(newFilter.filter_value)
+    const next = { ...current, ...patch }
+    setNewFilter(prev => ({
+      ...prev,
+      filter_value: buildNumericRangeFilterValue(next)
+    }))
+  }
+
+  const updateEditingNumericFilter = (patch: Partial<NumericRangeFilterValue>) => {
+    if (!editingFilter) return
+    const current = parseNumericRangeFilterValue(editingFilter.filter_value)
+    const next = { ...current, ...patch }
+    setEditingFilter((prev: any) => ({
+      ...prev,
+      filter_value: buildNumericRangeFilterValue(next)
+    }))
+  }
+
   const handleAddMessageFilter = async () => {
     try {
+      let payload = { ...newFilter }
+      if (newFilter.filter_type === 'numeric_range') {
+        const normalized = normalizeNumericRangeFilter(newFilter.filter_value)
+        if (!normalized.ok) {
+          toast.error(normalized.error)
+          return
+        }
+        payload = { filter_type: 'numeric_range', filter_value: normalized.value }
+      }
+
       const res = await fetch('/api/message-filters', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify(newFilter)
+        body: JSON.stringify(payload)
       })
       if (res.ok) {
         toast.success('过滤规则添加成功')
@@ -720,15 +824,29 @@ export function AccountsView() {
   const handleUpdateMessageFilter = async () => {
     if (!editingFilter) return
     try {
+      let payload = {
+        filter_type: editingFilter.filter_type,
+        filter_value: editingFilter.filter_value,
+        is_active: editingFilter.is_active
+      }
+
+      if (editingFilter.filter_type === 'numeric_range') {
+        const normalized = normalizeNumericRangeFilter(editingFilter.filter_value)
+        if (!normalized.ok) {
+          toast.error(normalized.error)
+          return
+        }
+        payload = {
+          ...payload,
+          filter_value: normalized.value
+        }
+      }
+
       const res = await fetch(`/api/message-filters/${editingFilter.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({
-          filter_type: editingFilter.filter_type,
-          filter_value: editingFilter.filter_value,
-          is_active: editingFilter.is_active
-        })
+        body: JSON.stringify(payload)
       })
       if (res.ok) {
         toast.success('过滤规则更新成功')
@@ -1032,7 +1150,16 @@ export function AccountsView() {
                     <div className="space-y-4">
                       <div>
                         <Label>过滤类型</Label>
-                        <Select value={newFilter.filter_type} onValueChange={value => setNewFilter(prev => ({ ...prev, filter_type: value }))}>
+                        <Select
+                          value={newFilter.filter_type}
+                          onValueChange={value => setNewFilter(prev => ({
+                            ...prev,
+                            filter_type: value,
+                            filter_value: value === 'numeric_range'
+                              ? buildNumericRangeFilterValue({ keyword: '', min: '', max: '' })
+                              : ''
+                          }))}
+                        >
                           <SelectTrigger>
                             <SelectValue />
                           </SelectTrigger>
@@ -1042,20 +1169,60 @@ export function AccountsView() {
                             <SelectItem value="ends_with">结尾是</SelectItem>
                             <SelectItem value="regex">正则表达式</SelectItem>
                             <SelectItem value="user_id">用户ID</SelectItem>
+                            <SelectItem value="numeric_range">数字范围</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
                       <div>
                         <Label>过滤值</Label>
-                        <Input
-                          value={newFilter.filter_value}
-                          onChange={e => setNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
-                          placeholder={
-                            newFilter.filter_type === 'user_id'
-                              ? "输入用户ID，多个用逗号分隔"
-                              : "输入要过滤的内容"
-                          }
-                        />
+                        {newFilter.filter_type === 'numeric_range' ? (
+                          <div className="space-y-3">
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">匹配关键词</Label>
+                              <Input
+                                value={parseNumericRangeFilterValue(newFilter.filter_value).keyword}
+                                onChange={e => updateNewNumericFilter({ keyword: e.target.value })}
+                                placeholder="例如: size"
+                                className="h-9"
+                              />
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-muted-foreground">小于</span>
+                                <Input
+                                  type="number"
+                                  value={parseNumericRangeFilterValue(newFilter.filter_value).min}
+                                  onChange={e => updateNewNumericFilter({ min: e.target.value })}
+                                  className="w-24 h-9"
+                                />
+                                <span className="text-xs text-muted-foreground">不回复</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-muted-foreground">大于</span>
+                                <Input
+                                  type="number"
+                                  value={parseNumericRangeFilterValue(newFilter.filter_value).max}
+                                  onChange={e => updateNewNumericFilter({ max: e.target.value })}
+                                  className="w-24 h-9"
+                                />
+                                <span className="text-xs text-muted-foreground">不回复</span>
+                              </div>
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              匹配关键词后面的数字（如 "size 49"），超出范围将忽略该消息。
+                            </p>
+                          </div>
+                        ) : (
+                          <Input
+                            value={newFilter.filter_value}
+                            onChange={e => setNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
+                            placeholder={
+                              newFilter.filter_type === 'user_id'
+                                ? "输入用户ID，多个用逗号分隔"
+                                : "输入要过滤的内容"
+                            }
+                          />
+                        )}
                       </div>
                     </div>
                     <DialogFooter>
@@ -1071,7 +1238,7 @@ export function AccountsView() {
                 {messageFilters.map((filter: any) => (
                   <div key={filter.id} className="flex items-center justify-between p-3 border rounded">
                     <div>
-                      <div className="font-medium">{filter.filter_type} "{filter.filter_value}"</div>
+                      <div className="font-medium">{formatMessageFilterLabel(filter)}</div>
                       <div className="text-sm text-muted-foreground">
                         创建时间: {new Date(filter.created_at).toLocaleString('zh-CN')}
                       </div>
@@ -1243,6 +1410,21 @@ export function AccountsView() {
                     <div className="text-xs text-muted-foreground mb-3">
                       <div>URL模板: {website.url_template}</div>
                       <div>ID模式: {website.id_pattern}</div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2 text-center mb-3">
+                      <div className="bg-muted/30 p-2 rounded">
+                        <div className="text-xs text-muted-foreground">总回复</div>
+                        <div className="text-lg font-bold">{website.stat_replies_total || 0}</div>
+                      </div>
+                      <div className="bg-blue-50/50 p-2 rounded">
+                        <div className="text-xs text-blue-600">文本回复</div>
+                        <div className="text-lg font-bold text-blue-700">{website.stat_replies_text || 0}</div>
+                      </div>
+                      <div className="bg-green-50/50 p-2 rounded">
+                        <div className="text-xs text-green-600">图片回复</div>
+                        <div className="text-lg font-bold text-green-700">{website.stat_replies_image || 0}</div>
+                      </div>
                     </div>
 
                     {/* 频道绑定 */}
@@ -1570,7 +1752,16 @@ export function AccountsView() {
               <div className="space-y-4">
                 <div>
                   <Label>过滤类型</Label>
-                  <Select value={editingFilter.filter_type} onValueChange={value => setEditingFilter(prev => ({ ...prev, filter_type: value }))}>
+                  <Select
+                    value={editingFilter.filter_type}
+                    onValueChange={value => setEditingFilter((prev: any) => ({
+                      ...prev,
+                      filter_type: value,
+                      filter_value: value === 'numeric_range'
+                        ? buildNumericRangeFilterValue({ keyword: '', min: '', max: '' })
+                        : ''
+                    }))}
+                  >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -1580,15 +1771,52 @@ export function AccountsView() {
                       <SelectItem value="ends_with">结尾是</SelectItem>
                       <SelectItem value="regex">正则表达式</SelectItem>
                       <SelectItem value="user_id">用户ID</SelectItem>
+                      <SelectItem value="numeric_range">数字范围</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 <div>
                   <Label>过滤值</Label>
-                  <Input
-                    value={editingFilter.filter_value}
-                    onChange={e => setEditingFilter(prev => ({ ...prev, filter_value: e.target.value }))}
-                  />
+                  {editingFilter.filter_type === 'numeric_range' ? (
+                    <div className="space-y-3">
+                      <div className="space-y-1">
+                        <Label className="text-xs text-muted-foreground">匹配关键词</Label>
+                        <Input
+                          value={parseNumericRangeFilterValue(editingFilter.filter_value).keyword}
+                          onChange={e => updateEditingNumericFilter({ keyword: e.target.value })}
+                          placeholder="例如: size"
+                          className="h-9"
+                        />
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-muted-foreground">小于</span>
+                          <Input
+                            type="number"
+                            value={parseNumericRangeFilterValue(editingFilter.filter_value).min}
+                            onChange={e => updateEditingNumericFilter({ min: e.target.value })}
+                            className="w-24 h-9"
+                          />
+                          <span className="text-xs text-muted-foreground">不回复</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-muted-foreground">大于</span>
+                          <Input
+                            type="number"
+                            value={parseNumericRangeFilterValue(editingFilter.filter_value).max}
+                            onChange={e => updateEditingNumericFilter({ max: e.target.value })}
+                            className="w-24 h-9"
+                          />
+                          <span className="text-xs text-muted-foreground">不回复</span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <Input
+                      value={editingFilter.filter_value}
+                      onChange={e => setEditingFilter((prev: any) => ({ ...prev, filter_value: e.target.value }))}
+                    />
+                  )}
                 </div>
               </div>
               <DialogFooter>

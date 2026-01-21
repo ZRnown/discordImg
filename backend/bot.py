@@ -537,6 +537,19 @@ class DiscordBotClient(discord.Client):
                             logger.info(
                                 f"✅ [回复成功] 真实发送账号: {target_client.user.name} (ID: {target_client.account_id}) | 商品ID: {product.get('id')} | 图片数量: {len(files)}"
                             )
+                            try:
+                                has_text = bool(response_content)
+                                has_image = bool(files)
+                                if website_config and website_config.get('id') and (has_text or has_image):
+                                    await asyncio.get_event_loop().run_in_executor(
+                                        None,
+                                        db.increment_website_stats,
+                                        website_config['id'],
+                                        has_text,
+                                        has_image
+                                    )
+                            except Exception as stat_error:
+                                logger.error(f"统计更新失败: {stat_error}")
 
                         except Exception as reply_error:
                             logger.warning(f"回复失败，尝试直接发送: {reply_error}")
@@ -549,6 +562,17 @@ class DiscordBotClient(discord.Client):
                             logger.info(
                                 f"✅ [发送成功] 真实发送账号: {target_client.user.name} | 商品ID: {product.get('id')}"
                             )
+                            try:
+                                if website_config and website_config.get('id') and response_content:
+                                    await asyncio.get_event_loop().run_in_executor(
+                                        None,
+                                        db.increment_website_stats,
+                                        website_config['id'],
+                                        True,
+                                        False
+                                    )
+                            except Exception as stat_error:
+                                logger.error(f"统计更新失败: {stat_error}")
 
                     else:
                         logger.warning(
@@ -750,7 +774,8 @@ class DiscordBotClient(discord.Client):
             message_content = (message.content or '').lower()
 
             for filter_rule in filters:
-                filter_value = filter_rule['filter_value'].lower()
+                raw_filter_value = filter_rule.get('filter_value') or ''
+                filter_value = raw_filter_value.lower()
                 filter_type = filter_rule['filter_type']
 
                 if filter_type == 'contains':
@@ -773,6 +798,40 @@ class DiscordBotClient(discord.Client):
                             return True
                     except re.error:
                         logger.warning(f'无效的正则表达式: {filter_value}')
+                elif filter_type == 'numeric_range':
+                    try:
+                        rule = json.loads(raw_filter_value) if raw_filter_value else {}
+                    except json.JSONDecodeError:
+                        rule = {}
+
+                    keyword = str(rule.get('keyword') or '').strip()
+                    min_value = rule.get('min')
+                    max_value = rule.get('max')
+
+                    if not keyword:
+                        continue
+
+                    try:
+                        min_value = int(min_value)
+                        max_value = int(max_value)
+                    except (TypeError, ValueError):
+                        continue
+
+                    if min_value >= max_value:
+                        continue
+
+                    pattern = rf'(?i){re.escape(keyword)}\s*[:=-]?\s*(\d+)'
+                    value_matches = re.findall(pattern, message.content or '')
+                    for value_str in value_matches:
+                        try:
+                            value = int(value_str)
+                            if value < min_value or value > max_value:
+                                logger.info(
+                                    f'消息被过滤: {keyword} {value} 超出范围 ({min_value}-{max_value})'
+                                )
+                                return True
+                        except ValueError:
+                            continue
                 elif filter_type == 'user_id':
                     # 检查用户ID过滤
                     filter_user_ids = [uid.strip() for uid in filter_value.split(',') if uid.strip()]

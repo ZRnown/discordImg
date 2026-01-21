@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { Copy, ChevronLeft, ChevronRight, Trash2, ImageIcon, Edit, X, Download, Loader2, List, Upload, Store, CheckSquare, Square, Search, ChevronDown, ChevronUp, Pause, Play, StopCircle } from "lucide-react"
+import { Copy, ChevronLeft, ChevronRight, Trash2, ImageIcon, Edit, X, Download, Loader2, List, Upload, Store, CheckSquare, Square, Search, ChevronDown, ChevronUp, Pause, Play, StopCircle, AlertCircle } from "lucide-react"
 import { toast } from "sonner"
 import {
   Dialog,
@@ -106,6 +106,8 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   const [batchIds, setBatchIds] = useState('')
   const [isBatchScraping, setIsBatchScraping] = useState(false)
   const [batchProgress, setBatchProgress] = useState(0)
+  const [failedItems, setFailedItems] = useState<{ id: string, reason: string }[]>([])
+  const [showFailedDialog, setShowFailedDialog] = useState(false)
   const [products, setProducts] = useState<any[]>([])
   const [totalProducts, setTotalProducts] = useState(0)
   const [currentPage, setCurrentPage] = useState(1)
@@ -386,14 +388,25 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   // === 链接生成逻辑 ===
 
   const getProductLinks = (product: any) => {
-    const links = [
-        { name: 'cnfans', display_name: 'CNFans', url: product.cnfansUrl, badge_color: 'blue' },
-        { name: 'weidian', display_name: '微店', url: product.weidianUrl, badge_color: 'gray' },
-        { name: 'acbuy', display_name: 'AcBuy', url: product.acbuyUrl, badge_color: 'orange' }
-    ].filter(link => link.url && link.url.trim() !== '');
+    const dynamicLinks = Array.isArray(product.websiteUrls) ? product.websiteUrls : []
+    const normalized = dynamicLinks
+      .map((site: any) => ({
+        name: site.name || site.display_name || site.url,
+        display_name: site.display_name || site.name || '网站',
+        url: site.url || '',
+        badge_color: site.badge_color || 'gray'
+      }))
+      .filter((link: any) => link.url && link.url.trim() !== '')
 
-    // 如果有从后端获取的额外链接，可以合并（这里简化处理，只用上面的）
-    return links;
+    if (normalized.length > 0) {
+      return normalized
+    }
+
+    return [
+      { name: 'weidian', display_name: '微店', url: product.weidianUrl, badge_color: 'gray' },
+      { name: 'cnfans', display_name: 'CNFans', url: product.cnfansUrl, badge_color: 'blue' },
+      { name: 'acbuy', display_name: 'AcBuy', url: product.acbuyUrl, badge_color: 'orange' }
+    ].filter(link => link.url && link.url.trim() !== '')
   }
 
   // ... (保留 handleBatchDelete, confirmBatchDelete, handleUploadImage, handleBatchUploadImages) ...
@@ -737,6 +750,8 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     console.log('开始批量上传，商品数量:', ids.length)
     setIsBatchScraping(true)
     setBatchProgress(0)
+    setFailedItems([])
+    setShowFailedDialog(false)
 
     try {
       console.log(`发送批量请求到 /api/scrape/batch，商品数量: ${ids.length}`)
@@ -757,6 +772,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
         // 从结果中提取统计信息
         const results = result.results || {}
+        const details = result.details || []
         const successCount = results.success || 0
         const skipCount = results.skipped || 0
         const cancelledCount = results.cancelled || 0
@@ -779,6 +795,16 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         // 显示处理时间
         if (results.duration) {
           console.log(`处理时间: ${results.duration.toFixed(2)} 秒`)
+        }
+
+        if (details.length > 0) {
+          const failures = details
+            .filter((item: any) => item.status === 'failed' || item.status === 'error')
+            .map((item: any) => ({
+              id: String(item.id),
+              reason: item.message || '未知错误'
+            }))
+          setFailedItems(failures)
         }
       } else {
         const errorText = await res.text()
@@ -960,6 +986,23 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         </div>
       )}
 
+      {failedItems.length > 0 && (
+        <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex items-center justify-between">
+          <div className="flex items-center text-red-700">
+            <AlertCircle className="w-5 h-5 mr-2" />
+            <span>{failedItems.length} 个商品处理失败</span>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-red-200 text-red-700 hover:bg-red-100"
+            onClick={() => setShowFailedDialog(true)}
+          >
+            查看详情
+          </Button>
+        </div>
+      )}
+
 
       {/* Product List */}
       <div className="space-y-4">
@@ -1043,7 +1086,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                     {currentProducts.map((product) => {
                         const links = getProductLinks(product);
                         const showAllLinks = expandedProducts.has(product.id);
-                        const displayedLinks = showAllLinks ? links : links.slice(0, 3);
+                        const displayedLinks = showAllLinks ? links : links.slice(0, 6);
                         return (
               <div key={product.id} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3 min-w-0">
                 <div className="flex gap-3 items-center">
@@ -1200,25 +1243,51 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                   </div>
                 </div>
                             {/* 链接显示区域 */}
-                <div className="flex items-center gap-4 min-w-0 flex-1">
-                                <div className="flex flex-col gap-1 min-w-0 flex-1 max-w-md">
-                                    {displayedLinks.map((link) => (
-                      <div key={link.name} className="flex items-center gap-1.5">
-                                            <Badge className={`text-[9px] px-1 py-0 h-4 border-none w-12 justify-center shrink-0 text-white ${
-                          link.badge_color === 'blue' ? 'bg-blue-600' :
-                          link.badge_color === 'green' ? 'bg-green-600' :
-                                                link.badge_color === 'orange' ? 'bg-orange-600' : 'bg-gray-600'
-                                            }`}>{link.display_name}</Badge>
-                        <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
-                                                <a href={link.url} target="_blank" className="font-mono truncate hover:underline text-muted-foreground block max-w-full">{link.url}</a>
-                                                <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(link.url); toast.success("Copied")}}><Copy className="h-2.5 w-2.5"/></Button>
+                <div className="flex items-start gap-2 min-w-0 flex-1">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 flex-1 min-w-0">
+                    {displayedLinks.map((link) => (
+                      <div
+                        key={link.name || link.url}
+                        className="flex items-center gap-1 min-w-0 bg-muted/40 p-1 rounded border border-transparent hover:border-border transition-colors"
+                      >
+                        <Badge
+                          className="text-[9px] px-1.5 py-0.5 h-5 border-none justify-center shrink-0 text-white font-normal w-14"
+                          style={{ backgroundColor: link.badge_color || '#6b7280' }}
+                        >
+                          {link.display_name}
+                        </Badge>
+                        <div className="flex-1 min-w-0 flex items-center justify-between">
+                          <a
+                            href={link.url}
+                            target="_blank"
+                            className="text-[10px] truncate hover:underline text-foreground/80 px-1"
+                            title={link.url}
+                          >
+                            {link.url}
+                          </a>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-5 w-5 shrink-0 opacity-50 hover:opacity-100"
+                            onClick={() => {
+                              navigator.clipboard.writeText(link.url)
+                              toast.success("链接已复制")
+                            }}
+                          >
+                            <Copy className="h-3 w-3"/>
+                          </Button>
                         </div>
                       </div>
                     ))}
-                                    {links.length > 3 && (
-                                        <Button variant="ghost" size="sm" className="h-5 text-xs w-full" onClick={()=>toggleProductExpansion(product.id)}>
-                                            {showAllLinks ? <ChevronUp className="h-3 w-3"/> : <ChevronDown className="h-3 w-3"/>}
-                                            {showAllLinks ? "收起" : `显示更多 (${links.length - 3})`}
+                    {links.length > 6 && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 text-xs col-span-2 sm:col-span-3"
+                        onClick={() => toggleProductExpansion(product.id)}
+                      >
+                        {showAllLinks ? <ChevronUp className="h-3 w-3"/> : <ChevronDown className="h-3 w-3"/>}
+                        {showAllLinks ? "收起" : `显示更多 (${links.length - 6})`}
                       </Button>
                     )}
                   </div>
@@ -1601,6 +1670,50 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
           )}
         </CardContent>
       </Card>
+
+      {/* 失败商品详情 */}
+      <Dialog open={showFailedDialog} onOpenChange={setShowFailedDialog}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>失败商品详情</DialogTitle>
+            <DialogDescription>以下商品抓取失败，请检查原因</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            {failedItems.map((item) => (
+              <div key={item.id} className="flex items-center justify-between p-3 bg-muted rounded border">
+                <div className="font-mono text-sm">{item.id}</div>
+                <div className="text-sm text-red-600">{item.reason}</div>
+              </div>
+            ))}
+            {failedItems.length === 0 && (
+              <div className="text-center text-sm text-muted-foreground">暂无失败记录</div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowFailedDialog(false)
+              }}
+            >
+              关闭
+            </Button>
+            <Button
+              onClick={() => {
+                const retryIds = failedItems.map(item => item.id).join('\n')
+                if (retryIds) {
+                  setBatchIds(retryIds)
+                }
+                setShowFailedDialog(false)
+                setFailedItems([])
+              }}
+              disabled={failedItems.length === 0}
+            >
+              重试所有失败项
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
         {/* 单个商品删除确认对话框 */}
         <Dialog open={showDeleteConfirm && deletingProductId !== null} onOpenChange={(open) => {

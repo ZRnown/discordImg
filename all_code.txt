@@ -1881,15 +1881,15 @@ export async function GET(request: NextRequest) {
 }
 
 --- File: ./frontend/app/api/logs/route.ts ---
-import { NextRequest, NextResponse } from 'next/server'
+import { NextResponse } from 'next/server'
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001'
+const RAW_BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL
+const BACKEND_URL = RAW_BACKEND_URL ? RAW_BACKEND_URL.replace(/\/+$/, '') : 'http://127.0.0.1:5001'
 
-export async function GET(request: NextRequest) {
+export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url)
-    const endpoint = searchParams.get('endpoint') || 'recent'
-
+    const endpoint = (searchParams.get('endpoint') || 'recent').replace(/^\/+/, '')
     const backendUrl = `${BACKEND_URL}/api/logs/${endpoint}`
 
     const response = await fetch(backendUrl, {
@@ -1897,17 +1897,26 @@ export async function GET(request: NextRequest) {
       headers: {
         'Content-Type': 'application/json',
       },
+      cache: 'no-store'
     })
 
     if (!response.ok) {
-      throw new Error(`Backend API error: ${response.status}`)
+      console.error(`[NextAPI] Backend logs error: ${response.status}`)
+      return NextResponse.json({
+        error: `Backend error: ${response.status}`,
+        logs: []
+      }, { status: response.status })
     }
 
     const data = await response.json()
     return NextResponse.json(data)
-  } catch (error) {
-    console.error('Logs API error:', error)
-    return NextResponse.json({ error: 'Failed to fetch logs' }, { status: 500 })
+  } catch (error: any) {
+    console.error('[NextAPI] Logs API error:', error)
+    return NextResponse.json({
+      error: 'Failed to fetch logs',
+      details: error.message,
+      logs: []
+    }, { status: 500 })
   }
 }
 
@@ -3202,6 +3211,7 @@ export function AccountsView() {
   })
   const [websiteChannels, setWebsiteChannels] = useState<{[key: number]: string[]}>({})
   const [channelInputs, setChannelInputs] = useState<{[key: number]: string}>({})
+  const [channelToRemove, setChannelToRemove] = useState<{webId: number, chanId: string} | null>(null)
   const [rotationEnabled, setRotationEnabled] = useState<{[key: number]: boolean}>({})
   const [rotationInputs, setRotationInputs] = useState<{[key: number]: string}>({})
 
@@ -3609,7 +3619,10 @@ export function AccountsView() {
   }
 
   const handleAddChannel = async (websiteId: number, channelId: string) => {
-    if (!channelId.trim()) return
+    if (!channelId.trim()) {
+      toast.warning("频道ID不能为空")
+      return
+    }
     try {
       const res = await fetch(`/api/websites/${websiteId}/channels`, {
         method: 'POST',
@@ -3617,6 +3630,7 @@ export function AccountsView() {
         credentials: 'include',
         body: JSON.stringify({ channel_id: channelId.trim() })
       })
+      const data = await res.json().catch(() => ({}))
       if (res.ok) {
         toast.success('频道绑定已添加')
         // 立即更新前端状态，而不是重新获取所有数据
@@ -3624,24 +3638,31 @@ export function AccountsView() {
           ...prev,
           [websiteId]: [...(prev[websiteId] || []), channelId.trim()]
         }))
+        setChannelInputs(prev => ({ ...prev, [websiteId]: '' }))
       } else {
-        toast.error('添加失败')
+        toast.error(`添加失败: ${data.error || '未知错误'}`)
       }
     } catch (e) {
-      toast.error('网络错误')
+      toast.error('网络连接错误，请稍后再试')
     }
   }
 
-  const handleRemoveChannel = async (websiteId: number, channelId: string) => {
+  const confirmRemoveChannel = (websiteId: number, channelId: string) => {
+    setChannelToRemove({ webId: websiteId, chanId: channelId })
+  }
+
+  const executeRemoveChannel = async () => {
+    if (!channelToRemove) return
+    const { webId, chanId } = channelToRemove
     try {
       // 【修复】如果channelId是完整的Discord URL，提取频道ID
-      let actualChannelId = channelId;
-      if (channelId.includes('discord.com/channels/')) {
-        const parts = channelId.split('/');
+      let actualChannelId = chanId
+      if (chanId.includes('discord.com/channels/')) {
+        const parts = chanId.split('/')
         actualChannelId = parts[parts.length - 1];
       }
 
-      const res = await fetch(`/api/websites/${websiteId}/channels/${actualChannelId}`, {
+      const res = await fetch(`/api/websites/${webId}/channels/${actualChannelId}`, {
         method: 'DELETE',
         credentials: 'include'
       })
@@ -3650,13 +3671,16 @@ export function AccountsView() {
         // 立即更新前端状态，而不是重新获取所有数据
         setWebsiteChannels(prev => ({
           ...prev,
-          [websiteId]: prev[websiteId]?.filter(id => id !== channelId) || []
+          [webId]: prev[webId]?.filter(id => id !== chanId) || []
         }))
       } else {
-        toast.error('移除失败')
+        const data = await res.json().catch(() => ({}))
+        toast.error(`移除失败: ${data.error || '未知错误'}`)
       }
     } catch (e) {
       toast.error('网络错误')
+    } finally {
+      setChannelToRemove(null)
     }
   }
 
@@ -4399,7 +4423,6 @@ export function AccountsView() {
                                   onKeyDown={(e) => {
                                     if (e.key === 'Enter' && channelInputs[website.id]?.trim()) {
                                       handleAddChannel(website.id, channelInputs[website.id].trim())
-                                      setChannelInputs(prev => ({ ...prev, [website.id]: '' }))
                                     }
                                   }}
                                 />
@@ -4410,7 +4433,6 @@ export function AccountsView() {
                               <Button onClick={() => {
                                 if (channelInputs[website.id]?.trim()) {
                                   handleAddChannel(website.id, channelInputs[website.id].trim())
-                                  setChannelInputs(prev => ({ ...prev, [website.id]: '' }))
                                 }
                               }} disabled={!channelInputs[website.id]?.trim()}>添加</Button>
                             </DialogFooter>
@@ -4427,7 +4449,7 @@ export function AccountsView() {
                               variant="ghost"
                               size="sm"
                               className="h-4 w-4 p-0"
-                              onClick={() => handleRemoveChannel(website.id, channelId)}
+                              onClick={() => confirmRemoveChannel(website.id, channelId)}
                             >
                               <X className="w-3 h-3" />
                             </Button>
@@ -4728,6 +4750,22 @@ export function AccountsView() {
           </Dialog>
         )}
 
+
+        {/* 移除频道确认对话框 */}
+        <Dialog open={!!channelToRemove} onOpenChange={(open) => !open && setChannelToRemove(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>确认移除频道?</DialogTitle>
+              <DialogDescription>
+                确定要解除频道 {channelToRemove?.chanId} 的绑定吗？
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setChannelToRemove(null)}>取消</Button>
+              <Button variant="destructive" onClick={executeRemoveChannel}>确认移除</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* 删除账号确认对话框 */}
         <Dialog open={!!deleteAccountConfirm} onOpenChange={() => setDeleteAccountConfirm(null)}>
@@ -5561,6 +5599,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   const [shopScrapeProgress, setShopScrapeProgress] = useState(0)
   const [scrapeStatus, setScrapeStatus] = useState<any>(null)
   const [availableShops, setAvailableShops] = useState<any[]>([])
+  const [availableWebsites, setAvailableWebsites] = useState<any[]>([])
   const [selectedShopId, setSelectedShopId] = useState('')
   const [totalProductsCount, setTotalProductsCount] = useState(0)
   // 搜索类型状态
@@ -5570,6 +5609,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   useEffect(() => {
     fetchIndexedIds()
     fetchAvailableShops()
+    fetchWebsites()
     fetchProductsCount()
     fetchScrapeStatus() // 初始化时检查抓取状态，恢复进度显示
   }, []) // 静态数据只加载一次
@@ -5714,6 +5754,15 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     }
   }
 
+  const fetchWebsites = async () => {
+    try {
+      const data = await cachedFetch('/api/websites', { credentials: 'include' })
+      setAvailableWebsites(data.websites || [])
+    } catch (e) {
+      console.error('获取网站列表失败:', e)
+    }
+  }
+
   const fetchProductsCount = async () => {
     try {
       const data = await cachedFetch('/api/products/count')
@@ -5745,6 +5794,51 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
       console.error('获取抓取状态失败:', e)
       // 静默失败
     }
+  }
+
+  const parseReplyScopes = (rawScope: any): string[] => {
+    if (!rawScope || rawScope === 'all') return []
+    if (Array.isArray(rawScope)) return rawScope.map(scope => String(scope))
+    if (typeof rawScope === 'string') {
+      const trimmed = rawScope.trim()
+      if (trimmed.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(trimmed)
+          if (Array.isArray(parsed)) {
+            return parsed.map(scope => String(scope))
+          }
+        } catch {
+          return [trimmed]
+        }
+      }
+      return [trimmed]
+    }
+    return [String(rawScope)]
+  }
+
+  const handleScopeChange = (websiteName: string, checked: boolean) => {
+    if (!editingProduct) return
+    let currentScopes = parseReplyScopes(editingProduct.replyScope)
+    currentScopes = currentScopes.filter(scope => scope && scope !== 'all')
+
+    if (checked) {
+      if (!currentScopes.includes(websiteName)) {
+        currentScopes.push(websiteName)
+      }
+    } else {
+      currentScopes = currentScopes.filter(scope => scope !== websiteName)
+    }
+
+    setEditingProduct({
+      ...editingProduct,
+      replyScope: JSON.stringify(currentScopes)
+    })
+  }
+
+  const isScopeSelected = (websiteName: string) => {
+    if (!editingProduct || editingProduct.replyScope === 'all') return false
+    const scopes = parseReplyScopes(editingProduct.replyScope)
+    return scopes.includes(websiteName)
   }
 
   // === 链接生成逻辑 ===
@@ -6625,23 +6719,41 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                           {!editingProduct?.ruleEnabled && (
                             <div className="space-y-4 p-4 border rounded-lg bg-blue-50/30">
                               <div className="space-y-2">
-                                <Label className="text-sm font-medium">应用范围</Label>
-                                <Select
-                                  value={editingProduct?.replyScope || 'all'}
-                                  onValueChange={(value) => setEditingProduct({ ...editingProduct, replyScope: value })}
-                                >
-                                  <SelectTrigger className="bg-white">
-                                    <SelectValue placeholder="选择回复范围" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="all">所有网站</SelectItem>
-                                    <SelectItem value="cnfans">仅 CNFans</SelectItem>
-                                    <SelectItem value="acbuy">仅 ACBuy</SelectItem>
-                                    <SelectItem value="weidian">仅 Weidian</SelectItem>
-                                  </SelectContent>
-                                </Select>
+                                <Label className="text-sm font-medium">应用范围 (多选)</Label>
+                                <div className="border rounded-md p-3 space-y-2 max-h-40 overflow-y-auto bg-white">
+                                  <div className="flex items-center space-x-2">
+                                    <Checkbox
+                                      id="scope-all"
+                                      checked={editingProduct?.replyScope === 'all'}
+                                      onCheckedChange={(checked) => {
+                                        if (!editingProduct) return
+                                        if (checked === true) {
+                                          setEditingProduct({ ...editingProduct, replyScope: 'all' })
+                                        } else {
+                                          setEditingProduct({ ...editingProduct, replyScope: JSON.stringify([]) })
+                                        }
+                                      }}
+                                    />
+                                    <label htmlFor="scope-all" className="text-sm cursor-pointer font-bold">所有网站 (All)</label>
+                                  </div>
+                                  {availableWebsites.map(site => (
+                                    <div key={site.id} className="flex items-center space-x-2">
+                                      <Checkbox
+                                        id={`scope-${site.name}`}
+                                        checked={editingProduct?.replyScope !== 'all' && isScopeSelected(site.name)}
+                                        onCheckedChange={(checked) => handleScopeChange(site.name, checked === true)}
+                                      />
+                                      <label htmlFor={`scope-${site.name}`} className="text-sm cursor-pointer">
+                                        {site.display_name} ({site.name})
+                                      </label>
+                                    </div>
+                                  ))}
+                                  {!availableWebsites.length && (
+                                    <p className="text-xs text-muted-foreground">暂无网站配置</p>
+                                  )}
+                                </div>
                                 <p className="text-xs text-muted-foreground">
-                                  控制自定义回复在指定网站频道生效。
+                                  勾选 "所有网站" 将覆盖其他选择。如果不勾选 "所有网站"，则仅在勾选的特定网站频道回复。
                                 </p>
                               </div>
                               <div className="space-y-2">
@@ -7872,6 +7984,9 @@ interface UserSettings {
   keyword_reply_enabled: boolean
   image_reply_enabled: boolean
   global_reply_template: string
+  numeric_filter_keyword: string
+  filter_size_min: number
+  filter_size_max: number
 }
 
 interface SystemSettings {
@@ -7890,6 +8005,9 @@ export function SettingsView() {
     keyword_reply_enabled: true,
     image_reply_enabled: true,
     global_reply_template: '',
+    numeric_filter_keyword: 'size',
+    filter_size_min: 35,
+    filter_size_max: 46,
   })
   const [systemSettings, setSystemSettings] = useState<SystemSettings>({
     scrape_threads: 2,
@@ -7926,6 +8044,9 @@ export function SettingsView() {
           keyword_reply_enabled: data.keyword_reply_enabled === 1 || data.keyword_reply_enabled === true,
           image_reply_enabled: data.image_reply_enabled === 1 || data.image_reply_enabled === true,
           global_reply_template: data.global_reply_template ?? '',
+          numeric_filter_keyword: data.numeric_filter_keyword ?? 'size',
+          filter_size_min: data.filter_size_min ?? 35,
+          filter_size_max: data.filter_size_max ?? 46,
         })
       } else {
         toast.error("获取设置失败")
@@ -8001,6 +8122,14 @@ export function SettingsView() {
         toast.error("延迟时间不能为负数")
         setSaving(false)
         return
+      }
+
+      if (settings.numeric_filter_keyword.trim()) {
+        if (settings.filter_size_min >= settings.filter_size_max) {
+          toast.error("最小数字必须小于最大数字")
+          setSaving(false)
+          return
+        }
       }
 
       // 保存用户个性化设置
@@ -8387,6 +8516,46 @@ export function SettingsView() {
                 消息包含这些关键词时不会回复，格式：广告,刷屏,测试,垃圾
               </p>
             </div>
+          </div>
+
+          {/* 数字范围过滤设置 */}
+          <div className="space-y-2 pt-4 border-t">
+            <Label className="text-sm font-medium">数字范围过滤</Label>
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">匹配关键词</Label>
+              <Input
+                type="text"
+                value={settings.numeric_filter_keyword}
+                onChange={(e) => setSettings(prev => ({ ...prev, numeric_filter_keyword: e.target.value }))}
+                placeholder="例如: size"
+                className="h-9"
+              />
+            </div>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">小于</span>
+                <Input
+                  type="number"
+                  value={settings.filter_size_min}
+                  onChange={(e) => setSettings(prev => ({ ...prev, filter_size_min: parseInt(e.target.value) || 0 }))}
+                  className="w-20 h-9"
+                />
+                <span className="text-sm text-muted-foreground">不回复</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">大于</span>
+                <Input
+                  type="number"
+                  value={settings.filter_size_max}
+                  onChange={(e) => setSettings(prev => ({ ...prev, filter_size_max: parseInt(e.target.value) || 0 }))}
+                  className="w-20 h-9"
+                />
+                <span className="text-sm text-muted-foreground">不回复</span>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              匹配关键词后面的数字（如 "size 49"）。超出范围将忽略该消息；清空关键词可禁用该规则。
+            </p>
           </div>
         </CardContent>
       </Card>
@@ -11016,6 +11185,53 @@ class Database:
             except sqlite3.OperationalError:
                 pass
 
+            # 检测并迁移旧的唯一约束 (UNIQUE(website_id, channel_id) -> UNIQUE(website_id, channel_id, user_id))
+            needs_migration = False
+            table_exists = False
+            try:
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='website_channel_bindings'")
+                table_exists = cursor.fetchone() is not None
+            except sqlite3.OperationalError:
+                table_exists = False
+
+            if table_exists:
+                try:
+                    cursor.execute("PRAGMA index_list(website_channel_bindings)")
+                    for idx in cursor.fetchall():
+                        if len(idx) > 2 and idx[2]:
+                            index_name = idx[1]
+                            cursor.execute(f'PRAGMA index_info("{index_name}")')
+                            col_names = [row[2] for row in cursor.fetchall()]
+                            if 'website_id' in col_names and 'channel_id' in col_names and 'user_id' not in col_names:
+                                needs_migration = True
+                                break
+                except sqlite3.OperationalError:
+                    pass
+
+            if needs_migration:
+                logger.info("🔄 检测到旧的频道绑定表结构，正在迁移以支持多用户绑定...")
+                try:
+                    cursor.execute("ALTER TABLE website_channel_bindings RENAME TO website_channel_bindings_old")
+                    cursor.execute('''
+                        CREATE TABLE IF NOT EXISTS website_channel_bindings (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            website_id INTEGER NOT NULL,
+                            channel_id TEXT NOT NULL,
+                            user_id INTEGER,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE,
+                            UNIQUE(website_id, channel_id, user_id)
+                        )
+                    ''')
+                    cursor.execute('''
+                        INSERT OR IGNORE INTO website_channel_bindings (id, website_id, channel_id, user_id, created_at)
+                        SELECT id, website_id, channel_id, user_id, created_at FROM website_channel_bindings_old
+                    ''')
+                    cursor.execute("DROP TABLE website_channel_bindings_old")
+                    logger.info("✅ 频道绑定表结构迁移完成")
+                except Exception as e:
+                    logger.error(f"❌ 表结构迁移失败: {e}")
+
             # 创建网站频道绑定表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS website_channel_bindings (
@@ -11025,7 +11241,7 @@ class Database:
                     user_id INTEGER,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE,
-                    UNIQUE(website_id, channel_id)
+                    UNIQUE(website_id, channel_id, user_id)
                 )
             ''')
 
@@ -11082,6 +11298,9 @@ class Database:
                     keyword_reply_enabled INTEGER DEFAULT 1,  -- 是否启用关键词回复
                     image_reply_enabled INTEGER DEFAULT 1,  -- 是否启用图片回复
                     global_reply_template TEXT DEFAULT '',
+                    numeric_filter_keyword TEXT DEFAULT 'size',
+                    filter_size_min INTEGER DEFAULT 35,
+                    filter_size_max INTEGER DEFAULT 46,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
@@ -11102,6 +11321,21 @@ class Database:
 
             try:
                 cursor.execute('ALTER TABLE user_settings ADD COLUMN global_reply_template TEXT DEFAULT \'\'')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN numeric_filter_keyword TEXT DEFAULT \'size\'')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN filter_size_min INTEGER DEFAULT 35')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN filter_size_max INTEGER DEFAULT 46')
             except sqlite3.OperationalError:
                 pass
 
@@ -13133,7 +13367,8 @@ class Database:
                 cursor.execute('''
                     SELECT download_threads, feature_extract_threads, discord_similarity_threshold,
                            global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
-                           keyword_reply_enabled, image_reply_enabled, global_reply_template
+                           keyword_reply_enabled, image_reply_enabled, global_reply_template,
+                           numeric_filter_keyword, filter_size_min, filter_size_max
                     FROM user_settings WHERE user_id = ?
                 ''', (user_id,))
                 row = cursor.fetchone()
@@ -13149,6 +13384,9 @@ class Database:
                         'keyword_reply_enabled': row[7] if row[7] is not None else 1,
                         'image_reply_enabled': row[8] if row[8] is not None else 1,
                         'global_reply_template': row[9] or '',
+                        'numeric_filter_keyword': row[10] or 'size',
+                        'filter_size_min': row[11] if row[11] is not None else 35,
+                        'filter_size_max': row[12] if row[12] is not None else 46,
                     }
                 # 如果用户没有设置，返回默认值
                 return {
@@ -13162,6 +13400,9 @@ class Database:
                     'keyword_reply_enabled': 1,
                     'image_reply_enabled': 1,
                     'global_reply_template': '',
+                    'numeric_filter_keyword': 'size',
+                    'filter_size_min': 35,
+                    'filter_size_max': 46,
                 }
         except Exception as e:
             logger.error(f"获取用户设置失败: {e}")
@@ -13176,6 +13417,9 @@ class Database:
                 'keyword_reply_enabled': 1,
                 'image_reply_enabled': 1,
                 'global_reply_template': '',
+                'numeric_filter_keyword': 'size',
+                'filter_size_min': 35,
+                'filter_size_max': 46,
             }
 
     def update_user_settings(self, user_id: int, download_threads: int = None,
@@ -13183,7 +13427,8 @@ class Database:
                            global_reply_min_delay: float = None, global_reply_max_delay: float = None,
                            user_blacklist: str = None, keyword_filters: str = None,
                            keyword_reply_enabled: int = None, image_reply_enabled: int = None,
-                           global_reply_template: str = None) -> bool:
+                           global_reply_template: str = None, numeric_filter_keyword: str = None,
+                           filter_size_min: int = None, filter_size_max: int = None) -> bool:
         """更新用户个性化设置"""
         try:
             with self.get_connection() as conn:
@@ -13238,6 +13483,18 @@ class Database:
                         update_fields.append('global_reply_template = ?')
                         params.append(global_reply_template)
 
+                    if numeric_filter_keyword is not None:
+                        update_fields.append('numeric_filter_keyword = ?')
+                        params.append(numeric_filter_keyword)
+
+                    if filter_size_min is not None:
+                        update_fields.append('filter_size_min = ?')
+                        params.append(filter_size_min)
+
+                    if filter_size_max is not None:
+                        update_fields.append('filter_size_max = ?')
+                        params.append(filter_size_max)
+
                     if update_fields:
                         update_fields.append('updated_at = CURRENT_TIMESTAMP')
                         sql = f'UPDATE user_settings SET {", ".join(update_fields)} WHERE user_id = ?'
@@ -13249,8 +13506,9 @@ class Database:
                         INSERT INTO user_settings
                         (user_id, download_threads, feature_extract_threads, discord_similarity_threshold,
                          global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
-                         keyword_reply_enabled, image_reply_enabled, global_reply_template)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         keyword_reply_enabled, image_reply_enabled, global_reply_template, numeric_filter_keyword,
+                         filter_size_min, filter_size_max)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         user_id,
                         download_threads or 4,
@@ -13262,7 +13520,10 @@ class Database:
                         keyword_filters or '',
                         keyword_reply_enabled if keyword_reply_enabled is not None else 1,
                         image_reply_enabled if image_reply_enabled is not None else 1,
-                        global_reply_template or ''
+                        global_reply_template or '',
+                        numeric_filter_keyword or 'size',
+                        filter_size_min if filter_size_min is not None else 35,
+                        filter_size_max if filter_size_max is not None else 46
                     ))
 
                 conn.commit()
@@ -14478,6 +14739,7 @@ import os
 import json
 import io
 import sqlite3
+import re
 from datetime import datetime
 try:
     from config import config
@@ -14797,6 +15059,9 @@ class DiscordBotClient(discord.Client):
 
             # 生成回复内容
             response_content = self._generate_reply_content(product, message.channel.id, custom_reply)
+            if response_content is None:
+                logger.info(f"商品 {product.get('id')} 回复范围不匹配，跳过发送")
+                return
 
             # 1. 尝试获取网站配置（必须绑定，否则不回复）
             website_config = await self.get_website_config_by_channel_async(message.channel.id)
@@ -14893,12 +15158,13 @@ class DiscordBotClient(discord.Client):
                             files = []
 
                             # 检查是否是自定义模式，且有图片
+                            skip_images = bool(custom_reply and custom_reply.get('skip_images'))
                             is_custom_mode = custom_reply and (
                                 custom_reply.get('reply_type') == 'custom_only' or
                                 custom_reply.get('reply_type') == 'text'
                             )
 
-                            if is_custom_mode:
+                            if is_custom_mode and not skip_images:
                                 # 获取图片信息
                                 # 注意：如果是从 search_similar_text 返回的 product，字段名可能已经格式化
                                 # 需要兼容处理
@@ -15051,8 +15317,38 @@ class DiscordBotClient(discord.Client):
                 else:
                     channel_scope = 'weidian'
 
-            product_scope = (product.get('replyScope') or product.get('reply_scope') or 'all').strip().lower()
-            scope_match = (product_scope == 'all') or (product_scope == channel_scope)
+            product_scope_raw = (product.get('replyScope') or product.get('reply_scope') or 'all')
+            scope_match = False
+
+            if isinstance(product_scope_raw, str):
+                product_scope_raw = product_scope_raw.strip()
+
+            if not product_scope_raw or (isinstance(product_scope_raw, str) and product_scope_raw.lower() == 'all'):
+                scope_match = True
+            else:
+                scopes = []
+                if isinstance(product_scope_raw, list):
+                    scopes = product_scope_raw
+                elif isinstance(product_scope_raw, str):
+                    if product_scope_raw.startswith('['):
+                        try:
+                            scopes = json.loads(product_scope_raw)
+                        except json.JSONDecodeError:
+                            scopes = [product_scope_raw]
+                    else:
+                        scopes = [product_scope_raw]
+                else:
+                    scopes = [str(product_scope_raw)]
+
+                normalized_scopes = [
+                    str(scope).strip().lower()
+                    for scope in scopes
+                    if str(scope).strip()
+                ]
+                scope_match = channel_scope in normalized_scopes
+
+            if not scope_match:
+                return None
 
             response_url = get_response_url_for_channel(product, channel_id, self.user_id)
 
@@ -15144,9 +15440,45 @@ class DiscordBotClient(discord.Client):
             except ImportError:
                 from .database import db
 
+            user_settings = None
+
+            # 0. 数字范围过滤逻辑（可配置关键词）
+            filter_keyword = ''
+            min_value = 35
+            max_value = 46
+
+            if self.user_id:
+                user_settings = db.get_user_settings(self.user_id)
+                if user_settings:
+                    filter_keyword = (user_settings.get('numeric_filter_keyword') or '').strip()
+                    min_value = user_settings.get('filter_size_min', 35)
+                    max_value = user_settings.get('filter_size_max', 46)
+
+            if filter_keyword:
+                try:
+                    min_value = int(min_value)
+                    max_value = int(max_value)
+                except (TypeError, ValueError):
+                    min_value = None
+                    max_value = None
+
+                if min_value is not None and max_value is not None and min_value < max_value:
+                    pattern = rf'(?i){re.escape(filter_keyword)}\s*[:=-]?\s*(\d+)'
+                    value_matches = re.findall(pattern, message.content or '')
+                    for value_str in value_matches:
+                        try:
+                            value = int(value_str)
+                            if value < min_value or value > max_value:
+                                logger.info(
+                                    f'🚫 消息被过滤: {filter_keyword} {value} 超出范围 ({min_value}-{max_value})'
+                                )
+                                return True
+                        except ValueError:
+                            continue
+
             # 1. 检查全局消息过滤规则
             filters = db.get_message_filters()
-            message_content = message.content.lower()
+            message_content = (message.content or '').lower()
 
             for filter_rule in filters:
                 filter_value = filter_rule['filter_value'].lower()
@@ -15185,31 +15517,29 @@ class DiscordBotClient(discord.Client):
                             return True
 
             # 2. 检查用户个性化设置的过滤规则
-            if self.user_id:
-                user_settings = db.get_user_settings(self.user_id)
-                if user_settings:
-                    # 检查用户黑名单
-                    user_blacklist = user_settings.get('user_blacklist', '')
-                    if user_blacklist:
-                        blacklist_users = [u.strip().lower() for u in user_blacklist.split(',') if u.strip()]
-                        sender_name = str(message.author.name).lower()
-                        sender_id = str(message.author.id).lower()
+            if user_settings:
+                # 检查用户黑名单
+                user_blacklist = user_settings.get('user_blacklist', '')
+                if user_blacklist:
+                    blacklist_users = [u.strip().lower() for u in user_blacklist.split(',') if u.strip()]
+                    sender_name = str(message.author.name).lower()
+                    sender_id = str(message.author.id).lower()
 
-                        for blocked_user in blacklist_users:
-                            blocked_user = blocked_user.lower()
-                            if blocked_user in sender_name or blocked_user == sender_id:
-                                logger.info(f'消息被过滤: 用户 {message.author.name} 在黑名单中')
-                                return True
+                    for blocked_user in blacklist_users:
+                        blocked_user = blocked_user.lower()
+                        if blocked_user in sender_name or blocked_user == sender_id:
+                            logger.info(f'消息被过滤: 用户 {message.author.name} 在黑名单中')
+                            return True
 
-                    # 检查关键词过滤
-                    keyword_filters = user_settings.get('keyword_filters', '')
-                    if keyword_filters:
-                        filter_keywords = [k.strip().lower() for k in keyword_filters.split(',') if k.strip()]
+                # 检查关键词过滤
+                keyword_filters = user_settings.get('keyword_filters', '')
+                if keyword_filters:
+                    filter_keywords = [k.strip().lower() for k in keyword_filters.split(',') if k.strip()]
 
-                        for keyword in filter_keywords:
-                            if keyword in message_content:
-                                logger.info(f'消息被过滤: 包含关键词 "{keyword}"')
-                                return True
+                    for keyword in filter_keywords:
+                        if keyword in message_content:
+                            logger.info(f'消息被过滤: 包含关键词 "{keyword}"')
+                            return True
 
         except Exception as e:
             logger.error(f'检查消息过滤失败: {e}')
@@ -15639,25 +15969,49 @@ class DiscordBotClient(discord.Client):
             # 调用搜索API
             result = await self.search_products_by_keyword(search_query)
 
-            products = []
+            all_products = []
             if result and result.get('success') and result.get('products'):
-                products = result['products'][:5]  # 最多显示5个结果
+                all_products = result['products']
 
-            # 只在找到商品时回复和记录日志
-            if products:
-                logger.info(f'关键词搜索成功: "{search_query}" -> 找到 {len(products)} 个商品')
-                product = products[0]
+            if not all_products:
+                logger.info(f'关键词搜索无结果: {search_query}')
+                return
 
-                # 检查频道是否绑定了网站配置（必须绑定才能回复）
-                website_config = await self.get_website_config_by_channel_async(message.channel.id)
-                if not website_config:
-                    logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过关键词回复")
-                    return
+            query_lower = search_query.lower()
+
+            def _product_matches_query(product):
+                title = (product.get('title') or '').lower()
+                english_title = (product.get('english_title') or product.get('englishTitle') or '').lower()
+                if query_lower and (query_lower in title or query_lower in english_title):
+                    return True
+                if title and len(title) >= 2 and title in query_lower:
+                    return True
+                if english_title and len(english_title) >= 2 and english_title in query_lower:
+                    return True
+                keywords = [kw for kw in re.findall(r'\w+', query_lower) if len(kw) >= 2]
+                return any(kw in title or kw in english_title for kw in keywords)
+
+            matched_products = [p for p in all_products if _product_matches_query(p)]
+            if not matched_products:
+                logger.info(f'关键词搜索无精确匹配: {search_query}')
+                return
+
+            logger.info(f'关键词搜索成功: "{search_query}" -> 匹配 {len(matched_products)} 个商品')
+
+            # 检查频道是否绑定了网站配置（必须绑定才能回复）
+            website_config = await self.get_website_config_by_channel_async(message.channel.id)
+            if not website_config:
+                logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过关键词回复")
+                return
+
+            # 单个商品时保留原有发送逻辑（支持自定义图片）
+            if len(matched_products) == 1:
+                product = matched_products[0]
 
                 # === 关键修复逻辑 ===
                 # 检查规则是否启用（兼容字符串/数字）
                 # 注意：后端API返回的 autoReplyEnabled 即 ruleEnabled
-                rule_enabled = product.get('autoReplyEnabled', True)
+                rule_enabled = product.get('autoReplyEnabled', product.get('ruleEnabled', True))
                 if isinstance(rule_enabled, str):
                     rule_enabled = rule_enabled.strip().lower() not in {'0', 'false', 'no', 'off'}
                 elif isinstance(rule_enabled, (int, float)):
@@ -15705,7 +16059,7 @@ class DiscordBotClient(discord.Client):
                     # 即使没有文本，只要是要发图片，也需要传递 custom_reply 信号
                     # schedule_reply 会进一步处理图片逻辑
                     custom_reply = {
-                        'reply_type': 'text' if custom_text else 'custom_only', # custom_only 表示不发默认链接
+                        'reply_type': 'text' if custom_text else 'custom_only',  # custom_only 表示不发默认链接
                         'content': custom_text,
                         # 传递图片信息供 schedule_reply 内部处理
                         'product_data': product
@@ -15717,9 +16071,51 @@ class DiscordBotClient(discord.Client):
 
                 # 使用 schedule_reply 统一发送
                 await self.schedule_reply(message, product, custom_reply)
+                return
+
+            # 多商品合并回复
+            final_reply_lines = []
+            reply_products = []
+
+            for product in matched_products:
+                if len(final_reply_lines) >= 5:
+                    break
+
+                rule_enabled = product.get('autoReplyEnabled', product.get('ruleEnabled', True))
+                if isinstance(rule_enabled, str):
+                    rule_enabled = rule_enabled.strip().lower() not in {'0', 'false', 'no', 'off'}
+                elif isinstance(rule_enabled, (int, float)):
+                    rule_enabled = bool(rule_enabled)
+
+                custom_reply = None
+                if not rule_enabled:
+                    custom_text = (product.get('custom_reply_text') or '').strip()
+                    custom_reply = {
+                        'reply_type': 'text' if custom_text else 'custom_only',
+                        'content': custom_text,
+                        'product_data': product,
+                        'skip_images': True
+                    }
+
+                reply_text = self._generate_reply_content(product, message.channel.id, custom_reply)
+                if reply_text:
+                    final_reply_lines.append(reply_text)
+                    reply_products.append(product)
+
+            if final_reply_lines:
+                combined_message = "\n".join(final_reply_lines)
+                base_product = reply_products[0]
+                agg_custom_reply = {
+                    'reply_type': 'custom_only',
+                    'content': combined_message,
+                    'product_data': base_product,
+                    'skip_images': True
+                }
+
+                logger.info(f"发送合并回复，包含 {len(final_reply_lines)} 条内容")
+                await self.schedule_reply(message, base_product, agg_custom_reply)
             else:
-                # 没有找到商品，不回复任何消息
-                logger.info(f'关键词搜索无结果: {search_query}')
+                logger.info(f'关键词搜索无可用回复内容: {search_query}')
 
         except Exception as e:
             logger.error(f'Error handling keyword search: {e}')
@@ -15734,7 +16130,7 @@ class DiscordBotClient(discord.Client):
                 # 构建搜索请求
                 search_data = {
                     'query': keyword,
-                    'limit': 10  # 搜索更多结果，但只显示前5个
+                    'limit': 20  # 搜索更多结果以便筛选
                 }
 
                 # 调用后端搜索API
@@ -19938,7 +20334,10 @@ def update_user_settings():
             keyword_filters=data.get('keyword_filters'),
             keyword_reply_enabled=keyword_reply,
             image_reply_enabled=image_reply,
-            global_reply_template=data.get('global_reply_template')
+            global_reply_template=data.get('global_reply_template'),
+            numeric_filter_keyword=data.get('numeric_filter_keyword'),
+            filter_size_min=data.get('filter_size_min'),
+            filter_size_max=data.get('filter_size_max')
         )
 
         if success:
@@ -20710,6 +21109,54 @@ def search_similar_text():
             """, (f'%{query_lower}%', f'%{query_lower}%', limit))
 
             rows = cursor.fetchall()
+            if not rows:
+                import re
+                tokens = [kw for kw in re.findall(r'\w+', query_lower) if len(kw) >= 2]
+                tokens = tokens[:6]
+                if tokens:
+                    conditions = []
+                    params = []
+                    for token in tokens:
+                        like = f"%{token}%"
+                        conditions.append("(LOWER(english_title) LIKE ? OR LOWER(title) LIKE ?)")
+                        params.extend([like, like])
+                    where_clause = " OR ".join(conditions)
+                    cursor.execute(f"""
+                        SELECT id, product_url, title, english_title, description,
+                               ruleEnabled, min_delay, max_delay, created_at,
+                               cnfans_url, shop_name, custom_reply_text,
+                               custom_reply_images, custom_image_urls, image_source,
+                               reply_scope,
+                               uploaded_reply_images
+                        FROM products
+                        WHERE {where_clause}
+                        ORDER BY created_at DESC
+                        LIMIT ?
+                    """, (*params, limit))
+                    rows = cursor.fetchall()
+            if not rows:
+                cursor.execute("""
+                    SELECT id, product_url, title, english_title, description,
+                           ruleEnabled, min_delay, max_delay, created_at,
+                           cnfans_url, shop_name, custom_reply_text,
+                           custom_reply_images, custom_image_urls, image_source,
+                           reply_scope,
+                           uploaded_reply_images
+                    FROM products
+                    WHERE (
+                        english_title IS NOT NULL
+                        AND LENGTH(TRIM(english_title)) >= 2
+                        AND INSTR(?, LOWER(english_title)) > 0
+                    )
+                    OR (
+                        title IS NOT NULL
+                        AND LENGTH(TRIM(title)) >= 2
+                        AND INSTR(?, LOWER(title)) > 0
+                    )
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                """, (query_lower, query_lower, limit))
+                rows = cursor.fetchall()
 
             products = []
             for row in rows:

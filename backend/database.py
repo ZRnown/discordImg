@@ -305,6 +305,9 @@ class Database:
                     rotation_interval INTEGER DEFAULT 180,
                     rotation_enabled INTEGER DEFAULT 1,  -- 是否启用轮换功能 (1=启用, 0=禁用)
                     message_filters TEXT DEFAULT '[]',  -- JSON格式存储过滤条件数组
+                    stat_replies_text INTEGER DEFAULT 0,
+                    stat_replies_image INTEGER DEFAULT 0,
+                    stat_replies_total INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
@@ -329,6 +332,21 @@ class Database:
             # 为website_configs表添加rotation_enabled字段
             try:
                 cursor.execute('ALTER TABLE website_configs ADD COLUMN rotation_enabled INTEGER DEFAULT 1')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE website_configs ADD COLUMN stat_replies_text INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE website_configs ADD COLUMN stat_replies_image INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE website_configs ADD COLUMN stat_replies_total INTEGER DEFAULT 0')
             except sqlite3.OperationalError:
                 pass
 
@@ -472,7 +490,7 @@ class Database:
                     keyword_reply_enabled INTEGER DEFAULT 1,  -- 是否启用关键词回复
                     image_reply_enabled INTEGER DEFAULT 1,  -- 是否启用图片回复
                     global_reply_template TEXT DEFAULT '',
-                    numeric_filter_keyword TEXT DEFAULT 'size',
+                    numeric_filter_keyword TEXT DEFAULT '',
                     filter_size_min INTEGER DEFAULT 35,
                     filter_size_max INTEGER DEFAULT 46,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -499,7 +517,7 @@ class Database:
                 pass
 
             try:
-                cursor.execute('ALTER TABLE user_settings ADD COLUMN numeric_filter_keyword TEXT DEFAULT \'size\'')
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN numeric_filter_keyword TEXT DEFAULT \'\'')
             except sqlite3.OperationalError:
                 pass
 
@@ -1142,6 +1160,24 @@ class Database:
                 rows = cursor.fetchall()
                 history = []
                 for row in rows:
+                    weidian_url = row['weidian_url']
+                    weidian_id = ''
+                    if weidian_url:
+                        try:
+                            import re
+                            match = re.search(r'itemID=(\d+)', weidian_url)
+                            if match:
+                                weidian_id = match.group(1)
+                        except Exception:
+                            weidian_id = ''
+
+                    website_urls = []
+                    if weidian_id:
+                        try:
+                            website_urls = self.generate_website_urls(weidian_id)
+                        except Exception:
+                            website_urls = []
+
                     history.append({
                         'id': row['id'],
                         'query_image_path': row['query_image_path'],
@@ -1152,11 +1188,12 @@ class Database:
                         'search_time': row['search_time'],
                         'title': row['title'],
                         'english_title': row['english_title'],
-                        'weidian_url': row['weidian_url'],
+                        'weidian_url': weidian_url,
                         'cnfans_url': row['cnfans_url'],
                         'acbuy_url': row['acbuy_url'],
                         'ruleEnabled': row['ruleEnabled'],
-                        'matched_image_path': row['matched_image_path']
+                        'matched_image_path': row['matched_image_path'],
+                        'websiteUrls': website_urls
                     })
 
                 return {
@@ -1484,17 +1521,23 @@ class Database:
                 cursor.execute('''
                     SELECT
                         wc.id, wc.name, wc.display_name, wc.url_template,
-                        wc.id_pattern, wc.badge_color, wc.reply_template, wc.rotation_interval, wc.rotation_enabled, wc.message_filters, wc.created_at,
+                        wc.id_pattern, wc.badge_color, wc.reply_template,
+                        wc.rotation_interval, wc.rotation_enabled, wc.message_filters,
+                        wc.stat_replies_text, wc.stat_replies_image, wc.stat_replies_total,
+                        wc.created_at,
                         GROUP_CONCAT(wcb.channel_id) as channels
                     FROM website_configs wc
                     LEFT JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
-                    GROUP BY wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.reply_template, wc.rotation_interval, wc.rotation_enabled, wc.message_filters, wc.created_at
+                    GROUP BY wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.reply_template, wc.rotation_interval, wc.rotation_enabled, wc.message_filters, wc.stat_replies_text, wc.stat_replies_image, wc.stat_replies_total, wc.created_at
                     ORDER BY wc.created_at
                 ''')
 
                 configs = []
                 for row in cursor.fetchall():
                     config = dict(row)
+                    config['stat_replies_text'] = config.get('stat_replies_text', 0) or 0
+                    config['stat_replies_image'] = config.get('stat_replies_image', 0) or 0
+                    config['stat_replies_total'] = config.get('stat_replies_total', 0) or 0
                     # 将channels字符串解析为数组
                     if config.get('channels'):
                         config['channels'] = config['channels'].split(',') if config['channels'] else []
@@ -1506,6 +1549,28 @@ class Database:
         except Exception as e:
             logger.error(f"获取网站配置失败: {e}")
             return []
+
+    def increment_website_stats(self, website_id: int, has_text: bool, has_image: bool) -> bool:
+        """增加网站回复统计"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                updates = ['stat_replies_total = stat_replies_total + 1']
+                if has_text:
+                    updates.append('stat_replies_text = stat_replies_text + 1')
+                if has_image:
+                    updates.append('stat_replies_image = stat_replies_image + 1')
+
+                cursor.execute(f'''
+                    UPDATE website_configs
+                    SET {', '.join(updates)}
+                    WHERE id = ?
+                ''', (website_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"更新网站回复统计失败: {e}")
+            return False
 
     def add_website_config(self, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str = 'blue', reply_template: str = '{url}', rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> bool:
         """添加网站配置"""
@@ -2375,6 +2440,11 @@ class Database:
                     except Exception:
                         prod['weidianId'] = ''
 
+                    try:
+                        prod['websiteUrls'] = self.generate_website_urls(prod['weidianId']) if prod.get('weidianId') else []
+                    except Exception:
+                        prod['websiteUrls'] = []
+
                     products.append(prod)
 
                 return {'products': products, 'total': total}
@@ -2558,7 +2628,7 @@ class Database:
                         'keyword_reply_enabled': row[7] if row[7] is not None else 1,
                         'image_reply_enabled': row[8] if row[8] is not None else 1,
                         'global_reply_template': row[9] or '',
-                        'numeric_filter_keyword': row[10] or 'size',
+                        'numeric_filter_keyword': row[10] if row[10] is not None else '',
                         'filter_size_min': row[11] if row[11] is not None else 35,
                         'filter_size_max': row[12] if row[12] is not None else 46,
                     }
@@ -2574,7 +2644,7 @@ class Database:
                     'keyword_reply_enabled': 1,
                     'image_reply_enabled': 1,
                     'global_reply_template': '',
-                    'numeric_filter_keyword': 'size',
+                    'numeric_filter_keyword': '',
                     'filter_size_min': 35,
                     'filter_size_max': 46,
                 }
@@ -2591,7 +2661,7 @@ class Database:
                 'keyword_reply_enabled': 1,
                 'image_reply_enabled': 1,
                 'global_reply_template': '',
-                'numeric_filter_keyword': 'size',
+                'numeric_filter_keyword': '',
                 'filter_size_min': 35,
                 'filter_size_max': 46,
             }
@@ -2695,7 +2765,7 @@ class Database:
                         keyword_reply_enabled if keyword_reply_enabled is not None else 1,
                         image_reply_enabled if image_reply_enabled is not None else 1,
                         global_reply_template or '',
-                        numeric_filter_keyword or 'size',
+                        numeric_filter_keyword or '',
                         filter_size_min if filter_size_min is not None else 35,
                         filter_size_max if filter_size_max is not None else 46
                     ))
