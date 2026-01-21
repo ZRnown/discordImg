@@ -60,6 +60,7 @@ export function AccountsView() {
   })
   const [websiteChannels, setWebsiteChannels] = useState<{[key: number]: string[]}>({})
   const [channelInputs, setChannelInputs] = useState<{[key: number]: string}>({})
+  const [channelToRemove, setChannelToRemove] = useState<{webId: number, chanId: string} | null>(null)
   const [rotationEnabled, setRotationEnabled] = useState<{[key: number]: boolean}>({})
   const [rotationInputs, setRotationInputs] = useState<{[key: number]: string}>({})
 
@@ -467,7 +468,10 @@ export function AccountsView() {
   }
 
   const handleAddChannel = async (websiteId: number, channelId: string) => {
-    if (!channelId.trim()) return
+    if (!channelId.trim()) {
+      toast.warning("频道ID不能为空")
+      return
+    }
     try {
       const res = await fetch(`/api/websites/${websiteId}/channels`, {
         method: 'POST',
@@ -475,6 +479,7 @@ export function AccountsView() {
         credentials: 'include',
         body: JSON.stringify({ channel_id: channelId.trim() })
       })
+      const data = await res.json().catch(() => ({}))
       if (res.ok) {
         toast.success('频道绑定已添加')
         // 立即更新前端状态，而不是重新获取所有数据
@@ -482,24 +487,31 @@ export function AccountsView() {
           ...prev,
           [websiteId]: [...(prev[websiteId] || []), channelId.trim()]
         }))
+        setChannelInputs(prev => ({ ...prev, [websiteId]: '' }))
       } else {
-        toast.error('添加失败')
+        toast.error(`添加失败: ${data.error || '未知错误'}`)
       }
     } catch (e) {
-      toast.error('网络错误')
+      toast.error('网络连接错误，请稍后再试')
     }
   }
 
-  const handleRemoveChannel = async (websiteId: number, channelId: string) => {
+  const confirmRemoveChannel = (websiteId: number, channelId: string) => {
+    setChannelToRemove({ webId: websiteId, chanId: channelId })
+  }
+
+  const executeRemoveChannel = async () => {
+    if (!channelToRemove) return
+    const { webId, chanId } = channelToRemove
     try {
       // 【修复】如果channelId是完整的Discord URL，提取频道ID
-      let actualChannelId = channelId;
-      if (channelId.includes('discord.com/channels/')) {
-        const parts = channelId.split('/');
+      let actualChannelId = chanId
+      if (chanId.includes('discord.com/channels/')) {
+        const parts = chanId.split('/')
         actualChannelId = parts[parts.length - 1];
       }
 
-      const res = await fetch(`/api/websites/${websiteId}/channels/${actualChannelId}`, {
+      const res = await fetch(`/api/websites/${webId}/channels/${actualChannelId}`, {
         method: 'DELETE',
         credentials: 'include'
       })
@@ -508,13 +520,16 @@ export function AccountsView() {
         // 立即更新前端状态，而不是重新获取所有数据
         setWebsiteChannels(prev => ({
           ...prev,
-          [websiteId]: prev[websiteId]?.filter(id => id !== channelId) || []
+          [webId]: prev[webId]?.filter(id => id !== chanId) || []
         }))
       } else {
-        toast.error('移除失败')
+        const data = await res.json().catch(() => ({}))
+        toast.error(`移除失败: ${data.error || '未知错误'}`)
       }
     } catch (e) {
       toast.error('网络错误')
+    } finally {
+      setChannelToRemove(null)
     }
   }
 
@@ -1257,7 +1272,6 @@ export function AccountsView() {
                                   onKeyDown={(e) => {
                                     if (e.key === 'Enter' && channelInputs[website.id]?.trim()) {
                                       handleAddChannel(website.id, channelInputs[website.id].trim())
-                                      setChannelInputs(prev => ({ ...prev, [website.id]: '' }))
                                     }
                                   }}
                                 />
@@ -1268,7 +1282,6 @@ export function AccountsView() {
                               <Button onClick={() => {
                                 if (channelInputs[website.id]?.trim()) {
                                   handleAddChannel(website.id, channelInputs[website.id].trim())
-                                  setChannelInputs(prev => ({ ...prev, [website.id]: '' }))
                                 }
                               }} disabled={!channelInputs[website.id]?.trim()}>添加</Button>
                             </DialogFooter>
@@ -1285,7 +1298,7 @@ export function AccountsView() {
                               variant="ghost"
                               size="sm"
                               className="h-4 w-4 p-0"
-                              onClick={() => handleRemoveChannel(website.id, channelId)}
+                              onClick={() => confirmRemoveChannel(website.id, channelId)}
                             >
                               <X className="w-3 h-3" />
                             </Button>
@@ -1586,6 +1599,22 @@ export function AccountsView() {
           </Dialog>
         )}
 
+
+        {/* 移除频道确认对话框 */}
+        <Dialog open={!!channelToRemove} onOpenChange={(open) => !open && setChannelToRemove(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>确认移除频道?</DialogTitle>
+              <DialogDescription>
+                确定要解除频道 {channelToRemove?.chanId} 的绑定吗？
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setChannelToRemove(null)}>取消</Button>
+              <Button variant="destructive" onClick={executeRemoveChannel}>确认移除</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* 删除账号确认对话框 */}
         <Dialog open={!!deleteAccountConfirm} onOpenChange={() => setDeleteAccountConfirm(null)}>

@@ -425,6 +425,8 @@ class Database:
                     keyword_reply_enabled INTEGER DEFAULT 1,  -- 是否启用关键词回复
                     image_reply_enabled INTEGER DEFAULT 1,  -- 是否启用图片回复
                     global_reply_template TEXT DEFAULT '',
+                    filter_size_min INTEGER DEFAULT 35,
+                    filter_size_max INTEGER DEFAULT 46,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
@@ -445,6 +447,16 @@ class Database:
 
             try:
                 cursor.execute('ALTER TABLE user_settings ADD COLUMN global_reply_template TEXT DEFAULT \'\'')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN filter_size_min INTEGER DEFAULT 35')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN filter_size_max INTEGER DEFAULT 46')
             except sqlite3.OperationalError:
                 pass
 
@@ -2476,7 +2488,8 @@ class Database:
                 cursor.execute('''
                     SELECT download_threads, feature_extract_threads, discord_similarity_threshold,
                            global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
-                           keyword_reply_enabled, image_reply_enabled, global_reply_template
+                           keyword_reply_enabled, image_reply_enabled, global_reply_template,
+                           filter_size_min, filter_size_max
                     FROM user_settings WHERE user_id = ?
                 ''', (user_id,))
                 row = cursor.fetchone()
@@ -2492,6 +2505,8 @@ class Database:
                         'keyword_reply_enabled': row[7] if row[7] is not None else 1,
                         'image_reply_enabled': row[8] if row[8] is not None else 1,
                         'global_reply_template': row[9] or '',
+                        'filter_size_min': row[10] if row[10] is not None else 35,
+                        'filter_size_max': row[11] if row[11] is not None else 46,
                     }
                 # 如果用户没有设置，返回默认值
                 return {
@@ -2505,6 +2520,8 @@ class Database:
                     'keyword_reply_enabled': 1,
                     'image_reply_enabled': 1,
                     'global_reply_template': '',
+                    'filter_size_min': 35,
+                    'filter_size_max': 46,
                 }
         except Exception as e:
             logger.error(f"获取用户设置失败: {e}")
@@ -2519,6 +2536,8 @@ class Database:
                 'keyword_reply_enabled': 1,
                 'image_reply_enabled': 1,
                 'global_reply_template': '',
+                'filter_size_min': 35,
+                'filter_size_max': 46,
             }
 
     def update_user_settings(self, user_id: int, download_threads: int = None,
@@ -2526,7 +2545,8 @@ class Database:
                            global_reply_min_delay: float = None, global_reply_max_delay: float = None,
                            user_blacklist: str = None, keyword_filters: str = None,
                            keyword_reply_enabled: int = None, image_reply_enabled: int = None,
-                           global_reply_template: str = None) -> bool:
+                           global_reply_template: str = None, filter_size_min: int = None,
+                           filter_size_max: int = None) -> bool:
         """更新用户个性化设置"""
         try:
             with self.get_connection() as conn:
@@ -2581,6 +2601,14 @@ class Database:
                         update_fields.append('global_reply_template = ?')
                         params.append(global_reply_template)
 
+                    if filter_size_min is not None:
+                        update_fields.append('filter_size_min = ?')
+                        params.append(filter_size_min)
+
+                    if filter_size_max is not None:
+                        update_fields.append('filter_size_max = ?')
+                        params.append(filter_size_max)
+
                     if update_fields:
                         update_fields.append('updated_at = CURRENT_TIMESTAMP')
                         sql = f'UPDATE user_settings SET {", ".join(update_fields)} WHERE user_id = ?'
@@ -2592,8 +2620,9 @@ class Database:
                         INSERT INTO user_settings
                         (user_id, download_threads, feature_extract_threads, discord_similarity_threshold,
                          global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
-                         keyword_reply_enabled, image_reply_enabled, global_reply_template)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         keyword_reply_enabled, image_reply_enabled, global_reply_template,
+                         filter_size_min, filter_size_max)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         user_id,
                         download_threads or 4,
@@ -2605,7 +2634,9 @@ class Database:
                         keyword_filters or '',
                         keyword_reply_enabled if keyword_reply_enabled is not None else 1,
                         image_reply_enabled if image_reply_enabled is not None else 1,
-                        global_reply_template or ''
+                        global_reply_template or '',
+                        filter_size_min if filter_size_min is not None else 35,
+                        filter_size_max if filter_size_max is not None else 46
                     ))
 
                 conn.commit()

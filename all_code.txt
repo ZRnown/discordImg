@@ -3197,7 +3197,8 @@ export function AccountsView() {
     display_name: '',
     url_template: '',
     id_pattern: '',
-    badge_color: 'blue'
+    badge_color: 'blue',
+    reply_template: '{url}'
   })
   const [websiteChannels, setWebsiteChannels] = useState<{[key: number]: string[]}>({})
   const [channelInputs, setChannelInputs] = useState<{[key: number]: string}>({})
@@ -3558,8 +3559,8 @@ export function AccountsView() {
       if (res.ok) {
         toast.success('网站配置已添加')
         setShowAddWebsite(false)
-        setNewWebsite({ name: '', display_name: '', url_template: '', id_pattern: '', badge_color: 'blue' })
-        fetchWebsites()
+        setNewWebsite({ name: '', display_name: '', url_template: '', id_pattern: '', badge_color: 'blue', reply_template: '{url}' })
+        fetchWebsites(true)
       } else {
         toast.error('添加失败')
       }
@@ -3580,7 +3581,7 @@ export function AccountsView() {
       if (res.ok) {
         toast.success('网站配置已更新')
         setEditingWebsite(null)
-        fetchWebsites()
+        fetchWebsites(true)
       } else {
         toast.error('更新失败')
       }
@@ -3598,7 +3599,7 @@ export function AccountsView() {
       })
       if (res.ok) {
         toast.success('网站配置已删除')
-        fetchWebsites()
+        fetchWebsites(true)
       } else {
         toast.error('删除失败')
       }
@@ -4084,13 +4085,24 @@ export function AccountsView() {
                     onChange={e => setEditingWebsite(prev => ({ ...prev, display_name: e.target.value }))}
                   />
                 </div>
-                <div>
-                  <Label>URL模板</Label>
-                  <Input
-                    value={editingWebsite.url_template}
-                    onChange={e => setEditingWebsite(prev => ({ ...prev, url_template: e.target.value }))}
-                  />
-                </div>
+              <div>
+                <Label>URL模板</Label>
+                <Input
+                  value={editingWebsite.url_template}
+                  onChange={e => setEditingWebsite(prev => ({ ...prev, url_template: e.target.value }))}
+                />
+              </div>
+              <div>
+                <Label>回复模板</Label>
+                <Textarea
+                  value={editingWebsite.reply_template || '{url}'}
+                  onChange={e => setEditingWebsite(prev => ({ ...prev, reply_template: e.target.value }))}
+                  rows={3}
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  使用 <span className="font-mono">{`{url}`}</span> 作为链接占位符。
+                </p>
+              </div>
                 <div>
                   <Label>ID提取模式</Label>
                   <Input
@@ -4269,6 +4281,18 @@ export function AccountsView() {
                           onChange={e => setNewWebsite(prev => ({ ...prev, url_template: e.target.value }))}
                           placeholder="https://www.kakobuy.com/item/details?url=https%3A%2F%2Fweidian.com%2Fitem.html%3FitemID%3D{id}&id={id}&source=WD"
                         />
+                      </div>
+                      <div>
+                        <Label>回复模板</Label>
+                        <Textarea
+                          value={newWebsite.reply_template}
+                          onChange={e => setNewWebsite(prev => ({ ...prev, reply_template: e.target.value }))}
+                          placeholder="{url}"
+                          rows={3}
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                          使用 <span className="font-mono">{`{url}`}</span> 作为链接占位符。
+                        </p>
                       </div>
                       <div>
                         <Label>ID提取模式</Label>
@@ -5526,6 +5550,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   const [lightboxOpen, setLightboxOpen] = useState(false)
   const [lightboxImages, setLightboxImages] = useState<string[]>([])
   const [lightboxIndex, setLightboxIndex] = useState(0)
+  const [openGalleryId, setOpenGalleryId] = useState<number | null>(null)
 
   // 使用API缓存hook
   const { cachedFetch, invalidateCache } = useApiCache()
@@ -5654,6 +5679,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         weidianId: product.weidianId || '',
         ruleEnabled: product.ruleEnabled !== undefined ? product.ruleEnabled : true,
         customReplyText: product.customReplyText || product.custom_reply_text || '',
+        replyScope: product.replyScope || product.reply_scope || 'all',
         customReplyImages: product.customReplyImages || product.custom_reply_images || [],
         selectedImageIndexes: product.selectedImageIndexes || [],
         customImageUrls: product.customImageUrls || product.custom_image_urls || [],
@@ -5915,6 +5941,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         if (updatedProduct.ruleEnabled !== undefined) formData.append('ruleEnabled', updatedProduct.ruleEnabled.toString());
         if (updatedProduct.customReplyText) formData.append('customReplyText', updatedProduct.customReplyText);
         if (updatedProduct.imageSource) formData.append('imageSource', updatedProduct.imageSource);
+        if (updatedProduct.replyScope) formData.append('replyScope', updatedProduct.replyScope);
 
         // 添加数组数据（序列化为JSON）
         if (updatedProduct.selectedImageIndexes) {
@@ -6399,7 +6426,19 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                             {/* 图片与基本信息 */}
                 <div className="flex gap-3 items-center flex-1">
                                 {/* 图片弹窗 (保持原逻辑) */}
-                  <Dialog>
+                  <Dialog
+                    modal={false}
+                    open={openGalleryId === product.id}
+                    onOpenChange={(open) => {
+                      if (open) {
+                        setOpenGalleryId(product.id)
+                        return
+                      }
+                      if (!lightboxOpen) {
+                        setOpenGalleryId(null)
+                      }
+                    }}
+                  >
                     <DialogTrigger asChild>
                                         <Button variant="ghost" className="size-10 p-0 rounded bg-muted flex items-center justify-center flex-shrink-0 border shadow-sm">
                         {product.images && product.images.length > 0 ? (
@@ -6407,15 +6446,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                             ) : <ImageIcon className="size-4 text-muted-foreground" />}
                       </Button>
                     </DialogTrigger>
-                    <DialogContent
-                      className="max-w-4xl"
-                      onInteractOutside={(event) => {
-                        if (lightboxOpen) event.preventDefault()
-                      }}
-                      onEscapeKeyDown={(event) => {
-                        if (lightboxOpen) event.preventDefault()
-                      }}
-                    >
+                    <DialogContent className="max-w-4xl">
                       <DialogHeader>
                         <DialogTitle className="text-xl">商品图集 - {product.weidianId}</DialogTitle>
                         <div className="flex gap-2 mt-2">
@@ -6594,6 +6625,26 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                           {!editingProduct?.ruleEnabled && (
                             <div className="space-y-4 p-4 border rounded-lg bg-blue-50/30">
                               <div className="space-y-2">
+                                <Label className="text-sm font-medium">应用范围</Label>
+                                <Select
+                                  value={editingProduct?.replyScope || 'all'}
+                                  onValueChange={(value) => setEditingProduct({ ...editingProduct, replyScope: value })}
+                                >
+                                  <SelectTrigger className="bg-white">
+                                    <SelectValue placeholder="选择回复范围" />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="all">所有网站</SelectItem>
+                                    <SelectItem value="cnfans">仅 CNFans</SelectItem>
+                                    <SelectItem value="acbuy">仅 ACBuy</SelectItem>
+                                    <SelectItem value="weidian">仅 Weidian</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                                <p className="text-xs text-muted-foreground">
+                                  控制自定义回复在指定网站频道生效。
+                                </p>
+                              </div>
+                              <div className="space-y-2">
                                 <Label className="text-sm font-medium">自定义回复消息</Label>
                                 <Textarea
                                   value={editingProduct?.customReplyText || ""}
@@ -6601,7 +6652,9 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                                   placeholder="输入自定义回复消息内容..."
                                   rows={3}
                                 />
-                                <p className="text-xs text-muted-foreground">如果留空，将只发送选中的图片</p>
+                                <p className="text-xs text-muted-foreground">
+                                  支持 <span className="font-mono">{`{url}`}</span> 占位符；留空将只发送选中的图片
+                                </p>
                               </div>
 
                               <div className="space-y-3">
@@ -7796,6 +7849,7 @@ import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
@@ -7817,6 +7871,7 @@ interface UserSettings {
   keyword_filters: string
   keyword_reply_enabled: boolean
   image_reply_enabled: boolean
+  global_reply_template: string
 }
 
 interface SystemSettings {
@@ -7834,6 +7889,7 @@ export function SettingsView() {
     keyword_filters: '',
     keyword_reply_enabled: true,
     image_reply_enabled: true,
+    global_reply_template: '',
   })
   const [systemSettings, setSystemSettings] = useState<SystemSettings>({
     scrape_threads: 2,
@@ -7869,6 +7925,7 @@ export function SettingsView() {
           keyword_filters: data.keyword_filters ?? '',
           keyword_reply_enabled: data.keyword_reply_enabled === 1 || data.keyword_reply_enabled === true,
           image_reply_enabled: data.image_reply_enabled === 1 || data.image_reply_enabled === true,
+          global_reply_template: data.global_reply_template ?? '',
         })
       } else {
         toast.error("获取设置失败")
@@ -8275,6 +8332,24 @@ export function SettingsView() {
                   onCheckedChange={(checked) => setSettings(prev => ({ ...prev, image_reply_enabled: checked }))}
                 />
               </div>
+            </div>
+          </div>
+
+          {/* 全局回复模板 */}
+          <div className="space-y-2">
+            <Label htmlFor="global-reply-template" className="text-sm font-medium">全局回复模板</Label>
+            <div className="space-y-1">
+              <Textarea
+                id="global-reply-template"
+                value={settings.global_reply_template}
+                onChange={(e) => setSettings(prev => ({ ...prev, global_reply_template: e.target.value }))}
+                placeholder="例如：找到啦！链接在这里：{url}"
+                rows={3}
+              />
+              <p className="text-xs text-muted-foreground">
+                使用 <span className="font-mono">{`{url}`}</span> 作为链接占位符。
+                未包含占位符时会自动追加链接。
+              </p>
             </div>
           </div>
 
@@ -10622,6 +10697,7 @@ class Database:
                     acbuy_url TEXT,
                     shop_name TEXT,
                     ruleEnabled BOOLEAN DEFAULT 1,
+                    reply_scope TEXT DEFAULT 'all',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
@@ -10698,6 +10774,11 @@ class Database:
 
             try:
                 cursor.execute('ALTER TABLE products ADD COLUMN image_source TEXT DEFAULT \'product\'')  # 图片来源：'product'(商品图片), 'upload'(本地上传), 'custom'(URL)
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE products ADD COLUMN reply_scope TEXT DEFAULT \'all\'')
             except sqlite3.OperationalError:
                 pass
 
@@ -10877,6 +10958,7 @@ class Database:
                     url_template TEXT NOT NULL,
                     id_pattern TEXT NOT NULL,
                     badge_color TEXT DEFAULT 'blue',
+                    reply_template TEXT DEFAULT '{url}',
                     rotation_interval INTEGER DEFAULT 180,
                     rotation_enabled INTEGER DEFAULT 1,  -- 是否启用轮换功能 (1=启用, 0=禁用)
                     message_filters TEXT DEFAULT '[]',  -- JSON格式存储过滤条件数组
@@ -10887,6 +10969,11 @@ class Database:
             # 为website_configs表添加rotation_interval字段
             try:
                 cursor.execute('ALTER TABLE website_configs ADD COLUMN rotation_interval INTEGER DEFAULT 180')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE website_configs ADD COLUMN reply_template TEXT DEFAULT \'{url}\'')
             except sqlite3.OperationalError:
                 pass
 
@@ -10994,6 +11081,7 @@ class Database:
                     keyword_filters TEXT DEFAULT '',  -- 关键词过滤，逗号分隔
                     keyword_reply_enabled INTEGER DEFAULT 1,  -- 是否启用关键词回复
                     image_reply_enabled INTEGER DEFAULT 1,  -- 是否启用图片回复
+                    global_reply_template TEXT DEFAULT '',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
@@ -11009,6 +11097,11 @@ class Database:
 
             try:
                 cursor.execute('ALTER TABLE user_settings ADD COLUMN image_reply_enabled INTEGER DEFAULT 1')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN global_reply_template TEXT DEFAULT \'\'')
             except sqlite3.OperationalError:
                 pass
 
@@ -11064,11 +11157,11 @@ class Database:
 
             # 插入默认网站配置
             cursor.execute('''
-                INSERT OR IGNORE INTO website_configs (name, display_name, url_template, id_pattern, badge_color)
+                INSERT OR IGNORE INTO website_configs (name, display_name, url_template, id_pattern, badge_color, reply_template)
                 VALUES
-                    ('cnfans', 'CNFans', 'https://cnfans.com/product?id={id}&platform=WEIDIAN', '{id}', 'blue'),
-                    ('acbuy', 'AcBuy', 'https://www.acbuy.com/product?url=https%3A%2F%2Fweidian.com%2Fitem.html%3FitemID%3D{id}&id={id}&source=WD', '{id}', 'orange'),
-                    ('weidian', '微店', 'https://weidian.com/item.html?itemID={id}', '{id}', 'gray')
+                    ('cnfans', 'CNFans', 'https://cnfans.com/product?id={id}&platform=WEIDIAN', '{id}', 'blue', '{url}'),
+                    ('acbuy', 'AcBuy', 'https://www.acbuy.com/product?url=https%3A%2F%2Fweidian.com%2Fitem.html%3FitemID%3D{id}&id={id}&source=WD', '{id}', 'orange', '{url}'),
+                    ('weidian', '微店', 'https://weidian.com/item.html?itemID={id}', '{id}', 'gray', '{url}')
             ''')
 
             # 插入默认状态记录
@@ -11894,7 +11987,7 @@ class Database:
                 allowed_fields = [
                     'title', 'english_title', 'ruleEnabled',
                     'custom_reply_text', 'custom_reply_images', 'custom_image_urls',
-                    'image_source', 'uploaded_reply_images'
+                    'image_source', 'uploaded_reply_images', 'reply_scope'
                 ]
 
                 for field in allowed_fields:
@@ -11983,11 +12076,11 @@ class Database:
                 cursor.execute('''
                     SELECT
                         wc.id, wc.name, wc.display_name, wc.url_template,
-                        wc.id_pattern, wc.badge_color, wc.rotation_interval, wc.rotation_enabled, wc.message_filters, wc.created_at,
+                        wc.id_pattern, wc.badge_color, wc.reply_template, wc.rotation_interval, wc.rotation_enabled, wc.message_filters, wc.created_at,
                         GROUP_CONCAT(wcb.channel_id) as channels
                     FROM website_configs wc
                     LEFT JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
-                    GROUP BY wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.rotation_interval, wc.rotation_enabled, wc.message_filters, wc.created_at
+                    GROUP BY wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.reply_template, wc.rotation_interval, wc.rotation_enabled, wc.message_filters, wc.created_at
                     ORDER BY wc.created_at
                 ''')
 
@@ -12006,31 +12099,31 @@ class Database:
             logger.error(f"获取网站配置失败: {e}")
             return []
 
-    def add_website_config(self, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str = 'blue', rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> bool:
+    def add_website_config(self, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str = 'blue', reply_template: str = '{url}', rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> bool:
         """添加网站配置"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    INSERT INTO website_configs (name, display_name, url_template, id_pattern, badge_color, rotation_interval, rotation_enabled, message_filters)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (name, display_name, url_template, id_pattern, badge_color, rotation_interval, rotation_enabled, message_filters))
+                    INSERT INTO website_configs (name, display_name, url_template, id_pattern, badge_color, reply_template, rotation_interval, rotation_enabled, message_filters)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (name, display_name, url_template, id_pattern, badge_color, reply_template, rotation_interval, rotation_enabled, message_filters))
                 conn.commit()
                 return True
         except Exception as e:
             logger.error(f"添加网站配置失败: {e}")
             return False
 
-    def update_website_config(self, config_id: int, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str, rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> bool:
+    def update_website_config(self, config_id: int, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str, reply_template: str, rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> bool:
         """更新网站配置"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     UPDATE website_configs
-                    SET name = ?, display_name = ?, url_template = ?, id_pattern = ?, badge_color = ?, rotation_interval = ?, rotation_enabled = ?, message_filters = ?
+                    SET name = ?, display_name = ?, url_template = ?, id_pattern = ?, badge_color = ?, reply_template = ?, rotation_interval = ?, rotation_enabled = ?, message_filters = ?
                     WHERE id = ?
-                ''', (name, display_name, url_template, id_pattern, badge_color, rotation_interval, rotation_enabled, message_filters, config_id))
+                ''', (name, display_name, url_template, id_pattern, badge_color, reply_template, rotation_interval, rotation_enabled, message_filters, config_id))
                 conn.commit()
                 return cursor.rowcount > 0
         except Exception as e:
@@ -12140,7 +12233,7 @@ class Database:
                 cursor = conn.cursor()
                 if user_id:
                     cursor.execute('''
-                        SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color
+                        SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.reply_template
                         FROM website_configs wc
                         JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
                         WHERE wcb.channel_id = ? AND wcb.user_id = ?
@@ -12148,7 +12241,7 @@ class Database:
                     ''', (str(channel_id), user_id))
                 else:
                     cursor.execute('''
-                        SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color
+                        SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.reply_template
                         FROM website_configs wc
                         JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
                         WHERE wcb.channel_id = ?
@@ -12847,6 +12940,7 @@ class Database:
                     prod['autoReplyEnabled'] = prod.get('ruleEnabled', True)
                     prod['shopName'] = prod.get('shop_name') or '未知店铺'
                     prod['customReplyText'] = prod.get('custom_reply_text') or ''
+                    prod['replyScope'] = prod.get('reply_scope') or 'all'
 
                     try:
                         custom_reply_images = prod.get('custom_reply_images')
@@ -13039,7 +13133,7 @@ class Database:
                 cursor.execute('''
                     SELECT download_threads, feature_extract_threads, discord_similarity_threshold,
                            global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
-                           keyword_reply_enabled, image_reply_enabled
+                           keyword_reply_enabled, image_reply_enabled, global_reply_template
                     FROM user_settings WHERE user_id = ?
                 ''', (user_id,))
                 row = cursor.fetchone()
@@ -13054,6 +13148,7 @@ class Database:
                         'keyword_filters': row[6] or '',
                         'keyword_reply_enabled': row[7] if row[7] is not None else 1,
                         'image_reply_enabled': row[8] if row[8] is not None else 1,
+                        'global_reply_template': row[9] or '',
                     }
                 # 如果用户没有设置，返回默认值
                 return {
@@ -13066,6 +13161,7 @@ class Database:
                     'keyword_filters': '',
                     'keyword_reply_enabled': 1,
                     'image_reply_enabled': 1,
+                    'global_reply_template': '',
                 }
         except Exception as e:
             logger.error(f"获取用户设置失败: {e}")
@@ -13079,13 +13175,15 @@ class Database:
                 'keyword_filters': '',
                 'keyword_reply_enabled': 1,
                 'image_reply_enabled': 1,
+                'global_reply_template': '',
             }
 
     def update_user_settings(self, user_id: int, download_threads: int = None,
                            feature_extract_threads: int = None, discord_similarity_threshold: float = None,
                            global_reply_min_delay: float = None, global_reply_max_delay: float = None,
                            user_blacklist: str = None, keyword_filters: str = None,
-                           keyword_reply_enabled: int = None, image_reply_enabled: int = None) -> bool:
+                           keyword_reply_enabled: int = None, image_reply_enabled: int = None,
+                           global_reply_template: str = None) -> bool:
         """更新用户个性化设置"""
         try:
             with self.get_connection() as conn:
@@ -13136,6 +13234,10 @@ class Database:
                         update_fields.append('image_reply_enabled = ?')
                         params.append(image_reply_enabled)
 
+                    if global_reply_template is not None:
+                        update_fields.append('global_reply_template = ?')
+                        params.append(global_reply_template)
+
                     if update_fields:
                         update_fields.append('updated_at = CURRENT_TIMESTAMP')
                         sql = f'UPDATE user_settings SET {", ".join(update_fields)} WHERE user_id = ?'
@@ -13147,8 +13249,8 @@ class Database:
                         INSERT INTO user_settings
                         (user_id, download_threads, feature_extract_threads, discord_similarity_threshold,
                          global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
-                         keyword_reply_enabled, image_reply_enabled)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         keyword_reply_enabled, image_reply_enabled, global_reply_template)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         user_id,
                         download_threads or 4,
@@ -13159,7 +13261,8 @@ class Database:
                         user_blacklist or '',
                         keyword_filters or '',
                         keyword_reply_enabled if keyword_reply_enabled is not None else 1,
-                        image_reply_enabled if image_reply_enabled is not None else 1
+                        image_reply_enabled if image_reply_enabled is not None else 1,
+                        global_reply_template or ''
                     ))
 
                 conn.commit()
@@ -14925,25 +15028,75 @@ class DiscordBotClient(discord.Client):
             logger.error(f"❌ 严重错误: {e}")
 
     def _generate_reply_content(self, product, channel_id, custom_reply=None):
-        """生成回复内容"""
-        if custom_reply:
-            reply_type = custom_reply.get('reply_type')
+        """生成回复内容（支持 {url}、范围与全局模板）"""
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
 
-            if reply_type == 'custom_only':
-                # 只发送自定义内容，不发送链接
-                return custom_reply.get('content', '')
+            channel_id_str = str(channel_id)
+            website_config = db.get_website_config_by_channel(channel_id_str, self.user_id)
+            channel_scope = None
+            if website_config:
+                channel_scope = (website_config.get('name') or '').strip().lower()
+                if not channel_scope:
+                    channel_scope = (website_config.get('display_name') or '').strip().lower()
 
-            elif reply_type == 'text_and_link':
-                # 发送文字 + 链接
-                response = get_response_url_for_channel(product, channel_id, self.user_id)
-                return f"{custom_reply.get('content', '')}\n{response}".strip()
+            if not channel_scope:
+                if config.CNFANS_CHANNEL_ID and channel_id_str == str(config.CNFANS_CHANNEL_ID):
+                    channel_scope = 'cnfans'
+                elif config.ACBUY_CHANNEL_ID and channel_id_str == str(config.ACBUY_CHANNEL_ID):
+                    channel_scope = 'acbuy'
+                else:
+                    channel_scope = 'weidian'
 
-            elif reply_type == 'text':
-                # 只发送文字
-                return custom_reply.get('content', '')
+            product_scope = (product.get('replyScope') or product.get('reply_scope') or 'all').strip().lower()
+            scope_match = (product_scope == 'all') or (product_scope == channel_scope)
 
-        # 默认行为：发送链接
-        return get_response_url_for_channel(product, channel_id, self.user_id)
+            response_url = get_response_url_for_channel(product, channel_id, self.user_id)
+
+            def apply_template(template: str, append_link: bool) -> str:
+                if not template:
+                    return ''
+                if '{url}' in template:
+                    return template.replace('{url}', response_url).strip()
+                if append_link:
+                    return f"{template}\n{response_url}".strip()
+                return template.strip()
+
+            # 1) 商品级自定义回复（优先级最高）
+            is_product_custom = bool(custom_reply and custom_reply.get('product_data'))
+            if is_product_custom and scope_match:
+                reply_type = custom_reply.get('reply_type')
+                content = custom_reply.get('content', '') or ''
+                if reply_type == 'custom_only' or reply_type == 'text':
+                    return apply_template(content, append_link=False)
+                if reply_type == 'text_and_link':
+                    return apply_template(content, append_link=True)
+
+            # 2) 网站级回复模板（默认 {url}）
+            if website_config:
+                website_template = (website_config.get('reply_template') or '{url}').strip()
+                if website_template:
+                    return apply_template(website_template, append_link=True)
+
+            # 3) 原有自定义回复（全局随机）
+            if custom_reply and not is_product_custom:
+                reply_type = custom_reply.get('reply_type')
+                content = custom_reply.get('content', '') or ''
+
+                if reply_type == 'custom_only' or reply_type == 'text':
+                    return apply_template(content, append_link=False)
+                if reply_type == 'text_and_link':
+                    return apply_template(content, append_link=True)
+
+            # 4) 默认行为：发送链接
+            return response_url
+
+        except Exception as e:
+            logger.error(f"生成回复内容失败: {e}")
+            return get_response_url_for_channel(product, channel_id, self.user_id)
 
     def get_website_config_by_channel(self, channel_id):
         """根据频道ID获取对应的网站配置"""
@@ -16196,35 +16349,13 @@ class DINOv2FeatureExtractor:
             return None
 
     def _build_hybrid_signature(self, img: np.ndarray) -> Dict:
-        """构建用于混合相似度的签名: 颜色 + 版型 + 细节 + 轮廓"""
+        """构建用于混合相似度的签名: 颜色"""
         hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
         hist = cv2.calcHist([hsv], [0, 1], None, [18, 4], [0, 180, 0, 256])
         cv2.normalize(hist, hist, 0, 1, cv2.NORM_MINMAX)
 
-        h, w = img.shape[:2]
-        aspect_ratio = float(w) / float(h) if h else 1.0
-
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        gray_small = cv2.resize(gray, (256, 256), interpolation=cv2.INTER_AREA)
-
-        # 细节强度：拉普拉斯方差（越大越细节丰富）
-        detail_value = float(cv2.Laplacian(gray_small, cv2.CV_64F).var())
-
-        # 轮廓特征：边缘图缩放后做归一化向量
-        edges = cv2.Canny(gray_small, 80, 200)
-        edges_small = cv2.resize(edges, (32, 32), interpolation=cv2.INTER_AREA)
-        edge_vec = (edges_small > 0).astype(np.float32).flatten()
-        edge_norm = float(np.linalg.norm(edge_vec))
-        if edge_norm > 0:
-            edge_vec = edge_vec / edge_norm
-        else:
-            edge_vec = None
-
         return {
-            'hist': hist,
-            'aspect_ratio': aspect_ratio,
-            'detail': detail_value,
-            'edge_vec': edge_vec
+            'hist': hist
         }
 
     def calculate_hybrid_similarity(self, img_path1: str, img_path2: str, dino_score: float,
@@ -16232,7 +16363,7 @@ class DINOv2FeatureExtractor:
         """
         【新增】计算综合相似度 (Re-ranking)
 
-        综合分 = DINO语义分 + 颜色分 + 版型分 + 细节分 + 轮廓分
+        综合分 = DINO语义分 + 颜色分
 
         Args:
             img_path1: 查询图片路径
@@ -16265,52 +16396,17 @@ class DINOv2FeatureExtractor:
             )
             color_score = max(0.0, color_score)
 
-            # 宽高比相似度 (过滤跨品类误报)
-            ratio1 = query_signature['aspect_ratio']
-            ratio2 = candidate_signature['aspect_ratio']
-            ratio_score = min(ratio1, ratio2) / max(ratio1, ratio2) if ratio1 > 0 and ratio2 > 0 else 0.0
-
-            # 细节相似度 (纹理/清晰度强度)
-            detail1 = float(query_signature.get('detail', 0.0) or 0.0)
-            detail2 = float(candidate_signature.get('detail', 0.0) or 0.0)
-            detail_score = min(detail1, detail2) / max(detail1, detail2) if detail1 > 0 and detail2 > 0 else 0.0
-
-            # 轮廓相似度 (边缘分布)
-            edge_vec1 = query_signature.get('edge_vec')
-            edge_vec2 = candidate_signature.get('edge_vec')
-            if edge_vec1 is not None and edge_vec2 is not None and edge_vec1.size == edge_vec2.size:
-                contour_score = float(np.dot(edge_vec1, edge_vec2))
-                contour_score = max(0.0, min(1.0, contour_score))
-            else:
-                contour_score = 0.0
-
             # 如果DINO很高，优先尊重语义/结构鲁棒性
             if dino_score > 0.85:
                 final_score = dino_score
             else:
-                # 权重可按需要调整
-                weights = {
-                    'dino': 0.50,
-                    'color': 0.25,
-                    'ratio': 0.10,
-                    'detail': 0.10,
-                    'contour': 0.05
-                }
-                final_score = (
-                    (dino_score * weights['dino']) +
-                    (color_score * weights['color']) +
-                    (ratio_score * weights['ratio']) +
-                    (detail_score * weights['detail']) +
-                    (contour_score * weights['contour'])
-                )
+                # 仅使用 DINO + 颜色
+                final_score = (dino_score * 0.70) + (color_score * 0.30)
 
             logger.debug(
-                "综合评分: DINO=%.3f, Color=%.3f, Ratio=%.3f, Detail=%.3f, Contour=%.3f, Final=%.3f",
+                "综合评分: DINO=%.3f, Color=%.3f, Final=%.3f",
                 dino_score,
                 color_score,
-                ratio_score,
-                detail_score,
-                contour_score,
                 final_score
             )
 
@@ -16318,10 +16414,7 @@ class DINOv2FeatureExtractor:
                 'score': float(final_score),
                 'details': {
                     'dino': float(dino_score),
-                    'color': float(color_score),
-                    'ratio': float(ratio_score),
-                    'detail': float(detail_score),
-                    'contour': float(contour_score)
+                    'color': float(color_score)
                 }
             }
 
@@ -17777,6 +17870,7 @@ def search_similar():
                             # 修复：机器人需要 imageSource 和 uploaded_reply_images 才能发送本地图片
                             'imageSource': product_info.get('image_source', 'product') if product_info else 'product',
                             'custom_reply_text': product_info.get('custom_reply_text', '') if product_info else '',
+                            'replyScope': product_info.get('reply_scope', 'all') if product_info else 'all',
                             'uploaded_reply_images': json.loads(product_info.get('uploaded_reply_images', '[]')) if product_info and product_info.get('uploaded_reply_images') else [],
                             'images': actual_images if actual_images else [f"/api/image/{result['id']}/{result['image_index']}"],  # 使用实际图片列表
                             'websiteUrls': website_urls  # 添加所有网站的链接
@@ -18284,11 +18378,12 @@ def add_website_config():
         url_template = data.get('url_template')
         id_pattern = data.get('id_pattern')
         badge_color = data.get('badge_color', 'blue')
+        reply_template = data.get('reply_template') or '{url}'
 
         if not all([name, display_name, url_template, id_pattern]):
             return jsonify({'error': '所有字段都是必填的'}), 400
 
-        if db.add_website_config(name, display_name, url_template, id_pattern, badge_color):
+        if db.add_website_config(name, display_name, url_template, id_pattern, badge_color, reply_template):
             return jsonify({'success': True, 'message': '网站配置已添加'})
         else:
             return jsonify({'error': '添加失败'}), 500
@@ -18309,11 +18404,12 @@ def update_website_config(config_id):
         url_template = data.get('url_template')
         id_pattern = data.get('id_pattern')
         badge_color = data.get('badge_color', 'blue')
+        reply_template = data.get('reply_template') or '{url}'
 
         if not all([name, display_name, url_template, id_pattern]):
             return jsonify({'error': '所有字段都是必填的'}), 400
 
-        if db.update_website_config(config_id, name, display_name, url_template, id_pattern, badge_color):
+        if db.update_website_config(config_id, name, display_name, url_template, id_pattern, badge_color, reply_template):
             return jsonify({'success': True, 'message': '网站配置已更新'})
         else:
             return jsonify({'error': '更新失败'}), 500
@@ -19075,6 +19171,7 @@ def update_product():
             'ruleEnabled': bool(product.get('ruleEnabled', True)),
             'customReplyText': product.get('custom_reply_text', ''),
             'imageSource': product.get('image_source', 'product'),
+            'replyScope': product.get('reply_scope', 'all'),
 
             # 图片相关
             'selectedImageIndexes': selected_indexes,
@@ -19151,7 +19248,7 @@ def update_product():
             # 如果有上传的自定义回复图片（已有的或新上传的），将文件名列表存储到数据库
             if all_uploaded_filenames:
                 updates['uploaded_reply_images'] = json.dumps(all_uploaded_filenames)
-            for key in ['title', 'englishTitle', 'ruleEnabled', 'customReplyText', 'imageSource']:
+            for key in ['title', 'englishTitle', 'ruleEnabled', 'customReplyText', 'imageSource', 'replyScope']:
                 value = request.form.get(key)
                 if value is not None:
                     if key == 'englishTitle':
@@ -19166,6 +19263,8 @@ def update_product():
                         updates['custom_reply_text'] = value
                     elif key == 'imageSource':
                         updates['image_source'] = value
+                    elif key == 'replyScope':
+                        updates['reply_scope'] = value
                     else:
                         updates[key] = value
 
@@ -19212,6 +19311,8 @@ def update_product():
                 updates['ruleEnabled'] = 1 if data['ruleEnabled'] else 0
             if 'customReplyText' in data:
                 updates['custom_reply_text'] = data['customReplyText']
+            if 'replyScope' in data:
+                updates['reply_scope'] = data['replyScope']
             if 'selectedImageIndexes' in data:
                 updates['custom_reply_images'] = json.dumps(data['selectedImageIndexes'])
             if 'customImageUrls' in data:
@@ -19836,7 +19937,8 @@ def update_user_settings():
             user_blacklist=data.get('user_blacklist'),
             keyword_filters=data.get('keyword_filters'),
             keyword_reply_enabled=keyword_reply,
-            image_reply_enabled=image_reply
+            image_reply_enabled=image_reply,
+            global_reply_template=data.get('global_reply_template')
         )
 
         if success:
@@ -20599,6 +20701,7 @@ def search_similar_text():
                        ruleEnabled, min_delay, max_delay, created_at,
                        cnfans_url, shop_name, custom_reply_text,
                        custom_reply_images, custom_image_urls, image_source,
+                       reply_scope,
                        uploaded_reply_images
                 FROM products
                 WHERE (LOWER(english_title) LIKE ? OR LOWER(title) LIKE ?)
@@ -20623,6 +20726,7 @@ def search_similar_text():
                 # 补充 Bot 需要的字段
                 prod['weidianUrl'] = prod.get('product_url')
                 prod['autoReplyEnabled'] = bool(prod.get('ruleEnabled', True))
+                prod['replyScope'] = prod.get('reply_scope') or 'all'
 
                 # 解析 JSON 字段供 Bot 使用
                 try:

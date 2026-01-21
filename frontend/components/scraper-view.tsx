@@ -141,6 +141,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   const [shopScrapeProgress, setShopScrapeProgress] = useState(0)
   const [scrapeStatus, setScrapeStatus] = useState<any>(null)
   const [availableShops, setAvailableShops] = useState<any[]>([])
+  const [availableWebsites, setAvailableWebsites] = useState<any[]>([])
   const [selectedShopId, setSelectedShopId] = useState('')
   const [totalProductsCount, setTotalProductsCount] = useState(0)
   // 搜索类型状态
@@ -150,6 +151,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   useEffect(() => {
     fetchIndexedIds()
     fetchAvailableShops()
+    fetchWebsites()
     fetchProductsCount()
     fetchScrapeStatus() // 初始化时检查抓取状态，恢复进度显示
   }, []) // 静态数据只加载一次
@@ -294,6 +296,15 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     }
   }
 
+  const fetchWebsites = async () => {
+    try {
+      const data = await cachedFetch('/api/websites', { credentials: 'include' })
+      setAvailableWebsites(data.websites || [])
+    } catch (e) {
+      console.error('获取网站列表失败:', e)
+    }
+  }
+
   const fetchProductsCount = async () => {
     try {
       const data = await cachedFetch('/api/products/count')
@@ -325,6 +336,51 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
       console.error('获取抓取状态失败:', e)
       // 静默失败
     }
+  }
+
+  const parseReplyScopes = (rawScope: any): string[] => {
+    if (!rawScope || rawScope === 'all') return []
+    if (Array.isArray(rawScope)) return rawScope.map(scope => String(scope))
+    if (typeof rawScope === 'string') {
+      const trimmed = rawScope.trim()
+      if (trimmed.startsWith('[')) {
+        try {
+          const parsed = JSON.parse(trimmed)
+          if (Array.isArray(parsed)) {
+            return parsed.map(scope => String(scope))
+          }
+        } catch {
+          return [trimmed]
+        }
+      }
+      return [trimmed]
+    }
+    return [String(rawScope)]
+  }
+
+  const handleScopeChange = (websiteName: string, checked: boolean) => {
+    if (!editingProduct) return
+    let currentScopes = parseReplyScopes(editingProduct.replyScope)
+    currentScopes = currentScopes.filter(scope => scope && scope !== 'all')
+
+    if (checked) {
+      if (!currentScopes.includes(websiteName)) {
+        currentScopes.push(websiteName)
+      }
+    } else {
+      currentScopes = currentScopes.filter(scope => scope !== websiteName)
+    }
+
+    setEditingProduct({
+      ...editingProduct,
+      replyScope: JSON.stringify(currentScopes)
+    })
+  }
+
+  const isScopeSelected = (websiteName: string) => {
+    if (!editingProduct || editingProduct.replyScope === 'all') return false
+    const scopes = parseReplyScopes(editingProduct.replyScope)
+    return scopes.includes(websiteName)
   }
 
   // === 链接生成逻辑 ===
@@ -1205,23 +1261,41 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                           {!editingProduct?.ruleEnabled && (
                             <div className="space-y-4 p-4 border rounded-lg bg-blue-50/30">
                               <div className="space-y-2">
-                                <Label className="text-sm font-medium">应用范围</Label>
-                                <Select
-                                  value={editingProduct?.replyScope || 'all'}
-                                  onValueChange={(value) => setEditingProduct({ ...editingProduct, replyScope: value })}
-                                >
-                                  <SelectTrigger className="bg-white">
-                                    <SelectValue placeholder="选择回复范围" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="all">所有网站</SelectItem>
-                                    <SelectItem value="cnfans">仅 CNFans</SelectItem>
-                                    <SelectItem value="acbuy">仅 ACBuy</SelectItem>
-                                    <SelectItem value="weidian">仅 Weidian</SelectItem>
-                                  </SelectContent>
-                                </Select>
+                                <Label className="text-sm font-medium">应用范围 (多选)</Label>
+                                <div className="border rounded-md p-3 space-y-2 max-h-40 overflow-y-auto bg-white">
+                                  <div className="flex items-center space-x-2">
+                                    <Checkbox
+                                      id="scope-all"
+                                      checked={editingProduct?.replyScope === 'all'}
+                                      onCheckedChange={(checked) => {
+                                        if (!editingProduct) return
+                                        if (checked === true) {
+                                          setEditingProduct({ ...editingProduct, replyScope: 'all' })
+                                        } else {
+                                          setEditingProduct({ ...editingProduct, replyScope: JSON.stringify([]) })
+                                        }
+                                      }}
+                                    />
+                                    <label htmlFor="scope-all" className="text-sm cursor-pointer font-bold">所有网站 (All)</label>
+                                  </div>
+                                  {availableWebsites.map(site => (
+                                    <div key={site.id} className="flex items-center space-x-2">
+                                      <Checkbox
+                                        id={`scope-${site.name}`}
+                                        checked={editingProduct?.replyScope !== 'all' && isScopeSelected(site.name)}
+                                        onCheckedChange={(checked) => handleScopeChange(site.name, checked === true)}
+                                      />
+                                      <label htmlFor={`scope-${site.name}`} className="text-sm cursor-pointer">
+                                        {site.display_name} ({site.name})
+                                      </label>
+                                    </div>
+                                  ))}
+                                  {!availableWebsites.length && (
+                                    <p className="text-xs text-muted-foreground">暂无网站配置</p>
+                                  )}
+                                </div>
                                 <p className="text-xs text-muted-foreground">
-                                  控制自定义回复在指定网站频道生效。
+                                  勾选 "所有网站" 将覆盖其他选择。如果不勾选 "所有网站"，则仅在勾选的特定网站频道回复。
                                 </p>
                               </div>
                               <div className="space-y-2">

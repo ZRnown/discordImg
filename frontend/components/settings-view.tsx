@@ -27,6 +27,8 @@ interface UserSettings {
   keyword_reply_enabled: boolean
   image_reply_enabled: boolean
   global_reply_template: string
+  filter_size_min: number
+  filter_size_max: number
 }
 
 interface SystemSettings {
@@ -45,6 +47,8 @@ export function SettingsView() {
     keyword_reply_enabled: true,
     image_reply_enabled: true,
     global_reply_template: '',
+    filter_size_min: 35,
+    filter_size_max: 46,
   })
   const [systemSettings, setSystemSettings] = useState<SystemSettings>({
     scrape_threads: 2,
@@ -81,6 +85,8 @@ export function SettingsView() {
           keyword_reply_enabled: data.keyword_reply_enabled === 1 || data.keyword_reply_enabled === true,
           image_reply_enabled: data.image_reply_enabled === 1 || data.image_reply_enabled === true,
           global_reply_template: data.global_reply_template ?? '',
+          filter_size_min: data.filter_size_min ?? 35,
+          filter_size_max: data.filter_size_max ?? 46,
         })
       } else {
         toast.error("获取设置失败")
@@ -154,6 +160,12 @@ export function SettingsView() {
 
       if (settings.global_reply_min_delay < 0 || settings.global_reply_max_delay < 0) {
         toast.error("延迟时间不能为负数")
+        setSaving(false)
+        return
+      }
+
+      if (settings.filter_size_min >= settings.filter_size_max) {
+        toast.error("最小尺码必须小于最大尺码")
         setSaving(false)
         return
       }
@@ -542,6 +554,36 @@ export function SettingsView() {
                 消息包含这些关键词时不会回复，格式：广告,刷屏,测试,垃圾
               </p>
             </div>
+          </div>
+
+          {/* 尺码过滤设置 */}
+          <div className="space-y-2 pt-4 border-t">
+            <Label className="text-sm font-medium">尺码过滤范围 (Size Filter)</Label>
+            <div className="flex items-center gap-4">
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">小于</span>
+                <Input
+                  type="number"
+                  value={settings.filter_size_min}
+                  onChange={(e) => setSettings(prev => ({ ...prev, filter_size_min: parseInt(e.target.value) || 0 }))}
+                  className="w-20 h-9"
+                />
+                <span className="text-sm text-muted-foreground">不回复</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">大于</span>
+                <Input
+                  type="number"
+                  value={settings.filter_size_max}
+                  onChange={(e) => setSettings(prev => ({ ...prev, filter_size_max: parseInt(e.target.value) || 0 }))}
+                  className="w-20 h-9"
+                />
+                <span className="text-sm text-muted-foreground">不回复</span>
+              </div>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              当消息包含 "size 48" 等内容时，如果数字超出此范围，机器人将忽略该消息。
+            </p>
           </div>
         </CardContent>
       </Card>

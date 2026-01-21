@@ -8,6 +8,7 @@ import os
 import json
 import io
 import sqlite3
+import re
 from datetime import datetime
 try:
     from config import config
@@ -327,6 +328,9 @@ class DiscordBotClient(discord.Client):
 
             # 生成回复内容
             response_content = self._generate_reply_content(product, message.channel.id, custom_reply)
+            if response_content is None:
+                logger.info(f"商品 {product.get('id')} 回复范围不匹配，跳过发送")
+                return
 
             # 1. 尝试获取网站配置（必须绑定，否则不回复）
             website_config = await self.get_website_config_by_channel_async(message.channel.id)
@@ -423,12 +427,13 @@ class DiscordBotClient(discord.Client):
                             files = []
 
                             # 检查是否是自定义模式，且有图片
+                            skip_images = bool(custom_reply and custom_reply.get('skip_images'))
                             is_custom_mode = custom_reply and (
                                 custom_reply.get('reply_type') == 'custom_only' or
                                 custom_reply.get('reply_type') == 'text'
                             )
 
-                            if is_custom_mode:
+                            if is_custom_mode and not skip_images:
                                 # 获取图片信息
                                 # 注意：如果是从 search_similar_text 返回的 product，字段名可能已经格式化
                                 # 需要兼容处理
@@ -581,8 +586,38 @@ class DiscordBotClient(discord.Client):
                 else:
                     channel_scope = 'weidian'
 
-            product_scope = (product.get('replyScope') or product.get('reply_scope') or 'all').strip().lower()
-            scope_match = (product_scope == 'all') or (product_scope == channel_scope)
+            product_scope_raw = (product.get('replyScope') or product.get('reply_scope') or 'all')
+            scope_match = False
+
+            if isinstance(product_scope_raw, str):
+                product_scope_raw = product_scope_raw.strip()
+
+            if not product_scope_raw or (isinstance(product_scope_raw, str) and product_scope_raw.lower() == 'all'):
+                scope_match = True
+            else:
+                scopes = []
+                if isinstance(product_scope_raw, list):
+                    scopes = product_scope_raw
+                elif isinstance(product_scope_raw, str):
+                    if product_scope_raw.startswith('['):
+                        try:
+                            scopes = json.loads(product_scope_raw)
+                        except json.JSONDecodeError:
+                            scopes = [product_scope_raw]
+                    else:
+                        scopes = [product_scope_raw]
+                else:
+                    scopes = [str(product_scope_raw)]
+
+                normalized_scopes = [
+                    str(scope).strip().lower()
+                    for scope in scopes
+                    if str(scope).strip()
+                ]
+                scope_match = channel_scope in normalized_scopes
+
+            if not scope_match:
+                return None
 
             response_url = get_response_url_for_channel(product, channel_id, self.user_id)
 
@@ -674,9 +709,31 @@ class DiscordBotClient(discord.Client):
             except ImportError:
                 from .database import db
 
+            user_settings = None
+
+            # 0. 尺码过滤逻辑
+            min_size = 35
+            max_size = 46
+
+            if self.user_id:
+                user_settings = db.get_user_settings(self.user_id)
+                if user_settings:
+                    min_size = user_settings.get('filter_size_min', 35)
+                    max_size = user_settings.get('filter_size_max', 46)
+
+            size_matches = re.findall(r'(?i)size\s*[:=-]?\s*(\d+)', message.content or '')
+            for size_str in size_matches:
+                try:
+                    size = int(size_str)
+                    if size < min_size or size > max_size:
+                        logger.info(f'🚫 消息被过滤: 尺码 {size} 超出范围 ({min_size}-{max_size})')
+                        return True
+                except ValueError:
+                    continue
+
             # 1. 检查全局消息过滤规则
             filters = db.get_message_filters()
-            message_content = message.content.lower()
+            message_content = (message.content or '').lower()
 
             for filter_rule in filters:
                 filter_value = filter_rule['filter_value'].lower()
@@ -715,31 +772,29 @@ class DiscordBotClient(discord.Client):
                             return True
 
             # 2. 检查用户个性化设置的过滤规则
-            if self.user_id:
-                user_settings = db.get_user_settings(self.user_id)
-                if user_settings:
-                    # 检查用户黑名单
-                    user_blacklist = user_settings.get('user_blacklist', '')
-                    if user_blacklist:
-                        blacklist_users = [u.strip().lower() for u in user_blacklist.split(',') if u.strip()]
-                        sender_name = str(message.author.name).lower()
-                        sender_id = str(message.author.id).lower()
+            if user_settings:
+                # 检查用户黑名单
+                user_blacklist = user_settings.get('user_blacklist', '')
+                if user_blacklist:
+                    blacklist_users = [u.strip().lower() for u in user_blacklist.split(',') if u.strip()]
+                    sender_name = str(message.author.name).lower()
+                    sender_id = str(message.author.id).lower()
 
-                        for blocked_user in blacklist_users:
-                            blocked_user = blocked_user.lower()
-                            if blocked_user in sender_name or blocked_user == sender_id:
-                                logger.info(f'消息被过滤: 用户 {message.author.name} 在黑名单中')
-                                return True
+                    for blocked_user in blacklist_users:
+                        blocked_user = blocked_user.lower()
+                        if blocked_user in sender_name or blocked_user == sender_id:
+                            logger.info(f'消息被过滤: 用户 {message.author.name} 在黑名单中')
+                            return True
 
-                    # 检查关键词过滤
-                    keyword_filters = user_settings.get('keyword_filters', '')
-                    if keyword_filters:
-                        filter_keywords = [k.strip().lower() for k in keyword_filters.split(',') if k.strip()]
+                # 检查关键词过滤
+                keyword_filters = user_settings.get('keyword_filters', '')
+                if keyword_filters:
+                    filter_keywords = [k.strip().lower() for k in keyword_filters.split(',') if k.strip()]
 
-                        for keyword in filter_keywords:
-                            if keyword in message_content:
-                                logger.info(f'消息被过滤: 包含关键词 "{keyword}"')
-                                return True
+                    for keyword in filter_keywords:
+                        if keyword in message_content:
+                            logger.info(f'消息被过滤: 包含关键词 "{keyword}"')
+                            return True
 
         except Exception as e:
             logger.error(f'检查消息过滤失败: {e}')
@@ -1169,25 +1224,45 @@ class DiscordBotClient(discord.Client):
             # 调用搜索API
             result = await self.search_products_by_keyword(search_query)
 
-            products = []
+            all_products = []
             if result and result.get('success') and result.get('products'):
-                products = result['products'][:5]  # 最多显示5个结果
+                all_products = result['products']
 
-            # 只在找到商品时回复和记录日志
-            if products:
-                logger.info(f'关键词搜索成功: "{search_query}" -> 找到 {len(products)} 个商品')
-                product = products[0]
+            if not all_products:
+                logger.info(f'关键词搜索无结果: {search_query}')
+                return
 
-                # 检查频道是否绑定了网站配置（必须绑定才能回复）
-                website_config = await self.get_website_config_by_channel_async(message.channel.id)
-                if not website_config:
-                    logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过关键词回复")
-                    return
+            query_lower = search_query.lower()
+
+            def _product_matches_query(product):
+                title = (product.get('title') or '').lower()
+                english_title = (product.get('english_title') or product.get('englishTitle') or '').lower()
+                if query_lower and (query_lower in title or query_lower in english_title):
+                    return True
+                keywords = [kw for kw in re.findall(r'\w+', query_lower) if len(kw) >= 2]
+                return any(kw in title or kw in english_title for kw in keywords)
+
+            matched_products = [p for p in all_products if _product_matches_query(p)]
+            if not matched_products:
+                logger.info(f'关键词搜索无精确匹配: {search_query}')
+                return
+
+            logger.info(f'关键词搜索成功: "{search_query}" -> 匹配 {len(matched_products)} 个商品')
+
+            # 检查频道是否绑定了网站配置（必须绑定才能回复）
+            website_config = await self.get_website_config_by_channel_async(message.channel.id)
+            if not website_config:
+                logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过关键词回复")
+                return
+
+            # 单个商品时保留原有发送逻辑（支持自定义图片）
+            if len(matched_products) == 1:
+                product = matched_products[0]
 
                 # === 关键修复逻辑 ===
                 # 检查规则是否启用（兼容字符串/数字）
                 # 注意：后端API返回的 autoReplyEnabled 即 ruleEnabled
-                rule_enabled = product.get('autoReplyEnabled', True)
+                rule_enabled = product.get('autoReplyEnabled', product.get('ruleEnabled', True))
                 if isinstance(rule_enabled, str):
                     rule_enabled = rule_enabled.strip().lower() not in {'0', 'false', 'no', 'off'}
                 elif isinstance(rule_enabled, (int, float)):
@@ -1235,7 +1310,7 @@ class DiscordBotClient(discord.Client):
                     # 即使没有文本，只要是要发图片，也需要传递 custom_reply 信号
                     # schedule_reply 会进一步处理图片逻辑
                     custom_reply = {
-                        'reply_type': 'text' if custom_text else 'custom_only', # custom_only 表示不发默认链接
+                        'reply_type': 'text' if custom_text else 'custom_only',  # custom_only 表示不发默认链接
                         'content': custom_text,
                         # 传递图片信息供 schedule_reply 内部处理
                         'product_data': product
@@ -1247,9 +1322,51 @@ class DiscordBotClient(discord.Client):
 
                 # 使用 schedule_reply 统一发送
                 await self.schedule_reply(message, product, custom_reply)
+                return
+
+            # 多商品合并回复
+            final_reply_lines = []
+            reply_products = []
+
+            for product in matched_products:
+                if len(final_reply_lines) >= 5:
+                    break
+
+                rule_enabled = product.get('autoReplyEnabled', product.get('ruleEnabled', True))
+                if isinstance(rule_enabled, str):
+                    rule_enabled = rule_enabled.strip().lower() not in {'0', 'false', 'no', 'off'}
+                elif isinstance(rule_enabled, (int, float)):
+                    rule_enabled = bool(rule_enabled)
+
+                custom_reply = None
+                if not rule_enabled:
+                    custom_text = (product.get('custom_reply_text') or '').strip()
+                    custom_reply = {
+                        'reply_type': 'text' if custom_text else 'custom_only',
+                        'content': custom_text,
+                        'product_data': product,
+                        'skip_images': True
+                    }
+
+                reply_text = self._generate_reply_content(product, message.channel.id, custom_reply)
+                if reply_text:
+                    final_reply_lines.append(reply_text)
+                    reply_products.append(product)
+
+            if final_reply_lines:
+                combined_message = "\n".join(final_reply_lines)
+                base_product = reply_products[0]
+                agg_custom_reply = {
+                    'reply_type': 'custom_only',
+                    'content': combined_message,
+                    'product_data': base_product,
+                    'skip_images': True
+                }
+
+                logger.info(f"发送合并回复，包含 {len(final_reply_lines)} 条内容")
+                await self.schedule_reply(message, base_product, agg_custom_reply)
             else:
-                # 没有找到商品，不回复任何消息
-                logger.info(f'关键词搜索无结果: {search_query}')
+                logger.info(f'关键词搜索无可用回复内容: {search_query}')
 
         except Exception as e:
             logger.error(f'Error handling keyword search: {e}')
@@ -1264,7 +1381,7 @@ class DiscordBotClient(discord.Client):
                 # 构建搜索请求
                 search_data = {
                     'query': keyword,
-                    'limit': 10  # 搜索更多结果，但只显示前5个
+                    'limit': 20  # 搜索更多结果以便筛选
                 }
 
                 # 调用后端搜索API
