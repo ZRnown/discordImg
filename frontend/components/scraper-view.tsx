@@ -269,6 +269,13 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     return merged.length ? merged : normalized
   }
 
+  const getLinkGridClass = (count: number) => {
+    if (count <= 1) return "grid grid-cols-1 gap-2 flex-1 min-w-0"
+    if (count === 2) return "grid grid-cols-2 gap-2 flex-1 min-w-0"
+    if (count === 3) return "grid grid-cols-3 gap-2 flex-1 min-w-0"
+    return "grid grid-cols-4 gap-2 flex-1 min-w-0"
+  }
+
   // 优化：分离不同类型的加载逻辑
   useEffect(() => {
     fetchIndexedIds()
@@ -1347,7 +1354,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                 </div>
                             {/* 链接显示区域 */}
                 <div className="flex items-start gap-2 min-w-0 flex-1">
-                  <div className="grid grid-cols-4 gap-2 flex-1 min-w-0">
+                  <div className={getLinkGridClass(displayedLinks.length)}>
                     {displayedLinks.map((link) => (
                       <div
                         key={link.name || link.url}

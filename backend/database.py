@@ -177,10 +177,16 @@ class Database:
                     password_hash TEXT NOT NULL,
                     role TEXT DEFAULT 'user',  -- admin, user
                     is_active BOOLEAN DEFAULT 1,
+                    image_search_count INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+
+            try:
+                cursor.execute('ALTER TABLE users ADD COLUMN image_search_count INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
 
             # 创建用户-店铺权限表
             cursor.execute('''
@@ -1294,13 +1300,14 @@ class Database:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT id, username, role, is_active, created_at
+                    SELECT id, username, role, is_active, image_search_count, created_at
                     FROM users
                     ORDER BY created_at DESC
                 ''')
                 users = []
                 for row in cursor.fetchall():
                     user = dict(row)
+                    user['image_search_count'] = user.get('image_search_count', 0) or 0
                     user['shops'] = self.get_user_shops(user['id'])
                     users.append(user)
                 return users
@@ -1349,19 +1356,37 @@ class Database:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT id, username, role, is_active, created_at
+                    SELECT id, username, role, is_active, image_search_count, created_at
                     FROM users
                     WHERE id = ?
                 ''', (user_id,))
                 user = cursor.fetchone()
                 if user:
                     user_dict = dict(user)
+                    user_dict['image_search_count'] = user_dict.get('image_search_count', 0) or 0
                     user_dict['shops'] = self.get_user_shops(user_id)
                     return user_dict
                 return None
         except Exception as e:
             logger.error(f"获取用户信息失败: {e}")
             return None
+
+    def increment_user_image_search_count(self, user_id: int) -> bool:
+        """增加用户以图搜图次数"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE users
+                    SET image_search_count = COALESCE(image_search_count, 0) + 1,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                ''', (user_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"更新用户搜索次数失败: {e}")
+            return False
 
     def update_discord_account_user(self, account_id: int, user_id: Optional[int]) -> bool:
         """更新Discord账号关联的用户"""

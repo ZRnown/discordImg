@@ -622,6 +622,14 @@ def search_similar():
             if query_features is None:
                 return jsonify({'error': 'Feature extraction failed'}), 500
 
+            # 记录用户搜索次数（未登录则跳过，不影响机器人调用）
+            try:
+                current_user = get_current_user()
+                if current_user:
+                    db.increment_user_image_search_count(current_user['id'])
+            except Exception as e:
+                logger.error(f"记录用户搜索次数失败: {e}")
+
             # 【优化】使用 FAISS HNSW 向量搜索 + 综合评分重排序
             print(f"DEBUG: Searching with threshold: {threshold}, vector length: {len(query_features)}")
 
@@ -1152,7 +1160,7 @@ def create_user():
         if db.create_user(username, password_hash, role):
             with db.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT id, username, role, is_active, created_at FROM users WHERE username = ?", (username,))
+                cursor.execute("SELECT id, username, role, is_active, image_search_count, created_at FROM users WHERE username = ?", (username,))
                 user = cursor.fetchone()
 
             if user:

@@ -70,6 +70,8 @@ function CooldownTimer({ remaining }: { remaining: number }) {
 
 export function AccountsView() {
   const [accounts, setAccounts] = useState<any[]>([])
+  const [accountPage, setAccountPage] = useState(1)
+  const accountsPerPage = 5
   const [users, setUsers] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [showAddDialog, setShowAddDialog] = useState(false)
@@ -878,6 +880,15 @@ export function AccountsView() {
     }
   }
 
+  const totalAccountPages = Math.ceil(accounts.length / accountsPerPage)
+  const paginatedAccounts = accounts.slice((accountPage - 1) * accountsPerPage, accountPage * accountsPerPage)
+
+  useEffect(() => {
+    if (totalAccountPages > 0 && accountPage > totalAccountPages) {
+      setAccountPage(totalAccountPages)
+    }
+  }, [accountPage, totalAccountPages])
+
 
   return (
     <div className="space-y-8">
@@ -931,7 +942,7 @@ export function AccountsView() {
         </div>
 
         <div className="space-y-2">
-          {accounts.map((account) => (
+          {paginatedAccounts.map((account) => (
             <div key={account.id} className="flex justify-between items-center p-4 border rounded">
               <div className="flex-1">
                 <div className="font-semibold">{account.username}</div>
@@ -960,6 +971,34 @@ export function AccountsView() {
             </div>
           ))}
         </div>
+        {totalAccountPages > 1 && (
+          <div className="flex flex-col sm:flex-row justify-between items-center gap-4 mt-4 pt-4 border-t">
+            <div className="text-sm text-muted-foreground font-medium">
+              显示第 {(accountPage - 1) * accountsPerPage + 1} - {Math.min(accountPage * accountsPerPage, accounts.length)} 条，共 {accounts.length} 条记录
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={accountPage === 1}
+                onClick={() => setAccountPage(page => page - 1)}
+              >
+                上一页
+              </Button>
+              <div className="text-sm font-medium bg-primary text-primary-foreground px-3 py-1 rounded">
+                {accountPage} / {totalAccountPages}
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={accountPage === totalAccountPages}
+                onClick={() => setAccountPage(page => page + 1)}
+              >
+                下一页
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
 

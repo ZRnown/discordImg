@@ -19,6 +19,7 @@ interface User {
   role: string
   shops: string[]
   is_active: boolean
+  image_search_count?: number
   created_at: string
 }
 
@@ -303,6 +304,7 @@ export function UsersView() {
               <TableRow className="bg-muted/50 h-12">
                 <TableHead className="text-sm font-bold text-foreground pl-6">用户名</TableHead>
                 <TableHead className="text-sm font-bold text-foreground">角色</TableHead>
+                <TableHead className="text-sm font-bold text-foreground">搜索次数</TableHead>
                 <TableHead className="text-sm font-bold text-foreground">管理店铺</TableHead>
                 <TableHead className="text-sm font-bold text-foreground">状态</TableHead>
                 <TableHead className="text-sm font-bold text-foreground text-right pr-6">操作</TableHead>
@@ -327,6 +329,9 @@ export function UsersView() {
                     ) : (
                       <Badge variant="secondary">普通用户</Badge>
                     )}
+                  </TableCell>
+                  <TableCell className="py-3">
+                    <span className="text-sm font-medium">{user.image_search_count ?? 0}</span>
                   </TableCell>
                   <TableCell className="py-3">
                     <div className="text-sm max-w-xs truncate" title={getShopNames(user.shops)}>

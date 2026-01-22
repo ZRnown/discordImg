@@ -5,10 +5,12 @@ const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:500
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
+    const cookie = request.headers.get('cookie')
 
     const response = await fetch(`${BACKEND_URL}/search_similar`, {
       method: 'POST',
-      body: formData
+      body: formData,
+      headers: cookie ? { cookie } : undefined
     });
 
     if (!response.ok) {

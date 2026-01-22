@@ -149,6 +149,14 @@ export function ImageSearchView() {
     return merged.length ? merged : normalized
   }
 
+  const getLinkGridClass = (count: number, extra?: string) => {
+    const base = `grid gap-2${extra ? ` ${extra}` : ''}`
+    if (count <= 1) return `${base} grid-cols-1`
+    if (count === 2) return `${base} grid-cols-2`
+    if (count === 3) return `${base} grid-cols-3`
+    return `${base} grid-cols-4`
+  }
+
   // 加载搜索历史
   useEffect(() => {
     fetchSearchHistory()
@@ -560,7 +568,7 @@ export function ImageSearchView() {
 
                     {/* 网站链接网格显示区域 */}
                     <div className="w-full lg:w-1/2 mt-2 lg:mt-0">
-                      <div className="grid grid-cols-4 gap-2">
+                      <div className={getLinkGridClass(displayedLinks.length)}>
                         {displayedLinks.map((site: any, index: number) => (
                           <div
                             key={index}
@@ -699,7 +707,7 @@ export function ImageSearchView() {
 
                       {/* 链接显示区域 */}
                       <div className="w-full lg:w-1/2 mt-2 lg:mt-0 flex items-start gap-2">
-                        <div className="grid grid-cols-4 gap-2 flex-1 min-w-0">
+                        <div className={getLinkGridClass(limitedHistoryLinks.length, 'flex-1 min-w-0')}>
                           {limitedHistoryLinks.map((site: any, index: number) => (
                             <div
                               key={`${history.id}-${index}`}
