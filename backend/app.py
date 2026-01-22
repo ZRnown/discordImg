@@ -3048,12 +3048,6 @@ def upload_product_image(product_id):
             row = cursor.fetchone()
             next_index = (row[0] + 1) if row and row[0] is not None else 0
 
-            # 检查图片数量限制（每个商品最多20张图片）
-            cursor.execute("SELECT COUNT(*) FROM product_images WHERE product_id = ?", (product_id,))
-            count_row = cursor.fetchone()
-            if count_row and count_row[0] >= 20:
-                return jsonify({'error': '每个商品最多只能上传20张图片'}), 400
-
         # 调用核心处理函数（现在包含完整的数据库和FAISS操作）
         result = process_and_save_image_core(product_id, file, next_index, existing_feats)
 
