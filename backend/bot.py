@@ -97,7 +97,7 @@ def mark_message_as_processed(message_id):
     except sqlite3.IntegrityError:
         return False  # 已经被其他Bot抢锁
 
-def get_response_url_for_channel(product, channel_id, user_id=None):
+def get_response_url_for_channel(product, channel_id, user_id=None, website_config=None):
     """根据频道ID和网站配置决定发送哪个链接"""
     import re
     try:
@@ -108,7 +108,8 @@ def get_response_url_for_channel(product, channel_id, user_id=None):
     channel_id_str = str(channel_id)
 
     # 1. 首先尝试根据频道绑定获取网站配置
-    website_config = db.get_website_config_by_channel(channel_id_str, user_id)
+    if not website_config:
+        website_config = db.get_website_config_by_channel(channel_id_str, user_id)
 
     if website_config and website_config.get('url_template'):
         # 从商品URL中提取微店ID
@@ -326,92 +327,107 @@ class DiscordBotClient(discord.Client):
             min_delay = user_settings.get('global_reply_min_delay', 3.0)
             max_delay = user_settings.get('global_reply_max_delay', 8.0)
 
-            # 生成回复内容
-            response_content = self._generate_reply_content(product, message.channel.id, custom_reply)
-            if response_content is None:
-                logger.info(f"商品 {product.get('id')} 回复范围不匹配，跳过发送")
-                return
-
-            # 1. 尝试获取网站配置（必须绑定，否则不回复）
-            website_config = await self.get_website_config_by_channel_async(message.channel.id)
-
-            if not website_config:
+            website_configs = await self.get_website_configs_by_channel_async(message.channel.id)
+            if not website_configs:
                 logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过回复")
                 return
 
-            target_client = None
+            def _coerce_bool(value, default=True):
+                if isinstance(value, str):
+                    return value.strip().lower() not in {'0', 'false', 'no', 'off'}
+                if isinstance(value, (int, float, bool)):
+                    return bool(value)
+                return default
 
-            # 2. 获取数据库配置的发送者 ID
-            db_sender_ids = await asyncio.get_event_loop().run_in_executor(
-                None, db.get_website_senders, website_config['id']
-            )
-
-            if not db_sender_ids:
-                logger.warning(
-                    f"❌ [配置错误] 网站配置 '{website_config.get('name')}' 未绑定任何【发送】账号。请在网站配置中绑定账号。"
-                )
-                return
+            def _coerce_int(value, default):
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    return default
 
             # === 获取当前真正在线的机器人账号 ID ===
             online_client_ids = [c.account_id for c in bot_clients if c.is_ready() and not c.is_closed()]
 
-            # 调试信息：打印当前状态
-            logger.info(f"配置账号ID: {db_sender_ids} | 在线账号ID: {online_client_ids}")
-
-            # 取交集：既在数据库配置了，又是当前在线的
-            valid_senders = [uid for uid in db_sender_ids if uid in online_client_ids]
-
-            if not valid_senders:
-                logger.warning("❌ [状态错误] 配置的发送账号均不在线。请检查 Discord 账号连接状态。")
-                return
-
-            # 3. 轮换/冷却逻辑 - 使用用户级别设置
-            # 优先使用用户个性化设置，如果没有则使用全局配置
-            rotation_enabled = website_config.get('rotation_enabled', 1)
-            rotation_interval = website_config.get('rotation_interval', 180)
-
-            if self.user_id and website_config.get('id'):
-                user_website_settings = await asyncio.get_event_loop().run_in_executor(
-                    None, db.get_user_website_settings, self.user_id, website_config['id']
+            for website_config in website_configs:
+                response_content = self._generate_reply_content(
+                    product,
+                    message.channel.id,
+                    custom_reply,
+                    website_config=website_config
                 )
-                if user_website_settings:
-                    rotation_enabled = user_website_settings.get('rotation_enabled', rotation_enabled)
-                    rotation_interval = user_website_settings.get('rotation_interval', rotation_interval)
-                    logger.info(f"📋 使用用户级别设置: rotation_interval={rotation_interval}秒, rotation_enabled={rotation_enabled}")
+                if response_content is None:
+                    logger.info(f"商品 {product.get('id')} 回复范围不匹配，跳过发送")
+                    continue
 
-            available_senders = []
+                # 2. 获取数据库配置的发送者 ID
+                db_sender_ids = await asyncio.get_event_loop().run_in_executor(
+                    None, db.get_website_senders, website_config['id']
+                )
 
-            if rotation_enabled:
-                # 筛选非冷却的（按频道区分冷却）
+                if not db_sender_ids:
+                    logger.warning(
+                        f"❌ [配置错误] 网站配置 '{website_config.get('name')}' 未绑定任何【发送】账号。请在网站配置中绑定账号。"
+                    )
+                    continue
+
+                logger.info(f"配置账号ID: {db_sender_ids} | 在线账号ID: {online_client_ids}")
+
+                valid_senders = [uid for uid in db_sender_ids if uid in online_client_ids]
+
+                if not valid_senders:
+                    logger.warning("❌ [状态错误] 配置的发送账号均不在线。请检查 Discord 账号连接状态。")
+                    continue
+
+                # 3. 冷却逻辑：始终生效，轮换开关仅控制选人策略
+                rotation_enabled = _coerce_bool(website_config.get('rotation_enabled', 1), True)
+                rotation_interval = _coerce_int(website_config.get('rotation_interval', 180), 180)
+
+                if self.user_id and website_config.get('id'):
+                    user_website_settings = await asyncio.get_event_loop().run_in_executor(
+                        None, db.get_user_website_settings, self.user_id, website_config['id']
+                    )
+                    if user_website_settings:
+                        rotation_enabled = _coerce_bool(
+                            user_website_settings.get('rotation_enabled', rotation_enabled),
+                            rotation_enabled
+                        )
+                        rotation_interval = _coerce_int(
+                            user_website_settings.get('rotation_interval', rotation_interval),
+                            rotation_interval
+                        )
+                        logger.info(
+                            f"📋 使用用户级别设置: rotation_interval={rotation_interval}秒, rotation_enabled={rotation_enabled}"
+                        )
+
                 available_senders = [
                     uid for uid in valid_senders
                     if not is_account_on_cooldown(uid, message.channel.id, rotation_interval)
                 ]
 
-                # 只有 valid_senders 有值但 available_senders 为空，才是真正的“冷却中”
                 if not available_senders:
                     logger.info(
                         f"⏳ [冷却中] 频道 {message.channel.id} 所有在线账号 ({len(valid_senders)}个) "
                         f"均处于 {rotation_interval}秒 冷却期内，跳过发送"
                     )
-                    return
+                    continue
 
-            else:
-                available_senders = valid_senders
+                if rotation_enabled:
+                    selected_id = random.choice(available_senders)
+                else:
+                    available_set = set(available_senders)
+                    selected_id = next((uid for uid in db_sender_ids if uid in available_set), None)
+                    if selected_id is None:
+                        selected_id = available_senders[0]
 
-            # 4. 选中一个 ID
-            if available_senders:
-                selected_id = random.choice(available_senders)
                 target_client = next((c for c in bot_clients if c.account_id == selected_id), None)
+                if not target_client:
+                    logger.warning("❌ 逻辑异常：有可用发送账号但无法找到客户端")
+                    continue
+
                 logger.info(
                     f"✅ 本次选中发送账号: {target_client.user.name if target_client else selected_id} (ID: {selected_id})"
                 )
-            else:
-                logger.warning("❌ 逻辑异常：有 valid_senders 但无可用发送账号")
-                return
 
-            # 5. 执行发送
-            if target_client:
                 try:
                     target_channel = target_client.get_channel(message.channel.id)
 
@@ -443,7 +459,7 @@ class DiscordBotClient(discord.Client):
                                 if isinstance(custom_urls, str):
                                     try:
                                         custom_urls = json.loads(custom_urls)
-                                    except:
+                                    except Exception:
                                         custom_urls = []
 
                                 image_source = product.get('imageSource') or product.get('image_source') or 'product'
@@ -472,7 +488,7 @@ class DiscordBotClient(discord.Client):
                                     if isinstance(uploaded_filenames, str):
                                         try:
                                             uploaded_filenames = json.loads(uploaded_filenames)
-                                        except:
+                                        except Exception:
                                             # 如果解析失败，且它本身就是列表，则保持原样，否则置空
                                             uploaded_filenames = uploaded_filenames if isinstance(uploaded_filenames, list) else []
 
@@ -499,7 +515,7 @@ class DiscordBotClient(discord.Client):
                                     if isinstance(indexes, str):
                                         try:
                                             indexes = json.loads(indexes)
-                                        except:
+                                        except Exception:
                                             indexes = []
 
                                     if pid and indexes:
@@ -522,7 +538,7 @@ class DiscordBotClient(discord.Client):
                                 logger.warning(
                                     f"⚠️ 无可发送内容: 商品ID={product.get('id')}，未生成文字且无图片"
                                 )
-                                return
+                                continue
 
                             await target_channel.send(
                                 content=response_content if response_content else None,
@@ -588,7 +604,7 @@ class DiscordBotClient(discord.Client):
                         logger.warning(
                             f"❌ 选中的账号 {target_client.user.name} 无法访问频道 {message.channel.id} (可能不在该服务器)"
                         )
-                        return
+                        continue
 
                 except Exception as e:
                     logger.error(f"❌ 发送异常: {e}")
@@ -596,7 +612,7 @@ class DiscordBotClient(discord.Client):
         except Exception as e:
             logger.error(f"❌ 严重错误: {e}")
 
-    def _generate_reply_content(self, product, channel_id, custom_reply=None):
+    def _generate_reply_content(self, product, channel_id, custom_reply=None, website_config=None):
         """生成回复内容（支持 {url}、范围与全局模板）"""
         try:
             try:
@@ -605,7 +621,8 @@ class DiscordBotClient(discord.Client):
                 from .database import db
 
             channel_id_str = str(channel_id)
-            website_config = db.get_website_config_by_channel(channel_id_str, self.user_id)
+            if not website_config:
+                website_config = db.get_website_config_by_channel(channel_id_str, self.user_id)
             channel_scope = None
             if website_config:
                 channel_scope = (website_config.get('name') or '').strip().lower()
@@ -653,7 +670,12 @@ class DiscordBotClient(discord.Client):
             if not scope_match:
                 return None
 
-            response_url = get_response_url_for_channel(product, channel_id, self.user_id)
+            response_url = get_response_url_for_channel(
+                product,
+                channel_id,
+                self.user_id,
+                website_config=website_config
+            )
 
             def apply_template(template: str, append_link: bool) -> str:
                 if not template:
@@ -697,43 +719,47 @@ class DiscordBotClient(discord.Client):
             logger.error(f"生成回复内容失败: {e}")
             return get_response_url_for_channel(product, channel_id, self.user_id)
 
-    def get_website_config_by_channel(self, channel_id):
-        """根据频道ID获取对应的网站配置"""
+    def get_website_configs_by_channel(self, channel_id):
+        """根据频道ID获取对应的网站配置列表"""
         try:
             try:
                 from database import db
             except ImportError:
                 from .database import db
 
-            # 查询频道绑定的网站配置
-            configs = db.get_website_configs()
-            for config in configs:
-                channels = config.get('channels', [])
-                if str(channel_id) in channels:
-                    return config
-            return None
+            return db.get_website_configs_by_channel(str(channel_id), self.user_id)
+        except Exception as e:
+            logger.error(f"获取频道网站配置失败: {e}")
+            return []
+
+    def get_website_config_by_channel(self, channel_id):
+        """根据频道ID获取对应的网站配置（兼容单个返回）"""
+        try:
+            configs = self.get_website_configs_by_channel(channel_id)
+            return configs[0] if configs else None
         except Exception as e:
             logger.error(f"获取频道网站配置失败: {e}")
             return None
 
-    async def get_website_config_by_channel_async(self, channel_id):
-        """异步版本：根据频道ID获取对应的网站配置"""
+    async def get_website_configs_by_channel_async(self, channel_id):
+        """异步版本：根据频道ID获取对应的网站配置列表"""
         try:
             try:
                 from database import db
             except ImportError:
                 from .database import db
 
-            # 异步查询频道绑定的网站配置
-            configs = await asyncio.get_event_loop().run_in_executor(None, db.get_website_configs)
-            for config in configs:
-                channels = config.get('channels', [])
-                if str(channel_id) in channels:
-                    return config
-            return None
+            return await asyncio.get_event_loop().run_in_executor(
+                None, db.get_website_configs_by_channel, str(channel_id), self.user_id
+            )
         except Exception as e:
             logger.error(f"异步获取频道网站配置失败: {e}")
-            return None
+            return []
+
+    async def get_website_config_by_channel_async(self, channel_id):
+        """异步版本：根据频道ID获取对应的网站配置（兼容单个返回）"""
+        configs = await self.get_website_configs_by_channel_async(channel_id)
+        return configs[0] if configs else None
 
     def _should_filter_message(self, message):
         """检查消息是否应该被过滤"""
@@ -961,10 +987,10 @@ class DiscordBotClient(discord.Client):
         # =================================================================
         try:
             # 异步获取该频道绑定的网站配置
-            website_config = await self.get_website_config_by_channel_async(message.channel.id)
+            website_configs = await self.get_website_configs_by_channel_async(message.channel.id)
 
             # 如果这个频道没有绑定任何配置，直接忽略
-            if not website_config:
+            if not website_configs:
                 # logger.debug(f"频道 {message.channel.id} 未绑定配置，账号 {self.account_id} 忽略此消息")
                 return
 
@@ -975,13 +1001,17 @@ class DiscordBotClient(discord.Client):
             except ImportError:
                 from .database import db
 
-            # 获取该网站配置绑定的所有监听者ID
-            listener_ids = await asyncio.get_event_loop().run_in_executor(
-                None, db.get_website_listeners, website_config['id']
-            )
+            listener_allowed = False
+            for config in website_configs:
+                listener_ids = await asyncio.get_event_loop().run_in_executor(
+                    None, db.get_website_listeners, config['id']
+                )
+                if self.account_id in listener_ids:
+                    listener_allowed = True
+                    break
 
             # 如果当前账号不在监听列表中，直接忽略
-            if self.account_id not in listener_ids:
+            if not listener_allowed:
                 # logger.debug(f"账号 {self.account_id} 不是频道 {message.channel.id} 的监听者，忽略")
                 return
 
@@ -1366,8 +1396,8 @@ class DiscordBotClient(discord.Client):
             logger.info(f'关键词搜索成功: "{search_query}" -> 匹配 {len(matched_products)} 个商品')
 
             # 检查频道是否绑定了网站配置（必须绑定才能回复）
-            website_config = await self.get_website_config_by_channel_async(message.channel.id)
-            if not website_config:
+            website_configs = await self.get_website_configs_by_channel_async(message.channel.id)
+            if not website_configs:
                 logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过关键词回复")
                 return
 
