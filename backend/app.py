@@ -2882,7 +2882,7 @@ def get_indexed_ids():
 # === 修复：批量删除 API ===
 @app.route('/api/products/batch', methods=['DELETE'])
 def batch_delete_products():
-    """批量删除商品（多线程高性能版）"""
+    """批量删除商品（优化版）"""
     try:
         data = request.get_json()
         ids = data.get('ids', [])
@@ -2891,43 +2891,22 @@ def batch_delete_products():
 
         logger.info(f"开始批量删除 {len(ids)} 个商品")
 
-        # 使用多线程删除
-        import concurrent.futures
-        max_threads = min(16, len(ids))  # 提高并发删除速度，同时避免过多线程
-
-        deleted_count = 0
-        failed_ids = []
-
-        def delete_single_product(product_id):
-            """删除单个商品"""
-            try:
-                # 创建新的数据库实例避免多线程冲突
-                from database import Database
-                temp_db = Database()
-                if temp_db.delete_product_images(product_id):
-                    return {'success': True, 'id': product_id}
-                else:
-                    return {'success': False, 'id': product_id}
-            except Exception as e:
-                logger.error(f"删除商品 {product_id} 失败: {e}")
-                return {'success': False, 'id': product_id}
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
-            futures = [executor.submit(delete_single_product, pid) for pid in ids]
-
-            for future in concurrent.futures.as_completed(futures):
-                result = future.result()
-                if result['success']:
-                    deleted_count += 1
-                else:
-                    failed_ids.append(result['id'])
+        result = db.delete_products_bulk(ids)
+        deleted_count = result.get('deleted_count', 0)
+        failed_ids = result.get('missing_ids', [])
+        file_failed_count = result.get('file_failed_count', 0)
 
         logger.info(f"批量删除完成: {deleted_count}/{len(ids)} 个商品成功删除")
 
         response = {'success': True, 'count': deleted_count, 'total': len(ids)}
+        warnings = []
         if failed_ids:
             response['failed_ids'] = failed_ids
-            response['warning'] = f'{len(failed_ids)} 个商品删除失败'
+            warnings.append(f'{len(failed_ids)} 个商品不存在')
+        if file_failed_count:
+            warnings.append(f'{file_failed_count} 个图片文件删除失败')
+        if warnings:
+            response['warning'] = '，'.join(warnings)
 
         return jsonify(response)
     except Exception as e:
@@ -2968,35 +2947,10 @@ def batch_delete_all_products():
 
         logger.info(f"开始删除所有 {len(all_ids)} 个商品")
 
-        # 使用多线程删除所有商品
-        import concurrent.futures
-        max_threads = min(16, len(all_ids))
-
-        deleted_count = 0
-        failed_ids = []
-
-        def delete_single_product(product_id):
-            try:
-                # 创建新的数据库实例避免多线程冲突
-                from database import Database
-                temp_db = Database()
-                if temp_db.delete_product_images(product_id):
-                    return {'success': True, 'id': product_id}
-                else:
-                    return {'success': False, 'id': product_id}
-            except Exception as e:
-                logger.error(f"删除商品 {product_id} 失败: {e}")
-                return {'success': False, 'id': product_id}
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
-            futures = [executor.submit(delete_single_product, pid) for pid in all_ids]
-
-            for future in concurrent.futures.as_completed(futures):
-                result = future.result()
-                if result['success']:
-                    deleted_count += 1
-                else:
-                    failed_ids.append(result['id'])
+        result = db.delete_products_bulk(all_ids)
+        deleted_count = result.get('deleted_count', 0)
+        failed_ids = result.get('missing_ids', [])
+        file_failed_count = result.get('file_failed_count', 0)
 
         logger.info(f"全选删除完成: {deleted_count}/{len(all_ids)} 个商品成功删除")
 
@@ -3007,9 +2961,14 @@ def batch_delete_all_products():
             'message': f'成功删除 {deleted_count} 个商品'
         }
 
+        warnings = []
         if failed_ids:
             response['failed_ids'] = failed_ids
-            response['warning'] = f'{len(failed_ids)} 个商品删除失败'
+            warnings.append(f'{len(failed_ids)} 个商品不存在')
+        if file_failed_count:
+            warnings.append(f'{file_failed_count} 个图片文件删除失败')
+        if warnings:
+            response['warning'] = '，'.join(warnings)
 
         return jsonify(response)
     except Exception as e:

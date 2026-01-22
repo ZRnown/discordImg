@@ -928,6 +928,115 @@ class Database:
             logger.error(f"删除商品图像失败: {e}")
             return False
 
+    def delete_products_bulk(self, product_ids: List[int], max_workers: int = 8) -> Dict[str, Any]:
+        """批量删除商品、图片文件与向量索引（优化版）"""
+        try:
+            normalized_ids = []
+            for pid in product_ids or []:
+                try:
+                    normalized_ids.append(int(pid))
+                except (TypeError, ValueError):
+                    continue
+
+            if not normalized_ids:
+                return {'deleted_count': 0, 'missing_ids': [], 'file_failed_count': 0}
+
+            unique_ids = sorted(set(normalized_ids))
+            existing_ids = set()
+            image_records = []
+
+            def chunked(values, size):
+                for idx in range(0, len(values), size):
+                    yield values[idx:idx + size]
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                for chunk in chunked(unique_ids, 500):
+                    placeholders = ','.join(['?'] * len(chunk))
+                    cursor.execute(f"SELECT id FROM products WHERE id IN ({placeholders})", chunk)
+                    existing_ids.update([row['id'] for row in cursor.fetchall()])
+
+                if not existing_ids:
+                    return {'deleted_count': 0, 'missing_ids': unique_ids, 'file_failed_count': 0}
+
+                existing_list = list(existing_ids)
+                for chunk in chunked(existing_list, 500):
+                    placeholders = ','.join(['?'] * len(chunk))
+                    cursor.execute(
+                        f"SELECT id, image_path FROM product_images WHERE product_id IN ({placeholders})",
+                        chunk
+                    )
+                    image_records.extend([{'id': row['id'], 'path': row['image_path']} for row in cursor.fetchall()])
+
+            engine = None
+            try:
+                from vector_engine import get_vector_engine
+                engine = get_vector_engine()
+            except ImportError:
+                try:
+                    from .vector_engine import get_vector_engine
+                    engine = get_vector_engine()
+                except ImportError:
+                    logger.warning("无法导入vector_engine，跳过FAISS向量删除")
+
+            if engine and image_records:
+                for record in image_records:
+                    try:
+                        engine.remove_vector_by_db_id(record['id'])
+                    except Exception as e:
+                        logger.warning(f"删除FAISS向量失败 {record['id']}: {e}")
+
+            file_failed = {'count': 0}
+            if image_records:
+                import concurrent.futures
+                import threading
+
+                lock = threading.Lock()
+
+                def remove_file(path: str):
+                    if not path:
+                        return
+                    if os.path.exists(path):
+                        try:
+                            os.remove(path)
+                        except Exception:
+                            with lock:
+                                file_failed['count'] += 1
+
+                workers = min(max_workers, len(image_records))
+                if workers > 1:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                        executor.map(lambda rec: remove_file(rec['path']), image_records)
+                else:
+                    for record in image_records:
+                        remove_file(record['path'])
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                existing_list = list(existing_ids)
+                for chunk in chunked(existing_list, 500):
+                    placeholders = ','.join(['?'] * len(chunk))
+                    cursor.execute(f"DELETE FROM product_images WHERE product_id IN ({placeholders})", chunk)
+                    cursor.execute(f"DELETE FROM products WHERE id IN ({placeholders})", chunk)
+                conn.commit()
+
+            if engine and image_records:
+                try:
+                    engine.save()
+                except Exception as e:
+                    logger.warning(f"保存FAISS索引失败: {e}")
+
+            missing_ids = [pid for pid in unique_ids if pid not in existing_ids]
+
+            return {
+                'deleted_count': len(existing_ids),
+                'missing_ids': missing_ids,
+                'file_failed_count': file_failed['count']
+            }
+        except Exception as e:
+            logger.error(f"批量删除商品失败: {e}")
+            return {'deleted_count': 0, 'missing_ids': [], 'file_failed_count': 0, 'error': str(e)}
+
     def delete_image_record(self, image_id: int) -> bool:
         """根据图片ID删除图片记录（用于回滚操作）"""
         try:
