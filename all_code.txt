@@ -2115,10 +2115,12 @@ const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:500
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
+    const cookie = request.headers.get('cookie')
 
     const response = await fetch(`${BACKEND_URL}/search_similar`, {
       method: 'POST',
-      body: formData
+      body: formData,
+      headers: cookie ? { cookie } : undefined
     });
 
     if (!response.ok) {
@@ -3165,6 +3167,50 @@ import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit, Clock } from "lucide-react"
 
+type NumericRangeFilterValue = {
+  keyword: string
+  min: string
+  max: string
+}
+
+const parseNumericRangeFilterValue = (value: string): NumericRangeFilterValue => {
+  if (!value) {
+    return { keyword: '', min: '', max: '' }
+  }
+  try {
+    const parsed = JSON.parse(value)
+    return {
+      keyword: String(parsed?.keyword || ''),
+      min: parsed?.min === null || parsed?.min === undefined ? '' : String(parsed.min),
+      max: parsed?.max === null || parsed?.max === undefined ? '' : String(parsed.max)
+    }
+  } catch {
+    const parts = value.split(/[|,]/).map(part => part.trim())
+    if (parts.length >= 3) {
+      return { keyword: parts[0] || '', min: parts[1] || '', max: parts[2] || '' }
+    }
+    return { keyword: '', min: '', max: '' }
+  }
+}
+
+const buildNumericRangeFilterValue = (value: NumericRangeFilterValue) => {
+  const keyword = value.keyword.trim()
+  const min = value.min === '' ? null : Number(value.min)
+  const max = value.max === '' ? null : Number(value.max)
+  return JSON.stringify({ keyword, min, max })
+}
+
+const formatMessageFilterLabel = (filter: any) => {
+  if (filter.filter_type === 'numeric_range') {
+    const fields = parseNumericRangeFilterValue(filter.filter_value || '')
+    const keyword = fields.keyword || '未设置关键词'
+    const minLabel = fields.min !== '' ? fields.min : '不限'
+    const maxLabel = fields.max !== '' ? fields.max : '不限'
+    return `数字范围: ${keyword} (${minLabel}-${maxLabel})`
+  }
+  return `${filter.filter_type} "${filter.filter_value}"`
+}
+
 function CooldownTimer({ remaining }: { remaining: number }) {
   if (remaining <= 0) return null
   return (
@@ -3177,6 +3223,8 @@ function CooldownTimer({ remaining }: { remaining: number }) {
 
 export function AccountsView() {
   const [accounts, setAccounts] = useState<any[]>([])
+  const [accountPage, setAccountPage] = useState(1)
+  const accountsPerPage = 5
   const [users, setUsers] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [showAddDialog, setShowAddDialog] = useState(false)
@@ -3847,13 +3895,73 @@ export function AccountsView() {
   }
 
   // 消息过滤处理函数
+  const normalizeNumericRangeFilter = (rawValue: string) => {
+    const fields = parseNumericRangeFilterValue(rawValue)
+    const keyword = fields.keyword.trim()
+
+    if (!keyword) {
+      return { ok: false, error: '请输入匹配关键词' }
+    }
+    if (fields.min === '' || fields.max === '') {
+      return { ok: false, error: '请输入完整的数字范围' }
+    }
+
+    const minValue = Number(fields.min)
+    const maxValue = Number(fields.max)
+
+    if (Number.isNaN(minValue) || Number.isNaN(maxValue)) {
+      return { ok: false, error: '请输入有效的数字范围' }
+    }
+    if (minValue >= maxValue) {
+      return { ok: false, error: '最小值必须小于最大值' }
+    }
+
+    return {
+      ok: true,
+      value: buildNumericRangeFilterValue({
+        keyword,
+        min: String(minValue),
+        max: String(maxValue)
+      })
+    }
+  }
+
+  const updateNewNumericFilter = (patch: Partial<NumericRangeFilterValue>) => {
+    const current = parseNumericRangeFilterValue(newFilter.filter_value)
+    const next = { ...current, ...patch }
+    setNewFilter(prev => ({
+      ...prev,
+      filter_value: buildNumericRangeFilterValue(next)
+    }))
+  }
+
+  const updateEditingNumericFilter = (patch: Partial<NumericRangeFilterValue>) => {
+    if (!editingFilter) return
+    const current = parseNumericRangeFilterValue(editingFilter.filter_value)
+    const next = { ...current, ...patch }
+    setEditingFilter((prev: any) => ({
+      ...prev,
+      filter_value: buildNumericRangeFilterValue(next)
+    }))
+  }
+
   const handleAddMessageFilter = async () => {
     try {
+      let payload = { ...newFilter }
+      if (newFilter.filter_type === 'numeric_range') {
+        const normalized = normalizeNumericRangeFilter(newFilter.filter_value)
+        if (!normalized.ok) {
+          toast.error(normalized.error)
+          return
+        }
+        payload = { filter_type: 'numeric_range', filter_value: normalized.value }
+      }
+
       const res = await fetch('/api/message-filters', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify(newFilter)
+        body: JSON.stringify(payload)
       })
       if (res.ok) {
         toast.success('过滤规则添加成功')
@@ -3871,15 +3979,29 @@ export function AccountsView() {
   const handleUpdateMessageFilter = async () => {
     if (!editingFilter) return
     try {
+      let payload = {
+        filter_type: editingFilter.filter_type,
+        filter_value: editingFilter.filter_value,
+        is_active: editingFilter.is_active
+      }
+
+      if (editingFilter.filter_type === 'numeric_range') {
+        const normalized = normalizeNumericRangeFilter(editingFilter.filter_value)
+        if (!normalized.ok) {
+          toast.error(normalized.error)
+          return
+        }
+        payload = {
+          ...payload,
+          filter_value: normalized.value
+        }
+      }
+
       const res = await fetch(`/api/message-filters/${editingFilter.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({
-          filter_type: editingFilter.filter_type,
-          filter_value: editingFilter.filter_value,
-          is_active: editingFilter.is_active
-        })
+        body: JSON.stringify(payload)
       })
       if (res.ok) {
         toast.success('过滤规则更新成功')
@@ -3910,6 +4032,15 @@ export function AccountsView() {
       toast.error('网络错误')
     }
   }
+
+  const totalAccountPages = Math.ceil(accounts.length / accountsPerPage)
+  const paginatedAccounts = accounts.slice((accountPage - 1) * accountsPerPage, accountPage * accountsPerPage)
+
+  useEffect(() => {
+    if (totalAccountPages > 0 && accountPage > totalAccountPages) {
+      setAccountPage(totalAccountPages)
+    }
+  }, [accountPage, totalAccountPages])
 
 
   return (
@@ -3964,7 +4095,7 @@ export function AccountsView() {
         </div>
 
         <div className="space-y-2">
-          {accounts.map((account) => (
+          {paginatedAccounts.map((account) => (
             <div key={account.id} className="flex justify-between items-center p-4 border rounded">
               <div className="flex-1">
                 <div className="font-semibold">{account.username}</div>
@@ -3993,6 +4124,34 @@ export function AccountsView() {
             </div>
           ))}
         </div>
+        {totalAccountPages > 1 && (
+          <div className="flex flex-col sm:flex-row justify-between items-center gap-4 mt-4 pt-4 border-t">
+            <div className="text-sm text-muted-foreground font-medium">
+              显示第 {(accountPage - 1) * accountsPerPage + 1} - {Math.min(accountPage * accountsPerPage, accounts.length)} 条，共 {accounts.length} 条记录
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={accountPage === 1}
+                onClick={() => setAccountPage(page => page - 1)}
+              >
+                上一页
+              </Button>
+              <div className="text-sm font-medium bg-primary text-primary-foreground px-3 py-1 rounded">
+                {accountPage} / {totalAccountPages}
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={accountPage === totalAccountPages}
+                onClick={() => setAccountPage(page => page + 1)}
+              >
+                下一页
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
 
@@ -4183,7 +4342,16 @@ export function AccountsView() {
                     <div className="space-y-4">
                       <div>
                         <Label>过滤类型</Label>
-                        <Select value={newFilter.filter_type} onValueChange={value => setNewFilter(prev => ({ ...prev, filter_type: value }))}>
+                        <Select
+                          value={newFilter.filter_type}
+                          onValueChange={value => setNewFilter(prev => ({
+                            ...prev,
+                            filter_type: value,
+                            filter_value: value === 'numeric_range'
+                              ? buildNumericRangeFilterValue({ keyword: '', min: '', max: '' })
+                              : ''
+                          }))}
+                        >
                           <SelectTrigger>
                             <SelectValue />
                           </SelectTrigger>
@@ -4193,20 +4361,60 @@ export function AccountsView() {
                             <SelectItem value="ends_with">结尾是</SelectItem>
                             <SelectItem value="regex">正则表达式</SelectItem>
                             <SelectItem value="user_id">用户ID</SelectItem>
+                            <SelectItem value="numeric_range">数字范围</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
                       <div>
                         <Label>过滤值</Label>
-                        <Input
-                          value={newFilter.filter_value}
-                          onChange={e => setNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
-                          placeholder={
-                            newFilter.filter_type === 'user_id'
-                              ? "输入用户ID，多个用逗号分隔"
-                              : "输入要过滤的内容"
-                          }
-                        />
+                        {newFilter.filter_type === 'numeric_range' ? (
+                          <div className="space-y-3">
+                            <div className="space-y-1">
+                              <Label className="text-xs text-muted-foreground">匹配关键词</Label>
+                              <Input
+                                value={parseNumericRangeFilterValue(newFilter.filter_value).keyword}
+                                onChange={e => updateNewNumericFilter({ keyword: e.target.value })}
+                                placeholder="例如: size"
+                                className="h-9"
+                              />
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-muted-foreground">小于</span>
+                                <Input
+                                  type="number"
+                                  value={parseNumericRangeFilterValue(newFilter.filter_value).min}
+                                  onChange={e => updateNewNumericFilter({ min: e.target.value })}
+                                  className="w-24 h-9"
+                                />
+                                <span className="text-xs text-muted-foreground">不回复</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs text-muted-foreground">大于</span>
+                                <Input
+                                  type="number"
+                                  value={parseNumericRangeFilterValue(newFilter.filter_value).max}
+                                  onChange={e => updateNewNumericFilter({ max: e.target.value })}
+                                  className="w-24 h-9"
+                                />
+                                <span className="text-xs text-muted-foreground">不回复</span>
+                              </div>
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              匹配关键词后面的数字（如 "size 49"），超出范围将忽略该消息。
+                            </p>
+                          </div>
+                        ) : (
+                          <Input
+                            value={newFilter.filter_value}
+                            onChange={e => setNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
+                            placeholder={
+                              newFilter.filter_type === 'user_id'
+                                ? "输入用户ID，多个用逗号分隔"
+                                : "输入要过滤的内容"
+                            }
+                          />
+                        )}
                       </div>
                     </div>
                     <DialogFooter>
@@ -4222,7 +4430,7 @@ export function AccountsView() {
                 {messageFilters.map((filter: any) => (
                   <div key={filter.id} className="flex items-center justify-between p-3 border rounded">
                     <div>
-                      <div className="font-medium">{filter.filter_type} "{filter.filter_value}"</div>
+                      <div className="font-medium">{formatMessageFilterLabel(filter)}</div>
                       <div className="text-sm text-muted-foreground">
                         创建时间: {new Date(filter.created_at).toLocaleString('zh-CN')}
                       </div>
@@ -4356,44 +4564,63 @@ export function AccountsView() {
               <div className="space-y-4">
                 {websites.map((website: any) => (
                   <div key={website.id} className="border rounded-lg p-4">
-                    <div className="flex justify-between items-start mb-3">
-                      <div className="flex items-center gap-2">
-                        <span className={`inline-flex items-center rounded-md border font-medium w-fit whitespace-nowrap text-[9px] px-1 py-0 h-4 border-none shrink-0 text-white ${
-                          website.badge_color === 'blue' ? 'bg-blue-600' :
-                          website.badge_color === 'green' ? 'bg-green-600' :
-                          website.badge_color === 'orange' ? 'bg-orange-600' :
-                          website.badge_color === 'red' ? 'bg-red-600' :
-                          website.badge_color === 'purple' ? 'bg-purple-600' :
-                          'bg-gray-600'
-                        }`}>
-                          {website.display_name}
-                        </span>
-                        <span className="text-sm font-medium">{website.name}</span>
-                      </div>
-                      {/* 只有管理员可以编辑/删除网站定义 */}
-                      {currentUser?.role === 'admin' && (
-                        <div className="flex gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setEditingWebsite(website)}
-                          >
-                            <Edit className="w-4 h-4" />
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleDeleteWebsite(website)}
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
+                    <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3 mb-3">
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <span className={`inline-flex items-center rounded-md border font-medium w-fit whitespace-nowrap text-[9px] px-1 py-0 h-4 border-none shrink-0 text-white ${
+                            website.badge_color === 'blue' ? 'bg-blue-600' :
+                            website.badge_color === 'green' ? 'bg-green-600' :
+                            website.badge_color === 'orange' ? 'bg-orange-600' :
+                            website.badge_color === 'red' ? 'bg-red-600' :
+                            website.badge_color === 'purple' ? 'bg-purple-600' :
+                            'bg-gray-600'
+                          }`}>
+                            {website.display_name}
+                          </span>
+                          <span className="text-sm font-medium">{website.name}</span>
                         </div>
-                      )}
-                    </div>
+                        <div className="text-xs text-muted-foreground">
+                          <div>URL模板: {website.url_template}</div>
+                          <div>ID模式: {website.id_pattern}</div>
+                        </div>
+                      </div>
 
-                    <div className="text-xs text-muted-foreground mb-3">
-                      <div>URL模板: {website.url_template}</div>
-                      <div>ID模式: {website.id_pattern}</div>
+                      <div className="flex flex-col items-start lg:items-end gap-2">
+                        {/* 只有管理员可以编辑/删除网站定义 */}
+                        {currentUser?.role === 'admin' && (
+                          <div className="flex gap-2">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setEditingWebsite(website)}
+                            >
+                              <Edit className="w-4 h-4" />
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleDeleteWebsite(website)}
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-3 gap-2 text-center">
+                          <div className="bg-muted/40 px-2 py-1 rounded">
+                            <div className="text-[10px] text-muted-foreground">总回复</div>
+                            <div className="text-sm font-semibold">{website.stat_replies_total || 0}</div>
+                          </div>
+                          <div className="bg-muted/40 px-2 py-1 rounded">
+                            <div className="text-[10px] text-muted-foreground">文本回复</div>
+                            <div className="text-sm font-semibold">{website.stat_replies_text || 0}</div>
+                          </div>
+                          <div className="bg-muted/40 px-2 py-1 rounded">
+                            <div className="text-[10px] text-muted-foreground">图片回复</div>
+                            <div className="text-sm font-semibold">{website.stat_replies_image || 0}</div>
+                          </div>
+                        </div>
+                      </div>
                     </div>
 
                     {/* 频道绑定 */}
@@ -4549,7 +4776,7 @@ export function AccountsView() {
                       <div className="space-y-2">
                         <div className="flex items-center gap-2">
                           <Settings className="w-4 h-4" />
-                          <span className="text-sm font-medium">轮换设置 (全局)</span>
+                          <span className="text-sm font-medium">轮换设置</span>
                         </div>
 
                         {/* 轮换启用开关 */}
@@ -4721,7 +4948,16 @@ export function AccountsView() {
               <div className="space-y-4">
                 <div>
                   <Label>过滤类型</Label>
-                  <Select value={editingFilter.filter_type} onValueChange={value => setEditingFilter(prev => ({ ...prev, filter_type: value }))}>
+                  <Select
+                    value={editingFilter.filter_type}
+                    onValueChange={value => setEditingFilter((prev: any) => ({
+                      ...prev,
+                      filter_type: value,
+                      filter_value: value === 'numeric_range'
+                        ? buildNumericRangeFilterValue({ keyword: '', min: '', max: '' })
+                        : ''
+                    }))}
+                  >
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -4731,15 +4967,52 @@ export function AccountsView() {
                       <SelectItem value="ends_with">结尾是</SelectItem>
                       <SelectItem value="regex">正则表达式</SelectItem>
                       <SelectItem value="user_id">用户ID</SelectItem>
+                      <SelectItem value="numeric_range">数字范围</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
                 <div>
                   <Label>过滤值</Label>
-                  <Input
-                    value={editingFilter.filter_value}
-                    onChange={e => setEditingFilter(prev => ({ ...prev, filter_value: e.target.value }))}
-                  />
+                  {editingFilter.filter_type === 'numeric_range' ? (
+                    <div className="space-y-3">
+                      <div className="space-y-1">
+                        <Label className="text-xs text-muted-foreground">匹配关键词</Label>
+                        <Input
+                          value={parseNumericRangeFilterValue(editingFilter.filter_value).keyword}
+                          onChange={e => updateEditingNumericFilter({ keyword: e.target.value })}
+                          placeholder="例如: size"
+                          className="h-9"
+                        />
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-muted-foreground">小于</span>
+                          <Input
+                            type="number"
+                            value={parseNumericRangeFilterValue(editingFilter.filter_value).min}
+                            onChange={e => updateEditingNumericFilter({ min: e.target.value })}
+                            className="w-24 h-9"
+                          />
+                          <span className="text-xs text-muted-foreground">不回复</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-muted-foreground">大于</span>
+                          <Input
+                            type="number"
+                            value={parseNumericRangeFilterValue(editingFilter.filter_value).max}
+                            onChange={e => updateEditingNumericFilter({ max: e.target.value })}
+                            className="w-24 h-9"
+                          />
+                          <span className="text-xs text-muted-foreground">不回复</span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <Input
+                      value={editingFilter.filter_value}
+                      onChange={e => setEditingFilter((prev: any) => ({ ...prev, filter_value: e.target.value }))}
+                    />
+                  )}
                 </div>
               </div>
               <DialogFooter>
@@ -4819,10 +5092,157 @@ export function ImageSearchView() {
   const [totalHistory, setTotalHistory] = useState(0)
   const [hasMoreHistory, setHasMoreHistory] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
+  const [availableWebsites, setAvailableWebsites] = useState<any[]>([])
+
+  const copyToClipboard = async (text: string) => {
+    if (!text) return
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text)
+        toast.success("链接已复制")
+        return
+      }
+    } catch {
+      // fallback below
+    }
+
+    try {
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.focus()
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+      toast.success("链接已复制")
+    } catch {
+      toast.error("复制失败")
+    }
+  }
+
+  const resolveBadgeColor = (value?: string) => {
+    if (!value) return '#6b7280'
+    const trimmed = value.trim()
+    if (trimmed.startsWith('#') || trimmed.startsWith('rgb') || trimmed.startsWith('hsl')) {
+      return trimmed
+    }
+    const palette: Record<string, string> = {
+      blue: '#2563eb',
+      green: '#16a34a',
+      orange: '#ea580c',
+      red: '#dc2626',
+      purple: '#7c3aed',
+      gray: '#4b5563'
+    }
+    return palette[trimmed] || trimmed
+  }
+
+  const getWeidianIdFromUrl = (url?: string) => {
+    if (!url) return ''
+    const match = url.match(/itemID=(\d+)/i)
+    return match ? match[1] : ''
+  }
+
+  const mergeWebsiteLinks = (links: any[], weidianId: string) => {
+    const normalized = Array.isArray(links)
+      ? links
+          .map((site: any) => ({
+            name: site.name || site.display_name || site.url || '',
+            display_name: site.display_name || site.name || '网站',
+            url: site.url || '',
+            badge_color: resolveBadgeColor(site.badge_color || site.badgeColor || '')
+          }))
+          .filter((link: any) => link.url && link.url.trim() !== '')
+      : []
+
+    if (!availableWebsites.length || !weidianId) {
+      return normalized
+    }
+
+    const existingByKey = new Map<string, any>()
+    const unnamed: any[] = []
+
+    normalized.forEach((link: any) => {
+      const key = String(link.name || '').toLowerCase()
+      if (key) {
+        if (!existingByKey.has(key)) {
+          existingByKey.set(key, link)
+        }
+      } else {
+        unnamed.push(link)
+      }
+    })
+
+    const merged: any[] = []
+    const used = new Set<string>()
+
+    availableWebsites.forEach((site: any) => {
+      const name = String(site.name || '').trim()
+      if (!name) return
+      const key = name.toLowerCase()
+      const existing = existingByKey.get(key)
+      if (existing) {
+        merged.push({
+          ...existing,
+          display_name: site.display_name || existing.display_name,
+          badge_color: resolveBadgeColor(site.badge_color || existing.badge_color || '')
+        })
+        used.add(key)
+        return
+      }
+
+      const template = site.url_template || site.urlTemplate || ''
+      const url = template ? template.replace('{id}', weidianId) : ''
+      if (!url) return
+      merged.push({
+        name,
+        display_name: site.display_name || name,
+        url,
+        badge_color: resolveBadgeColor(site.badge_color || site.badgeColor || '')
+      })
+      used.add(key)
+    })
+
+    existingByKey.forEach((link, key) => {
+      if (!used.has(key)) {
+        merged.push(link)
+      }
+    })
+
+    unnamed.forEach((link) => merged.push(link))
+
+    return merged.length ? merged : normalized
+  }
+
+  const getLinkGridClass = (count: number, extra?: string) => {
+    const base = `grid gap-2${extra ? ` ${extra}` : ''}`
+    if (count <= 1) return `${base} grid-cols-1`
+    if (count === 2) return `${base} grid-cols-2`
+    if (count === 3) return `${base} grid-cols-3`
+    return `${base} grid-cols-4`
+  }
 
   // 加载搜索历史
   useEffect(() => {
     fetchSearchHistory()
+  }, [])
+
+  useEffect(() => {
+    const fetchWebsites = async () => {
+      try {
+        const response = await fetch('/api/websites', { credentials: 'include' })
+        if (response.ok) {
+          const data = await response.json()
+          setAvailableWebsites(data.websites || [])
+        }
+      } catch (error) {
+        console.error('Failed to fetch websites:', error)
+      }
+    }
+
+    fetchWebsites()
   }, [])
 
   const fetchSearchHistory = async (page: number = 1) => {
@@ -5160,8 +5580,15 @@ export function ImageSearchView() {
             </CardHeader>
             <CardContent className="pt-0">
               <div className="space-y-4">
-                {searchResults.map((result, index) => (
-                  <div key={index} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3">
+                {searchResults.map((result, index) => {
+                  const websiteLinks = Array.isArray(result.product?.websiteUrls)
+                    ? result.product.websiteUrls
+                    : []
+                  const weidianId = getWeidianIdFromUrl(result.product?.weidianUrl)
+                  const displayedLinks = mergeWebsiteLinks(websiteLinks, weidianId).slice(0, 12)
+
+                  return (
+                    <div key={index} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3">
                     {/* 匹配图片和基本信息 */}
                     <div className="flex gap-3 items-center flex-1">
                       {/* 匹配的商品图片 */}
@@ -5207,48 +5634,48 @@ export function ImageSearchView() {
                     </div>
 
                     {/* 网站链接网格显示区域 */}
-                    <div className="w-full">
-                      <div className="grid grid-cols-2 gap-1 max-w-md">
-                        {(result.product.websiteUrls || []).slice(0, 8).map((site: any, index: number) => (
-                          <div key={index} className="flex items-center gap-1">
+                    <div className="w-full lg:w-1/2 mt-2 lg:mt-0">
+                      <div className={getLinkGridClass(displayedLinks.length)}>
+                        {displayedLinks.map((site: any, index: number) => (
+                          <div
+                            key={index}
+                            className="flex items-center gap-1 min-w-0 bg-muted/40 p-1 rounded border border-transparent hover:border-border transition-colors"
+                          >
                             <Badge
-                              className="text-[8px] px-1 py-0 h-3 border-none min-w-[40px] justify-center shrink-0 text-white"
+                              className="text-[9px] px-1.5 py-0.5 h-5 border-none justify-center shrink-0 text-white font-normal w-14"
                               style={{ backgroundColor: site.badge_color || '#6b7280' }}
                             >
                               {site.display_name}
                             </Badge>
-                            <div className="flex-1 bg-muted/30 p-0.5 px-1.5 rounded border text-[9px] flex items-center justify-between overflow-hidden min-w-0">
+                            <div className="flex-1 min-w-0 flex items-center justify-between">
                               <a
                                 href={site.url}
                                 target="_blank"
-                                className="truncate hover:underline"
-                                style={{ color: site.badge_color || '#6b7280' }}
+                                className="text-[10px] truncate hover:underline text-foreground/80 px-1"
+                                title={site.url}
                               >
                                 {site.url}
                               </a>
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                className="h-3 w-3 shrink-0"
-                                onClick={() => {
-                                  navigator.clipboard.writeText(site.url)
-                                  toast.success("已复制链接")
+                                className="h-5 w-5 shrink-0 opacity-50 hover:opacity-100"
+                                onClick={(event) => {
+                                  event.preventDefault()
+                                  event.stopPropagation()
+                                  copyToClipboard(site.url)
                                 }}
                               >
-                                <Copy className="h-2 w-2"/>
+                                <Copy className="h-3 w-3"/>
                               </Button>
                             </div>
                           </div>
                         ))}
                       </div>
-                      {(result.product.websiteUrls || []).length > 8 && (
-                        <div className="mt-2 text-xs text-muted-foreground">
-                          还有 {(result.product.websiteUrls || []).length - 8} 个网站链接...
-                        </div>
-                      )}
                     </div>
-                  </div>
-                ))}
+                    </div>
+                  )
+                })}
               </div>
             </CardContent>
           </Card>
@@ -5284,29 +5711,40 @@ export function ImageSearchView() {
               </div>
             ) : (
               <div className="space-y-3">
-                {searchHistory.map((history) => (
-                  <div key={history.id} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3">
-                    {/* 匹配图片和基本信息 */}
-                    <div className="flex gap-3 items-center flex-1">
-                      {/* 匹配的商品图片 */}
-                      {history.matched_product_id && (
-                        <div className="flex-shrink-0">
-                          <div className="w-16 h-16 bg-muted rounded-lg overflow-hidden">
-                            <img
-                              src={`/api/image/${history.matched_product_id}/${history.matched_image_index}`}
-                              alt="匹配的商品图片"
-                              className="w-full h-full object-cover"
-                              onError={(e) => {
-                                e.currentTarget.src = '/placeholder.jpg'
-                              }}
-                            />
-                          </div>
-                        </div>
-                      )}
+                {searchHistory.map((history) => {
+                  const historyLinks = (history.websiteUrls && history.websiteUrls.length > 0)
+                    ? history.websiteUrls
+                    : [
+                        { display_name: '微店', url: history.weidian_url, badge_color: 'gray' },
+                        { display_name: 'CNFans', url: history.cnfans_url, badge_color: 'blue' },
+                        { display_name: 'ACBuy', url: history.acbuy_url, badge_color: 'purple' }
+                      ].filter(site => site.url)
+                  const weidianId = getWeidianIdFromUrl(history.weidian_url)
+                  const limitedHistoryLinks = mergeWebsiteLinks(historyLinks, weidianId).slice(0, 12)
 
-                      <div className="space-y-0.5 min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <h4 className="font-bold text-base truncate max-w-[200px] sm:max-w-[400px]">{history.title}</h4>
+                  return (
+                    <div key={history.id} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3">
+                      {/* 匹配图片和基本信息 */}
+                      <div className="flex gap-3 items-center flex-1">
+                        {/* 匹配的商品图片 */}
+                        {history.matched_product_id && (
+                          <div className="flex-shrink-0">
+                            <div className="w-16 h-16 bg-muted rounded-lg overflow-hidden">
+                              <img
+                                src={`/api/image/${history.matched_product_id}/${history.matched_image_index}`}
+                                alt="匹配的商品图片"
+                                className="w-full h-full object-cover"
+                                onError={(e) => {
+                                  e.currentTarget.src = '/placeholder.jpg'
+                                }}
+                              />
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="space-y-0.5 min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-bold text-base truncate max-w-[200px] sm:max-w-[400px]">{history.title}</h4>
                             <Badge
                               className={
                                 history.similarity >= 0.95
@@ -5319,81 +5757,74 @@ export function ImageSearchView() {
                               {(history.similarity * 100).toFixed(1)}% 相似度
                             </Badge>
                           </div>
-                        <div className="flex items-center gap-2 mt-1">
-                          <p className="text-sm font-bold text-blue-600 truncate max-w-[240px] sm:max-w-[500px]">{history.english_title || "No English Title"}</p>
-                        </div>
-                        <div className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground">
-                          <span className="font-mono">ID: {history.weidian_url?.split('itemID=')?.[1] || 'N/A'}</span>
-                          <span>|</span>
-                          <span>匹配图片: #{history.matched_image_index}</span>
-                          <span>|</span>
-                          <span>阈值: {history.threshold * 100}%</span>
-                          <span>|</span>
-                          <span>搜索时间: {new Date(history.search_time).toLocaleString('zh-CN')}</span>
-                        </div>
-                              </div>
-                            </div>
-
-                    {/* 链接显示区域 */}
-                    <div className="flex items-center gap-4">
-                      <div className="flex flex-col gap-1 min-w-[300px]">
-                        <div className="flex items-center gap-1.5">
-                          <Badge className="text-[9px] px-1 py-0 h-4 border-none w-12 justify-center shrink-0 text-white bg-gray-600">
-                            微店
-                          </Badge>
-                          <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
-                            <a href={history.weidian_url} target="_blank" className="font-mono truncate hover:underline text-muted-foreground">
-                              {history.weidian_url}
-                            </a>
-                            <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(history.weidian_url); toast.success("Copied")}}>
-                              <Copy className="h-2.5 w-2.5"/>
-                            </Button>
+                          <div className="flex items-center gap-2 mt-1">
+                            <p className="text-sm font-bold text-blue-600 truncate max-w-[240px] sm:max-w-[500px]">{history.english_title || "No English Title"}</p>
+                          </div>
+                          <div className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground">
+                            <span className="font-mono">ID: {history.weidian_url?.split('itemID=')?.[1] || 'N/A'}</span>
+                            <span>|</span>
+                            <span>匹配图片: #{history.matched_image_index}</span>
+                            <span>|</span>
+                            <span>阈值: {history.threshold * 100}%</span>
+                            <span>|</span>
+                            <span>搜索时间: {new Date(history.search_time).toLocaleString('zh-CN')}</span>
                           </div>
                         </div>
-                        {history.cnfans_url && (
-                          <div className="flex items-center gap-1.5">
-                            <Badge className="text-[9px] px-1 py-0 h-4 border-none w-12 justify-center shrink-0 text-white bg-blue-600">
-                              CNFans
-                            </Badge>
-                            <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
-                              <a href={history.cnfans_url} target="_blank" className="font-mono truncate hover:underline text-blue-500">
-                                {history.cnfans_url}
-                              </a>
-                              <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(history.cnfans_url); toast.success("Copied")}}>
-                                <Copy className="h-2.5 w-2.5"/>
-                            </Button>
-                            </div>
-                          </div>
-                        )}
-                        {history.acbuy_url && (
-                          <div className="flex items-center gap-1.5">
-                            <Badge className="text-[9px] px-1 py-0 h-4 border-none w-12 justify-center shrink-0 text-white bg-purple-600">
-                              ACBuy
-                            </Badge>
-                            <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
-                              <a href={history.acbuy_url} target="_blank" className="font-mono truncate hover:underline text-purple-500">
-                                {history.acbuy_url}
-                              </a>
-                              <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(history.acbuy_url); toast.success("Copied")}}>
-                                <Copy className="h-2.5 w-2.5"/>
-                            </Button>
-                            </div>
-                          </div>
-                        )}
                       </div>
 
-                      {/* 删除按钮 */}
+                      {/* 链接显示区域 */}
+                      <div className="w-full lg:w-1/2 mt-2 lg:mt-0 flex items-start gap-2">
+                        <div className={getLinkGridClass(limitedHistoryLinks.length, 'flex-1 min-w-0')}>
+                          {limitedHistoryLinks.map((site: any, index: number) => (
+                            <div
+                              key={`${history.id}-${index}`}
+                              className="flex items-center gap-1 min-w-0 bg-muted/40 p-1 rounded border border-transparent hover:border-border transition-colors"
+                            >
+                              <Badge
+                                className="text-[9px] px-1.5 py-0.5 h-5 border-none justify-center shrink-0 text-white font-normal w-14"
+                                style={{ backgroundColor: site.badge_color || '#6b7280' }}
+                              >
+                                {site.display_name}
+                              </Badge>
+                              <div className="flex-1 min-w-0 flex items-center justify-between">
+                                <a
+                                  href={site.url}
+                                  target="_blank"
+                                  className="text-[10px] truncate hover:underline text-foreground/80 px-1"
+                                  title={site.url}
+                                >
+                                  {site.url}
+                                </a>
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-5 w-5 shrink-0 opacity-50 hover:opacity-100"
+                                  onClick={(event) => {
+                                    event.preventDefault()
+                                    event.stopPropagation()
+                                    copyToClipboard(site.url)
+                                  }}
+                                >
+                                  <Copy className="h-3 w-3"/>
+                                </Button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* 删除按钮 */}
                         <Button
-                        variant="outline"
+                          variant="outline"
                           size="icon"
-                        className="h-8 w-8 hover:bg-red-50 hover:text-red-600"
+                          className="h-8 w-8 shrink-0 hover:bg-red-50 hover:text-red-600"
                           onClick={() => handleDeleteHistory(history.id)}
                         >
-                        <X className="size-3.5" />
+                          <X className="size-3.5" />
                         </Button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
 
                 {/* 分页控件 */}
                 {searchHistory.length > 0 && (
@@ -5467,7 +5898,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { Copy, ChevronLeft, ChevronRight, Trash2, ImageIcon, Edit, X, Download, Loader2, List, Upload, Store, CheckSquare, Square, Search, ChevronDown, ChevronUp, Pause, Play, StopCircle } from "lucide-react"
+import { Copy, ChevronLeft, ChevronRight, Trash2, ImageIcon, Edit, X, Download, Loader2, List, Upload, Store, CheckSquare, Square, Search, Pause, Play, StopCircle, AlertCircle } from "lucide-react"
 import { toast } from "sonner"
 import {
   Dialog,
@@ -5564,6 +5995,11 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   const [batchIds, setBatchIds] = useState('')
   const [isBatchScraping, setIsBatchScraping] = useState(false)
   const [batchProgress, setBatchProgress] = useState(0)
+  const [batchFailedItems, setBatchFailedItems] = useState<{ id: string, reason: string }[]>([])
+  const [shopFailedItems, setShopFailedItems] = useState<{ id: string, reason: string }[]>([])
+  const [dialogFailedItems, setDialogFailedItems] = useState<{ id: string, reason: string }[]>([])
+  const [failedDialogTitle, setFailedDialogTitle] = useState('失败商品详情')
+  const [showFailedDialog, setShowFailedDialog] = useState(false)
   const [products, setProducts] = useState<any[]>([])
   const [totalProducts, setTotalProducts] = useState(0)
   const [currentPage, setCurrentPage] = useState(1)
@@ -5581,8 +6017,6 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   // 图片上传 ref
   const uploadInputRef = useRef<HTMLInputElement>(null)
   const [isUploadingImg, setIsUploadingImg] = useState(false)
-  const [productUrls, setProductUrls] = useState<{[key: number]: any[]}>({})
-  const [expandedProducts, setExpandedProducts] = useState<Set<number>>(new Set())
   const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null)
   const [batchUploading, setBatchUploading] = useState(false)
   const [lightboxOpen, setLightboxOpen] = useState(false)
@@ -5604,6 +6038,136 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   const [totalProductsCount, setTotalProductsCount] = useState(0)
   // 搜索类型状态
   const [searchType, setSearchType] = useState<'all' | 'id' | 'keyword' | 'chinese'>('all')
+  const isStopping = Boolean(scrapeStatus?.stop_signal && !scrapeStatus?.completed)
+
+  const copyToClipboard = async (text: string) => {
+    if (!text) return
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text)
+        toast.success("链接已复制")
+        return
+      }
+    } catch {
+      // fallback below
+    }
+
+    try {
+      const textarea = document.createElement('textarea')
+      textarea.value = text
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.focus()
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+      toast.success("链接已复制")
+    } catch {
+      toast.error("复制失败")
+    }
+  }
+
+  const resolveBadgeColor = (value?: string) => {
+    if (!value) return '#6b7280'
+    const trimmed = value.trim()
+    if (trimmed.startsWith('#') || trimmed.startsWith('rgb') || trimmed.startsWith('hsl')) {
+      return trimmed
+    }
+    const palette: Record<string, string> = {
+      blue: '#2563eb',
+      green: '#16a34a',
+      orange: '#ea580c',
+      red: '#dc2626',
+      purple: '#7c3aed',
+      gray: '#4b5563'
+    }
+    return palette[trimmed] || trimmed
+  }
+
+  const getWeidianIdFromUrl = (url?: string) => {
+    if (!url) return ''
+    const match = url.match(/itemID=(\d+)/i)
+    return match ? match[1] : ''
+  }
+
+  const mergeWebsiteLinks = (links: any[], weidianId: string) => {
+    const normalized = Array.isArray(links)
+      ? links
+          .map((site: any) => ({
+            name: site.name || site.display_name || site.url || '',
+            display_name: site.display_name || site.name || '网站',
+            url: site.url || '',
+            badge_color: resolveBadgeColor(site.badge_color || site.badgeColor || '')
+          }))
+          .filter((link: any) => link.url && link.url.trim() !== '')
+      : []
+
+    if (!availableWebsites.length || !weidianId) {
+      return normalized
+    }
+
+    const existingByKey = new Map<string, any>()
+    const unnamed: any[] = []
+
+    normalized.forEach((link: any) => {
+      const key = String(link.name || '').toLowerCase()
+      if (key) {
+        if (!existingByKey.has(key)) {
+          existingByKey.set(key, link)
+        }
+      } else {
+        unnamed.push(link)
+      }
+    })
+
+    const merged: any[] = []
+    const used = new Set<string>()
+
+    availableWebsites.forEach((site: any) => {
+      const name = String(site.name || '').trim()
+      if (!name) return
+      const key = name.toLowerCase()
+      const existing = existingByKey.get(key)
+      if (existing) {
+        merged.push({
+          ...existing,
+          display_name: site.display_name || existing.display_name,
+          badge_color: resolveBadgeColor(site.badge_color || existing.badge_color || '')
+        })
+        used.add(key)
+        return
+      }
+
+      const template = site.url_template || site.urlTemplate || ''
+      const url = template ? template.replace('{id}', weidianId) : ''
+      if (!url) return
+      merged.push({
+        name,
+        display_name: site.display_name || name,
+        url,
+        badge_color: resolveBadgeColor(site.badge_color || site.badgeColor || '')
+      })
+      used.add(key)
+    })
+
+    existingByKey.forEach((link, key) => {
+      if (!used.has(key)) {
+        merged.push(link)
+      }
+    })
+
+    unnamed.forEach((link) => merged.push(link))
+
+    return merged.length ? merged : normalized
+  }
+
+  const getLinkGridClass = (count: number) => {
+    if (count <= 1) return "grid grid-cols-1 gap-2 flex-1 min-w-0"
+    if (count === 2) return "grid grid-cols-2 gap-2 flex-1 min-w-0"
+    if (count === 3) return "grid grid-cols-3 gap-2 flex-1 min-w-0"
+    return "grid grid-cols-4 gap-2 flex-1 min-w-0"
+  }
 
   // 优化：分离不同类型的加载逻辑
   useEffect(() => {
@@ -5651,7 +6215,9 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     let statusInterval: NodeJS.Timeout | null = null
 
     // 如果没有抓取任务，减少轮询频率到60秒一次
-    if (!isShopScraping && !isBatchScraping) {
+    const shouldPollFast = isShopScraping || isBatchScraping || isStopping
+
+    if (!shouldPollFast) {
       statusInterval = setInterval(() => {
         fetchScrapeStatus()
       }, 60000) // 60秒检查一次状态
@@ -5671,12 +6237,12 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
       // 只有在抓取进行中时才检查商品数量和列表
       // 前30秒（15次）每2秒检查一次，后续每10秒检查一次
-      if ((isShopScraping || isBatchScraping)) {
-        if (pollCount <= 15) {
-          fetchProductsCount()
-          fetchProducts(currentPage)
-        } else if (pollCount % 5 === 0) {
-          // 每10秒检查一次商品数量和列表
+    if (shouldPollFast) {
+      if (pollCount <= 15) {
+        fetchProductsCount()
+        fetchProducts(currentPage)
+      } else if (pollCount % 5 === 0) {
+        // 每10秒检查一次商品数量和列表
           fetchProductsCount()
           fetchProducts(currentPage)
         }
@@ -5688,7 +6254,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         clearInterval(statusInterval)
       }
     }
-  }, [isShopScraping, isBatchScraping, currentPage, itemsPerPage, keywordSearch, shopFilter, searchType])
+  }, [isShopScraping, isBatchScraping, isStopping, currentPage, itemsPerPage, keywordSearch, shopFilter, searchType])
 
   const fetchProducts = async (page: number = currentPage) => {
     try {
@@ -5783,6 +6349,18 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
           setScrapeStatus(status)
           setIsShopScraping(status.is_scraping)
           setShopScrapeProgress(status.progress || 0)
+          if (status.is_scraping) {
+            setShopFailedItems([])
+          } else if (status.completed) {
+            const rawFailedItems = Array.isArray(status.failed_items) ? status.failed_items : []
+            const formatted = rawFailedItems
+              .map((item: any) => ({
+                id: String(item?.id || item?.item_id || ''),
+                reason: item?.reason || item?.message || '未知错误'
+              }))
+              .filter((item: any) => item.id)
+            setShopFailedItems(formatted)
+          }
           // 如果抓取完成，刷新商品列表
           if (!status.is_scraping && status.completed) {
             fetchProducts()
@@ -5844,14 +6422,18 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   // === 链接生成逻辑 ===
 
   const getProductLinks = (product: any) => {
-    const links = [
-        { name: 'cnfans', display_name: 'CNFans', url: product.cnfansUrl, badge_color: 'blue' },
-        { name: 'weidian', display_name: '微店', url: product.weidianUrl, badge_color: 'gray' },
-        { name: 'acbuy', display_name: 'AcBuy', url: product.acbuyUrl, badge_color: 'orange' }
-    ].filter(link => link.url && link.url.trim() !== '');
+    const dynamicLinks = Array.isArray(product.websiteUrls) ? product.websiteUrls : []
+    const weidianId = product.weidianId || getWeidianIdFromUrl(product.weidianUrl || product.product_url)
+    const mergedLinks = mergeWebsiteLinks(dynamicLinks, weidianId)
+    if (mergedLinks.length > 0) {
+      return mergedLinks
+    }
 
-    // 如果有从后端获取的额外链接，可以合并（这里简化处理，只用上面的）
-    return links;
+    return [
+      { name: 'weidian', display_name: '微店', url: product.weidianUrl, badge_color: resolveBadgeColor('gray') },
+      { name: 'cnfans', display_name: 'CNFans', url: product.cnfansUrl, badge_color: resolveBadgeColor('blue') },
+      { name: 'acbuy', display_name: 'AcBuy', url: product.acbuyUrl, badge_color: resolveBadgeColor('orange') }
+    ].filter(link => link.url && link.url.trim() !== '')
   }
 
   // ... (保留 handleBatchDelete, confirmBatchDelete, handleUploadImage, handleBatchUploadImages) ...
@@ -5971,15 +6553,6 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     if (totalProducts === 0) return
     setSelectAllAcrossPages(true)
     setSelectedProducts(currentProducts.map(p => p.id))
-  }
-
-  const toggleProductExpansion = (productId: number) => {
-    setExpandedProducts(prev => {
-      const newSet = new Set(prev)
-      if (newSet.has(productId)) newSet.delete(productId)
-      else newSet.add(productId)
-      return newSet
-    })
   }
 
   const handleDeleteProduct = async (id: number) => {
@@ -6151,6 +6724,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     // ==========================================
     // 修复：立即设置加载状态，防止UI闪烁
     // ==========================================
+    setShopFailedItems([])
     setIsShopScraping(true)
     setShopScrapeProgress(0)
     setScrapeStatus((prev: any) => ({
@@ -6185,26 +6759,30 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     // 状态应该由 useEffect 里的轮询来决定何时变回 false。
   }
 
-  const handleBatchScrape = async () => {
-    const ids = batchIds.split('\n').map(id => id.trim()).filter(id => id && id.match(/^\d+$/))
+  const startBatchScrape = async (ids: string[]) => {
     if (ids.length === 0) {
       toast.error("请输入有效的商品ID")
+      return
+    }
+    if (isBatchScraping) {
       return
     }
 
     console.log('开始批量上传，商品数量:', ids.length)
     setIsBatchScraping(true)
     setBatchProgress(0)
+    setBatchFailedItems([])
+    setDialogFailedItems([])
+    setShowFailedDialog(false)
 
     try {
       console.log(`发送批量请求到 /api/scrape/batch，商品数量: ${ids.length}`)
 
-      // 调用新的批量API
       const res = await fetch('/api/scrape/batch', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ productIds: ids }),
-        signal: AbortSignal.timeout(300000) // 5分钟超时（批量处理需要更长时间）
+        signal: AbortSignal.timeout(300000)
       })
 
       console.log(`收到批量响应，状态码: ${res.status}`)
@@ -6213,15 +6791,14 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         const result = await res.json()
         console.log('批量处理结果:', result)
 
-        // 从结果中提取统计信息
         const results = result.results || {}
+        const details = result.details || []
         const successCount = results.success || 0
         const skipCount = results.skipped || 0
         const cancelledCount = results.cancelled || 0
         const partialCount = results.partial || 0
         const errorCount = results.errors || 0
 
-        // 构建结果消息
         let messageParts = []
         if (successCount > 0) messageParts.push(`成功 ${successCount}`)
         if (skipCount > 0) messageParts.push(`跳过 ${skipCount}`)
@@ -6234,9 +6811,18 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         toast.success(`批量上传完成: ${message}`)
         console.log('批量上传完成')
 
-        // 显示处理时间
         if (results.duration) {
           console.log(`处理时间: ${results.duration.toFixed(2)} 秒`)
+        }
+
+        if (details.length > 0) {
+          const failures = details
+            .filter((item: any) => item.status === 'failed' || item.status === 'error')
+            .map((item: any) => ({
+              id: String(item.id),
+              reason: item.message || '未知错误'
+            }))
+          setBatchFailedItems(failures)
         }
       } else {
         const errorText = await res.text()
@@ -6245,12 +6831,8 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
       }
 
       setBatchProgress(100)
-
-      // 强制刷新数据
       fetchProducts()
       fetchProductsCount()
-
-      // 强制刷新抓取状态，确保UI正确更新
       setTimeout(() => fetchScrapeStatus(), 100)
 
       setBatchIds('')
@@ -6265,6 +6847,15 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
       console.log('设置 isBatchScraping 为 false')
       setIsBatchScraping(false)
     }
+  }
+
+  const handleBatchScrape = async () => {
+    const ids = batchIds.split('\n').map(id => id.trim()).filter(id => id && id.match(/^\d+$/))
+    if (ids.length === 0) {
+      toast.error("请输入有效的商品ID")
+      return
+    }
+    await startBatchScrape(ids)
   }
 
   const handleJumpPage = () => { /* ... */ }
@@ -6418,6 +7009,48 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         </div>
       )}
 
+      {batchFailedItems.length > 0 && (
+        <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex items-center justify-between">
+          <div className="flex items-center text-red-700">
+            <AlertCircle className="w-5 h-5 mr-2" />
+            <span>批量上传失败 {batchFailedItems.length} 个商品</span>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-red-200 text-red-700 hover:bg-red-100"
+            onClick={() => {
+              setDialogFailedItems(batchFailedItems)
+              setFailedDialogTitle('批量上传失败商品详情')
+              setShowFailedDialog(true)
+            }}
+          >
+            查看详情
+          </Button>
+        </div>
+      )}
+
+      {shopFailedItems.length > 0 && scrapeStatus?.completed && !scrapeStatus?.is_scraping && (
+        <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex items-center justify-between">
+          <div className="flex items-center text-red-700">
+            <AlertCircle className="w-5 h-5 mr-2" />
+            <span>店铺抓取失败 {shopFailedItems.length} 个商品</span>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-red-200 text-red-700 hover:bg-red-100"
+            onClick={() => {
+              setDialogFailedItems(shopFailedItems)
+              setFailedDialogTitle('店铺抓取失败商品详情')
+              setShowFailedDialog(true)
+            }}
+          >
+            查看详情
+          </Button>
+        </div>
+      )}
+
 
       {/* Product List */}
       <div className="space-y-4">
@@ -6500,8 +7133,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
           <div className="divide-y overflow-x-hidden">
                     {currentProducts.map((product) => {
                         const links = getProductLinks(product);
-                        const showAllLinks = expandedProducts.has(product.id);
-                        const displayedLinks = showAllLinks ? links : links.slice(0, 3);
+                        const displayedLinks = links.slice(0, 12)
                         return (
               <div key={product.id} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3 min-w-0">
                 <div className="flex gap-3 items-center">
@@ -6658,27 +7290,43 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                   </div>
                 </div>
                             {/* 链接显示区域 */}
-                <div className="flex items-center gap-4 min-w-0 flex-1">
-                                <div className="flex flex-col gap-1 min-w-0 flex-1 max-w-md">
-                                    {displayedLinks.map((link) => (
-                      <div key={link.name} className="flex items-center gap-1.5">
-                                            <Badge className={`text-[9px] px-1 py-0 h-4 border-none w-12 justify-center shrink-0 text-white ${
-                          link.badge_color === 'blue' ? 'bg-blue-600' :
-                          link.badge_color === 'green' ? 'bg-green-600' :
-                                                link.badge_color === 'orange' ? 'bg-orange-600' : 'bg-gray-600'
-                                            }`}>{link.display_name}</Badge>
-                        <div className="flex-1 bg-muted/30 p-0.5 px-2 rounded border text-[10px] flex items-center justify-between overflow-hidden">
-                                                <a href={link.url} target="_blank" className="font-mono truncate hover:underline text-muted-foreground block max-w-full">{link.url}</a>
-                                                <Button variant="ghost" size="icon" className="h-4 w-4" onClick={()=>{navigator.clipboard.writeText(link.url); toast.success("Copied")}}><Copy className="h-2.5 w-2.5"/></Button>
+                <div className="flex items-start gap-2 min-w-0 flex-1">
+                  <div className={getLinkGridClass(displayedLinks.length)}>
+                    {displayedLinks.map((link) => (
+                      <div
+                        key={link.name || link.url}
+                        className="flex items-center gap-1 min-w-0 bg-muted/40 p-1 rounded border border-transparent hover:border-border transition-colors"
+                      >
+                        <Badge
+                          className="text-[9px] px-1.5 py-0.5 h-5 border-none justify-center shrink-0 text-white font-normal w-14"
+                          style={{ backgroundColor: link.badge_color || '#6b7280' }}
+                        >
+                          {link.display_name}
+                        </Badge>
+                        <div className="flex-1 min-w-0 flex items-center justify-between">
+                          <a
+                            href={link.url}
+                            target="_blank"
+                            className="text-[10px] truncate hover:underline text-foreground/80 px-1"
+                            title={link.url}
+                          >
+                            {link.url}
+                          </a>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-5 w-5 shrink-0 opacity-50 hover:opacity-100"
+                            onClick={(event) => {
+                              event.preventDefault()
+                              event.stopPropagation()
+                              copyToClipboard(link.url)
+                            }}
+                          >
+                            <Copy className="h-3 w-3"/>
+                          </Button>
                         </div>
                       </div>
                     ))}
-                                    {links.length > 3 && (
-                                        <Button variant="ghost" size="sm" className="h-5 text-xs w-full" onClick={()=>toggleProductExpansion(product.id)}>
-                                            {showAllLinks ? <ChevronUp className="h-3 w-3"/> : <ChevronDown className="h-3 w-3"/>}
-                                            {showAllLinks ? "收起" : `显示更多 (${links.length - 3})`}
-                      </Button>
-                    )}
                   </div>
                                 {/* 操作按钮组 */}
                                 <div className="flex items-center gap-1 ml-auto shrink-0">
@@ -7060,6 +7708,52 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         </CardContent>
       </Card>
 
+      {/* 失败商品详情 */}
+      <Dialog open={showFailedDialog} onOpenChange={setShowFailedDialog}>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>{failedDialogTitle}</DialogTitle>
+            <DialogDescription>以下商品抓取失败，请检查原因</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            {dialogFailedItems.map((item) => (
+              <div key={item.id} className="flex items-center justify-between p-3 bg-muted rounded border">
+                <div className="font-mono text-sm">{item.id}</div>
+                <div className="text-sm text-red-600">{item.reason}</div>
+              </div>
+            ))}
+            {dialogFailedItems.length === 0 && (
+              <div className="text-center text-sm text-muted-foreground">暂无失败记录</div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowFailedDialog(false)
+              }}
+            >
+              关闭
+            </Button>
+            <Button
+              onClick={() => {
+                const retryIds = dialogFailedItems
+                  .map(item => item.id)
+                  .filter(id => id && id.match(/^\d+$/))
+                if (retryIds.length > 0) {
+                  setBatchIds(retryIds.join('\n'))
+                  startBatchScrape(retryIds)
+                }
+                setShowFailedDialog(false)
+              }}
+              disabled={dialogFailedItems.length === 0}
+            >
+              重试所有失败项
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
         {/* 单个商品删除确认对话框 */}
         <Dialog open={showDeleteConfirm && deletingProductId !== null} onOpenChange={(open) => {
           if (!open) {
@@ -7146,14 +7840,32 @@ export function LogsView() {
   const [isPaused, setIsPaused] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
+  const logLimit = 500
+
+  const isRelevantLog = (log: LogEntry) => {
+    const message = log.message || ''
+    return (
+      message.includes('回复成功') ||
+      message.includes('发送成功') ||
+      message.includes('抓取完成') ||
+      message.includes('抓取失败') ||
+      message.includes('严格模式失败') ||
+      message.includes('处理失败') ||
+      message.includes('启动Discord机器人') ||
+      message.includes('Discord机器人启动成功') ||
+      message.includes('Discord机器人已登录') ||
+      message.includes('正在启动机器人账号')
+    )
+  }
 
   // 加载历史日志
   const loadRecentLogs = async () => {
     try {
-      const response = await fetch('/api/logs?endpoint=recent')
+      const response = await fetch('/api/logs/recent')
       if (response.ok) {
         const data = await response.json()
-        setLogs(data.logs || [])
+        const filtered = (data.logs || []).filter(isRelevantLog)
+        setLogs(filtered.slice(-logLimit))
       }
     } catch (error) {
       console.error('加载历史日志失败:', error)
@@ -7183,7 +7895,10 @@ export function LogsView() {
           return
         }
 
-        setLogs((prev) => [...prev, logEntry].slice(-200)) // 保持最近200条日志
+        if (!isRelevantLog(logEntry)) {
+          return
+        }
+        setLogs((prev) => [...prev, logEntry].slice(-logLimit))
       } catch (error) {
         console.error('解析日志数据失败:', error, event.data)
       }
@@ -7303,16 +8018,16 @@ export function LogsView() {
         <CardHeader>
           <CardTitle>系统日志流</CardTitle>
           <CardDescription>
-            共 {logs.length} 条记录 • {isPaused ? '已暂停' : '实时监控中'}
+            共 {logs.length} 条记录（最多保留 {logLimit} 条） • {isPaused ? '已暂停' : '实时监控中'}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <ScrollArea className="h-[600px] w-full rounded-md border bg-black/90 p-4">
-            <div className="space-y-3 font-mono text-[11px] leading-relaxed">
+            <div className="space-y-1 font-mono text-[10px] leading-tight">
               {logs.map((log, index) => (
                 <div
                   key={`${log.timestamp}-${index}`}
-                  className="flex items-start gap-3 text-green-400 hover:bg-white/5 p-2 rounded transition-colors border-b border-white/5 last:border-0"
+                  className="flex items-start gap-2 text-green-400 hover:bg-white/5 p-1 rounded transition-colors border-b border-white/5 last:border-0"
                 >
                   <span className="text-gray-500 shrink-0 font-bold">
                     {formatTimestamp(log.timestamp)}
@@ -7334,7 +8049,6 @@ export function LogsView() {
     </div>
   )
 }
-
 
 --- File: ./frontend/components/similarity-test-view.tsx ---
 "use client"
@@ -7623,7 +8337,7 @@ export function SimilarityTestView() {
 import { useState, useEffect } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Store, Package, ImageIcon, Users, Megaphone, Plus, Edit, Trash2 } from "lucide-react"
+import { Store, Package, ImageIcon, Users, Megaphone, Plus, Edit, Trash2, MessageSquare } from "lucide-react"
 import { toast } from "sonner"
 import {
   Dialog,
@@ -7643,6 +8357,7 @@ interface SystemStats {
   product_count: number
   image_count: number
   user_count: number
+  total_replies: number
 }
 
 interface Announcement {
@@ -7773,7 +8488,7 @@ export function DashboardView({ currentUser }: { currentUser: any }) {
       </div>
 
       {/* 统计信息 */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 lg:gap-6">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">店铺数量</CardTitle>
@@ -7815,6 +8530,17 @@ export function DashboardView({ currentUser }: { currentUser: any }) {
           <CardContent>
             <div className="text-2xl font-bold">{stats?.user_count ?? 0}</div>
             <p className="text-xs text-muted-foreground">活跃用户</p>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">总回复数</CardTitle>
+            <MessageSquare className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats?.total_replies ?? 0}</div>
+            <p className="text-xs text-muted-foreground">全站文本+图片回复</p>
           </CardContent>
         </Card>
       </div>
@@ -8518,45 +9244,6 @@ export function SettingsView() {
             </div>
           </div>
 
-          {/* 数字范围过滤设置 */}
-          <div className="space-y-2 pt-4 border-t">
-            <Label className="text-sm font-medium">数字范围过滤</Label>
-            <div className="space-y-2">
-              <Label className="text-xs text-muted-foreground">匹配关键词</Label>
-              <Input
-                type="text"
-                value={settings.numeric_filter_keyword}
-                onChange={(e) => setSettings(prev => ({ ...prev, numeric_filter_keyword: e.target.value }))}
-                placeholder="例如: size"
-                className="h-9"
-              />
-            </div>
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground">小于</span>
-                <Input
-                  type="number"
-                  value={settings.filter_size_min}
-                  onChange={(e) => setSettings(prev => ({ ...prev, filter_size_min: parseInt(e.target.value) || 0 }))}
-                  className="w-20 h-9"
-                />
-                <span className="text-sm text-muted-foreground">不回复</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-sm text-muted-foreground">大于</span>
-                <Input
-                  type="number"
-                  value={settings.filter_size_max}
-                  onChange={(e) => setSettings(prev => ({ ...prev, filter_size_max: parseInt(e.target.value) || 0 }))}
-                  className="w-20 h-9"
-                />
-                <span className="text-sm text-muted-foreground">不回复</span>
-              </div>
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              匹配关键词后面的数字（如 "size 49"）。超出范围将忽略该消息；清空关键词可禁用该规则。
-            </p>
-          </div>
         </CardContent>
       </Card>
 
@@ -9949,6 +10636,7 @@ interface User {
   role: string
   shops: string[]
   is_active: boolean
+  image_search_count?: number
   created_at: string
 }
 
@@ -10233,6 +10921,7 @@ export function UsersView() {
               <TableRow className="bg-muted/50 h-12">
                 <TableHead className="text-sm font-bold text-foreground pl-6">用户名</TableHead>
                 <TableHead className="text-sm font-bold text-foreground">角色</TableHead>
+                <TableHead className="text-sm font-bold text-foreground">搜索次数</TableHead>
                 <TableHead className="text-sm font-bold text-foreground">管理店铺</TableHead>
                 <TableHead className="text-sm font-bold text-foreground">状态</TableHead>
                 <TableHead className="text-sm font-bold text-foreground text-right pr-6">操作</TableHead>
@@ -10257,6 +10946,9 @@ export function UsersView() {
                     ) : (
                       <Badge variant="secondary">普通用户</Badge>
                     )}
+                  </TableCell>
+                  <TableCell className="py-3">
+                    <span className="text-sm font-medium">{user.image_search_count ?? 0}</span>
                   </TableCell>
                   <TableCell className="py-3">
                     <div className="text-sm max-w-xs truncate" title={getShopNames(user.shops)}>
@@ -11003,10 +11695,16 @@ class Database:
                     password_hash TEXT NOT NULL,
                     role TEXT DEFAULT 'user',  -- admin, user
                     is_active BOOLEAN DEFAULT 1,
+                    image_search_count INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+
+            try:
+                cursor.execute('ALTER TABLE users ADD COLUMN image_search_count INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
 
             # 创建用户-店铺权限表
             cursor.execute('''
@@ -11131,6 +11829,9 @@ class Database:
                     rotation_interval INTEGER DEFAULT 180,
                     rotation_enabled INTEGER DEFAULT 1,  -- 是否启用轮换功能 (1=启用, 0=禁用)
                     message_filters TEXT DEFAULT '[]',  -- JSON格式存储过滤条件数组
+                    stat_replies_text INTEGER DEFAULT 0,
+                    stat_replies_image INTEGER DEFAULT 0,
+                    stat_replies_total INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
@@ -11155,6 +11856,21 @@ class Database:
             # 为website_configs表添加rotation_enabled字段
             try:
                 cursor.execute('ALTER TABLE website_configs ADD COLUMN rotation_enabled INTEGER DEFAULT 1')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE website_configs ADD COLUMN stat_replies_text INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE website_configs ADD COLUMN stat_replies_image INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE website_configs ADD COLUMN stat_replies_total INTEGER DEFAULT 0')
             except sqlite3.OperationalError:
                 pass
 
@@ -11298,7 +12014,7 @@ class Database:
                     keyword_reply_enabled INTEGER DEFAULT 1,  -- 是否启用关键词回复
                     image_reply_enabled INTEGER DEFAULT 1,  -- 是否启用图片回复
                     global_reply_template TEXT DEFAULT '',
-                    numeric_filter_keyword TEXT DEFAULT 'size',
+                    numeric_filter_keyword TEXT DEFAULT '',
                     filter_size_min INTEGER DEFAULT 35,
                     filter_size_max INTEGER DEFAULT 46,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -11325,7 +12041,7 @@ class Database:
                 pass
 
             try:
-                cursor.execute('ALTER TABLE user_settings ADD COLUMN numeric_filter_keyword TEXT DEFAULT \'size\'')
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN numeric_filter_keyword TEXT DEFAULT \'\'')
             except sqlite3.OperationalError:
                 pass
 
@@ -11369,6 +12085,7 @@ class Database:
                     failed INTEGER DEFAULT 0,
                     image_failed INTEGER DEFAULT 0,
                     index_failed INTEGER DEFAULT 0,
+                    failed_items TEXT DEFAULT '[]',
                     progress REAL DEFAULT 0,
                     message TEXT DEFAULT '等待开始...',
                     completed BOOLEAN DEFAULT 0,
@@ -11386,6 +12103,10 @@ class Database:
                 pass
             try:
                 cursor.execute('ALTER TABLE scrape_status ADD COLUMN index_failed INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute("ALTER TABLE scrape_status ADD COLUMN failed_items TEXT DEFAULT '[]'")
             except sqlite3.OperationalError:
                 pass
 
@@ -11730,6 +12451,130 @@ class Database:
             logger.error(f"删除商品图像失败: {e}")
             return False
 
+    def delete_products_bulk(self, product_ids: List[int], max_workers: int = 8) -> Dict[str, Any]:
+        """批量删除商品、图片文件与向量索引（优化版）"""
+        try:
+            normalized_ids = []
+            for pid in product_ids or []:
+                try:
+                    normalized_ids.append(int(pid))
+                except (TypeError, ValueError):
+                    continue
+
+            if not normalized_ids:
+                return {'deleted_count': 0, 'missing_ids': [], 'file_failed_count': 0}
+
+            unique_ids = sorted(set(normalized_ids))
+            existing_ids = set()
+            image_records = []
+
+            def chunked(values, size):
+                for idx in range(0, len(values), size):
+                    yield values[idx:idx + size]
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                for chunk in chunked(unique_ids, 500):
+                    placeholders = ','.join(['?'] * len(chunk))
+                    cursor.execute(f"SELECT id FROM products WHERE id IN ({placeholders})", chunk)
+                    existing_ids.update([row['id'] for row in cursor.fetchall()])
+
+                if not existing_ids:
+                    return {'deleted_count': 0, 'missing_ids': unique_ids, 'file_failed_count': 0}
+
+                existing_list = list(existing_ids)
+                for chunk in chunked(existing_list, 500):
+                    placeholders = ','.join(['?'] * len(chunk))
+                    cursor.execute(
+                        f"SELECT id, image_path FROM product_images WHERE product_id IN ({placeholders})",
+                        chunk
+                    )
+                    image_records.extend([{'id': row['id'], 'path': row['image_path']} for row in cursor.fetchall()])
+
+            engine = None
+            try:
+                from vector_engine import get_vector_engine
+                engine = get_vector_engine()
+            except ImportError:
+                try:
+                    from .vector_engine import get_vector_engine
+                    engine = get_vector_engine()
+                except ImportError:
+                    logger.warning("无法导入vector_engine，跳过FAISS向量删除")
+
+            if engine and image_records:
+                image_ids = {record['id'] for record in image_records if record.get('id') is not None}
+                if image_ids:
+                    try:
+                        engine.remove_vectors_by_db_ids(image_ids)
+                    except Exception as e:
+                        logger.warning(f"批量删除FAISS向量失败: {e}")
+
+            file_failed = {'count': 0}
+            if image_records:
+                import concurrent.futures
+                import threading
+
+                lock = threading.Lock()
+
+                def remove_file(path: str):
+                    if not path:
+                        return
+                    if os.path.exists(path):
+                        try:
+                            os.remove(path)
+                        except Exception:
+                            with lock:
+                                file_failed['count'] += 1
+
+                workers = min(max_workers, len(image_records))
+                if workers > 1:
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                        executor.map(lambda rec: remove_file(rec['path']), image_records)
+                else:
+                    for record in image_records:
+                        remove_file(record['path'])
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                existing_list = list(existing_ids)
+                for chunk in chunked(existing_list, 500):
+                    placeholders = ','.join(['?'] * len(chunk))
+                    cursor.execute(f"DELETE FROM product_images WHERE product_id IN ({placeholders})", chunk)
+                    cursor.execute(f"DELETE FROM products WHERE id IN ({placeholders})", chunk)
+                conn.commit()
+
+            remaining_images = 0
+            try:
+                with self.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT COUNT(*) FROM product_images")
+                    remaining_images = cursor.fetchone()[0] or 0
+            except Exception as e:
+                logger.warning(f"统计剩余图片数量失败: {e}")
+
+            if engine and remaining_images == 0:
+                try:
+                    engine.rebuild_index([])
+                except Exception as e:
+                    logger.warning(f"清空FAISS索引失败: {e}")
+            elif engine and image_records:
+                try:
+                    engine.save()
+                except Exception as e:
+                    logger.warning(f"保存FAISS索引失败: {e}")
+
+            missing_ids = [pid for pid in unique_ids if pid not in existing_ids]
+
+            return {
+                'deleted_count': len(existing_ids),
+                'missing_ids': missing_ids,
+                'file_failed_count': file_failed['count']
+            }
+        except Exception as e:
+            logger.error(f"批量删除商品失败: {e}")
+            return {'deleted_count': 0, 'missing_ids': [], 'file_failed_count': 0, 'error': str(e)}
+
     def delete_image_record(self, image_id: int) -> bool:
         """根据图片ID删除图片记录（用于回滚操作）"""
         try:
@@ -11968,6 +12813,24 @@ class Database:
                 rows = cursor.fetchall()
                 history = []
                 for row in rows:
+                    weidian_url = row['weidian_url']
+                    weidian_id = ''
+                    if weidian_url:
+                        try:
+                            import re
+                            match = re.search(r'itemID=(\d+)', weidian_url)
+                            if match:
+                                weidian_id = match.group(1)
+                        except Exception:
+                            weidian_id = ''
+
+                    website_urls = []
+                    if weidian_id:
+                        try:
+                            website_urls = self.generate_website_urls(weidian_id)
+                        except Exception:
+                            website_urls = []
+
                     history.append({
                         'id': row['id'],
                         'query_image_path': row['query_image_path'],
@@ -11978,11 +12841,12 @@ class Database:
                         'search_time': row['search_time'],
                         'title': row['title'],
                         'english_title': row['english_title'],
-                        'weidian_url': row['weidian_url'],
+                        'weidian_url': weidian_url,
                         'cnfans_url': row['cnfans_url'],
                         'acbuy_url': row['acbuy_url'],
                         'ruleEnabled': row['ruleEnabled'],
-                        'matched_image_path': row['matched_image_path']
+                        'matched_image_path': row['matched_image_path'],
+                        'websiteUrls': website_urls
                     })
 
                 return {
@@ -12083,13 +12947,14 @@ class Database:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT id, username, role, is_active, created_at
+                    SELECT id, username, role, is_active, image_search_count, created_at
                     FROM users
                     ORDER BY created_at DESC
                 ''')
                 users = []
                 for row in cursor.fetchall():
                     user = dict(row)
+                    user['image_search_count'] = user.get('image_search_count', 0) or 0
                     user['shops'] = self.get_user_shops(user['id'])
                     users.append(user)
                 return users
@@ -12138,19 +13003,37 @@ class Database:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT id, username, role, is_active, created_at
+                    SELECT id, username, role, is_active, image_search_count, created_at
                     FROM users
                     WHERE id = ?
                 ''', (user_id,))
                 user = cursor.fetchone()
                 if user:
                     user_dict = dict(user)
+                    user_dict['image_search_count'] = user_dict.get('image_search_count', 0) or 0
                     user_dict['shops'] = self.get_user_shops(user_id)
                     return user_dict
                 return None
         except Exception as e:
             logger.error(f"获取用户信息失败: {e}")
             return None
+
+    def increment_user_image_search_count(self, user_id: int) -> bool:
+        """增加用户以图搜图次数"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE users
+                    SET image_search_count = COALESCE(image_search_count, 0) + 1,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                ''', (user_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"更新用户搜索次数失败: {e}")
+            return False
 
     def update_discord_account_user(self, account_id: int, user_id: Optional[int]) -> bool:
         """更新Discord账号关联的用户"""
@@ -12310,17 +13193,23 @@ class Database:
                 cursor.execute('''
                     SELECT
                         wc.id, wc.name, wc.display_name, wc.url_template,
-                        wc.id_pattern, wc.badge_color, wc.reply_template, wc.rotation_interval, wc.rotation_enabled, wc.message_filters, wc.created_at,
+                        wc.id_pattern, wc.badge_color, wc.reply_template,
+                        wc.rotation_interval, wc.rotation_enabled, wc.message_filters,
+                        wc.stat_replies_text, wc.stat_replies_image, wc.stat_replies_total,
+                        wc.created_at,
                         GROUP_CONCAT(wcb.channel_id) as channels
                     FROM website_configs wc
                     LEFT JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
-                    GROUP BY wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.reply_template, wc.rotation_interval, wc.rotation_enabled, wc.message_filters, wc.created_at
+                    GROUP BY wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.reply_template, wc.rotation_interval, wc.rotation_enabled, wc.message_filters, wc.stat_replies_text, wc.stat_replies_image, wc.stat_replies_total, wc.created_at
                     ORDER BY wc.created_at
                 ''')
 
                 configs = []
                 for row in cursor.fetchall():
                     config = dict(row)
+                    config['stat_replies_text'] = config.get('stat_replies_text', 0) or 0
+                    config['stat_replies_image'] = config.get('stat_replies_image', 0) or 0
+                    config['stat_replies_total'] = config.get('stat_replies_total', 0) or 0
                     # 将channels字符串解析为数组
                     if config.get('channels'):
                         config['channels'] = config['channels'].split(',') if config['channels'] else []
@@ -12332,6 +13221,28 @@ class Database:
         except Exception as e:
             logger.error(f"获取网站配置失败: {e}")
             return []
+
+    def increment_website_stats(self, website_id: int, has_text: bool, has_image: bool) -> bool:
+        """增加网站回复统计"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                updates = ['stat_replies_total = stat_replies_total + 1']
+                if has_text:
+                    updates.append('stat_replies_text = stat_replies_text + 1')
+                if has_image:
+                    updates.append('stat_replies_image = stat_replies_image + 1')
+
+                cursor.execute(f'''
+                    UPDATE website_configs
+                    SET {', '.join(updates)}
+                    WHERE id = ?
+                ''', (website_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"更新网站回复统计失败: {e}")
+            return False
 
     def add_website_config(self, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str = 'blue', reply_template: str = '{url}', rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> bool:
         """添加网站配置"""
@@ -12827,8 +13738,17 @@ class Database:
                 shop_names_str = shop_result[1]
                 shop_names = shop_names_str.split(',') if shop_names_str else []
 
+                cursor.execute("SELECT COALESCE(SUM(stat_replies_total), 0) FROM website_configs")
+                total_replies = cursor.fetchone()[0] or 0
+
                 if shop_count == 0 and role != 'admin':
-                    return {'shop_count': 0, 'product_count': 0, 'image_count': 0, 'user_count': 0}
+                    return {
+                        'shop_count': 0,
+                        'product_count': 0,
+                        'image_count': 0,
+                        'user_count': 0,
+                        'total_replies': total_replies
+                    }
 
                 # 2. 统计商品
                 if role == 'admin' or user_id is None:
@@ -12865,11 +13785,12 @@ class Database:
                     'shop_count': shop_count,
                     'product_count': product_count,
                     'image_count': image_count,
-                    'user_count': user_count
+                    'user_count': user_count,
+                    'total_replies': total_replies
                 }
         except Exception as e:
             logger.error(f"获取系统统计信息失败: {e}")
-            return {'shop_count': 0, 'product_count': 0, 'image_count': 0, 'user_count': 0}
+            return {'shop_count': 0, 'product_count': 0, 'image_count': 0, 'user_count': 0, 'total_replies': 0}
 
     def cleanup_orphaned_images(self) -> int:
         """清理孤立的图片记录（没有对应商品的图片）"""
@@ -13201,6 +14122,11 @@ class Database:
                     except Exception:
                         prod['weidianId'] = ''
 
+                    try:
+                        prod['websiteUrls'] = self.generate_website_urls(prod['weidianId']) if prod.get('weidianId') else []
+                    except Exception:
+                        prod['websiteUrls'] = []
+
                     products.append(prod)
 
                 return {'products': products, 'total': total}
@@ -13384,7 +14310,7 @@ class Database:
                         'keyword_reply_enabled': row[7] if row[7] is not None else 1,
                         'image_reply_enabled': row[8] if row[8] is not None else 1,
                         'global_reply_template': row[9] or '',
-                        'numeric_filter_keyword': row[10] or 'size',
+                        'numeric_filter_keyword': row[10] if row[10] is not None else '',
                         'filter_size_min': row[11] if row[11] is not None else 35,
                         'filter_size_max': row[12] if row[12] is not None else 46,
                     }
@@ -13400,7 +14326,7 @@ class Database:
                     'keyword_reply_enabled': 1,
                     'image_reply_enabled': 1,
                     'global_reply_template': '',
-                    'numeric_filter_keyword': 'size',
+                    'numeric_filter_keyword': '',
                     'filter_size_min': 35,
                     'filter_size_max': 46,
                 }
@@ -13417,7 +14343,7 @@ class Database:
                 'keyword_reply_enabled': 1,
                 'image_reply_enabled': 1,
                 'global_reply_template': '',
-                'numeric_filter_keyword': 'size',
+                'numeric_filter_keyword': '',
                 'filter_size_min': 35,
                 'filter_size_max': 46,
             }
@@ -13521,7 +14447,7 @@ class Database:
                         keyword_reply_enabled if keyword_reply_enabled is not None else 1,
                         image_reply_enabled if image_reply_enabled is not None else 1,
                         global_reply_template or '',
-                        numeric_filter_keyword or 'size',
+                        numeric_filter_keyword or '',
                         filter_size_min if filter_size_min is not None else 35,
                         filter_size_max if filter_size_max is not None else 46
                     ))
@@ -13684,6 +14610,12 @@ class Database:
                 row = cursor.fetchone()
 
                 if row:
+                    failed_items_raw = row['failed_items'] if 'failed_items' in row.keys() else '[]'
+                    try:
+                        failed_items = json.loads(failed_items_raw) if failed_items_raw else []
+                    except (TypeError, ValueError):
+                        failed_items = []
+
                     return {
                         'id': row['id'],
                         'is_scraping': bool(row['is_scraping']),
@@ -13695,6 +14627,7 @@ class Database:
                         'failed': (row['failed'] if 'failed' in row.keys() else 0) or 0,
                         'image_failed': (row['image_failed'] if 'image_failed' in row.keys() else 0) or 0,
                         'index_failed': (row['index_failed'] if 'index_failed' in row.keys() else 0) or 0,
+                        'failed_items': failed_items,
                         'progress': row['progress'] or 0.0,
                         'message': row['message'] or '等待开始...',
                         'completed': bool(row['completed']),
@@ -13717,6 +14650,7 @@ class Database:
                 'failed': 0,
                 'image_failed': 0,
                 'index_failed': 0,
+                'failed_items': [],
                 'progress': 0.0,
                 'message': '获取状态失败',
                 'completed': False,
@@ -13743,6 +14677,14 @@ class Database:
                     elif key == 'progress':
                         fields.append(f'{key} = ?')
                         values.append(float(value) if value is not None else 0.0)
+                    elif key == 'failed_items':
+                        fields.append('failed_items = ?')
+                        if value is None:
+                            values.append('[]')
+                        elif isinstance(value, str):
+                            values.append(value)
+                        else:
+                            values.append(json.dumps(value, ensure_ascii=False))
                     elif key in ['current_shop_id', 'message', 'thread_id']:
                         fields.append(f'{key} = ?')
                         values.append(str(value) if value is not None else None)
@@ -13776,6 +14718,7 @@ class Database:
                         failed = 0,
                         image_failed = 0,
                         index_failed = 0,
+                        failed_items = '[]',
                         progress = 0,
                         message = '等待开始...',
                         completed = 0,
@@ -13795,6 +14738,7 @@ class Database:
                     'failed': 0,
                     'image_failed': 0,
                     'index_failed': 0,
+                    'failed_items': [],
                     'progress': 0.0,
                     'message': '等待开始...',
                     'completed': False,
@@ -15265,9 +16209,28 @@ class DiscordBotClient(discord.Client):
                             if hasattr(target_client, 'account_id') and target_client.account_id:
                                 set_account_cooldown(target_client.account_id, message.channel.id)
 
+                            reply_preview = (response_content or '').replace('\n', ' ').strip()
+                            if not reply_preview and files:
+                                reply_preview = f"[图片 {len(files)}]"
+                            if len(reply_preview) > 120:
+                                reply_preview = f"{reply_preview[:120]}..."
+                            author_label = f"{message.author.name}({message.author.id})"
                             logger.info(
-                                f"✅ [回复成功] 真实发送账号: {target_client.user.name} (ID: {target_client.account_id}) | 商品ID: {product.get('id')} | 图片数量: {len(files)}"
+                                f"✅ [回复成功] {target_client.user.name} -> {author_label}: {reply_preview} | 商品ID: {product.get('id')}"
                             )
+                            try:
+                                has_text = bool(response_content)
+                                has_image = bool(files)
+                                if website_config and website_config.get('id') and (has_text or has_image):
+                                    await asyncio.get_event_loop().run_in_executor(
+                                        None,
+                                        db.increment_website_stats,
+                                        website_config['id'],
+                                        has_text,
+                                        has_image
+                                    )
+                            except Exception as stat_error:
+                                logger.error(f"统计更新失败: {stat_error}")
 
                         except Exception as reply_error:
                             logger.warning(f"回复失败，尝试直接发送: {reply_error}")
@@ -15277,9 +16240,24 @@ class DiscordBotClient(discord.Client):
                             if hasattr(target_client, 'account_id') and target_client.account_id:
                                 set_account_cooldown(target_client.account_id, message.channel.id)
 
+                            reply_preview = (response_content or '').replace('\n', ' ').strip()
+                            if len(reply_preview) > 120:
+                                reply_preview = f"{reply_preview[:120]}..."
+                            author_label = f"{message.author.name}({message.author.id})"
                             logger.info(
-                                f"✅ [发送成功] 真实发送账号: {target_client.user.name} | 商品ID: {product.get('id')}"
+                                f"✅ [发送成功] {target_client.user.name} -> {author_label}: {reply_preview} | 商品ID: {product.get('id')}"
                             )
+                            try:
+                                if website_config and website_config.get('id') and response_content:
+                                    await asyncio.get_event_loop().run_in_executor(
+                                        None,
+                                        db.increment_website_stats,
+                                        website_config['id'],
+                                        True,
+                                        False
+                                    )
+                            except Exception as stat_error:
+                                logger.error(f"统计更新失败: {stat_error}")
 
                     else:
                         logger.warning(
@@ -15481,7 +16459,8 @@ class DiscordBotClient(discord.Client):
             message_content = (message.content or '').lower()
 
             for filter_rule in filters:
-                filter_value = filter_rule['filter_value'].lower()
+                raw_filter_value = filter_rule.get('filter_value') or ''
+                filter_value = raw_filter_value.lower()
                 filter_type = filter_rule['filter_type']
 
                 if filter_type == 'contains':
@@ -15497,13 +16476,46 @@ class DiscordBotClient(discord.Client):
                         logger.info(f'消息被过滤: 以 "{filter_value}" 结尾')
                         return True
                 elif filter_type == 'regex':
-                    import re
                     try:
                         if re.search(filter_value, message_content, re.IGNORECASE):
                             logger.info(f'消息被过滤: 匹配正则 "{filter_value}"')
                             return True
                     except re.error:
                         logger.warning(f'无效的正则表达式: {filter_value}')
+                elif filter_type == 'numeric_range':
+                    try:
+                        rule = json.loads(raw_filter_value) if raw_filter_value else {}
+                    except json.JSONDecodeError:
+                        rule = {}
+
+                    keyword = str(rule.get('keyword') or '').strip()
+                    min_value = rule.get('min')
+                    max_value = rule.get('max')
+
+                    if not keyword:
+                        continue
+
+                    try:
+                        min_value = int(min_value)
+                        max_value = int(max_value)
+                    except (TypeError, ValueError):
+                        continue
+
+                    if min_value >= max_value:
+                        continue
+
+                    pattern = rf'(?i){re.escape(keyword)}\s*[:=-]?\s*(\d+)'
+                    value_matches = re.findall(pattern, message.content or '')
+                    for value_str in value_matches:
+                        try:
+                            value = int(value_str)
+                            if value < min_value or value > max_value:
+                                logger.info(
+                                    f'消息被过滤: {keyword} {value} 超出范围 ({min_value}-{max_value})'
+                                )
+                                return True
+                        except ValueError:
+                            continue
                 elif filter_type == 'user_id':
                     # 检查用户ID过滤
                     filter_user_ids = [uid.strip() for uid in filter_value.split(',') if uid.strip()]
@@ -15977,19 +16989,49 @@ class DiscordBotClient(discord.Client):
                 logger.info(f'关键词搜索无结果: {search_query}')
                 return
 
-            query_lower = search_query.lower()
+            query_lower = re.sub(r'\s+', ' ', search_query.strip().lower())
+            query_compact = re.sub(r'\s+', ' ', re.sub(r'[^\w\s]+', ' ', query_lower)).strip()
+            query_terms = [term for term in re.findall(r'\w+', query_lower) if term]
+            query_has_multiple_words = len(query_terms) >= 2
+
+            def _normalize_phrase(value: str) -> str:
+                return re.sub(r'\s+', ' ', value).strip().lower()
+
+            def _split_keywords(raw_value):
+                if not raw_value:
+                    return []
+                if isinstance(raw_value, list):
+                    parts = []
+                    for item in raw_value:
+                        parts.extend(re.split(r'[,\uFF0C]', str(item)))
+                else:
+                    parts = re.split(r'[,\uFF0C]', str(raw_value))
+                keywords = []
+                for part in parts:
+                    normalized = _normalize_phrase(part)
+                    if len(normalized) >= 2:
+                        keywords.append(normalized)
+                return keywords
 
             def _product_matches_query(product):
-                title = (product.get('title') or '').lower()
-                english_title = (product.get('english_title') or product.get('englishTitle') or '').lower()
-                if query_lower and (query_lower in title or query_lower in english_title):
-                    return True
-                if title and len(title) >= 2 and title in query_lower:
-                    return True
-                if english_title and len(english_title) >= 2 and english_title in query_lower:
-                    return True
-                keywords = [kw for kw in re.findall(r'\w+', query_lower) if len(kw) >= 2]
-                return any(kw in title or kw in english_title for kw in keywords)
+                phrases = []
+                english_title = product.get('english_title') or product.get('englishTitle') or ''
+                phrases.extend(_split_keywords(english_title))
+                title = _normalize_phrase(product.get('title') or '')
+                if title:
+                    phrases.append(title)
+                if not phrases:
+                    return False
+                seen = set()
+                for phrase in phrases:
+                    if phrase in seen:
+                        continue
+                    seen.add(phrase)
+                    if phrase and phrase in query_lower:
+                        return True
+                    if query_has_multiple_words and query_compact and query_compact in phrase:
+                        return True
+                return False
 
             matched_products = [p for p in all_products if _product_matches_query(p)]
             if not matched_products:
@@ -17111,6 +18153,37 @@ class VectorEngine:
             logger.error(f"删除向量失败: {e}")
             return False
 
+    def remove_vectors_by_db_ids(self, db_ids: set) -> int:
+        """
+        批量标记删除向量，避免重复扫描和频繁保存。
+        返回成功标记删除的数量。
+        """
+        if not db_ids:
+            return 0
+
+        try:
+            removed_count = 0
+            for i, mapped_id in enumerate(self.id_map):
+                if mapped_id in db_ids:
+                    self.id_map[i] = None
+                    removed_count += 1
+
+            if removed_count:
+                deleted_count = sum(1 for id_val in self.id_map if id_val is None)
+                total_count = len(self.id_map)
+                deletion_ratio = deleted_count / total_count if total_count > 0 else 0
+
+                if deletion_ratio > 0.3:
+                    logger.info(f"删除比例({deletion_ratio:.1%})过高，重建索引清理碎片")
+                    self._rebuild_index_after_removal()
+                else:
+                    self.save()
+
+            return removed_count
+        except Exception as e:
+            logger.error(f"批量删除向量失败: {e}")
+            return 0
+
     def _rebuild_index_after_removal(self):
         """删除向量后重建索引（优化版：直接使用数据库中已存的 features，不重新跑模型）"""
         try:
@@ -17194,7 +18267,7 @@ class VectorEngine:
 
     def count(self) -> int:
         """返回当前索引中的向量数量"""
-        return self.index.ntotal
+        return sum(1 for id_val in self.id_map if id_val is not None)
 
     def get_stats(self) -> Dict:
         """获取索引统计信息"""
@@ -17811,7 +18884,7 @@ class QueueHandler(logging.Handler):
 
             # 添加到日志列表（限制大小）
             all_logs.append(log_entry)
-            if len(all_logs) > 200:  # 最多保存200条日志
+            if len(all_logs) > 500:  # 最多保存500条日志
                 all_logs.pop(0)
 
             log_queue.put(log_entry)
@@ -18133,6 +19206,14 @@ def search_similar():
 
             if query_features is None:
                 return jsonify({'error': 'Feature extraction failed'}), 500
+
+            # 记录用户搜索次数（未登录则跳过，不影响机器人调用）
+            try:
+                current_user = get_current_user()
+                if current_user:
+                    db.increment_user_image_search_count(current_user['id'])
+            except Exception as e:
+                logger.error(f"记录用户搜索次数失败: {e}")
 
             # 【优化】使用 FAISS HNSW 向量搜索 + 综合评分重排序
             print(f"DEBUG: Searching with threshold: {threshold}, vector length: {len(query_features)}")
@@ -18664,7 +19745,7 @@ def create_user():
         if db.create_user(username, password_hash, role):
             with db.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT id, username, role, is_active, created_at FROM users WHERE username = ?", (username,))
+                cursor.execute("SELECT id, username, role, is_active, image_search_count, created_at FROM users WHERE username = ?", (username,))
                 user = cursor.fetchone()
 
             if user:
@@ -19122,7 +20203,7 @@ def get_system_stats():
     try:
         user = get_current_user()
         if not user:
-            return jsonify({'shop_count': 0, 'product_count': 0, 'image_count': 0, 'user_count': 0})
+            return jsonify({'shop_count': 0, 'product_count': 0, 'image_count': 0, 'user_count': 0, 'total_replies': 0})
         stats = db.get_system_stats(user['id'], user['role'])
         return jsonify(stats)
     except Exception as e:
@@ -20386,7 +21467,7 @@ def get_indexed_ids():
 # === 修复：批量删除 API ===
 @app.route('/api/products/batch', methods=['DELETE'])
 def batch_delete_products():
-    """批量删除商品（多线程高性能版）"""
+    """批量删除商品（优化版）"""
     try:
         data = request.get_json()
         ids = data.get('ids', [])
@@ -20395,43 +21476,22 @@ def batch_delete_products():
 
         logger.info(f"开始批量删除 {len(ids)} 个商品")
 
-        # 使用多线程删除
-        import concurrent.futures
-        max_threads = min(16, len(ids))  # 提高并发删除速度，同时避免过多线程
-
-        deleted_count = 0
-        failed_ids = []
-
-        def delete_single_product(product_id):
-            """删除单个商品"""
-            try:
-                # 创建新的数据库实例避免多线程冲突
-                from database import Database
-                temp_db = Database()
-                if temp_db.delete_product_images(product_id):
-                    return {'success': True, 'id': product_id}
-                else:
-                    return {'success': False, 'id': product_id}
-            except Exception as e:
-                logger.error(f"删除商品 {product_id} 失败: {e}")
-                return {'success': False, 'id': product_id}
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
-            futures = [executor.submit(delete_single_product, pid) for pid in ids]
-
-            for future in concurrent.futures.as_completed(futures):
-                result = future.result()
-                if result['success']:
-                    deleted_count += 1
-                else:
-                    failed_ids.append(result['id'])
+        result = db.delete_products_bulk(ids)
+        deleted_count = result.get('deleted_count', 0)
+        failed_ids = result.get('missing_ids', [])
+        file_failed_count = result.get('file_failed_count', 0)
 
         logger.info(f"批量删除完成: {deleted_count}/{len(ids)} 个商品成功删除")
 
         response = {'success': True, 'count': deleted_count, 'total': len(ids)}
+        warnings = []
         if failed_ids:
             response['failed_ids'] = failed_ids
-            response['warning'] = f'{len(failed_ids)} 个商品删除失败'
+            warnings.append(f'{len(failed_ids)} 个商品不存在')
+        if file_failed_count:
+            warnings.append(f'{file_failed_count} 个图片文件删除失败')
+        if warnings:
+            response['warning'] = '，'.join(warnings)
 
         return jsonify(response)
     except Exception as e:
@@ -20468,39 +21528,31 @@ def batch_delete_all_products():
             )
 
         if not all_ids:
+            try:
+                with db.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT COUNT(*) FROM product_images")
+                    remaining_images = cursor.fetchone()[0] or 0
+
+                if remaining_images == 0:
+                    try:
+                        from vector_engine import get_vector_engine
+                    except ImportError:
+                        from .vector_engine import get_vector_engine
+                    engine = get_vector_engine()
+                    if engine.count() > 0:
+                        engine.rebuild_index([])
+            except Exception as e:
+                logger.warning(f"清理空索引失败: {e}")
+
             return jsonify({'success': True, 'count': 0, 'message': '没有商品需要删除'})
 
         logger.info(f"开始删除所有 {len(all_ids)} 个商品")
 
-        # 使用多线程删除所有商品
-        import concurrent.futures
-        max_threads = min(16, len(all_ids))
-
-        deleted_count = 0
-        failed_ids = []
-
-        def delete_single_product(product_id):
-            try:
-                # 创建新的数据库实例避免多线程冲突
-                from database import Database
-                temp_db = Database()
-                if temp_db.delete_product_images(product_id):
-                    return {'success': True, 'id': product_id}
-                else:
-                    return {'success': False, 'id': product_id}
-            except Exception as e:
-                logger.error(f"删除商品 {product_id} 失败: {e}")
-                return {'success': False, 'id': product_id}
-
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
-            futures = [executor.submit(delete_single_product, pid) for pid in all_ids]
-
-            for future in concurrent.futures.as_completed(futures):
-                result = future.result()
-                if result['success']:
-                    deleted_count += 1
-                else:
-                    failed_ids.append(result['id'])
+        result = db.delete_products_bulk(all_ids)
+        deleted_count = result.get('deleted_count', 0)
+        failed_ids = result.get('missing_ids', [])
+        file_failed_count = result.get('file_failed_count', 0)
 
         logger.info(f"全选删除完成: {deleted_count}/{len(all_ids)} 个商品成功删除")
 
@@ -20511,9 +21563,14 @@ def batch_delete_all_products():
             'message': f'成功删除 {deleted_count} 个商品'
         }
 
+        warnings = []
         if failed_ids:
             response['failed_ids'] = failed_ids
-            response['warning'] = f'{len(failed_ids)} 个商品删除失败'
+            warnings.append(f'{len(failed_ids)} 个商品不存在')
+        if file_failed_count:
+            warnings.append(f'{file_failed_count} 个图片文件删除失败')
+        if warnings:
+            response['warning'] = '，'.join(warnings)
 
         return jsonify(response)
     except Exception as e:
@@ -21074,6 +22131,7 @@ def get_search_history():
 def search_similar_text():
     """根据文字关键词搜索相似商品"""
     try:
+        import re
         data = request.get_json()
         if not data:
             return jsonify({'error': 'Invalid request body'}), 400
@@ -21089,51 +22147,63 @@ def search_similar_text():
         with db.get_connection() as conn:
             cursor = conn.cursor()
             query_lower = query.lower()
+            query_normalized = re.sub(r'\s+', ' ', query_lower).strip()
 
-            # =======================================================
-            # 修复: 移除 `AND ruleEnabled = 1`
-            # 即使规则被禁用(用于自定义回复)，也必须能被搜出来，
-            # 否则机器人永远找不到这个商品，也就无法发送自定义回复。
-            # =======================================================
-            cursor.execute("""
-                SELECT id, product_url, title, english_title, description,
-                       ruleEnabled, min_delay, max_delay, created_at,
-                       cnfans_url, shop_name, custom_reply_text,
-                       custom_reply_images, custom_image_urls, image_source,
-                       reply_scope,
-                       uploaded_reply_images
-                FROM products
-                WHERE (LOWER(english_title) LIKE ? OR LOWER(title) LIKE ?)
-                ORDER BY created_at DESC
-                LIMIT ?
-            """, (f'%{query_lower}%', f'%{query_lower}%', limit))
+            def fetch_by_terms(terms, remaining_limit, exclude_ids=None):
+                if not terms or remaining_limit <= 0:
+                    return []
+                conditions = []
+                params = []
+                for term in terms:
+                    like = f"%{term}%"
+                    conditions.append("(LOWER(english_title) LIKE ? OR LOWER(title) LIKE ?)")
+                    params.extend([like, like])
+                where_clause = " OR ".join(conditions)
+                exclude_clause = ""
+                exclude_params = []
+                if exclude_ids:
+                    placeholders = ",".join("?" for _ in exclude_ids)
+                    exclude_clause = f" AND id NOT IN ({placeholders})"
+                    exclude_params = list(exclude_ids)
+                cursor.execute(f"""
+                    SELECT id, product_url, title, english_title, description,
+                           ruleEnabled, min_delay, max_delay, created_at,
+                           cnfans_url, shop_name, custom_reply_text,
+                           custom_reply_images, custom_image_urls, image_source,
+                           reply_scope,
+                           uploaded_reply_images
+                    FROM products
+                    WHERE ({where_clause}){exclude_clause}
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                """, (*params, *exclude_params, remaining_limit))
+                return cursor.fetchall()
 
-            rows = cursor.fetchall()
+            rows = fetch_by_terms([query_normalized], limit)
+            found_ids = {row['id'] for row in rows}
+
+            tokens = [kw for kw in re.findall(r'\w+', query_normalized) if len(kw) >= 2]
+            extra_terms = []
+            if len(tokens) >= 2:
+                for i in range(len(tokens) - 1):
+                    term = f"{tokens[i]} {tokens[i + 1]}"
+                    if term not in extra_terms:
+                        extra_terms.append(term)
+            for token in tokens:
+                if any(ch.isdigit() for ch in token) and token not in extra_terms:
+                    extra_terms.append(token)
+
+            if extra_terms and len(rows) < limit:
+                remaining = limit - len(rows)
+                extra_rows = fetch_by_terms(extra_terms, remaining, found_ids)
+                rows.extend(extra_rows)
+                found_ids.update({row['id'] for row in extra_rows})
+
             if not rows:
-                import re
-                tokens = [kw for kw in re.findall(r'\w+', query_lower) if len(kw) >= 2]
                 tokens = tokens[:6]
                 if tokens:
-                    conditions = []
-                    params = []
-                    for token in tokens:
-                        like = f"%{token}%"
-                        conditions.append("(LOWER(english_title) LIKE ? OR LOWER(title) LIKE ?)")
-                        params.extend([like, like])
-                    where_clause = " OR ".join(conditions)
-                    cursor.execute(f"""
-                        SELECT id, product_url, title, english_title, description,
-                               ruleEnabled, min_delay, max_delay, created_at,
-                               cnfans_url, shop_name, custom_reply_text,
-                               custom_reply_images, custom_image_urls, image_source,
-                               reply_scope,
-                               uploaded_reply_images
-                        FROM products
-                        WHERE {where_clause}
-                        ORDER BY created_at DESC
-                        LIMIT ?
-                    """, (*params, limit))
-                    rows = cursor.fetchall()
+                    rows = fetch_by_terms(tokens, limit)
+
             if not rows:
                 cursor.execute("""
                     SELECT id, product_url, title, english_title, description,
@@ -21155,7 +22225,7 @@ def search_similar_text():
                     )
                     ORDER BY created_at DESC
                     LIMIT ?
-                """, (query_lower, query_lower, limit))
+                """, (query_normalized, query_normalized, limit))
                 rows = cursor.fetchall()
 
             products = []
@@ -21238,7 +22308,7 @@ def log_stream():
 
         try:
             # 发送最近的日志历史
-            for log_entry in all_logs[-20:]:  # 发送最近20条历史日志
+            for log_entry in all_logs[-50:]:  # 发送最近50条历史日志
                 yield f"data: {json.dumps(log_entry)}\n\n"
 
             # 持续监听新日志
@@ -21268,9 +22338,9 @@ def log_stream():
 def get_recent_logs():
     """获取最近的日志记录"""
     try:
-        # 从日志列表中返回最近50条日志
+        # 从日志列表中返回最近500条日志
         return jsonify({
-            'logs': all_logs[-50:],
+            'logs': all_logs[-500:],
             'total': len(all_logs)
         })
     except Exception as e:
@@ -21296,7 +22366,7 @@ def add_external_log():
 
         # 添加到日志列表
         all_logs.append(log_entry)
-        if len(all_logs) > 200:
+        if len(all_logs) > 500:
             all_logs.pop(0)
 
         # 添加到队列
@@ -21816,8 +22886,8 @@ def control_shop_scrape():
         success = db.update_scrape_status(
             is_scraping=False,
             stop_signal=True,
-            completed=True,
-            message='抓取已停止',
+            completed=False,
+            message='正在停止抓取...',
             progress=100
         )
 
@@ -21861,7 +22931,8 @@ def control_shop_scrape():
             progress=0,
             message='初始化抓取...',
             completed=False,
-            thread_id=None
+            thread_id=None,
+            failed_items=[]
         )
 
         if not success:
@@ -21925,60 +22996,30 @@ def batch_scrape_products():
             'errors': 0,
             'start_time': time.time()
         }
+        details = []
 
         def process_single_product_batch(product_id):
             """处理单个商品（用于线程池）"""
             try:
-                # === 检查停止信号 ===
                 current_status = db.get_scrape_status()
                 if current_status.get('stop_signal', False):
                     logger.info(f"🔴 处理商品前检测到停止信号，取消处理商品 {product_id}")
                     return {'status': 'cancelled', 'product_id': product_id, 'message': '任务已取消'}
 
-                # 先按item_id快速去重，避免无效请求
-                if db.get_product_by_item_id(str(product_id)):
-                    return {'status': 'skipped', 'product_id': product_id, 'message': '商品已存在'}
-
-                # 调用现有的单个商品处理逻辑
-                from app import process_single_product
-
-                # 构建商品信息
                 product_info = {
                     'item_id': str(product_id),
                     'item_url': f'https://weidian.com/item.html?itemID={product_id}',
                     'shop_name': '批量上传'
                 }
 
-                # 处理商品
-                product_data = process_single_product(product_info)
+                result = process_and_save_single_product_sync(product_info) or {}
+                status = result.get('status', 'failed')
 
-                if product_data:
-                    # === 再次检查停止信号 ===
-                    current_status = db.get_scrape_status()
-                    if current_status.get('stop_signal', False):
-                        logger.info(f"🔴 获取商品数据后检测到停止信号，跳过商品 {product_id}")
-                        return {'status': 'cancelled', 'product_id': product_id, 'message': '任务已取消'}
-
-                    # 检查是否已存在
-                    if db.get_product_by_url(product_data['product_url']):
-                        return {'status': 'skipped', 'product_id': product_id, 'message': '商品已存在'}
-
-                    # 入库
-                    product_id_db = db.insert_product(product_data)
-
-                    # === 再次检查停止信号 ===
-                    current_status = db.get_scrape_status()
-                    if current_status.get('stop_signal', False):
-                        logger.info(f"🔴 入库后检测到停止信号，商品 {product_id} 已入库但跳过图片处理")
-                        return {'status': 'partial', 'product_id': product_id, 'message': '商品已入库，图片处理被取消'}
-
-                    # 处理图片（使用优化后的多线程图片处理）
-                    if product_data.get('images'):
-                        save_product_images_unified(product_id_db, product_data['images'], shutdown_event=shutdown_event)
-
-                    return {'status': 'success', 'product_id': product_id, 'message': '处理成功'}
-                else:
-                    return {'status': 'error', 'product_id': product_id, 'message': '获取商品数据失败'}
+                return {
+                    'status': status,
+                    'product_id': product_id,
+                    'message': result.get('message', '')
+                }
 
             except Exception as e:
                 logger.error(f"处理商品 {product_id} 失败: {e}")
@@ -22023,6 +23064,12 @@ def batch_scrape_products():
                             result = future.result()
                             results['processed'] += 1
 
+                            details.append({
+                                'id': product_id,
+                                'status': result.get('status'),
+                                'message': result.get('message', '')
+                            })
+
                             if result['status'] == 'success':
                                 results['success'] += 1
                                 logger.info(f"商品 {product_id} 处理成功")
@@ -22042,6 +23089,11 @@ def batch_scrape_products():
                         except Exception as e:
                             results['processed'] += 1
                             results['errors'] += 1
+                            details.append({
+                                'id': product_id,
+                                'status': 'error',
+                                'message': str(e)
+                            })
                             logger.error(f"处理商品 {product_id} 时发生异常: {e}")
 
                     # 如果检测到停止信号且没有待处理的任务，退出循环
@@ -22069,7 +23121,8 @@ def batch_scrape_products():
 
         return jsonify({
             'message': f'批量处理完成，共处理 {results["total"]} 个商品，成功 {results["success"]} 个，跳过 {results["skipped"]} 个，取消 {results["cancelled"]} 个，部分完成 {results["partial"]} 个，失败 {results["errors"]} 个',
-            'results': results
+            'results': results,
+            'details': details
         })
 
     except Exception as e:
@@ -22088,11 +23141,13 @@ def get_scrape_status():
         # 确保返回必要的字段（兼容前端期望的字段名）
         result = {
             'is_scraping': status.get('is_scraping', False),
+            'stop_signal': status.get('stop_signal', False),
             'progress': status.get('progress', 0),
             'total': status.get('total', 0),
             'current': status.get('processed', 0),  # 前端期望current字段
             'processed': status.get('processed', 0),
             'success': status.get('success', 0),
+            'failed_items': status.get('failed_items', []),
             'message': status.get('message', ''),
             'completed': status.get('completed', False),
             'current_shop_id': status.get('current_shop_id'),
@@ -22107,12 +23162,14 @@ def get_scrape_status():
         logger.error(f'获取抓取状态失败: {e}')
         return jsonify({
             'is_scraping': False,
+            'stop_signal': False,
             'progress': 0,
             'total': 0,
             'current': 0,
             'processed': 0,
             'success': 0,
             'message': '获取状态失败',
+            'failed_items': [],
             'completed': False,
             'current_shop_id': None,
             'thread_id': None
@@ -22321,6 +23378,7 @@ def scrape_shop_products(shop_id):
 
     scraper = get_weidian_scraper()
     unique_product_tasks = {}  # 使用字典去重：item_id -> product_info
+    failed_items = []
 
     # 初始化状态
     db.update_scrape_status(
@@ -22334,6 +23392,7 @@ def scrape_shop_products(shop_id):
         failed=0,
         image_failed=0,
         index_failed=0,
+        failed_items=[],
         message='正在初始化...'
     )
 
@@ -22506,18 +23565,27 @@ def scrape_shop_products(shop_id):
                 )
 
                 for future in done:
+                    product_info = future_to_product.get(future, {})
                     try:
                         result = future.result() or {}
                         processed_count += 1
 
                         if not result:
                             failed_count += 1
+                            failed_items.append({
+                                'id': str(product_info.get('item_id', '')),
+                                'reason': '未知错误'
+                            })
                         elif result.get('failed'):
                             failed_count += 1
                             if result.get('image_failed'):
                                 image_failed_count += 1
                             if result.get('index_failed'):
                                 index_failed_count += 1
+                            failed_items.append({
+                                'id': str(result.get('item_id') or product_info.get('item_id') or ''),
+                                'reason': result.get('message') or '未知错误'
+                            })
                         else:
                             success_count += 1
 
@@ -22537,6 +23605,11 @@ def scrape_shop_products(shop_id):
                     except Exception as e:
                         logger.error(f"商品处理异常: {e}")
                         processed_count += 1
+                        failed_count += 1
+                        failed_items.append({
+                            'id': str(product_info.get('item_id', '')),
+                            'reason': str(e)
+                        })
         finally:
             if not stop_requested:
                 executor.shutdown(wait=True)
@@ -22562,6 +23635,7 @@ def scrape_shop_products(shop_id):
         failed=failed_count,
         image_failed=image_failed_count,
         index_failed=index_failed_count,
+        failed_items=failed_items,
         message=final_message
     )
     if failed_count > 0 or image_failed_count > 0 or index_failed_count > 0:
@@ -22595,7 +23669,8 @@ def process_and_save_single_product_sync(product_info):
                 'item_id': item_id,
                 'failed': False,
                 'image_failed': False,
-                'index_failed': False
+                'index_failed': False,
+                'message': '任务已取消'
             }
 
         current_status = db.get_scrape_status()
@@ -22606,7 +23681,8 @@ def process_and_save_single_product_sync(product_info):
                 'item_id': item_id,
                 'failed': False,
                 'image_failed': False,
-                'index_failed': False
+                'index_failed': False,
+                'message': '任务已取消'
             }
 
         # === 0. 基于item_id的强力去重 ===
@@ -22617,7 +23693,8 @@ def process_and_save_single_product_sync(product_info):
                 'item_id': item_id,
                 'failed': False,
                 'image_failed': False,
-                'index_failed': False
+                'index_failed': False,
+                'message': '商品已存在'
             }
 
         # 1. 抓取详情
@@ -22631,7 +23708,8 @@ def process_and_save_single_product_sync(product_info):
                 'item_id': item_id,
                 'failed': True,
                 'image_failed': False,
-                'index_failed': False
+                'index_failed': False,
+                'message': '未获取到商品详情'
             }
 
         product_title = product_data.get('title', '')
@@ -22644,7 +23722,8 @@ def process_and_save_single_product_sync(product_info):
                 'item_id': item_id,
                 'failed': False,
                 'image_failed': False,
-                'index_failed': False
+                'index_failed': False,
+                'message': '任务已取消'
             }
 
         # 2. 再次查重 (双重保险)
@@ -22655,7 +23734,8 @@ def process_and_save_single_product_sync(product_info):
                 'item_id': item_id,
                 'failed': False,
                 'image_failed': False,
-                'index_failed': False
+                'index_failed': False,
+                'message': '商品已存在'
             }
 
         # 3. 入库 (添加item_id字段)
@@ -22673,7 +23753,8 @@ def process_and_save_single_product_sync(product_info):
                 'item_id': item_id,
                 'failed': False,
                 'image_failed': False,
-                'index_failed': False
+                'index_failed': False,
+                'message': '商品已入库，图片处理被取消'
             }
 
         # 4. 图片处理 (使用多线程版本)
@@ -22695,37 +23776,63 @@ def process_and_save_single_product_sync(product_info):
             processed_count = 0
 
         image_total = len(product_data.get('images') or [])
-        image_failed = image_total == 0 or image_stats.get('downloaded', 0) == 0
+        download_failed = image_stats.get('download_failed', 0)
         index_failed = bool(image_stats.get('faiss_failed'))
-        failed = image_failed or index_failed
 
-        if failed:
-            reasons = []
-            if image_failed:
-                if image_total == 0:
-                    reasons.append("未抓取到图片URL")
-                else:
-                    reasons.append(f"图片下载失败 {image_stats.get('download_failed', image_total)}/{image_total}")
-            if index_failed:
-                reasons.append("索引写入失败")
+        image_failed = False
+        failure_reason = ""
+        is_strict_failure = False
+
+        if image_total == 0:
+            image_failed = True
+            is_strict_failure = True
+            failure_reason = "未找到任何图片"
+        elif download_failed > 0:
+            image_failed = True
+            is_strict_failure = True
+            failure_reason = f"图片下载不完整 (失败 {download_failed}/{image_total})"
+        elif processed_count < image_total:
+            image_failed = True
+            is_strict_failure = True
+            failure_reason = f"特征提取不完整 ({processed_count}/{image_total})"
+        elif index_failed:
+            is_strict_failure = True
+            failure_reason = "向量索引写入失败"
+
+        if is_strict_failure:
             logger.warning(
-                f"❌ 商品 {item_id} {product_title} 处理失败：{'，'.join(reasons)}"
+                f"❌ 商品 {item_id} {product_title} 严格模式失败：{failure_reason} -> 回滚删除"
             )
-        else:
-            download_failed = image_stats.get('download_failed', 0)
-            extra = f"，下载失败 {download_failed}" if download_failed else ""
-            logger.info(
-                f"✅ 商品 {item_id} {product_title} 抓取完成，图片 {processed_count}/{image_total}{extra}"
-            )
+            try:
+                db.delete_product_images(product_id)
+            except Exception as delete_error:
+                logger.error(f"回滚删除商品失败: {delete_error}")
+
+            return {
+                'status': 'failed',
+                'item_id': item_id,
+                'title': product_title,
+                'images_total': image_total,
+                'images_processed': processed_count,
+                'download_failed': download_failed,
+                'failed': True,
+                'image_failed': image_failed,
+                'index_failed': index_failed,
+                'message': failure_reason
+            }
+
+        logger.info(
+            f"✅ 商品 {item_id} {product_title} 抓取完成，图片 {processed_count}/{image_total}"
+        )
 
         return {
-            'status': 'success' if not failed else 'failed',
+            'status': 'success',
             'item_id': item_id,
             'title': product_title,
             'images_total': image_total,
             'images_processed': processed_count,
-            'download_failed': image_stats.get('download_failed', 0),
-            'failed': failed,
+            'download_failed': download_failed,
+            'failed': False,
             'image_failed': image_failed,
             'index_failed': index_failed
         }
@@ -22736,7 +23843,8 @@ def process_and_save_single_product_sync(product_info):
             'item_id': product_info.get('item_id'),
             'failed': True,
             'image_failed': False,
-            'index_failed': False
+            'index_failed': False,
+            'message': str(e)
         }
 
 def scrape_product_info(product_url):
@@ -23051,36 +24159,48 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
 
     logger.debug(f"🧠 [商品 {product_id}] 开始特征提取...")
 
+    max_feature_retries = 10
     for index, save_path in downloaded_images:
         if shutdown_event and shutdown_event.is_set():
             break
 
-        with GLOBAL_AI_SEMAPHORE:
-            try:
-                features = extractor.extract_feature(save_path)
-                if features is None:
+        try:
+            features = None
+            for attempt in range(1, max_feature_retries + 1):
+                with GLOBAL_AI_SEMAPHORE:
                     try:
-                        os.remove(save_path)
+                        features = extractor.extract_feature(save_path)
                     except Exception:
-                        pass
-                    continue
+                        features = None
+                if features is not None:
+                    break
+                if attempt < max_feature_retries:
+                    time.sleep(0.2 * attempt)
 
-                is_dup, score = check_duplicate_image(features, existing_feats, threshold=0.995)
-                if is_dup:
-                    logger.debug(f"♻️ [商品 {product_id}] 图片重复 (相似度 {score:.3f})，跳过")
-                    try:
-                        os.remove(save_path)
-                    except Exception:
-                        pass
-                    continue
+            if features is None:
+                try:
+                    os.remove(save_path)
+                except Exception:
+                    pass
+                logger.debug(f"特征提取失败(已重试{max_feature_retries}次): {save_path}")
+                continue
 
-                existing_feats.append(features)
-                img_db_id = db.insert_image_record(product_id, save_path, index, features)
-                if img_db_id:
-                    vectors_to_add.append((img_db_id, features))
-                    processed_count += 1
-            except Exception as e:
-                logger.error(f"处理图片异常: {e}")
+            is_dup, score = check_duplicate_image(features, existing_feats, threshold=0.995)
+            if is_dup:
+                logger.debug(f"♻️ [商品 {product_id}] 图片重复 (相似度 {score:.3f})，跳过")
+                try:
+                    os.remove(save_path)
+                except Exception:
+                    pass
+                continue
+
+            existing_feats.append(features)
+            img_db_id = db.insert_image_record(product_id, save_path, index, features)
+            if img_db_id:
+                vectors_to_add.append((img_db_id, features))
+                processed_count += 1
+        except Exception as e:
+            logger.error(f"处理图片异常: {e}")
 
     # --- 阶段 3: 批量写入 FAISS (内存/磁盘操作) ---
     if vectors_to_add:

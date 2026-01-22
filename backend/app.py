@@ -4433,7 +4433,8 @@ def batch_scrape_products():
                 return {
                     'status': status,
                     'product_id': product_id,
-                    'message': result.get('message', '')
+                    'message': result.get('message', ''),
+                    'failed_details': result.get('failed_details', [])
                 }
 
             except Exception as e:
@@ -4482,7 +4483,8 @@ def batch_scrape_products():
                             details.append({
                                 'id': product_id,
                                 'status': result.get('status'),
-                                'message': result.get('message', '')
+                                'message': result.get('message', ''),
+                                'failed_details': result.get('failed_details', [])
                             })
 
                             if result['status'] == 'success':
@@ -4999,7 +5001,8 @@ def scrape_shop_products(shop_id):
                                 index_failed_count += 1
                             failed_items.append({
                                 'id': str(result.get('item_id') or product_info.get('item_id') or ''),
-                                'reason': result.get('message') or '未知错误'
+                                'reason': result.get('message') or '未知错误',
+                                'details': result.get('failed_details', [])
                             })
                         else:
                             success_count += 1
@@ -5172,14 +5175,15 @@ def process_and_save_single_product_sync(product_info):
                 'message': '商品已入库，图片处理被取消'
             }
 
-        # 4. 图片处理 (使用多线程版本)
+        # 4. 图片处理
         image_stats = {
             'total_urls': 0,
-            'downloaded': 0,
             'download_failed': 0,
             'processed': 0,
-            'faiss_failed': False
+            'faiss_failed': False,
+            'failed_details': []
         }
+        processed_count = 0
         if product_data.get('images'):
             from app import save_product_images_unified
             processed_count, image_stats = save_product_images_unified(
@@ -5187,69 +5191,71 @@ def process_and_save_single_product_sync(product_info):
                 product_data['images'],
                 shutdown_event=scrape_stop_event
             )
-        else:
-            processed_count = 0
 
         image_total = len(product_data.get('images') or [])
-        download_failed = image_stats.get('download_failed', 0)
-        index_failed = bool(image_stats.get('faiss_failed'))
-
-        image_failed = False
-        failure_reason = ""
-        is_strict_failure = False
+        failed_details = image_stats.get('failed_details', [])
+        download_failed = len(failed_details)
 
         if image_total == 0:
-            image_failed = True
-            is_strict_failure = True
-            failure_reason = "未找到任何图片"
-        elif download_failed > 0:
-            image_failed = True
-            is_strict_failure = True
-            failure_reason = f"图片下载不完整 (失败 {download_failed}/{image_total})"
-        elif processed_count < image_total:
-            image_failed = True
-            is_strict_failure = True
-            failure_reason = f"特征提取不完整 ({processed_count}/{image_total})"
-        elif index_failed:
-            is_strict_failure = True
-            failure_reason = "向量索引写入失败"
-
-        if is_strict_failure:
-            logger.warning(
-                f"❌ 商品 {item_id} {product_title} 严格模式失败：{failure_reason} -> 回滚删除"
-            )
+            logger.error(f"❌ 商品 {item_id} {product_title} 未找到任何图片，回滚删除")
             try:
                 db.delete_product_images(product_id)
             except Exception as delete_error:
                 logger.error(f"回滚删除商品失败: {delete_error}")
-
             return {
                 'status': 'failed',
                 'item_id': item_id,
                 'title': product_title,
                 'images_total': image_total,
                 'images_processed': processed_count,
-                'download_failed': download_failed,
                 'failed': True,
-                'image_failed': image_failed,
-                'index_failed': index_failed,
-                'message': failure_reason
+                'image_failed': True,
+                'message': '未找到任何图片'
             }
 
-        logger.info(
-            f"✅ 商品 {item_id} {product_title} 抓取完成，图片 {processed_count}/{image_total}"
-        )
+        if processed_count == 0:
+            logger.error(f"❌ 商品 {item_id} {product_title} 所有图片获取失败，回滚删除")
+            try:
+                db.delete_product_images(product_id)
+            except Exception as delete_error:
+                logger.error(f"回滚删除商品失败: {delete_error}")
+            return {
+                'status': 'failed',
+                'item_id': item_id,
+                'title': product_title,
+                'images_total': image_total,
+                'images_processed': processed_count,
+                'failed': True,
+                'image_failed': True,
+                'failed_details': failed_details,
+                'message': f"30次尝试后所有 {image_total} 张图片均失败"
+            }
 
+        if processed_count < image_total:
+            missing_indices = [str(detail.get('index')) for detail in failed_details if detail.get('index') is not None]
+            warn_msg = f"部分成功: 缺 {len(missing_indices)} 张 (索引: {','.join(missing_indices)})"
+            logger.warning(f"⚠️ 商品 {item_id} {product_title} {warn_msg}，保留已获取数据")
+            return {
+                'status': 'success',
+                'item_id': item_id,
+                'title': product_title,
+                'images_total': image_total,
+                'images_processed': processed_count,
+                'download_failed': download_failed,
+                'failed': False,
+                'failed_details': failed_details,
+                'message': warn_msg
+            }
+
+        logger.info(f"✅ 商品 {item_id} {product_title} 完美抓取 ({processed_count}/{image_total})")
         return {
             'status': 'success',
             'item_id': item_id,
             'title': product_title,
             'images_total': image_total,
             'images_processed': processed_count,
-            'download_failed': download_failed,
             'failed': False,
-            'image_failed': image_failed,
-            'index_failed': index_failed
+            'failed_details': failed_details
         }
     except Exception as e:
         logger.error(f"❌ 处理商品出错 {product_info.get('item_id')}: {e}")
@@ -5459,184 +5465,256 @@ def process_products_multithreaded(products_list):
 
 def save_product_images_unified(product_id, image_urls, max_workers=None, shutdown_event=None):
     """
-    【性能优化版】统一的批量图片处理函数
-
-    策略：多线程并发下载 -> 有限并发 AI 特征提取 -> 批量数据库/FAISS 写入
-    解决 CPU 争抢和 GIL 锁导致的假死/卡顿问题。
-
-    - 下载阶段：IO 密集，允许高并发
-    - AI 阶段：CPU 密集，使用全局信号量限制并发，避免 CPU 冲突
-    - FAISS：一个商品只写入/保存一次，减少锁竞争
+    【最终增强版】统一批量图片处理
+    特性：
+    1. 深度校验图片文件头（防止 0 字节文件或 HTML 伪装成图片）。
+    2. 特征提取失败直接视为致命错误（避免对坏图无效重试）。
+    3. HTTP 404/403 视为致命错误。
+    3. 返回详细的失败原因报告。
     """
+    import time
+    import concurrent.futures
+    import requests
+    import os
+    import random
+    from PIL import Image, UnidentifiedImageError
+
     stats = {
-        'total_urls': len(image_urls) if image_urls else 0,
-        'downloaded': 0,
-        'download_failed': 0,
+        'total_urls': len(image_urls),
         'processed': 0,
+        'failed_details': [],
+        'download_failed': 0,
         'faiss_failed': False
     }
 
     if not image_urls:
         return 0, stats
 
-    import os
-    import time
-    import requests
-    import concurrent.futures
-    import threading
+    try:
+        existing_images = db.get_product_images(product_id)
+        existing_indices = {img['image_index'] for img in existing_images}
+        existing_feats = [img['features'] for img in existing_images if img.get('features') is not None]
+    except Exception:
+        existing_indices = set()
+        existing_feats = []
 
-    # 1. 准备目录
-    save_dir = os.path.join(config.IMAGE_SAVE_DIR, str(product_id))
-    os.makedirs(save_dir, exist_ok=True)
+    pending_items = []
+    for idx, url in enumerate(image_urls):
+        if idx not in existing_indices:
+            pending_items.append((idx, url))
+        else:
+            stats['processed'] += 1
 
-    # 动态决定下载线程数 (IO密集型，可以多开)
-    download_workers = min(getattr(config, 'DOWNLOAD_THREADS', 8), len(image_urls))
+    if not pending_items:
+        return stats['processed'], stats
 
-    downloaded_images = []  # (index, save_path)
+    max_retries = 30
 
-    logger.debug(f"🚀 [商品 {product_id}] 开始下载 {len(image_urls)} 张图片...")
+    def verify_image_file(file_path):
+        try:
+            if os.path.getsize(file_path) < 100:
+                return False, "文件过小"
+            with Image.open(file_path) as img:
+                img.verify()
+            return True, None
+        except UnidentifiedImageError:
+            return False, "无法识别的图片格式"
+        except Exception as e:
+            return False, f"图片文件损坏: {str(e)}"
 
-    def download_task(index, url):
-        max_retries = 10
-        for attempt in range(1, max_retries + 1):
+    def process_batch(items_to_process):
+        current_downloaded = []
+        retry_list = []
+        fatal_list = []
+
+        workers = min(getattr(config, 'DOWNLOAD_THREADS', 8), len(items_to_process))
+
+        def download_task(item):
+            idx, url = item
+            if shutdown_event and shutdown_event.is_set():
+                return ('RETRY', item, 'Cancelled')
+
+            save_dir = os.path.join(config.IMAGE_SAVE_DIR, str(product_id))
+            os.makedirs(save_dir, exist_ok=True)
+            timestamp = int(time.time() * 1000000)
+            filename = f"{product_id}_{idx}_{timestamp}.jpg"
+            save_path = os.path.join(save_dir, filename)
+
             try:
-                if shutdown_event and shutdown_event.is_set():
-                    return None
-
-                timestamp = int(time.time() * 1000000)
-                filename = f"{product_id}_{index}_{timestamp}.jpg"
-                save_path = os.path.join(save_dir, filename)
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Referer': 'https://weidian.com/'
+                }
 
                 resp = requests.get(
                     url,
-                    timeout=config.REQUEST_TIMEOUT,
-                    proxies={'http': None, 'https': None}
+                    timeout=(10, 20),
+                    proxies={'http': None, 'https': None},
+                    headers=headers
                 )
+
+                if resp.status_code in [403, 404]:
+                    return ('FATAL', item, f"HTTP {resp.status_code} (死链接)")
+
                 if resp.status_code != 200:
-                    if attempt < max_retries:
-                        time.sleep(0.2 * attempt)
-                        continue
-                    return None
+                    return ('RETRY', item, f"HTTP {resp.status_code}")
 
                 with open(save_path, 'wb') as f:
                     f.write(resp.content)
 
-                if os.path.getsize(save_path) == 0:
+                is_valid, reason = verify_image_file(save_path)
+                if not is_valid:
                     try:
                         os.remove(save_path)
                     except Exception:
                         pass
-                    if attempt < max_retries:
-                        time.sleep(0.2 * attempt)
-                        continue
-                    return None
+                    return ('FATAL', item, f"无效图片: {reason}")
 
-                return (index, save_path)
-
+                return ('SUCCESS', (idx, save_path), None)
             except Exception as e:
-                if attempt == max_retries:
-                    logger.debug(f"下载失败 {url}: {e}")
+                return ('RETRY', item, str(e))
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(download_task, item) for item in items_to_process]
+            for future in concurrent.futures.as_completed(futures):
+                result = future.result()
+                if not result:
+                    continue
+                status, data, error = result
+                if status == 'SUCCESS':
+                    current_downloaded.append(data)
+                elif status == 'FATAL':
+                    fatal_list.append((data, error))
                 else:
-                    time.sleep(0.2 * attempt)
-        return None
+                    retry_list.append(data)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=download_workers) as executor:
-        futures = [executor.submit(download_task, i, url) for i, url in enumerate(image_urls)]
-        for future in concurrent.futures.as_completed(futures):
-            res = future.result()
-            if res:
-                downloaded_images.append(res)
+        if not current_downloaded:
+            return [], retry_list, fatal_list
 
-    stats['downloaded'] = len(downloaded_images)
-    stats['download_failed'] = max(0, len(image_urls) - len(downloaded_images))
+        extractor = get_global_feature_extractor()
+        if extractor is None:
+            for _, path in current_downloaded:
+                try:
+                    os.remove(path)
+                except Exception:
+                    pass
+            retry_list.extend([(idx, image_urls[idx]) for idx, _ in current_downloaded])
+            return [], retry_list, fatal_list
 
-    if not downloaded_images:
-        logger.warning(f"⚠️ [商品 {product_id}] 图片下载失败: 0/{len(image_urls)}")
-        return 0, stats
+        processed_indices = []
+        vectors_to_add = []
 
-    downloaded_images.sort(key=lambda x: x[0])
-    if stats['download_failed'] > 0:
-        logger.warning(f"⚠️ [商品 {product_id}] 下载完成: {len(downloaded_images)}/{len(image_urls)}，失败 {stats['download_failed']}")
-    else:
-        logger.debug(f"✅ [商品 {product_id}] 下载完成: {len(downloaded_images)}/{len(image_urls)}")
+        for index, save_path in current_downloaded:
+            if shutdown_event and shutdown_event.is_set():
+                retry_list.append((index, image_urls[index]))
+                continue
 
-    # --- 阶段 2: 有限并发 AI 特征提取 (CPU 密集) ---
-    extractor = get_global_feature_extractor()
-    if extractor is None:
-        logger.error("特征提取器未初始化")
-        return 0, stats
-
-    existing_images = db.get_product_images(product_id)
-    existing_feats = [img['features'] for img in existing_images if img.get('features') is not None]
-
-    processed_count = 0
-    vectors_to_add = []  # (db_id, features)
-
-    logger.debug(f"🧠 [商品 {product_id}] 开始特征提取...")
-
-    max_feature_retries = 10
-    for index, save_path in downloaded_images:
-        if shutdown_event and shutdown_event.is_set():
-            break
-
-        try:
-            features = None
-            for attempt in range(1, max_feature_retries + 1):
+            try:
+                features = None
                 with GLOBAL_AI_SEMAPHORE:
                     try:
                         features = extractor.extract_feature(save_path)
-                    except Exception:
+                    except Exception as e:
+                        logger.error(f"特征提取底层错误: {e}")
                         features = None
-                if features is not None:
-                    break
-                if attempt < max_feature_retries:
-                    time.sleep(0.2 * attempt)
 
-            if features is None:
-                try:
-                    os.remove(save_path)
-                except Exception:
-                    pass
-                logger.debug(f"特征提取失败(已重试{max_feature_retries}次): {save_path}")
-                continue
+                if features is None:
+                    try:
+                        os.remove(save_path)
+                    except Exception:
+                        pass
+                    fatal_list.append(((index, image_urls[index]), "AI无法提取特征(图片可能损坏)"))
+                    continue
 
-            is_dup, score = check_duplicate_image(features, existing_feats, threshold=0.995)
-            if is_dup:
-                logger.debug(f"♻️ [商品 {product_id}] 图片重复 (相似度 {score:.3f})，跳过")
-                try:
-                    os.remove(save_path)
-                except Exception:
-                    pass
-                continue
+                is_dup, score = check_duplicate_image(features, existing_feats, threshold=0.995)
+                if is_dup:
+                    try:
+                        os.remove(save_path)
+                    except Exception:
+                        pass
+                    processed_indices.append(index)
+                    continue
 
-            existing_feats.append(features)
-            img_db_id = db.insert_image_record(product_id, save_path, index, features)
-            if img_db_id:
-                vectors_to_add.append((img_db_id, features))
-                processed_count += 1
-        except Exception as e:
-            logger.error(f"处理图片异常: {e}")
+                existing_feats.append(features)
+                img_db_id = db.insert_image_record(product_id, save_path, index, features)
 
-    # --- 阶段 3: 批量写入 FAISS (内存/磁盘操作) ---
-    if vectors_to_add:
-        try:
-            from vector_engine import get_vector_engine
-            engine = get_vector_engine()
+                if img_db_id:
+                    vectors_to_add.append((img_db_id, features))
+                    processed_indices.append(index)
+                else:
+                    retry_list.append((index, image_urls[index]))
 
-            with faiss_lock:
-                for img_id, feats in vectors_to_add:
-                    engine.add_vector(img_id, feats)
-                engine.save()
+            except Exception as e:
+                logger.error(f"处理图片 {index} 异常: {e}")
+                retry_list.append((index, image_urls[index]))
 
-            logger.debug(f"💾 [商品 {product_id}] FAISS 索引已更新，新增 {len(vectors_to_add)} 个向量")
+        if vectors_to_add:
+            try:
+                from vector_engine import get_vector_engine
+                engine = get_vector_engine()
+                with faiss_lock:
+                    for img_id, feats in vectors_to_add:
+                        engine.add_vector(img_id, feats)
+                    engine.save()
+            except Exception as e:
+                logger.error(f"FAISS 写入失败: {e}")
+                stats['faiss_failed'] = True
 
-        except Exception as e:
-            logger.error(f"FAISS 批量写入失败: {e}")
-            stats['faiss_failed'] = True
+        return processed_indices, retry_list, fatal_list
 
-    stats['processed'] = processed_count
-    logger.debug(f"✅ [商品 {product_id}] 图片处理完成: {processed_count}/{len(image_urls)}")
-    return processed_count, stats
+    logger.info(f"🚀 [商品 {product_id}] 开始处理，待处理 {len(pending_items)} 张")
+
+    for attempt in range(1, max_retries + 1):
+        if not pending_items:
+            break
+        if shutdown_event and shutdown_event.is_set():
+            break
+
+        success_indices, retry_items, fatal_items = process_batch(pending_items)
+
+        stats['processed'] += len(success_indices)
+
+        for item, reason in fatal_items:
+            idx, url = item
+            logger.warning(f"❌ [商品 {product_id}] 图片 {idx} 发生致命错误，放弃: {reason}")
+            stats['failed_details'].append({
+                'index': idx,
+                'url': url,
+                'reason': reason
+            })
+
+        pending_items = retry_items
+
+        if not pending_items:
+            break
+
+        if attempt <= 5:
+            sleep_time = random.uniform(1, 2)
+        elif attempt <= 15:
+            sleep_time = random.uniform(3, 5)
+        else:
+            sleep_time = random.uniform(5, 10)
+
+        logger.warning(
+            f"⚠️ [商品 {product_id}] 第 {attempt} 轮结束，{len(pending_items)} 张需重试，{len(fatal_items)} 张已放弃。等待 {sleep_time:.1f}s..."
+        )
+        time.sleep(sleep_time)
+
+    for idx, url in pending_items:
+        stats['failed_details'].append({
+            'index': idx,
+            'url': url,
+            'reason': '超过最大重试次数 (可能网络超时)'
+        })
+
+    stats['download_failed'] = len(stats['failed_details'])
+
+    if stats['download_failed'] > 0:
+        logger.error(f"❌ [商品 {product_id}] 最终结果: {stats['processed']} 成功, {stats['download_failed']} 失败")
+    else:
+        logger.info(f"✅ [商品 {product_id}] 全部处理成功")
+
+    return stats['processed'], stats
 
 def run_cleanup_task():
     """后台清理任务，定期清理数据库和内存中的过期记录"""

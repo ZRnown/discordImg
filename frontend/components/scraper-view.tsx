@@ -25,6 +25,18 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Checkbox } from "@/components/ui/checkbox"
 
+type FailedDetail = {
+  index: number
+  url?: string
+  reason: string
+}
+
+type FailedItem = {
+  id: string
+  reason: string
+  details?: FailedDetail[]
+}
+
 function ImageLightbox({
   images,
   initialIndex,
@@ -106,9 +118,9 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   const [batchIds, setBatchIds] = useState('')
   const [isBatchScraping, setIsBatchScraping] = useState(false)
   const [batchProgress, setBatchProgress] = useState(0)
-  const [batchFailedItems, setBatchFailedItems] = useState<{ id: string, reason: string }[]>([])
-  const [shopFailedItems, setShopFailedItems] = useState<{ id: string, reason: string }[]>([])
-  const [dialogFailedItems, setDialogFailedItems] = useState<{ id: string, reason: string }[]>([])
+  const [batchFailedItems, setBatchFailedItems] = useState<FailedItem[]>([])
+  const [shopFailedItems, setShopFailedItems] = useState<FailedItem[]>([])
+  const [dialogFailedItems, setDialogFailedItems] = useState<FailedItem[]>([])
   const [failedDialogTitle, setFailedDialogTitle] = useState('失败商品详情')
   const [showFailedDialog, setShowFailedDialog] = useState(false)
   const [products, setProducts] = useState<any[]>([])
@@ -464,13 +476,18 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
             setShopFailedItems([])
           } else if (status.completed) {
             const rawFailedItems = Array.isArray(status.failed_items) ? status.failed_items : []
-            const formatted = rawFailedItems
+          const formatted = rawFailedItems
               .map((item: any) => ({
                 id: String(item?.id || item?.item_id || ''),
-                reason: item?.reason || item?.message || '未知错误'
+                reason: item?.reason || item?.message || '未知错误',
+                details: Array.isArray(item?.details)
+                  ? item.details
+                  : Array.isArray(item?.failed_details)
+                    ? item.failed_details
+                    : []
               }))
               .filter((item: any) => item.id)
-            setShopFailedItems(formatted)
+          setShopFailedItems(formatted)
           }
           // 如果抓取完成，刷新商品列表
           if (!status.is_scraping && status.completed) {
@@ -931,7 +948,12 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
             .filter((item: any) => item.status === 'failed' || item.status === 'error')
             .map((item: any) => ({
               id: String(item.id),
-              reason: item.message || '未知错误'
+              reason: item.message || '未知错误',
+              details: Array.isArray(item.failed_details)
+                ? item.failed_details
+                : Array.isArray(item.failedDetails)
+                  ? item.failedDetails
+                  : []
             }))
           setBatchFailedItems(failures)
         }
@@ -1828,9 +1850,26 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
           </DialogHeader>
           <div className="space-y-2">
             {dialogFailedItems.map((item) => (
-              <div key={item.id} className="flex items-center justify-between p-3 bg-muted rounded border">
-                <div className="font-mono text-sm">{item.id}</div>
-                <div className="text-sm text-red-600">{item.reason}</div>
+              <div key={item.id} className="p-3 bg-muted rounded border space-y-2">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="font-mono text-sm">{item.id}</div>
+                  <div className="text-sm text-red-600 text-right">{item.reason}</div>
+                </div>
+                {item.details && item.details.length > 0 && (
+                  <div className="text-xs text-muted-foreground space-y-1">
+                    {item.details.map((detail, index) => (
+                      <div key={`${item.id}-${detail.index}-${index}`} className="flex flex-wrap gap-2">
+                        <span className="font-mono">#{detail.index}</span>
+                        <span>{detail.reason}</span>
+                        {detail.url && (
+                          <span className="truncate max-w-[420px] text-[10px] text-muted-foreground/80">
+                            {detail.url}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             ))}
             {dialogFailedItems.length === 0 && (
