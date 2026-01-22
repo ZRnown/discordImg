@@ -106,7 +106,10 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   const [batchIds, setBatchIds] = useState('')
   const [isBatchScraping, setIsBatchScraping] = useState(false)
   const [batchProgress, setBatchProgress] = useState(0)
-  const [failedItems, setFailedItems] = useState<{ id: string, reason: string }[]>([])
+  const [batchFailedItems, setBatchFailedItems] = useState<{ id: string, reason: string }[]>([])
+  const [shopFailedItems, setShopFailedItems] = useState<{ id: string, reason: string }[]>([])
+  const [dialogFailedItems, setDialogFailedItems] = useState<{ id: string, reason: string }[]>([])
+  const [failedDialogTitle, setFailedDialogTitle] = useState('失败商品详情')
   const [showFailedDialog, setShowFailedDialog] = useState(false)
   const [products, setProducts] = useState<any[]>([])
   const [totalProducts, setTotalProducts] = useState(0)
@@ -146,6 +149,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   const [totalProductsCount, setTotalProductsCount] = useState(0)
   // 搜索类型状态
   const [searchType, setSearchType] = useState<'all' | 'id' | 'keyword' | 'chinese'>('all')
+  const isStopping = Boolean(scrapeStatus?.stop_signal && !scrapeStatus?.completed)
 
   const copyToClipboard = async (text: string) => {
     if (!text) return
@@ -322,7 +326,9 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     let statusInterval: NodeJS.Timeout | null = null
 
     // 如果没有抓取任务，减少轮询频率到60秒一次
-    if (!isShopScraping && !isBatchScraping) {
+    const shouldPollFast = isShopScraping || isBatchScraping || isStopping
+
+    if (!shouldPollFast) {
       statusInterval = setInterval(() => {
         fetchScrapeStatus()
       }, 60000) // 60秒检查一次状态
@@ -342,12 +348,12 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
       // 只有在抓取进行中时才检查商品数量和列表
       // 前30秒（15次）每2秒检查一次，后续每10秒检查一次
-      if ((isShopScraping || isBatchScraping)) {
-        if (pollCount <= 15) {
-          fetchProductsCount()
-          fetchProducts(currentPage)
-        } else if (pollCount % 5 === 0) {
-          // 每10秒检查一次商品数量和列表
+    if (shouldPollFast) {
+      if (pollCount <= 15) {
+        fetchProductsCount()
+        fetchProducts(currentPage)
+      } else if (pollCount % 5 === 0) {
+        // 每10秒检查一次商品数量和列表
           fetchProductsCount()
           fetchProducts(currentPage)
         }
@@ -359,7 +365,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         clearInterval(statusInterval)
       }
     }
-  }, [isShopScraping, isBatchScraping, currentPage, itemsPerPage, keywordSearch, shopFilter, searchType])
+  }, [isShopScraping, isBatchScraping, isStopping, currentPage, itemsPerPage, keywordSearch, shopFilter, searchType])
 
   const fetchProducts = async (page: number = currentPage) => {
     try {
@@ -454,6 +460,18 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
           setScrapeStatus(status)
           setIsShopScraping(status.is_scraping)
           setShopScrapeProgress(status.progress || 0)
+          if (status.is_scraping) {
+            setShopFailedItems([])
+          } else if (status.completed) {
+            const rawFailedItems = Array.isArray(status.failed_items) ? status.failed_items : []
+            const formatted = rawFailedItems
+              .map((item: any) => ({
+                id: String(item?.id || item?.item_id || ''),
+                reason: item?.reason || item?.message || '未知错误'
+              }))
+              .filter((item: any) => item.id)
+            setShopFailedItems(formatted)
+          }
           // 如果抓取完成，刷新商品列表
           if (!status.is_scraping && status.completed) {
             fetchProducts()
@@ -817,6 +835,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     // ==========================================
     // 修复：立即设置加载状态，防止UI闪烁
     // ==========================================
+    setShopFailedItems([])
     setIsShopScraping(true)
     setShopScrapeProgress(0)
     setScrapeStatus((prev: any) => ({
@@ -851,28 +870,30 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     // 状态应该由 useEffect 里的轮询来决定何时变回 false。
   }
 
-  const handleBatchScrape = async () => {
-    const ids = batchIds.split('\n').map(id => id.trim()).filter(id => id && id.match(/^\d+$/))
+  const startBatchScrape = async (ids: string[]) => {
     if (ids.length === 0) {
       toast.error("请输入有效的商品ID")
+      return
+    }
+    if (isBatchScraping) {
       return
     }
 
     console.log('开始批量上传，商品数量:', ids.length)
     setIsBatchScraping(true)
     setBatchProgress(0)
-    setFailedItems([])
+    setBatchFailedItems([])
+    setDialogFailedItems([])
     setShowFailedDialog(false)
 
     try {
       console.log(`发送批量请求到 /api/scrape/batch，商品数量: ${ids.length}`)
 
-      // 调用新的批量API
       const res = await fetch('/api/scrape/batch', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({ productIds: ids }),
-        signal: AbortSignal.timeout(300000) // 5分钟超时（批量处理需要更长时间）
+        signal: AbortSignal.timeout(300000)
       })
 
       console.log(`收到批量响应，状态码: ${res.status}`)
@@ -881,7 +902,6 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         const result = await res.json()
         console.log('批量处理结果:', result)
 
-        // 从结果中提取统计信息
         const results = result.results || {}
         const details = result.details || []
         const successCount = results.success || 0
@@ -890,7 +910,6 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         const partialCount = results.partial || 0
         const errorCount = results.errors || 0
 
-        // 构建结果消息
         let messageParts = []
         if (successCount > 0) messageParts.push(`成功 ${successCount}`)
         if (skipCount > 0) messageParts.push(`跳过 ${skipCount}`)
@@ -903,7 +922,6 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         toast.success(`批量上传完成: ${message}`)
         console.log('批量上传完成')
 
-        // 显示处理时间
         if (results.duration) {
           console.log(`处理时间: ${results.duration.toFixed(2)} 秒`)
         }
@@ -915,7 +933,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
               id: String(item.id),
               reason: item.message || '未知错误'
             }))
-          setFailedItems(failures)
+          setBatchFailedItems(failures)
         }
       } else {
         const errorText = await res.text()
@@ -924,12 +942,8 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
       }
 
       setBatchProgress(100)
-
-      // 强制刷新数据
       fetchProducts()
       fetchProductsCount()
-
-      // 强制刷新抓取状态，确保UI正确更新
       setTimeout(() => fetchScrapeStatus(), 100)
 
       setBatchIds('')
@@ -944,6 +958,15 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
       console.log('设置 isBatchScraping 为 false')
       setIsBatchScraping(false)
     }
+  }
+
+  const handleBatchScrape = async () => {
+    const ids = batchIds.split('\n').map(id => id.trim()).filter(id => id && id.match(/^\d+$/))
+    if (ids.length === 0) {
+      toast.error("请输入有效的商品ID")
+      return
+    }
+    await startBatchScrape(ids)
   }
 
   const handleJumpPage = () => { /* ... */ }
@@ -1097,17 +1120,42 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         </div>
       )}
 
-      {failedItems.length > 0 && (
+      {batchFailedItems.length > 0 && (
         <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex items-center justify-between">
           <div className="flex items-center text-red-700">
             <AlertCircle className="w-5 h-5 mr-2" />
-            <span>{failedItems.length} 个商品处理失败</span>
+            <span>批量上传失败 {batchFailedItems.length} 个商品</span>
           </div>
           <Button
             variant="outline"
             size="sm"
             className="border-red-200 text-red-700 hover:bg-red-100"
-            onClick={() => setShowFailedDialog(true)}
+            onClick={() => {
+              setDialogFailedItems(batchFailedItems)
+              setFailedDialogTitle('批量上传失败商品详情')
+              setShowFailedDialog(true)
+            }}
+          >
+            查看详情
+          </Button>
+        </div>
+      )}
+
+      {shopFailedItems.length > 0 && scrapeStatus?.completed && !scrapeStatus?.is_scraping && (
+        <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex items-center justify-between">
+          <div className="flex items-center text-red-700">
+            <AlertCircle className="w-5 h-5 mr-2" />
+            <span>店铺抓取失败 {shopFailedItems.length} 个商品</span>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            className="border-red-200 text-red-700 hover:bg-red-100"
+            onClick={() => {
+              setDialogFailedItems(shopFailedItems)
+              setFailedDialogTitle('店铺抓取失败商品详情')
+              setShowFailedDialog(true)
+            }}
           >
             查看详情
           </Button>
@@ -1775,17 +1823,17 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
       <Dialog open={showFailedDialog} onOpenChange={setShowFailedDialog}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>失败商品详情</DialogTitle>
+            <DialogTitle>{failedDialogTitle}</DialogTitle>
             <DialogDescription>以下商品抓取失败，请检查原因</DialogDescription>
           </DialogHeader>
           <div className="space-y-2">
-            {failedItems.map((item) => (
+            {dialogFailedItems.map((item) => (
               <div key={item.id} className="flex items-center justify-between p-3 bg-muted rounded border">
                 <div className="font-mono text-sm">{item.id}</div>
                 <div className="text-sm text-red-600">{item.reason}</div>
               </div>
             ))}
-            {failedItems.length === 0 && (
+            {dialogFailedItems.length === 0 && (
               <div className="text-center text-sm text-muted-foreground">暂无失败记录</div>
             )}
           </div>
@@ -1800,14 +1848,16 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
             </Button>
             <Button
               onClick={() => {
-                const retryIds = failedItems.map(item => item.id).join('\n')
-                if (retryIds) {
-                  setBatchIds(retryIds)
+                const retryIds = dialogFailedItems
+                  .map(item => item.id)
+                  .filter(id => id && id.match(/^\d+$/))
+                if (retryIds.length > 0) {
+                  setBatchIds(retryIds.join('\n'))
+                  startBatchScrape(retryIds)
                 }
                 setShowFailedDialog(false)
-                setFailedItems([])
               }}
-              disabled={failedItems.length === 0}
+              disabled={dialogFailedItems.length === 0}
             >
               重试所有失败项
             </Button>

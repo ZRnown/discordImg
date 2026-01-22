@@ -1315,6 +1315,9 @@ class DiscordBotClient(discord.Client):
                 return
 
             query_lower = re.sub(r'\s+', ' ', search_query.strip().lower())
+            query_compact = re.sub(r'\s+', ' ', re.sub(r'[^\w\s]+', ' ', query_lower)).strip()
+            query_terms = [term for term in re.findall(r'\w+', query_lower) if term]
+            query_has_multiple_words = len(query_terms) >= 2
 
             def _normalize_phrase(value: str) -> str:
                 return re.sub(r'\s+', ' ', value).strip().lower()
@@ -1350,6 +1353,8 @@ class DiscordBotClient(discord.Client):
                         continue
                     seen.add(phrase)
                     if phrase and phrase in query_lower:
+                        return True
+                    if query_has_multiple_words and query_compact and query_compact in phrase:
                         return True
                 return False
 

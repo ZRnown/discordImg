@@ -3546,6 +3546,7 @@ def get_search_history():
 def search_similar_text():
     """根据文字关键词搜索相似商品"""
     try:
+        import re
         data = request.get_json()
         if not data:
             return jsonify({'error': 'Invalid request body'}), 400
@@ -3561,51 +3562,63 @@ def search_similar_text():
         with db.get_connection() as conn:
             cursor = conn.cursor()
             query_lower = query.lower()
+            query_normalized = re.sub(r'\s+', ' ', query_lower).strip()
 
-            # =======================================================
-            # 修复: 移除 `AND ruleEnabled = 1`
-            # 即使规则被禁用(用于自定义回复)，也必须能被搜出来，
-            # 否则机器人永远找不到这个商品，也就无法发送自定义回复。
-            # =======================================================
-            cursor.execute("""
-                SELECT id, product_url, title, english_title, description,
-                       ruleEnabled, min_delay, max_delay, created_at,
-                       cnfans_url, shop_name, custom_reply_text,
-                       custom_reply_images, custom_image_urls, image_source,
-                       reply_scope,
-                       uploaded_reply_images
-                FROM products
-                WHERE (LOWER(english_title) LIKE ? OR LOWER(title) LIKE ?)
-                ORDER BY created_at DESC
-                LIMIT ?
-            """, (f'%{query_lower}%', f'%{query_lower}%', limit))
+            def fetch_by_terms(terms, remaining_limit, exclude_ids=None):
+                if not terms or remaining_limit <= 0:
+                    return []
+                conditions = []
+                params = []
+                for term in terms:
+                    like = f"%{term}%"
+                    conditions.append("(LOWER(english_title) LIKE ? OR LOWER(title) LIKE ?)")
+                    params.extend([like, like])
+                where_clause = " OR ".join(conditions)
+                exclude_clause = ""
+                exclude_params = []
+                if exclude_ids:
+                    placeholders = ",".join("?" for _ in exclude_ids)
+                    exclude_clause = f" AND id NOT IN ({placeholders})"
+                    exclude_params = list(exclude_ids)
+                cursor.execute(f"""
+                    SELECT id, product_url, title, english_title, description,
+                           ruleEnabled, min_delay, max_delay, created_at,
+                           cnfans_url, shop_name, custom_reply_text,
+                           custom_reply_images, custom_image_urls, image_source,
+                           reply_scope,
+                           uploaded_reply_images
+                    FROM products
+                    WHERE ({where_clause}){exclude_clause}
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                """, (*params, *exclude_params, remaining_limit))
+                return cursor.fetchall()
 
-            rows = cursor.fetchall()
+            rows = fetch_by_terms([query_normalized], limit)
+            found_ids = {row['id'] for row in rows}
+
+            tokens = [kw for kw in re.findall(r'\w+', query_normalized) if len(kw) >= 2]
+            extra_terms = []
+            if len(tokens) >= 2:
+                for i in range(len(tokens) - 1):
+                    term = f"{tokens[i]} {tokens[i + 1]}"
+                    if term not in extra_terms:
+                        extra_terms.append(term)
+            for token in tokens:
+                if any(ch.isdigit() for ch in token) and token not in extra_terms:
+                    extra_terms.append(token)
+
+            if extra_terms and len(rows) < limit:
+                remaining = limit - len(rows)
+                extra_rows = fetch_by_terms(extra_terms, remaining, found_ids)
+                rows.extend(extra_rows)
+                found_ids.update({row['id'] for row in extra_rows})
+
             if not rows:
-                import re
-                tokens = [kw for kw in re.findall(r'\w+', query_lower) if len(kw) >= 2]
                 tokens = tokens[:6]
                 if tokens:
-                    conditions = []
-                    params = []
-                    for token in tokens:
-                        like = f"%{token}%"
-                        conditions.append("(LOWER(english_title) LIKE ? OR LOWER(title) LIKE ?)")
-                        params.extend([like, like])
-                    where_clause = " OR ".join(conditions)
-                    cursor.execute(f"""
-                        SELECT id, product_url, title, english_title, description,
-                               ruleEnabled, min_delay, max_delay, created_at,
-                               cnfans_url, shop_name, custom_reply_text,
-                               custom_reply_images, custom_image_urls, image_source,
-                               reply_scope,
-                               uploaded_reply_images
-                        FROM products
-                        WHERE {where_clause}
-                        ORDER BY created_at DESC
-                        LIMIT ?
-                    """, (*params, limit))
-                    rows = cursor.fetchall()
+                    rows = fetch_by_terms(tokens, limit)
+
             if not rows:
                 cursor.execute("""
                     SELECT id, product_url, title, english_title, description,
@@ -3627,7 +3640,7 @@ def search_similar_text():
                     )
                     ORDER BY created_at DESC
                     LIMIT ?
-                """, (query_lower, query_lower, limit))
+                """, (query_normalized, query_normalized, limit))
                 rows = cursor.fetchall()
 
             products = []
@@ -4288,8 +4301,8 @@ def control_shop_scrape():
         success = db.update_scrape_status(
             is_scraping=False,
             stop_signal=True,
-            completed=True,
-            message='抓取已停止',
+            completed=False,
+            message='正在停止抓取...',
             progress=100
         )
 
@@ -4333,7 +4346,8 @@ def control_shop_scrape():
             progress=0,
             message='初始化抓取...',
             completed=False,
-            thread_id=None
+            thread_id=None,
+            failed_items=[]
         )
 
         if not success:
@@ -4542,11 +4556,13 @@ def get_scrape_status():
         # 确保返回必要的字段（兼容前端期望的字段名）
         result = {
             'is_scraping': status.get('is_scraping', False),
+            'stop_signal': status.get('stop_signal', False),
             'progress': status.get('progress', 0),
             'total': status.get('total', 0),
             'current': status.get('processed', 0),  # 前端期望current字段
             'processed': status.get('processed', 0),
             'success': status.get('success', 0),
+            'failed_items': status.get('failed_items', []),
             'message': status.get('message', ''),
             'completed': status.get('completed', False),
             'current_shop_id': status.get('current_shop_id'),
@@ -4561,12 +4577,14 @@ def get_scrape_status():
         logger.error(f'获取抓取状态失败: {e}')
         return jsonify({
             'is_scraping': False,
+            'stop_signal': False,
             'progress': 0,
             'total': 0,
             'current': 0,
             'processed': 0,
             'success': 0,
             'message': '获取状态失败',
+            'failed_items': [],
             'completed': False,
             'current_shop_id': None,
             'thread_id': None
@@ -4775,6 +4793,7 @@ def scrape_shop_products(shop_id):
 
     scraper = get_weidian_scraper()
     unique_product_tasks = {}  # 使用字典去重：item_id -> product_info
+    failed_items = []
 
     # 初始化状态
     db.update_scrape_status(
@@ -4788,6 +4807,7 @@ def scrape_shop_products(shop_id):
         failed=0,
         image_failed=0,
         index_failed=0,
+        failed_items=[],
         message='正在初始化...'
     )
 
@@ -4960,18 +4980,27 @@ def scrape_shop_products(shop_id):
                 )
 
                 for future in done:
+                    product_info = future_to_product.get(future, {})
                     try:
                         result = future.result() or {}
                         processed_count += 1
 
                         if not result:
                             failed_count += 1
+                            failed_items.append({
+                                'id': str(product_info.get('item_id', '')),
+                                'reason': '未知错误'
+                            })
                         elif result.get('failed'):
                             failed_count += 1
                             if result.get('image_failed'):
                                 image_failed_count += 1
                             if result.get('index_failed'):
                                 index_failed_count += 1
+                            failed_items.append({
+                                'id': str(result.get('item_id') or product_info.get('item_id') or ''),
+                                'reason': result.get('message') or '未知错误'
+                            })
                         else:
                             success_count += 1
 
@@ -4991,6 +5020,11 @@ def scrape_shop_products(shop_id):
                     except Exception as e:
                         logger.error(f"商品处理异常: {e}")
                         processed_count += 1
+                        failed_count += 1
+                        failed_items.append({
+                            'id': str(product_info.get('item_id', '')),
+                            'reason': str(e)
+                        })
         finally:
             if not stop_requested:
                 executor.shutdown(wait=True)
@@ -5016,6 +5050,7 @@ def scrape_shop_products(shop_id):
         failed=failed_count,
         image_failed=image_failed_count,
         index_failed=index_failed_count,
+        failed_items=failed_items,
         message=final_message
     )
     if failed_count > 0 or image_failed_count > 0 or index_failed_count > 0:
@@ -5539,36 +5574,48 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
 
     logger.debug(f"🧠 [商品 {product_id}] 开始特征提取...")
 
+    max_feature_retries = 10
     for index, save_path in downloaded_images:
         if shutdown_event and shutdown_event.is_set():
             break
 
-        with GLOBAL_AI_SEMAPHORE:
-            try:
-                features = extractor.extract_feature(save_path)
-                if features is None:
+        try:
+            features = None
+            for attempt in range(1, max_feature_retries + 1):
+                with GLOBAL_AI_SEMAPHORE:
                     try:
-                        os.remove(save_path)
+                        features = extractor.extract_feature(save_path)
                     except Exception:
-                        pass
-                    continue
+                        features = None
+                if features is not None:
+                    break
+                if attempt < max_feature_retries:
+                    time.sleep(0.2 * attempt)
 
-                is_dup, score = check_duplicate_image(features, existing_feats, threshold=0.995)
-                if is_dup:
-                    logger.debug(f"♻️ [商品 {product_id}] 图片重复 (相似度 {score:.3f})，跳过")
-                    try:
-                        os.remove(save_path)
-                    except Exception:
-                        pass
-                    continue
+            if features is None:
+                try:
+                    os.remove(save_path)
+                except Exception:
+                    pass
+                logger.debug(f"特征提取失败(已重试{max_feature_retries}次): {save_path}")
+                continue
 
-                existing_feats.append(features)
-                img_db_id = db.insert_image_record(product_id, save_path, index, features)
-                if img_db_id:
-                    vectors_to_add.append((img_db_id, features))
-                    processed_count += 1
-            except Exception as e:
-                logger.error(f"处理图片异常: {e}")
+            is_dup, score = check_duplicate_image(features, existing_feats, threshold=0.995)
+            if is_dup:
+                logger.debug(f"♻️ [商品 {product_id}] 图片重复 (相似度 {score:.3f})，跳过")
+                try:
+                    os.remove(save_path)
+                except Exception:
+                    pass
+                continue
+
+            existing_feats.append(features)
+            img_db_id = db.insert_image_record(product_id, save_path, index, features)
+            if img_db_id:
+                vectors_to_add.append((img_db_id, features))
+                processed_count += 1
+        except Exception as e:
+            logger.error(f"处理图片异常: {e}")
 
     # --- 阶段 3: 批量写入 FAISS (内存/磁盘操作) ---
     if vectors_to_add:

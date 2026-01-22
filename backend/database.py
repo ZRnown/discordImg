@@ -567,6 +567,7 @@ class Database:
                     failed INTEGER DEFAULT 0,
                     image_failed INTEGER DEFAULT 0,
                     index_failed INTEGER DEFAULT 0,
+                    failed_items TEXT DEFAULT '[]',
                     progress REAL DEFAULT 0,
                     message TEXT DEFAULT '等待开始...',
                     completed BOOLEAN DEFAULT 0,
@@ -584,6 +585,10 @@ class Database:
                 pass
             try:
                 cursor.execute('ALTER TABLE scrape_status ADD COLUMN index_failed INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute("ALTER TABLE scrape_status ADD COLUMN failed_items TEXT DEFAULT '[]'")
             except sqlite3.OperationalError:
                 pass
 
@@ -3087,6 +3092,12 @@ class Database:
                 row = cursor.fetchone()
 
                 if row:
+                    failed_items_raw = row['failed_items'] if 'failed_items' in row.keys() else '[]'
+                    try:
+                        failed_items = json.loads(failed_items_raw) if failed_items_raw else []
+                    except (TypeError, ValueError):
+                        failed_items = []
+
                     return {
                         'id': row['id'],
                         'is_scraping': bool(row['is_scraping']),
@@ -3098,6 +3109,7 @@ class Database:
                         'failed': (row['failed'] if 'failed' in row.keys() else 0) or 0,
                         'image_failed': (row['image_failed'] if 'image_failed' in row.keys() else 0) or 0,
                         'index_failed': (row['index_failed'] if 'index_failed' in row.keys() else 0) or 0,
+                        'failed_items': failed_items,
                         'progress': row['progress'] or 0.0,
                         'message': row['message'] or '等待开始...',
                         'completed': bool(row['completed']),
@@ -3120,6 +3132,7 @@ class Database:
                 'failed': 0,
                 'image_failed': 0,
                 'index_failed': 0,
+                'failed_items': [],
                 'progress': 0.0,
                 'message': '获取状态失败',
                 'completed': False,
@@ -3146,6 +3159,14 @@ class Database:
                     elif key == 'progress':
                         fields.append(f'{key} = ?')
                         values.append(float(value) if value is not None else 0.0)
+                    elif key == 'failed_items':
+                        fields.append('failed_items = ?')
+                        if value is None:
+                            values.append('[]')
+                        elif isinstance(value, str):
+                            values.append(value)
+                        else:
+                            values.append(json.dumps(value, ensure_ascii=False))
                     elif key in ['current_shop_id', 'message', 'thread_id']:
                         fields.append(f'{key} = ?')
                         values.append(str(value) if value is not None else None)
@@ -3179,6 +3200,7 @@ class Database:
                         failed = 0,
                         image_failed = 0,
                         index_failed = 0,
+                        failed_items = '[]',
                         progress = 0,
                         message = '等待开始...',
                         completed = 0,
@@ -3198,6 +3220,7 @@ class Database:
                     'failed': 0,
                     'image_failed': 0,
                     'index_failed': 0,
+                    'failed_items': [],
                     'progress': 0.0,
                     'message': '等待开始...',
                     'completed': False,
