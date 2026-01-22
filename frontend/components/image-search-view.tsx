@@ -470,7 +470,7 @@ export function ImageSearchView() {
 
                     {/* 网站链接网格显示区域 */}
                     <div className="w-full lg:w-1/2 mt-2 lg:mt-0">
-                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                      <div className="grid grid-cols-4 gap-2">
                         {displayedLinks.map((site: any, index: number) => (
                           <div
                             key={index}
@@ -613,7 +613,7 @@ export function ImageSearchView() {
 
                       {/* 链接显示区域 */}
                       <div className="w-full lg:w-1/2 mt-2 lg:mt-0 flex items-start gap-2">
-                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 flex-1 min-w-0">
+                        <div className="grid grid-cols-4 gap-2 flex-1 min-w-0">
                           {limitedHistoryLinks.map((site: any, index: number) => (
                             <div
                               key={`${history.id}-${index}`}

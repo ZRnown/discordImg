@@ -1277,7 +1277,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                 </div>
                             {/* 链接显示区域 */}
                 <div className="flex items-start gap-2 min-w-0 flex-1">
-                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 flex-1 min-w-0">
+                  <div className="grid grid-cols-4 gap-2 flex-1 min-w-0">
                     {displayedLinks.map((link) => (
                       <div
                         key={link.name || link.url}
