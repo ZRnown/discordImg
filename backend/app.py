@@ -5247,7 +5247,17 @@ def process_and_save_single_product_sync(product_info):
                 'message': warn_msg
             }
 
-        logger.info(f"✅ 商品 {item_id} {product_title} 完美抓取 ({processed_count}/{image_total})")
+        stored_count = image_stats.get('stored', 0)
+        duplicate_count = image_stats.get('duplicates', 0)
+        existing_count = image_stats.get('existing', 0)
+
+        if stored_count == image_total:
+            logger.info(f"✅ 商品 {item_id} {product_title} 完美抓取 ({processed_count}/{image_total})")
+        else:
+            logger.info(
+                f"✅ 商品 {item_id} {product_title} 抓取完成 "
+                f"(总 {image_total}, 写入 {stored_count}, 重复 {duplicate_count}, 已有 {existing_count})"
+            )
         return {
             'status': 'success',
             'item_id': item_id,
@@ -5482,6 +5492,11 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
     stats = {
         'total_urls': len(image_urls),
         'processed': 0,
+        'stored': 0,
+        'duplicates': 0,
+        'existing': 0,
+        'fatal': 0,
+        'retry_failed': 0,
         'failed_details': [],
         'download_failed': 0,
         'faiss_failed': False
@@ -5504,6 +5519,7 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
             pending_items.append((idx, url))
         else:
             stats['processed'] += 1
+            stats['existing'] += 1
 
     if not pending_items:
         return stats['processed'], stats
@@ -5568,7 +5584,9 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
                         os.remove(save_path)
                     except Exception:
                         pass
-                    return ('FATAL', item, f"无效图片: {reason}")
+                    if reason and "无法识别" in reason:
+                        return ('FATAL', item, f"无效图片: {reason}")
+                    return ('RETRY', item, f"文件损坏: {reason}")
 
                 return ('SUCCESS', (idx, save_path), None)
             except Exception as e:
@@ -5632,6 +5650,7 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
                         os.remove(save_path)
                     except Exception:
                         pass
+                    stats['duplicates'] += 1
                     processed_indices.append(index)
                     continue
 
@@ -5641,6 +5660,7 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
                 if img_db_id:
                     vectors_to_add.append((img_db_id, features))
                     processed_indices.append(index)
+                    stats['stored'] += 1
                 else:
                     retry_list.append((index, image_urls[index]))
 
@@ -5677,6 +5697,7 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
         for item, reason in fatal_items:
             idx, url = item
             logger.warning(f"❌ [商品 {product_id}] 图片 {idx} 发生致命错误，放弃: {reason}")
+            stats['fatal'] += 1
             stats['failed_details'].append({
                 'index': idx,
                 'url': url,
@@ -5708,11 +5729,18 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
         })
 
     stats['download_failed'] = len(stats['failed_details'])
+    stats['retry_failed'] = len(pending_items)
 
     if stats['download_failed'] > 0:
         logger.error(f"❌ [商品 {product_id}] 最终结果: {stats['processed']} 成功, {stats['download_failed']} 失败")
     else:
         logger.info(f"✅ [商品 {product_id}] 全部处理成功")
+
+    logger.info(
+        f"🧾 [商品 {product_id}] 图片统计: total={stats['total_urls']}, stored={stats['stored']}, "
+        f"existing={stats['existing']}, duplicate={stats['duplicates']}, fatal={stats['fatal']}, "
+        f"retry_failed={stats['retry_failed']}"
+    )
 
     return stats['processed'], stats
 
