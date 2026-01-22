@@ -192,6 +192,83 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     return palette[trimmed] || trimmed
   }
 
+  const getWeidianIdFromUrl = (url?: string) => {
+    if (!url) return ''
+    const match = url.match(/itemID=(\d+)/i)
+    return match ? match[1] : ''
+  }
+
+  const mergeWebsiteLinks = (links: any[], weidianId: string) => {
+    const normalized = Array.isArray(links)
+      ? links
+          .map((site: any) => ({
+            name: site.name || site.display_name || site.url || '',
+            display_name: site.display_name || site.name || '网站',
+            url: site.url || '',
+            badge_color: resolveBadgeColor(site.badge_color || site.badgeColor || '')
+          }))
+          .filter((link: any) => link.url && link.url.trim() !== '')
+      : []
+
+    if (!availableWebsites.length || !weidianId) {
+      return normalized
+    }
+
+    const existingByKey = new Map<string, any>()
+    const unnamed: any[] = []
+
+    normalized.forEach((link: any) => {
+      const key = String(link.name || '').toLowerCase()
+      if (key) {
+        if (!existingByKey.has(key)) {
+          existingByKey.set(key, link)
+        }
+      } else {
+        unnamed.push(link)
+      }
+    })
+
+    const merged: any[] = []
+    const used = new Set<string>()
+
+    availableWebsites.forEach((site: any) => {
+      const name = String(site.name || '').trim()
+      if (!name) return
+      const key = name.toLowerCase()
+      const existing = existingByKey.get(key)
+      if (existing) {
+        merged.push({
+          ...existing,
+          display_name: site.display_name || existing.display_name,
+          badge_color: resolveBadgeColor(site.badge_color || existing.badge_color || '')
+        })
+        used.add(key)
+        return
+      }
+
+      const template = site.url_template || site.urlTemplate || ''
+      const url = template ? template.replace('{id}', weidianId) : ''
+      if (!url) return
+      merged.push({
+        name,
+        display_name: site.display_name || name,
+        url,
+        badge_color: resolveBadgeColor(site.badge_color || site.badgeColor || '')
+      })
+      used.add(key)
+    })
+
+    existingByKey.forEach((link, key) => {
+      if (!used.has(key)) {
+        merged.push(link)
+      }
+    })
+
+    unnamed.forEach((link) => merged.push(link))
+
+    return merged.length ? merged : normalized
+  }
+
   // 优化：分离不同类型的加载逻辑
   useEffect(() => {
     fetchIndexedIds()
@@ -432,17 +509,10 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
   const getProductLinks = (product: any) => {
     const dynamicLinks = Array.isArray(product.websiteUrls) ? product.websiteUrls : []
-    const normalized = dynamicLinks
-      .map((site: any) => ({
-        name: site.name || site.display_name || site.url,
-        display_name: site.display_name || site.name || '网站',
-        url: site.url || '',
-        badge_color: resolveBadgeColor(site.badge_color || site.badgeColor || '')
-      }))
-      .filter((link: any) => link.url && link.url.trim() !== '')
-
-    if (normalized.length > 0) {
-      return normalized
+    const weidianId = product.weidianId || getWeidianIdFromUrl(product.weidianUrl || product.product_url)
+    const mergedLinks = mergeWebsiteLinks(dynamicLinks, weidianId)
+    if (mergedLinks.length > 0) {
+      return mergedLinks
     }
 
     return [

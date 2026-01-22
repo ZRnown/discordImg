@@ -25,6 +25,7 @@ export function ImageSearchView() {
   const [totalHistory, setTotalHistory] = useState(0)
   const [hasMoreHistory, setHasMoreHistory] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
+  const [availableWebsites, setAvailableWebsites] = useState<any[]>([])
 
   const copyToClipboard = async (text: string) => {
     if (!text) return
@@ -71,9 +72,102 @@ export function ImageSearchView() {
     return palette[trimmed] || trimmed
   }
 
+  const getWeidianIdFromUrl = (url?: string) => {
+    if (!url) return ''
+    const match = url.match(/itemID=(\d+)/i)
+    return match ? match[1] : ''
+  }
+
+  const mergeWebsiteLinks = (links: any[], weidianId: string) => {
+    const normalized = Array.isArray(links)
+      ? links
+          .map((site: any) => ({
+            name: site.name || site.display_name || site.url || '',
+            display_name: site.display_name || site.name || '网站',
+            url: site.url || '',
+            badge_color: resolveBadgeColor(site.badge_color || site.badgeColor || '')
+          }))
+          .filter((link: any) => link.url && link.url.trim() !== '')
+      : []
+
+    if (!availableWebsites.length || !weidianId) {
+      return normalized
+    }
+
+    const existingByKey = new Map<string, any>()
+    const unnamed: any[] = []
+
+    normalized.forEach((link: any) => {
+      const key = String(link.name || '').toLowerCase()
+      if (key) {
+        if (!existingByKey.has(key)) {
+          existingByKey.set(key, link)
+        }
+      } else {
+        unnamed.push(link)
+      }
+    })
+
+    const merged: any[] = []
+    const used = new Set<string>()
+
+    availableWebsites.forEach((site: any) => {
+      const name = String(site.name || '').trim()
+      if (!name) return
+      const key = name.toLowerCase()
+      const existing = existingByKey.get(key)
+      if (existing) {
+        merged.push({
+          ...existing,
+          display_name: site.display_name || existing.display_name,
+          badge_color: resolveBadgeColor(site.badge_color || existing.badge_color || '')
+        })
+        used.add(key)
+        return
+      }
+
+      const template = site.url_template || site.urlTemplate || ''
+      const url = template ? template.replace('{id}', weidianId) : ''
+      if (!url) return
+      merged.push({
+        name,
+        display_name: site.display_name || name,
+        url,
+        badge_color: resolveBadgeColor(site.badge_color || site.badgeColor || '')
+      })
+      used.add(key)
+    })
+
+    existingByKey.forEach((link, key) => {
+      if (!used.has(key)) {
+        merged.push(link)
+      }
+    })
+
+    unnamed.forEach((link) => merged.push(link))
+
+    return merged.length ? merged : normalized
+  }
+
   // 加载搜索历史
   useEffect(() => {
     fetchSearchHistory()
+  }, [])
+
+  useEffect(() => {
+    const fetchWebsites = async () => {
+      try {
+        const response = await fetch('/api/websites', { credentials: 'include' })
+        if (response.ok) {
+          const data = await response.json()
+          setAvailableWebsites(data.websites || [])
+        }
+      } catch (error) {
+        console.error('Failed to fetch websites:', error)
+      }
+    }
+
+    fetchWebsites()
   }, [])
 
   const fetchSearchHistory = async (page: number = 1) => {
@@ -415,12 +509,8 @@ export function ImageSearchView() {
                   const websiteLinks = Array.isArray(result.product?.websiteUrls)
                     ? result.product.websiteUrls
                     : []
-                  const displayedLinks = websiteLinks
-                    .slice(0, 12)
-                    .map((site: any) => ({
-                      ...site,
-                      badge_color: resolveBadgeColor(site.badge_color || site.badgeColor || '')
-                    }))
+                  const weidianId = getWeidianIdFromUrl(result.product?.weidianUrl)
+                  const displayedLinks = mergeWebsiteLinks(websiteLinks, weidianId).slice(0, 12)
 
                   return (
                     <div key={index} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3">
@@ -554,12 +644,8 @@ export function ImageSearchView() {
                         { display_name: 'CNFans', url: history.cnfans_url, badge_color: 'blue' },
                         { display_name: 'ACBuy', url: history.acbuy_url, badge_color: 'purple' }
                       ].filter(site => site.url)
-                  const limitedHistoryLinks = historyLinks
-                    .slice(0, 12)
-                    .map((site: any) => ({
-                      ...site,
-                      badge_color: resolveBadgeColor(site.badge_color || site.badgeColor || '')
-                    }))
+                  const weidianId = getWeidianIdFromUrl(history.weidian_url)
+                  const limitedHistoryLinks = mergeWebsiteLinks(historyLinks, weidianId).slice(0, 12)
 
                   return (
                     <div key={history.id} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3">

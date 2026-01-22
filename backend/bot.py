@@ -801,7 +801,6 @@ class DiscordBotClient(discord.Client):
                         logger.info(f'消息被过滤: 以 "{filter_value}" 结尾')
                         return True
                 elif filter_type == 'regex':
-                    import re
                     try:
                         if re.search(filter_value, message_content, re.IGNORECASE):
                             logger.info(f'消息被过滤: 匹配正则 "{filter_value}"')
