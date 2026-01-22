@@ -980,11 +980,12 @@ class Database:
                     logger.warning("无法导入vector_engine，跳过FAISS向量删除")
 
             if engine and image_records:
-                for record in image_records:
+                image_ids = {record['id'] for record in image_records if record.get('id') is not None}
+                if image_ids:
                     try:
-                        engine.remove_vector_by_db_id(record['id'])
+                        engine.remove_vectors_by_db_ids(image_ids)
                     except Exception as e:
-                        logger.warning(f"删除FAISS向量失败 {record['id']}: {e}")
+                        logger.warning(f"批量删除FAISS向量失败: {e}")
 
             file_failed = {'count': 0}
             if image_records:
@@ -1020,7 +1021,21 @@ class Database:
                     cursor.execute(f"DELETE FROM products WHERE id IN ({placeholders})", chunk)
                 conn.commit()
 
-            if engine and image_records:
+            remaining_images = 0
+            try:
+                with self.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT COUNT(*) FROM product_images")
+                    remaining_images = cursor.fetchone()[0] or 0
+            except Exception as e:
+                logger.warning(f"统计剩余图片数量失败: {e}")
+
+            if engine and remaining_images == 0:
+                try:
+                    engine.rebuild_index([])
+                except Exception as e:
+                    logger.warning(f"清空FAISS索引失败: {e}")
+            elif engine and image_records:
                 try:
                     engine.save()
                 except Exception as e:

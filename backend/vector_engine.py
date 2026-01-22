@@ -229,6 +229,37 @@ class VectorEngine:
             logger.error(f"删除向量失败: {e}")
             return False
 
+    def remove_vectors_by_db_ids(self, db_ids: set) -> int:
+        """
+        批量标记删除向量，避免重复扫描和频繁保存。
+        返回成功标记删除的数量。
+        """
+        if not db_ids:
+            return 0
+
+        try:
+            removed_count = 0
+            for i, mapped_id in enumerate(self.id_map):
+                if mapped_id in db_ids:
+                    self.id_map[i] = None
+                    removed_count += 1
+
+            if removed_count:
+                deleted_count = sum(1 for id_val in self.id_map if id_val is None)
+                total_count = len(self.id_map)
+                deletion_ratio = deleted_count / total_count if total_count > 0 else 0
+
+                if deletion_ratio > 0.3:
+                    logger.info(f"删除比例({deletion_ratio:.1%})过高，重建索引清理碎片")
+                    self._rebuild_index_after_removal()
+                else:
+                    self.save()
+
+            return removed_count
+        except Exception as e:
+            logger.error(f"批量删除向量失败: {e}")
+            return 0
+
     def _rebuild_index_after_removal(self):
         """删除向量后重建索引（优化版：直接使用数据库中已存的 features，不重新跑模型）"""
         try:
@@ -312,7 +343,7 @@ class VectorEngine:
 
     def count(self) -> int:
         """返回当前索引中的向量数量"""
-        return self.index.ntotal
+        return sum(1 for id_val in self.id_map if id_val is not None)
 
     def get_stats(self) -> Dict:
         """获取索引统计信息"""

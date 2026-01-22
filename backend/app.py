@@ -2943,6 +2943,23 @@ def batch_delete_all_products():
             )
 
         if not all_ids:
+            try:
+                with db.get_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT COUNT(*) FROM product_images")
+                    remaining_images = cursor.fetchone()[0] or 0
+
+                if remaining_images == 0:
+                    try:
+                        from vector_engine import get_vector_engine
+                    except ImportError:
+                        from .vector_engine import get_vector_engine
+                    engine = get_vector_engine()
+                    if engine.count() > 0:
+                        engine.rebuild_index([])
+            except Exception as e:
+                logger.warning(f"清理空索引失败: {e}")
+
             return jsonify({'success': True, 'count': 0, 'message': '没有商品需要删除'})
 
         logger.info(f"开始删除所有 {len(all_ids)} 个商品")
