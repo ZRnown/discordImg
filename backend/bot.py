@@ -1315,19 +1315,44 @@ class DiscordBotClient(discord.Client):
                 logger.info(f'关键词搜索无结果: {search_query}')
                 return
 
-            query_lower = search_query.lower()
+            query_lower = re.sub(r'\s+', ' ', search_query.strip().lower())
+
+            def _normalize_phrase(value: str) -> str:
+                return re.sub(r'\s+', ' ', value).strip().lower()
+
+            def _split_keywords(raw_value):
+                if not raw_value:
+                    return []
+                if isinstance(raw_value, list):
+                    parts = []
+                    for item in raw_value:
+                        parts.extend(re.split(r'[,\uFF0C]', str(item)))
+                else:
+                    parts = re.split(r'[,\uFF0C]', str(raw_value))
+                keywords = []
+                for part in parts:
+                    normalized = _normalize_phrase(part)
+                    if len(normalized) >= 2:
+                        keywords.append(normalized)
+                return keywords
 
             def _product_matches_query(product):
-                title = (product.get('title') or '').lower()
-                english_title = (product.get('english_title') or product.get('englishTitle') or '').lower()
-                if query_lower and (query_lower in title or query_lower in english_title):
-                    return True
-                if title and len(title) >= 2 and title in query_lower:
-                    return True
-                if english_title and len(english_title) >= 2 and english_title in query_lower:
-                    return True
-                keywords = [kw for kw in re.findall(r'\w+', query_lower) if len(kw) >= 2]
-                return any(kw in title or kw in english_title for kw in keywords)
+                phrases = []
+                english_title = product.get('english_title') or product.get('englishTitle') or ''
+                phrases.extend(_split_keywords(english_title))
+                title = _normalize_phrase(product.get('title') or '')
+                if title:
+                    phrases.append(title)
+                if not phrases:
+                    return False
+                seen = set()
+                for phrase in phrases:
+                    if phrase in seen:
+                        continue
+                    seen.add(phrase)
+                    if phrase and phrase in query_lower:
+                        return True
+                return False
 
             matched_products = [p for p in all_products if _product_matches_query(p)]
             if not matched_products:

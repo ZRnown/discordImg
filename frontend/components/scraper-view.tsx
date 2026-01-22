@@ -175,6 +175,23 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     }
   }
 
+  const resolveBadgeColor = (value?: string) => {
+    if (!value) return '#6b7280'
+    const trimmed = value.trim()
+    if (trimmed.startsWith('#') || trimmed.startsWith('rgb') || trimmed.startsWith('hsl')) {
+      return trimmed
+    }
+    const palette: Record<string, string> = {
+      blue: '#2563eb',
+      green: '#16a34a',
+      orange: '#ea580c',
+      red: '#dc2626',
+      purple: '#7c3aed',
+      gray: '#4b5563'
+    }
+    return palette[trimmed] || trimmed
+  }
+
   // 优化：分离不同类型的加载逻辑
   useEffect(() => {
     fetchIndexedIds()
@@ -420,7 +437,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         name: site.name || site.display_name || site.url,
         display_name: site.display_name || site.name || '网站',
         url: site.url || '',
-        badge_color: site.badge_color || 'gray'
+        badge_color: resolveBadgeColor(site.badge_color || site.badgeColor || '')
       }))
       .filter((link: any) => link.url && link.url.trim() !== '')
 
@@ -429,9 +446,9 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     }
 
     return [
-      { name: 'weidian', display_name: '微店', url: product.weidianUrl, badge_color: 'gray' },
-      { name: 'cnfans', display_name: 'CNFans', url: product.cnfansUrl, badge_color: 'blue' },
-      { name: 'acbuy', display_name: 'AcBuy', url: product.acbuyUrl, badge_color: 'orange' }
+      { name: 'weidian', display_name: '微店', url: product.weidianUrl, badge_color: resolveBadgeColor('gray') },
+      { name: 'cnfans', display_name: 'CNFans', url: product.cnfansUrl, badge_color: resolveBadgeColor('blue') },
+      { name: 'acbuy', display_name: 'AcBuy', url: product.acbuyUrl, badge_color: resolveBadgeColor('orange') }
     ].filter(link => link.url && link.url.trim() !== '')
   }
 
@@ -1102,7 +1119,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
           <div className="divide-y overflow-x-hidden">
                     {currentProducts.map((product) => {
                         const links = getProductLinks(product);
-                        const displayedLinks = links.slice(0, 8)
+                        const displayedLinks = links.slice(0, 12)
                         return (
               <div key={product.id} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3 min-w-0">
                 <div className="flex gap-3 items-center">
@@ -1260,7 +1277,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                 </div>
                             {/* 链接显示区域 */}
                 <div className="flex items-start gap-2 min-w-0 flex-1">
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 flex-1 min-w-0">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 flex-1 min-w-0">
                     {displayedLinks.map((link) => (
                       <div
                         key={link.name || link.url}

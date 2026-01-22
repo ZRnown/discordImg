@@ -54,6 +54,23 @@ export function ImageSearchView() {
     }
   }
 
+  const resolveBadgeColor = (value?: string) => {
+    if (!value) return '#6b7280'
+    const trimmed = value.trim()
+    if (trimmed.startsWith('#') || trimmed.startsWith('rgb') || trimmed.startsWith('hsl')) {
+      return trimmed
+    }
+    const palette: Record<string, string> = {
+      blue: '#2563eb',
+      green: '#16a34a',
+      orange: '#ea580c',
+      red: '#dc2626',
+      purple: '#7c3aed',
+      gray: '#4b5563'
+    }
+    return palette[trimmed] || trimmed
+  }
+
   // 加载搜索历史
   useEffect(() => {
     fetchSearchHistory()
@@ -394,8 +411,19 @@ export function ImageSearchView() {
             </CardHeader>
             <CardContent className="pt-0">
               <div className="space-y-4">
-                {searchResults.map((result, index) => (
-                  <div key={index} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3">
+                {searchResults.map((result, index) => {
+                  const websiteLinks = Array.isArray(result.product?.websiteUrls)
+                    ? result.product.websiteUrls
+                    : []
+                  const displayedLinks = websiteLinks
+                    .slice(0, 12)
+                    .map((site: any) => ({
+                      ...site,
+                      badge_color: resolveBadgeColor(site.badge_color || site.badgeColor || '')
+                    }))
+
+                  return (
+                    <div key={index} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3">
                     {/* 匹配图片和基本信息 */}
                     <div className="flex gap-3 items-center flex-1">
                       {/* 匹配的商品图片 */}
@@ -442,8 +470,8 @@ export function ImageSearchView() {
 
                     {/* 网站链接网格显示区域 */}
                     <div className="w-full lg:w-1/2 mt-2 lg:mt-0">
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                        {(result.product.websiteUrls || []).slice(0, 8).map((site: any, index: number) => (
+                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                        {displayedLinks.map((site: any, index: number) => (
                           <div
                             key={index}
                             className="flex items-center gap-1 min-w-0 bg-muted/40 p-1 rounded border border-transparent hover:border-border transition-colors"
@@ -479,10 +507,10 @@ export function ImageSearchView() {
                           </div>
                         ))}
                       </div>
-                      {/* 超过 8 个时不显示额外链接 */}
                     </div>
-                  </div>
-                ))}
+                    </div>
+                  )
+                })}
               </div>
             </CardContent>
           </Card>
@@ -526,7 +554,12 @@ export function ImageSearchView() {
                         { display_name: 'CNFans', url: history.cnfans_url, badge_color: 'blue' },
                         { display_name: 'ACBuy', url: history.acbuy_url, badge_color: 'purple' }
                       ].filter(site => site.url)
-                  const limitedHistoryLinks = historyLinks.slice(0, 8)
+                  const limitedHistoryLinks = historyLinks
+                    .slice(0, 12)
+                    .map((site: any) => ({
+                      ...site,
+                      badge_color: resolveBadgeColor(site.badge_color || site.badgeColor || '')
+                    }))
 
                   return (
                     <div key={history.id} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3">
@@ -580,7 +613,7 @@ export function ImageSearchView() {
 
                       {/* 链接显示区域 */}
                       <div className="w-full lg:w-1/2 mt-2 lg:mt-0 flex items-start gap-2">
-                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 flex-1 min-w-0">
+                        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 flex-1 min-w-0">
                           {limitedHistoryLinks.map((site: any, index: number) => (
                             <div
                               key={`${history.id}-${index}`}

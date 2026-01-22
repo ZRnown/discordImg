@@ -1584,7 +1584,7 @@ export function AccountsView() {
                       <div className="space-y-2">
                         <div className="flex items-center gap-2">
                           <Settings className="w-4 h-4" />
-                          <span className="text-sm font-medium">轮换设置 (全局)</span>
+                          <span className="text-sm font-medium">轮换设置</span>
                         </div>
 
                         {/* 轮换启用开关 */}
