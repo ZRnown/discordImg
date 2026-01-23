@@ -27,6 +27,8 @@ os.environ["MKL_NUM_THREADS"] = str(_intra_threads)
 os.environ["OPENBLAS_NUM_THREADS"] = str(_intra_threads)
 os.environ["VECLIB_MAXIMUM_THREADS"] = str(_intra_threads)
 os.environ["NUMEXPR_NUM_THREADS"] = str(_intra_threads)
+os.environ.setdefault("TORCH_CPP_LOG_LEVEL", "ERROR")
+os.environ.setdefault("GLOG_minloglevel", "2")
 
 import warnings
 warnings.filterwarnings("ignore", message="Could not initialize NNPACK")

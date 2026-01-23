@@ -349,12 +349,24 @@ class DiscordBotClient(discord.Client):
             online_client_ids = [c.account_id for c in bot_clients if c.is_ready() and not c.is_closed()]
 
             for website_config in website_configs:
+                active_custom_reply = custom_reply
                 response_content = self._generate_reply_content(
                     product,
                     message.channel.id,
-                    custom_reply,
+                    active_custom_reply,
                     website_config=website_config
                 )
+                if response_content is None and active_custom_reply and active_custom_reply.get('product_data'):
+                    response_content = self._generate_reply_content(
+                        product,
+                        message.channel.id,
+                        None,
+                        website_config=website_config
+                    )
+                    if response_content:
+                        active_custom_reply = None
+                        logger.info(f"商品 {product.get('id')} 自定义回复范围不匹配，使用默认回复")
+
                 if response_content is None:
                     logger.info(f"商品 {product.get('id')} 回复范围不匹配，跳过发送")
                     continue
@@ -443,10 +455,10 @@ class DiscordBotClient(discord.Client):
                             files = []
 
                             # 检查是否是自定义模式，且有图片
-                            skip_images = bool(custom_reply and custom_reply.get('skip_images'))
-                            is_custom_mode = custom_reply and (
-                                custom_reply.get('reply_type') == 'custom_only' or
-                                custom_reply.get('reply_type') == 'text'
+                            skip_images = bool(active_custom_reply and active_custom_reply.get('skip_images'))
+                            is_custom_mode = active_custom_reply and (
+                                active_custom_reply.get('reply_type') == 'custom_only' or
+                                active_custom_reply.get('reply_type') == 'text'
                             )
 
                             if is_custom_mode and not skip_images:
@@ -519,17 +531,38 @@ class DiscordBotClient(discord.Client):
                                             indexes = []
 
                                     if pid and indexes:
-                                        # 使用原有的API端点获取商品图集中的图片
+                                        image_path_map = {}
+                                        try:
+                                            product_images = db.get_product_images(pid)
+                                            image_path_map = {
+                                                img.get('image_index'): img.get('image_path')
+                                                for img in product_images
+                                            }
+                                        except Exception as e:
+                                            logger.error(f"获取商品图片路径失败: {e}")
+
+                                        # 优先使用本地图片路径，失败再回退到HTTP获取
                                         for idx in indexes[:10]:  # 限制最多10张
                                             if len(files) >= 10:
                                                 break
-                                            img_url = f"{config.BACKEND_API_URL}/api/image/{pid}/{idx}"
+                                            idx_key = idx
+                                            try:
+                                                idx_key = int(idx)
+                                            except (TypeError, ValueError):
+                                                idx_key = idx
+
+                                            image_path = image_path_map.get(idx_key)
+                                            if image_path and os.path.exists(image_path):
+                                                files.append(discord.File(image_path, f"{pid}_{idx_key}.jpg"))
+                                                continue
+
+                                            img_url = f"{config.BACKEND_API_URL}/api/image/{pid}/{idx_key}"
                                             try:
                                                 async with aiohttp.ClientSession() as session:
                                                     async with session.get(img_url) as resp:
                                                         if resp.status == 200:
                                                             data = await resp.read()
-                                                            files.append(discord.File(io.BytesIO(data), f"{pid}_{idx}.jpg"))
+                                                            files.append(discord.File(io.BytesIO(data), f"{pid}_{idx_key}.jpg"))
                                             except Exception as e:
                                                 logger.error(f"下载商品图片失败: {e}")
 
@@ -557,7 +590,8 @@ class DiscordBotClient(discord.Client):
                                 reply_preview = f"{reply_preview[:120]}..."
                             author_label = f"{message.author.name}({message.author.id})"
                             logger.info(
-                                f"✅ [回复成功] {target_client.user.name} -> {author_label}: {reply_preview} | 商品ID: {product.get('id')}"
+                                f"✅ [回复成功] {target_client.user.name} -> {author_label} | 频道: {message.channel.name}: "
+                                f"{reply_preview} | 商品ID: {product.get('id')}"
                             )
                             try:
                                 has_text = bool(response_content)
@@ -586,7 +620,8 @@ class DiscordBotClient(discord.Client):
                                 reply_preview = f"{reply_preview[:120]}..."
                             author_label = f"{message.author.name}({message.author.id})"
                             logger.info(
-                                f"✅ [发送成功] {target_client.user.name} -> {author_label}: {reply_preview} | 商品ID: {product.get('id')}"
+                                f"✅ [发送成功] {target_client.user.name} -> {author_label} | 频道: {message.channel.name}: "
+                                f"{reply_preview} | 商品ID: {product.get('id')}"
                             )
                             try:
                                 if website_config and website_config.get('id') and response_content:
@@ -643,38 +678,40 @@ class DiscordBotClient(discord.Client):
                 else:
                     channel_scopes = ['weidian']
 
-            product_scope_raw = (product.get('replyScope') or product.get('reply_scope') or 'all')
-            scope_match = False
+            is_product_custom = bool(custom_reply and custom_reply.get('product_data'))
+            if is_product_custom:
+                product_scope_raw = (product.get('replyScope') or product.get('reply_scope') or 'all')
+                scope_match = False
 
-            if isinstance(product_scope_raw, str):
-                product_scope_raw = product_scope_raw.strip()
+                if isinstance(product_scope_raw, str):
+                    product_scope_raw = product_scope_raw.strip()
 
-            if not product_scope_raw or (isinstance(product_scope_raw, str) and product_scope_raw.lower() == 'all'):
-                scope_match = True
-            else:
-                scopes = []
-                if isinstance(product_scope_raw, list):
-                    scopes = product_scope_raw
-                elif isinstance(product_scope_raw, str):
-                    if product_scope_raw.startswith('['):
-                        try:
-                            scopes = json.loads(product_scope_raw)
-                        except json.JSONDecodeError:
+                if not product_scope_raw or (isinstance(product_scope_raw, str) and product_scope_raw.lower() == 'all'):
+                    scope_match = True
+                else:
+                    scopes = []
+                    if isinstance(product_scope_raw, list):
+                        scopes = product_scope_raw
+                    elif isinstance(product_scope_raw, str):
+                        if product_scope_raw.startswith('['):
+                            try:
+                                scopes = json.loads(product_scope_raw)
+                            except json.JSONDecodeError:
+                                scopes = [product_scope_raw]
+                        else:
                             scopes = [product_scope_raw]
                     else:
-                        scopes = [product_scope_raw]
-                else:
-                    scopes = [str(product_scope_raw)]
+                        scopes = [str(product_scope_raw)]
 
-                normalized_scopes = [
-                    str(scope).strip().lower()
-                    for scope in scopes
-                    if str(scope).strip()
-                ]
-                scope_match = any(scope in channel_scopes for scope in normalized_scopes) if channel_scopes else False
+                    normalized_scopes = [
+                        str(scope).strip().lower()
+                        for scope in scopes
+                        if str(scope).strip()
+                    ]
+                    scope_match = any(scope in channel_scopes for scope in normalized_scopes) if channel_scopes else False
 
-            if not scope_match:
-                return None
+                if not scope_match:
+                    return None
 
             response_url = get_response_url_for_channel(
                 product,
@@ -693,8 +730,7 @@ class DiscordBotClient(discord.Client):
                 return template.strip()
 
             # 1) 商品级自定义回复（优先级最高）
-            is_product_custom = bool(custom_reply and custom_reply.get('product_data'))
-            if is_product_custom and scope_match:
+            if is_product_custom:
                 reply_type = custom_reply.get('reply_type')
                 content = custom_reply.get('content', '') or ''
                 if reply_type == 'custom_only' or reply_type == 'text':
@@ -1462,6 +1498,8 @@ class DiscordBotClient(discord.Client):
                     }
 
                 reply_text = self._generate_reply_content(product, message.channel.id, custom_reply)
+                if not reply_text and custom_reply and custom_reply.get('product_data'):
+                    reply_text = self._generate_reply_content(product, message.channel.id, None)
                 if reply_text:
                     final_reply_lines.append(reply_text)
                     reply_products.append(product)

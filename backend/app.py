@@ -14,6 +14,9 @@ os.environ["OPENBLAS_NUM_THREADS"] = _ai_threads
 os.environ["VECLIB_MAXIMUM_THREADS"] = _ai_threads
 os.environ["NUMEXPR_NUM_THREADS"] = _ai_threads
 os.environ.setdefault("NO_PROXY", "localhost,127.0.0.1")
+os.environ.setdefault("TORCH_CPP_LOG_LEVEL", "ERROR")
+os.environ.setdefault("TORCH_SHOW_CPP_STACKTRACES", "0")
+os.environ.setdefault("GLOG_minloglevel", "2")
 
 from flask import Flask, request, jsonify, Response, session
 import numpy as np
@@ -526,6 +529,7 @@ def search_similar():
         image_url = request.form.get('image_url')
         threshold = float(request.form.get('threshold', 0.6))  # DINOv2需要更高的阈值
         limit = int(request.form.get('limit', 5))  # 返回结果数量，默认5个
+        debug_enabled = bool(getattr(config, 'DEBUG', False))
 
         # 获取用户店铺权限过滤（用于Discord机器人）
         user_shops = None
@@ -536,14 +540,14 @@ def search_similar():
             except:
                 user_shops = None
 
-        # 调试信息
-        print(f"DEBUG: Received threshold: {threshold}")
-        print(f"DEBUG: User shops filter: {user_shops}")
-        print(f"DEBUG: Form data: {list(request.form.keys())}")
-        print(f"DEBUG: Files: {list(request.files.keys()) if request.files else 'No files'}")
-        print(f"DEBUG: Content-Type: {request.content_type}")
-        print(f"DEBUG: Method: {request.method}")
-        print(f"DEBUG: image_url parameter: '{image_url}'")
+        if debug_enabled:
+            logger.debug(f"Received threshold: {threshold}")
+            logger.debug(f"User shops filter: {user_shops}")
+            logger.debug(f"Form data: {list(request.form.keys())}")
+            logger.debug(f"Files: {list(request.files.keys()) if request.files else 'No files'}")
+            logger.debug(f"Content-Type: {request.content_type}")
+            logger.debug(f"Method: {request.method}")
+            logger.debug(f"image_url parameter: '{image_url}'")
 
         # 处理图片来源
         import uuid
@@ -551,7 +555,8 @@ def search_similar():
         image_file = None  # 初始化变量，避免作用域问题
 
         if image_url:
-            print(f"DEBUG: Processing image URL: {image_url}")
+            if debug_enabled:
+                logger.debug(f"Processing image URL: {image_url}")
             # 验证URL格式
             if not image_url.startswith(('http://', 'https://')):
                 return jsonify({'error': 'Invalid URL format, must start with http:// or https://'}), 400
@@ -563,8 +568,9 @@ def search_similar():
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
                 }
                 response = requests.get(image_url, timeout=15, headers=headers, stream=True)
-                print(f"DEBUG: URL response status: {response.status_code}")
-                print(f"DEBUG: Content-Type: {response.headers.get('content-type', 'unknown')}")
+                if debug_enabled:
+                    logger.debug(f"URL response status: {response.status_code}")
+                    logger.debug(f"Content-Type: {response.headers.get('content-type', 'unknown')}")
 
                 if response.status_code != 200:
                     return jsonify({'error': f'Failed to download image from URL, status: {response.status_code}'}), 400
@@ -572,7 +578,8 @@ def search_similar():
                 # 检查内容类型
                 content_type = response.headers.get('content-type', '').lower()
                 if not any(img_type in content_type for img_type in ['image/', 'application/octet-stream']):
-                    print(f"DEBUG: Warning - Content-Type '{content_type}' may not be an image")
+                    if debug_enabled:
+                        logger.debug(f"Warning - Content-Type '{content_type}' may not be an image")
 
                 temp_filename = f"{uuid.uuid4()}.jpg"
                 # 【修改】使用项目目录下的 TEMP_DIR
@@ -585,7 +592,8 @@ def search_similar():
 
                 # 检查文件大小
                 file_size = os.path.getsize(image_path)
-                print(f"DEBUG: Image downloaded to: {image_path}, size: {file_size} bytes")
+                if debug_enabled:
+                    logger.debug(f"Image downloaded to: {image_path}, size: {file_size} bytes")
 
                 if file_size == 0:
                     os.remove(image_path)
@@ -596,15 +604,19 @@ def search_similar():
                     return jsonify({'error': 'Image file too large (max 10MB)'}), 400
 
             except requests.exceptions.RequestException as e:
-                print(f"DEBUG: Network error downloading image: {str(e)}")
+                if debug_enabled:
+                    logger.debug(f"Network error downloading image: {str(e)}")
                 return jsonify({'error': f'Network error downloading image: {str(e)}'}), 400
             except Exception as e:
-                print(f"DEBUG: Failed to download image: {str(e)}")
+                if debug_enabled:
+                    logger.debug(f"Failed to download image: {str(e)}")
                 return jsonify({'error': f'Failed to download image: {str(e)}'}), 400
         elif 'image' in request.files:
-            print("DEBUG: No image_url provided, checking for uploaded file")
+            if debug_enabled:
+                logger.debug("No image_url provided, checking for uploaded file")
             image_file = request.files['image']
-            print(f"DEBUG: Found uploaded file: {image_file.filename if image_file else 'None'}")
+            if debug_enabled:
+                logger.debug(f"Found uploaded file: {image_file.filename if image_file else 'None'}")
 
             temp_filename = f"{uuid.uuid4()}.jpg"
             # 【修改】使用项目目录下的 TEMP_DIR
@@ -612,7 +624,8 @@ def search_similar():
             image_file.save(image_path)
 
         else:
-            print("DEBUG: No image_url and no uploaded file")
+            if debug_enabled:
+                logger.debug("No image_url and no uploaded file")
             return jsonify({'error': 'No image provided (url or file)'}), 400
 
         try:
@@ -631,7 +644,6 @@ def search_similar():
                 logger.error(f"记录用户搜索次数失败: {e}")
 
             # 【优化】使用 FAISS HNSW 向量搜索 + 综合评分重排序
-            debug_enabled = bool(getattr(config, 'DEBUG', False))
             if debug_enabled:
                 logger.debug(f"Searching with threshold: {threshold}, vector length: {len(query_features)}")
 

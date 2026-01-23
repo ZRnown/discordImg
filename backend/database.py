@@ -722,10 +722,12 @@ class Database:
             except ImportError:
                 from .vector_engine import get_vector_engine
 
-            logger.info(f"开始获取FAISS引擎...")
+            if debug_enabled:
+                logger.debug("开始获取FAISS引擎...")
             engine_start = time.time()
             engine = get_vector_engine()
-            logger.info(f"获取FAISS引擎耗时: {time.time() - engine_start:.3f}秒")
+            if debug_enabled:
+                logger.debug(f"获取FAISS引擎耗时: {time.time() - engine_start:.3f}秒")
 
             if debug_enabled:
                 logger.debug(f"Starting FAISS search, threshold: {threshold}, limit: {limit}")
@@ -736,7 +738,8 @@ class Database:
             # 执行FAISS搜索
             faiss_start = time.time()
             faiss_results = engine.search(query_vector, top_k=min(limit * 3, 50))
-            logger.info(f"FAISS搜索耗时: {time.time() - faiss_start:.3f}秒")
+            if debug_enabled:
+                logger.debug(f"FAISS搜索耗时: {time.time() - faiss_start:.3f}秒")
             if debug_enabled:
                 logger.debug(f"FAISS search returned {len(faiss_results)} results")
 

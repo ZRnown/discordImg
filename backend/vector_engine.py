@@ -150,9 +150,11 @@ class VectorEngine:
         """搜索最相似的向量"""
         import time
         start_time = time.time()
+        debug_enabled = bool(getattr(config, 'DEBUG', False))
 
         if self.index.ntotal == 0:
-            logger.info("FAISS索引为空，跳过搜索")
+            if debug_enabled:
+                logger.debug("FAISS索引为空，跳过搜索")
             return []
 
         try:
@@ -164,7 +166,8 @@ class VectorEngine:
 
             query_vector = query_vector.reshape(1, -1)
 
-            logger.info(f"开始FAISS搜索，索引大小: {self.index.ntotal}, top_k: {top_k}")
+            if debug_enabled:
+                logger.debug(f"开始FAISS搜索，索引大小: {self.index.ntotal}, top_k: {top_k}")
 
             # 执行搜索
             # 强制使用单线程进行搜索，防止在 Flask/MacOS 环境下发生 OpenMP 死锁
@@ -172,7 +175,8 @@ class VectorEngine:
             search_start = time.time()
             distances, indices = self.index.search(query_vector, top_k)
             search_time = time.time() - search_start
-            logger.info(f"FAISS搜索完成，耗时: {search_time:.3f}秒")
+            if debug_enabled:
+                logger.debug(f"FAISS搜索完成，耗时: {search_time:.3f}秒")
 
             results = []
             for i in range(min(top_k, len(indices[0]))):
@@ -187,7 +191,8 @@ class VectorEngine:
                     })
 
             total_time = time.time() - start_time
-            logger.info(f"搜索总耗时: {total_time:.3f}秒, 返回{len(results)}个结果")
+            if debug_enabled:
+                logger.debug(f"搜索总耗时: {total_time:.3f}秒, 返回{len(results)}个结果")
             return results
 
         except Exception as e:
