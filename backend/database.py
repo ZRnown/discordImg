@@ -714,6 +714,7 @@ class Database:
         """使用FAISS搜索相似图像"""
         import time
         start_time = time.time()
+        debug_enabled = bool(getattr(config, 'DEBUG', False))
 
         try:
             try:
@@ -726,14 +727,18 @@ class Database:
             engine = get_vector_engine()
             logger.info(f"获取FAISS引擎耗时: {time.time() - engine_start:.3f}秒")
 
-            print(f"DEBUG DB: Starting FAISS search, threshold: {threshold}, limit: {limit}")
-            print(f"DEBUG DB: Query vector length: {len(query_vector) if hasattr(query_vector, '__len__') else 'unknown'}")
+            if debug_enabled:
+                logger.debug(f"Starting FAISS search, threshold: {threshold}, limit: {limit}")
+                logger.debug(
+                    f"Query vector length: {len(query_vector) if hasattr(query_vector, '__len__') else 'unknown'}"
+                )
 
             # 执行FAISS搜索
             faiss_start = time.time()
             faiss_results = engine.search(query_vector, top_k=min(limit * 3, 50))
             logger.info(f"FAISS搜索耗时: {time.time() - faiss_start:.3f}秒")
-            print(f"DEBUG DB: FAISS search returned {len(faiss_results)} results")
+            if debug_enabled:
+                logger.debug(f"FAISS search returned {len(faiss_results)} results")
 
             matched_results = []
 
@@ -741,21 +746,29 @@ class Database:
                 score = result['score']
                 db_id = result['db_id']
 
-                print(f"DEBUG DB: Processing result - db_id: {db_id}, score: {score}, threshold: {threshold}")
+                if debug_enabled:
+                    logger.debug(f"Processing result - db_id: {db_id}, score: {score}, threshold: {threshold}")
 
                 # 通过image_db_id获取产品信息
                 image_info = self.get_image_info_by_id(db_id)
                 if image_info:
-                    print(f"DEBUG DB: Found image info for db_id {db_id}: product_id={image_info['product_id']}")
+                    if debug_enabled:
+                        logger.debug(f"Found image info for db_id {db_id}: product_id={image_info['product_id']}")
                     product_info = self._get_product_info_by_id(image_info['product_id'])
 
                     if product_info:
                         # 如果指定了用户店铺权限，进行过滤
                         if user_shops and product_info.get('shop_name') not in user_shops:
-                            print(f"DEBUG DB: Skipping product from shop {product_info.get('shop_name')} - not in user shops {user_shops}")
+                            if debug_enabled:
+                                logger.debug(
+                                    f"Skipping product from shop {product_info.get('shop_name')} - not in user shops {user_shops}"
+                                )
                             continue
 
-                        print(f"DEBUG DB: Found product info for product_id {image_info['product_id']}: ruleEnabled={product_info.get('ruleEnabled', True)}")
+                        if debug_enabled:
+                            logger.debug(
+                                f"Found product info for product_id {image_info['product_id']}: ruleEnabled={product_info.get('ruleEnabled', True)}"
+                            )
                         result_dict = {
                             **product_info,
                             'similarity': score,
@@ -763,19 +776,23 @@ class Database:
                             'image_path': image_info['image_path']
                         }
                         matched_results.append(result_dict)
-                        print(f"DEBUG DB: Added result with similarity {score}")
+                        if debug_enabled:
+                            logger.debug(f"Added result with similarity {score}")
 
                         # 如果找到了足够的结果，就停止
                         if len(matched_results) >= limit:
                             break
                     else:
-                        print(f"DEBUG DB: Product info not found for product_id {image_info['product_id']}")
+                        if debug_enabled:
+                            logger.debug(f"Product info not found for product_id {image_info['product_id']}")
                 else:
-                    print(f"DEBUG DB: Image info not found for db_id {db_id}")
+                    if debug_enabled:
+                        logger.debug(f"Image info not found for db_id {db_id}")
 
             # 如果没有找到任何结果，返回最佳匹配（即使低于阈值）
             if not matched_results and faiss_results:
-                print(f"DEBUG DB: No results above threshold {threshold}, returning best match")
+                if debug_enabled:
+                    logger.debug(f"No results above threshold {threshold}, returning best match")
                 best_result = faiss_results[0]
                 db_id = best_result['db_id']
                 image_info = self.get_image_info_by_id(db_id)
@@ -789,7 +806,8 @@ class Database:
                             'image_path': image_info['image_path']
                         }
                         matched_results.append(result_dict)
-                        print(f"DEBUG DB: Added best match with similarity {best_result['score']}")
+                        if debug_enabled:
+                            logger.debug(f"Added best match with similarity {best_result['score']}")
 
             return matched_results
 

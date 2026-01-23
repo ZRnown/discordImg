@@ -623,19 +623,25 @@ class DiscordBotClient(discord.Client):
             channel_id_str = str(channel_id)
             if not website_config:
                 website_config = db.get_website_config_by_channel(channel_id_str, self.user_id)
-            channel_scope = None
+            channel_scopes = []
             if website_config:
-                channel_scope = (website_config.get('name') or '').strip().lower()
-                if not channel_scope:
-                    channel_scope = (website_config.get('display_name') or '').strip().lower()
+                config_name = (website_config.get('name') or '').strip().lower()
+                config_display = (website_config.get('display_name') or '').strip().lower()
+                if config_name:
+                    channel_scopes.append(config_name)
+                if config_display and config_display not in channel_scopes:
+                    channel_scopes.append(config_display)
+                config_id = website_config.get('id')
+                if config_id is not None:
+                    channel_scopes.append(str(config_id))
 
-            if not channel_scope:
+            if not channel_scopes:
                 if config.CNFANS_CHANNEL_ID and channel_id_str == str(config.CNFANS_CHANNEL_ID):
-                    channel_scope = 'cnfans'
+                    channel_scopes = ['cnfans']
                 elif config.ACBUY_CHANNEL_ID and channel_id_str == str(config.ACBUY_CHANNEL_ID):
-                    channel_scope = 'acbuy'
+                    channel_scopes = ['acbuy']
                 else:
-                    channel_scope = 'weidian'
+                    channel_scopes = ['weidian']
 
             product_scope_raw = (product.get('replyScope') or product.get('reply_scope') or 'all')
             scope_match = False
@@ -665,7 +671,7 @@ class DiscordBotClient(discord.Client):
                     for scope in scopes
                     if str(scope).strip()
                 ]
-                scope_match = channel_scope in normalized_scopes
+                scope_match = any(scope in channel_scopes for scope in normalized_scopes) if channel_scopes else False
 
             if not scope_match:
                 return None
@@ -717,7 +723,7 @@ class DiscordBotClient(discord.Client):
 
         except Exception as e:
             logger.error(f"生成回复内容失败: {e}")
-            return get_response_url_for_channel(product, channel_id, self.user_id)
+            return get_response_url_for_channel(product, channel_id, self.user_id, website_config=website_config)
 
     def get_website_configs_by_channel(self, channel_id):
         """根据频道ID获取对应的网站配置列表"""
@@ -1060,7 +1066,7 @@ class DiscordBotClient(discord.Client):
         if image_reply_enabled and message.attachments:
             for attachment in message.attachments:
                 if attachment.content_type and attachment.content_type.startswith('image/'):
-                    logger.info(f"📷 检测到图片，开始处理: {attachment.filename}")
+                    logger.debug(f"📷 检测到图片，开始处理: {attachment.filename}")
                     await self.handle_image(message, attachment)
 
     async def handle_image(self, message, attachment):
@@ -1080,18 +1086,18 @@ class DiscordBotClient(discord.Client):
             # 重试最多3次
             for attempt in range(3):
                 try:
-                    logger.info(f"下载Discord图片 (尝试 {attempt + 1}/3): {attachment.filename}")
+                    logger.debug(f"下载Discord图片 (尝试 {attempt + 1}/3): {attachment.filename}")
                     # 【关键修复】trust_env=True 允许使用系统代理
                     async with aiohttp.ClientSession(timeout=timeout, headers=headers, trust_env=True) as session:
                         async with session.get(attachment.url, proxy=proxy_url) as resp:
                             if resp.status == 200:
                                 image_data = await resp.read()
-                                logger.info(f"图片下载成功，大小: {len(image_data)} bytes")
+                                logger.debug(f"图片下载成功，大小: {len(image_data)} bytes")
                                 break
                             else:
-                                logger.warning(f"图片下载失败，状态码: {resp.status}")
+                                logger.debug(f"图片下载失败，状态码: {resp.status}")
                 except aiohttp.ClientError as e:
-                    logger.warning(f"图片下载网络错误 (尝试 {attempt + 1}/3): {e}")
+                    logger.debug(f"图片下载网络错误 (尝试 {attempt + 1}/3): {e}")
                     if attempt < 2:  # 不是最后一次尝试
                         await asyncio.sleep(2)  # 【增强】等待2秒后重试
                 except Exception as e:
@@ -1112,7 +1118,10 @@ class DiscordBotClient(discord.Client):
 
                 logger.debug(f"🔓 释放AI并发锁")
 
-            logger.info(f'图片识别结果: success={result.get("success") if result else False}, results_count={len(result.get("results", [])) if result else 0}')
+            logger.debug(
+                f'图片识别结果: success={result.get("success") if result else False}, '
+                f'results_count={len(result.get("results", [])) if result else 0}'
+            )
 
             if result and result.get('success') and result.get('results'):
                 # 获取最佳匹配结果
@@ -1134,116 +1143,74 @@ class DiscordBotClient(discord.Client):
                     except Exception as e:
                         logger.error(f'获取用户相似度设置失败: {e}')
 
-                logger.info(f'最佳匹配相似度: {similarity:.4f}, 用户阈值: {user_threshold:.4f}')
+                logger.debug(f'最佳匹配相似度: {similarity:.4f}, 用户阈值: {user_threshold:.4f}')
 
                 # 严格执行用户设置的阈值
                 if similarity >= user_threshold:
                     product = best_match.get('product', {})
-                    logger.info(f'✅ 匹配成功! 相似度: {similarity:.2f} | 商品: {product.get("id")} | 频道: {message.channel.name}')
+                    product_title = (product.get('title') or '').strip()
+                    logger.info(
+                        f'📷 图片匹配: 商品 {product.get("id")} {product_title} | 相似度 {similarity:.2f} | 频道: {message.channel.name}'
+                    )
 
-                    # 检查商品是否启用了自动回复规则
                     product_rule_enabled = product.get('ruleEnabled', True)
+                    if isinstance(product_rule_enabled, str):
+                        product_rule_enabled = product_rule_enabled.strip().lower() not in {'0', 'false', 'no', 'off'}
+                    elif isinstance(product_rule_enabled, (int, float)):
+                        product_rule_enabled = bool(product_rule_enabled)
 
-                    if product_rule_enabled:
-                        # 使用全局自定义回复
+                    def _coerce_list(value):
+                        if not value:
+                            return []
+                        if isinstance(value, list):
+                            return value
+                        if isinstance(value, str):
+                            try:
+                                parsed = json.loads(value)
+                            except json.JSONDecodeError:
+                                return []
+                            return parsed if isinstance(parsed, list) else []
+                        return []
+
+                    custom_reply = None
+                    image_source = product.get('imageSource') or product.get('image_source') or 'product'
+                    has_custom_images = False
+
+                    if image_source == 'upload':
+                        uploaded_imgs = _coerce_list(product.get('uploaded_reply_images'))
+                        product['uploaded_reply_images'] = uploaded_imgs
+                        has_custom_images = bool(uploaded_imgs)
+                    elif image_source == 'custom':
+                        custom_urls = _coerce_list(product.get('customImageUrls') or product.get('custom_image_urls'))
+                        if custom_urls:
+                            product['customImageUrls'] = custom_urls
+                        has_custom_images = bool(custom_urls)
+                    elif image_source == 'product':
+                        selected_indexes = _coerce_list(product.get('selectedImageIndexes') or product.get('custom_reply_images'))
+                        if selected_indexes:
+                            product['selectedImageIndexes'] = selected_indexes
+                        has_custom_images = bool(selected_indexes)
+
+                    if not product_rule_enabled or has_custom_images:
+                        custom_text = (product.get('custom_reply_text') or '').strip()
+                        custom_reply = {
+                            'reply_type': 'text' if custom_text else 'custom_only',
+                            'content': custom_text,
+                            'product_data': product
+                        }
+                        if not product_rule_enabled:
+                            logger.info(f"商品 {product.get('id')} 规则已禁用，准备发送自定义回复")
+                        elif has_custom_images:
+                            logger.info(f"商品 {product.get('id')} 配置了自定义图片，准备发送自定义回复")
+                    elif product_rule_enabled:
                         custom_reply = self._get_custom_reply()
 
-                        # 使用调度机制回复，而不是直接回复
-                        await self.schedule_reply(message, product, custom_reply)
-                    else:
-                        # 商品级自定义回复
-                        custom_text = product.get('custom_reply_text', '').strip()
-                        custom_image_indexes = product.get('selectedImageIndexes', [])
-                        custom_image_urls = product.get('customImageUrls', [])
+                    await self.schedule_reply(message, product, custom_reply)
 
-                        # 发送自定义文本消息
-                        if custom_text:
-                            await message.reply(custom_text)
-
-                        # 发送图片（按优先级：本地上传 > 自定义链接 > 商品图片）
-                        images_sent = False
-
-                        # 优先检查图片来源类型
-                        image_source = product.get('image_source', 'product')
-
-                        if image_source == 'upload':
-                            # 发送本地上传的图片
-                            try:
-                                from database import db
-                                # 获取该商品的所有图片（包括上传的）
-                                product_images = db.get_product_images(product['id'])
-                                if product_images:
-                                    for img_data in product_images[:10]:  # 最多发送10张图片
-                                        try:
-                                            image_path = img_data.get('image_path')
-                                            # 如果是相对路径，构建完整路径
-                                            if image_path and not os.path.isabs(image_path):
-                                                image_path = os.path.join(os.path.dirname(__file__), image_path)
-                                            if image_path and os.path.exists(image_path):
-                                                await message.reply(file=discord.File(image_path, os.path.basename(image_path)))
-                                                images_sent = True
-                                        except Exception as e:
-                                            logger.error(f'发送本地上传图片失败: {e}')
-                            except Exception as e:
-                                logger.error(f'处理本地上传图片回复失败: {e}')
-
-                        elif image_source == 'custom' and custom_image_urls and len(custom_image_urls) > 0:
-                            # 发送自定义图片链接
-                            try:
-                                # 【代理配置】从环境变量获取代理
-                                proxy_url = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or None
-                                # 【伪装头】添加 User-Agent
-                                headers = {
-                                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-                                }
-                                timeout = aiohttp.ClientTimeout(total=30, connect=10)
-
-                                for url in custom_image_urls[:10]:  # 最多发送10张图片
-                                    try:
-                                        # 【关键修复】trust_env=True 允许使用系统代理
-                                        async with aiohttp.ClientSession(timeout=timeout, headers=headers, trust_env=True) as session:
-                                            async with session.get(url.strip(), proxy=proxy_url) as resp:
-                                                if resp.status == 200:
-                                                    image_data = await resp.read()
-                                                    # 从URL提取文件名
-                                                    filename = url.split('/')[-1].split('?')[0] or f"image_{custom_image_urls.index(url)}.jpg"
-                                                    if not filename.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp')):
-                                                        filename += '.jpg'
-                                                    await message.reply(file=discord.File(io.BytesIO(image_data), filename))
-                                                    images_sent = True
-                                    except Exception as e:
-                                        logger.error(f'发送自定义图片失败 {url}: {e}')
-                            except Exception as e:
-                                logger.error(f'处理自定义图片回复失败: {e}')
-
-                        elif custom_image_indexes and len(custom_image_indexes) > 0:
-                            # 发送选中的商品图片
-                            try:
-                                import aiofiles
-                                from database import db
-
-                                for image_index in custom_image_indexes:
-                                    try:
-                                        # 获取图片路径
-                                        image_path = db.get_product_image_path(product['id'], image_index)
-                                        if image_path and os.path.exists(image_path):
-                                            # 发送图片文件
-                                            await message.reply(file=discord.File(image_path, f"image_{image_index}.jpg"))
-                                            images_sent = True
-                                    except Exception as e:
-                                        logger.error(f'发送商品图片失败: {e}')
-                            except Exception as e:
-                                logger.error(f'处理商品图片回复失败: {e}')
-
-                        # 如果既没有文本也没有图片，则发送默认链接
-                        if not custom_text and not images_sent:
-                            response = get_response_url_for_channel(product, message.channel.id, self.user_id)
-                            await message.reply(response)
-
-                    logger.info(f'图片识别成功，相似度: {similarity:.4f}')
+                    logger.debug(f'图片识别成功，相似度: {similarity:.4f}')
                 else:
                     # 相似度低于阈值，不回复任何消息
-                    logger.info(f'图片识别相似度 {similarity:.4f} 低于用户阈值 {user_threshold:.4f}，不回复')
+                    logger.info(f'图片识别未匹配，最高相似度 {similarity:.2f} 低于阈值 {user_threshold:.2f}')
 
         except Exception as e:
             logger.error(f'Error handling image: {e}')

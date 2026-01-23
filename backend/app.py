@@ -631,13 +631,16 @@ def search_similar():
                 logger.error(f"记录用户搜索次数失败: {e}")
 
             # 【优化】使用 FAISS HNSW 向量搜索 + 综合评分重排序
-            print(f"DEBUG: Searching with threshold: {threshold}, vector length: {len(query_features)}")
+            debug_enabled = bool(getattr(config, 'DEBUG', False))
+            if debug_enabled:
+                logger.debug(f"Searching with threshold: {threshold}, vector length: {len(query_features)}")
 
             # 1. 扩大召回范围：FAISS 先找前 50 个候选 (Primary Search)
             # 使用较低的阈值召回，防止漏掉可能的匹配
             candidates_limit = 50
             raw_results = db.search_similar_images(query_features, limit=candidates_limit, threshold=0.05)
-            print(f"DEBUG: FAISS recalled {len(raw_results) if raw_results else 0} candidates")
+            if debug_enabled:
+                logger.debug(f"FAISS recalled {len(raw_results) if raw_results else 0} candidates")
 
             # 2. 重排序 (Re-ranking) - 综合评分
             refined_results = []
@@ -655,7 +658,8 @@ def search_similar():
                     if not candidate_img_path or not os.path.exists(candidate_img_path):
                         final_score = res['similarity']
                         breakdown = {}
-                        print(f"DEBUG: Candidate image not found, using DINO score: {final_score:.3f}")
+                        if debug_enabled:
+                            logger.debug(f"Candidate image not found, using DINO score: {final_score:.3f}")
                     else:
                         # 计算综合评分
                         hybrid_data = extractor.calculate_hybrid_similarity(
@@ -676,7 +680,8 @@ def search_similar():
 
                 # 3. 按新的综合分数重新排序
                 refined_results.sort(key=lambda x: x['similarity'], reverse=True)
-                print(f"DEBUG: Re-ranking completed, best score: {refined_results[0]['similarity']:.3f}")
+                if debug_enabled:
+                    logger.debug(f"Re-ranking completed, best score: {refined_results[0]['similarity']:.3f}")
 
             # 4. 应用用户阈值和店铺过滤
             results = []
@@ -686,16 +691,20 @@ def search_similar():
                 if similarity >= threshold:
                     # 检查店铺权限
                     if user_shops and result.get('shop_name') not in user_shops:
-                        print(f"DEBUG: Skipping result from shop {result.get('shop_name')} - not in user shops {user_shops}")
+                        if debug_enabled:
+                            logger.debug(f"Skipping result from shop {result.get('shop_name')} - not in user shops {user_shops}")
                         continue
                     results.append(result)
                     if len(results) >= limit:
                         break
 
-            print(f"DEBUG: Filtered results count (threshold {threshold}): {len(results)}")
-            if results:
-                print(f"DEBUG: Best match similarity: {results[0]['similarity']:.3f} (original DINO: {results[0].get('original_similarity', 0):.3f})")
-            print(f"DEBUG: Total indexed images: {db.get_total_indexed_images()}")
+            if debug_enabled:
+                logger.debug(f"Filtered results count (threshold {threshold}): {len(results)}")
+                if results:
+                    logger.debug(
+                        f"Best match similarity: {results[0]['similarity']:.3f} (original DINO: {results[0].get('original_similarity', 0):.3f})"
+                    )
+                logger.debug(f"Total indexed images: {db.get_total_indexed_images()}")
 
             # 严格执行阈值：如果没有满足阈值的结果，则返回空结果
             # 不再使用任何硬编码阈值兜底（例如 >0.8）
@@ -744,6 +753,21 @@ def search_similar():
                     if weidian_id:
                         website_urls = db.generate_website_urls(weidian_id)
 
+                    selected_indexes = []
+                    custom_urls = []
+                    uploaded_reply_images = []
+                    try:
+                        if product_info and product_info.get('custom_reply_images'):
+                            selected_indexes = json.loads(product_info.get('custom_reply_images') or '[]')
+                        if product_info and product_info.get('custom_image_urls'):
+                            custom_urls = json.loads(product_info.get('custom_image_urls') or '[]')
+                        if product_info and product_info.get('uploaded_reply_images'):
+                            uploaded_reply_images = json.loads(product_info.get('uploaded_reply_images') or '[]')
+                    except Exception:
+                        selected_indexes = []
+                        custom_urls = []
+                        uploaded_reply_images = []
+
                     result_data = {
                         'rank': i + 1,
                         'similarity': float(result['similarity']),
@@ -763,7 +787,9 @@ def search_similar():
                             'imageSource': product_info.get('image_source', 'product') if product_info else 'product',
                             'custom_reply_text': product_info.get('custom_reply_text', '') if product_info else '',
                             'replyScope': product_info.get('reply_scope', 'all') if product_info else 'all',
-                            'uploaded_reply_images': json.loads(product_info.get('uploaded_reply_images', '[]')) if product_info and product_info.get('uploaded_reply_images') else [],
+                            'uploaded_reply_images': uploaded_reply_images,
+                            'selectedImageIndexes': selected_indexes,
+                            'customImageUrls': custom_urls,
                             'images': actual_images if actual_images else [f"/api/image/{result['id']}/{result['image_index']}"],  # 使用实际图片列表
                             'websiteUrls': website_urls  # 添加所有网站的链接
                         }
