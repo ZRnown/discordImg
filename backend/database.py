@@ -318,6 +318,21 @@ class Database:
                 )
             ''')
 
+            # 网站每日回复统计表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS website_reply_stats_daily (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    website_id INTEGER NOT NULL,
+                    stat_date TEXT NOT NULL,
+                    stat_replies_text INTEGER DEFAULT 0,
+                    stat_replies_image INTEGER DEFAULT 0,
+                    stat_replies_total INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(website_id, stat_date),
+                    FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE
+                )
+            ''')
+
             # 为website_configs表添加rotation_interval字段
             try:
                 cursor.execute('ALTER TABLE website_configs ADD COLUMN rotation_interval INTEGER DEFAULT 180')
@@ -1699,11 +1714,17 @@ class Database:
                         wc.id_pattern, wc.badge_color, wc.reply_template,
                         wc.rotation_interval, wc.rotation_enabled, wc.message_filters,
                         wc.stat_replies_text, wc.stat_replies_image, wc.stat_replies_total,
+                        COALESCE(wrd.stat_replies_text, 0) as stat_replies_daily_text,
+                        COALESCE(wrd.stat_replies_image, 0) as stat_replies_daily_image,
+                        COALESCE(wrd.stat_replies_total, 0) as stat_replies_daily_total,
                         wc.created_at,
                         GROUP_CONCAT(wcb.channel_id) as channels
                     FROM website_configs wc
                     LEFT JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
-                    GROUP BY wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.reply_template, wc.rotation_interval, wc.rotation_enabled, wc.message_filters, wc.stat_replies_text, wc.stat_replies_image, wc.stat_replies_total, wc.created_at
+                    LEFT JOIN website_reply_stats_daily wrd
+                        ON wc.id = wrd.website_id
+                        AND wrd.stat_date = date('now','localtime')
+                    GROUP BY wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.reply_template, wc.rotation_interval, wc.rotation_enabled, wc.message_filters, wc.stat_replies_text, wc.stat_replies_image, wc.stat_replies_total, wrd.stat_replies_text, wrd.stat_replies_image, wrd.stat_replies_total, wc.created_at
                     ORDER BY wc.created_at
                 ''')
 
@@ -1713,6 +1734,9 @@ class Database:
                     config['stat_replies_text'] = config.get('stat_replies_text', 0) or 0
                     config['stat_replies_image'] = config.get('stat_replies_image', 0) or 0
                     config['stat_replies_total'] = config.get('stat_replies_total', 0) or 0
+                    config['stat_replies_daily_text'] = config.get('stat_replies_daily_text', 0) or 0
+                    config['stat_replies_daily_image'] = config.get('stat_replies_daily_image', 0) or 0
+                    config['stat_replies_daily_total'] = config.get('stat_replies_daily_total', 0) or 0
                     # 将channels字符串解析为数组
                     if config.get('channels'):
                         config['channels'] = config['channels'].split(',') if config['channels'] else []
@@ -1741,6 +1765,22 @@ class Database:
                     SET {', '.join(updates)}
                     WHERE id = ?
                 ''', (website_id,))
+                daily_text = 1 if has_text else 0
+                daily_image = 1 if has_image else 0
+                cursor.execute('''
+                    INSERT INTO website_reply_stats_daily (
+                        website_id,
+                        stat_date,
+                        stat_replies_total,
+                        stat_replies_text,
+                        stat_replies_image
+                    )
+                    VALUES (?, date('now','localtime'), 1, ?, ?)
+                    ON CONFLICT(website_id, stat_date) DO UPDATE SET
+                        stat_replies_total = stat_replies_total + 1,
+                        stat_replies_text = stat_replies_text + excluded.stat_replies_text,
+                        stat_replies_image = stat_replies_image + excluded.stat_replies_image
+                ''', (website_id, daily_text, daily_image))
                 conn.commit()
                 return cursor.rowcount > 0
         except Exception as e:
@@ -2247,6 +2287,12 @@ class Database:
 
                 cursor.execute("SELECT COALESCE(SUM(stat_replies_total), 0) FROM website_configs")
                 total_replies = cursor.fetchone()[0] or 0
+                cursor.execute("""
+                    SELECT COALESCE(SUM(stat_replies_total), 0)
+                    FROM website_reply_stats_daily
+                    WHERE stat_date = date('now','localtime')
+                """)
+                daily_replies = cursor.fetchone()[0] or 0
 
                 if shop_count == 0 and role != 'admin':
                     return {
@@ -2254,7 +2300,8 @@ class Database:
                         'product_count': 0,
                         'image_count': 0,
                         'user_count': 0,
-                        'total_replies': total_replies
+                        'total_replies': total_replies,
+                        'daily_replies_total': daily_replies
                     }
 
                 # 2. 统计商品
@@ -2293,11 +2340,19 @@ class Database:
                     'product_count': product_count,
                     'image_count': image_count,
                     'user_count': user_count,
-                    'total_replies': total_replies
+                    'total_replies': total_replies,
+                    'daily_replies_total': daily_replies
                 }
         except Exception as e:
             logger.error(f"获取系统统计信息失败: {e}")
-            return {'shop_count': 0, 'product_count': 0, 'image_count': 0, 'user_count': 0, 'total_replies': 0}
+            return {
+                'shop_count': 0,
+                'product_count': 0,
+                'image_count': 0,
+                'user_count': 0,
+                'total_replies': 0,
+                'daily_replies_total': 0
+            }
 
     def cleanup_orphaned_images(self) -> int:
         """清理孤立的图片记录（没有对应商品的图片）"""

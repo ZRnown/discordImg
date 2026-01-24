@@ -1656,7 +1656,14 @@ def get_system_stats():
     try:
         user = get_current_user()
         if not user:
-            return jsonify({'shop_count': 0, 'product_count': 0, 'image_count': 0, 'user_count': 0, 'total_replies': 0})
+            return jsonify({
+                'shop_count': 0,
+                'product_count': 0,
+                'image_count': 0,
+                'user_count': 0,
+                'total_replies': 0,
+                'daily_replies_total': 0
+            })
         stats = db.get_system_stats(user['id'], user['role'])
         return jsonify(stats)
     except Exception as e:

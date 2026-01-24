@@ -1466,6 +1466,18 @@ export function AccountsView() {
                             <div className="text-[10px] text-muted-foreground">图片回复</div>
                             <div className="text-sm font-semibold">{website.stat_replies_image || 0}</div>
                           </div>
+                          <div className="bg-muted/40 px-2 py-1 rounded">
+                            <div className="text-[10px] text-muted-foreground">今日总</div>
+                            <div className="text-sm font-semibold">{website.stat_replies_daily_total || 0}</div>
+                          </div>
+                          <div className="bg-muted/40 px-2 py-1 rounded">
+                            <div className="text-[10px] text-muted-foreground">今日文本</div>
+                            <div className="text-sm font-semibold">{website.stat_replies_daily_text || 0}</div>
+                          </div>
+                          <div className="bg-muted/40 px-2 py-1 rounded">
+                            <div className="text-[10px] text-muted-foreground">今日图片</div>
+                            <div className="text-sm font-semibold">{website.stat_replies_daily_image || 0}</div>
+                          </div>
                         </div>
                       </div>
                     </div>
