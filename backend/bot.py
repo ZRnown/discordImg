@@ -1319,6 +1319,15 @@ class DiscordBotClient(discord.Client):
             if not search_query:
                 return
 
+            # 移除自定义表情，避免表情ID/名称误触发关键词
+            cleaned_query = re.sub(r'<a?:\w+:\d+>', ' ', search_query)
+            cleaned_query = re.sub(r'\s+', ' ', cleaned_query).strip()
+            if not cleaned_query:
+                return
+            if not re.search(r'\w', cleaned_query):
+                return
+            search_query = cleaned_query
+
             # 过滤太短的消息（至少需要2个字符）
             if len(search_query) < 2:
                 return
@@ -1374,29 +1383,58 @@ class DiscordBotClient(discord.Client):
             def _product_matches_query(product):
                 phrases = []
                 english_title = product.get('english_title') or product.get('englishTitle') or ''
-                phrases.extend(_split_keywords(english_title))
+                for phrase in _split_keywords(english_title):
+                    phrases.append((phrase, 'english_title'))
                 title = _normalize_phrase(product.get('title') or '')
                 if title:
-                    phrases.append(title)
+                    phrases.append((title, 'title'))
                 if not phrases:
-                    return False
+                    return False, None
                 seen = set()
-                for phrase in phrases:
+                for phrase, source in phrases:
                     if phrase in seen:
                         continue
                     seen.add(phrase)
                     if phrase and phrase in query_lower:
-                        return True
+                        return True, {
+                            'phrase': phrase,
+                            'source': source,
+                            'rule': 'phrase_in_query'
+                        }
                     if query_has_multiple_words and query_compact and query_compact in phrase:
-                        return True
-                return False
+                        return True, {
+                            'phrase': phrase,
+                            'source': source,
+                            'rule': 'query_in_phrase'
+                        }
+                return False, None
 
-            matched_products = [p for p in all_products if _product_matches_query(p)]
+            matched_products = []
+            match_reasons = {}
+            for product in all_products:
+                matched, reason = _product_matches_query(product)
+                if matched:
+                    matched_products.append(product)
+                    product_id = product.get('id')
+                    if reason and product_id is not None:
+                        match_reasons[product_id] = reason
             if not matched_products:
                 logger.info(f'关键词搜索无精确匹配: {search_query}')
                 return
 
             logger.info(f'关键词搜索成功: "{search_query}" -> 匹配 {len(matched_products)} 个商品')
+            for product in matched_products:
+                product_id = product.get('id')
+                reason = match_reasons.get(product_id)
+                if not reason:
+                    continue
+                rule_desc = '关键词出现在消息中'
+                if reason.get('rule') == 'query_in_phrase':
+                    rule_desc = '消息多词组合包含于商品标题/关键词'
+                logger.info(
+                    f'关键词命中: query="{search_query}" | 商品 {product_id} | 命中词 "{reason.get("phrase")}" '
+                    f'({reason.get("source")}) | 原因: {rule_desc}'
+                )
 
             # 检查频道是否绑定了网站配置（必须绑定才能回复）
             website_configs = await self.get_website_configs_by_channel_async(message.channel.id)
