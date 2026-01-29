@@ -308,6 +308,8 @@ class Database:
                     id_pattern TEXT NOT NULL,
                     badge_color TEXT DEFAULT 'blue',
                     reply_template TEXT DEFAULT '{url}',
+                    image_similarity_threshold REAL DEFAULT NULL,
+                    blocked_role_ids TEXT DEFAULT '[]',
                     rotation_interval INTEGER DEFAULT 180,
                     rotation_enabled INTEGER DEFAULT 1,  -- 是否启用轮换功能 (1=启用, 0=禁用)
                     message_filters TEXT DEFAULT '[]',  -- JSON格式存储过滤条件数组
@@ -341,6 +343,16 @@ class Database:
 
             try:
                 cursor.execute('ALTER TABLE website_configs ADD COLUMN reply_template TEXT DEFAULT \'{url}\'')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE website_configs ADD COLUMN image_similarity_threshold REAL DEFAULT NULL')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE website_configs ADD COLUMN blocked_role_ids TEXT DEFAULT \'[]\'')
             except sqlite3.OperationalError:
                 pass
 
@@ -1712,6 +1724,7 @@ class Database:
                     SELECT
                         wc.id, wc.name, wc.display_name, wc.url_template,
                         wc.id_pattern, wc.badge_color, wc.reply_template,
+                        wc.image_similarity_threshold, wc.blocked_role_ids,
                         wc.rotation_interval, wc.rotation_enabled, wc.message_filters,
                         wc.stat_replies_text, wc.stat_replies_image, wc.stat_replies_total,
                         COALESCE(wrd.stat_replies_text, 0) as stat_replies_daily_text,
@@ -1724,7 +1737,7 @@ class Database:
                     LEFT JOIN website_reply_stats_daily wrd
                         ON wc.id = wrd.website_id
                         AND wrd.stat_date = date('now','localtime')
-                    GROUP BY wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.reply_template, wc.rotation_interval, wc.rotation_enabled, wc.message_filters, wc.stat_replies_text, wc.stat_replies_image, wc.stat_replies_total, wrd.stat_replies_text, wrd.stat_replies_image, wrd.stat_replies_total, wc.created_at
+                    GROUP BY wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.reply_template, wc.image_similarity_threshold, wc.blocked_role_ids, wc.rotation_interval, wc.rotation_enabled, wc.message_filters, wc.stat_replies_text, wc.stat_replies_image, wc.stat_replies_total, wrd.stat_replies_text, wrd.stat_replies_image, wrd.stat_replies_total, wc.created_at
                     ORDER BY wc.created_at
                 ''')
 
@@ -1787,31 +1800,31 @@ class Database:
             logger.error(f"更新网站回复统计失败: {e}")
             return False
 
-    def add_website_config(self, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str = 'blue', reply_template: str = '{url}', rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> bool:
+    def add_website_config(self, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str = 'blue', reply_template: str = '{url}', image_similarity_threshold: float = None, blocked_role_ids: str = '[]', rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> bool:
         """添加网站配置"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    INSERT INTO website_configs (name, display_name, url_template, id_pattern, badge_color, reply_template, rotation_interval, rotation_enabled, message_filters)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (name, display_name, url_template, id_pattern, badge_color, reply_template, rotation_interval, rotation_enabled, message_filters))
+                    INSERT INTO website_configs (name, display_name, url_template, id_pattern, badge_color, reply_template, image_similarity_threshold, blocked_role_ids, rotation_interval, rotation_enabled, message_filters)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (name, display_name, url_template, id_pattern, badge_color, reply_template, image_similarity_threshold, blocked_role_ids, rotation_interval, rotation_enabled, message_filters))
                 conn.commit()
                 return True
         except Exception as e:
             logger.error(f"添加网站配置失败: {e}")
             return False
 
-    def update_website_config(self, config_id: int, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str, reply_template: str, rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> bool:
+    def update_website_config(self, config_id: int, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str, reply_template: str, image_similarity_threshold: float = None, blocked_role_ids: str = '[]', rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> bool:
         """更新网站配置"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     UPDATE website_configs
-                    SET name = ?, display_name = ?, url_template = ?, id_pattern = ?, badge_color = ?, reply_template = ?, rotation_interval = ?, rotation_enabled = ?, message_filters = ?
+                    SET name = ?, display_name = ?, url_template = ?, id_pattern = ?, badge_color = ?, reply_template = ?, image_similarity_threshold = ?, blocked_role_ids = ?, rotation_interval = ?, rotation_enabled = ?, message_filters = ?
                     WHERE id = ?
-                ''', (name, display_name, url_template, id_pattern, badge_color, reply_template, rotation_interval, rotation_enabled, message_filters, config_id))
+                ''', (name, display_name, url_template, id_pattern, badge_color, reply_template, image_similarity_threshold, blocked_role_ids, rotation_interval, rotation_enabled, message_filters, config_id))
                 conn.commit()
                 return cursor.rowcount > 0
         except Exception as e:
@@ -1922,7 +1935,8 @@ class Database:
                 if user_id:
                     cursor.execute('''
                         SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern,
-                               wc.badge_color, wc.reply_template, wc.rotation_interval, wc.rotation_enabled, wc.message_filters
+                               wc.badge_color, wc.reply_template, wc.image_similarity_threshold, wc.blocked_role_ids,
+                               wc.rotation_interval, wc.rotation_enabled, wc.message_filters
                         FROM website_configs wc
                         JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
                         WHERE wcb.channel_id = ? AND wcb.user_id = ?
@@ -1931,7 +1945,8 @@ class Database:
                 else:
                     cursor.execute('''
                         SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern,
-                               wc.badge_color, wc.reply_template, wc.rotation_interval, wc.rotation_enabled, wc.message_filters
+                               wc.badge_color, wc.reply_template, wc.image_similarity_threshold, wc.blocked_role_ids,
+                               wc.rotation_interval, wc.rotation_enabled, wc.message_filters
                         FROM website_configs wc
                         JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
                         WHERE wcb.channel_id = ?

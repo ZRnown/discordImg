@@ -102,7 +102,9 @@ export function AccountsView() {
     url_template: '',
     id_pattern: '',
     badge_color: 'blue',
-    reply_template: '{url}'
+    reply_template: '{url}',
+    image_similarity_threshold: '',
+    blocked_role_ids: ''
   })
   const [websiteChannels, setWebsiteChannels] = useState<{[key: number]: string[]}>({})
   const [channelInputs, setChannelInputs] = useState<{[key: number]: string}>({})
@@ -131,6 +133,35 @@ export function AccountsView() {
   const [newFilter, setNewFilter] = useState({
     filter_type: 'contains',
     filter_value: ''
+  })
+
+  const formatRoleIdsForInput = (value: any) => {
+    if (!value) return ''
+    if (Array.isArray(value)) return value.join(',')
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value)
+        if (Array.isArray(parsed)) {
+          return parsed.join(',')
+        }
+      } catch {
+        // ignore
+      }
+      return value
+    }
+    return ''
+  }
+
+  const formatThresholdForInput = (value: any) => {
+    if (value === null || value === undefined || value === '') return ''
+    const num = Number(value)
+    return Number.isFinite(num) ? String(num) : ''
+  }
+
+  const formatWebsiteForEdit = (website: any) => ({
+    ...website,
+    image_similarity_threshold: formatThresholdForInput(website?.image_similarity_threshold),
+    blocked_role_ids: formatRoleIdsForInput(website?.blocked_role_ids)
   })
 
 
@@ -464,7 +495,16 @@ export function AccountsView() {
       if (res.ok) {
         toast.success('网站配置已添加')
         setShowAddWebsite(false)
-        setNewWebsite({ name: '', display_name: '', url_template: '', id_pattern: '', badge_color: 'blue', reply_template: '{url}' })
+        setNewWebsite({
+          name: '',
+          display_name: '',
+          url_template: '',
+          id_pattern: '',
+          badge_color: 'blue',
+          reply_template: '{url}',
+          image_similarity_threshold: '',
+          blocked_role_ids: ''
+        })
         fetchWebsites(true)
       } else {
         toast.error('添加失败')
@@ -1133,6 +1173,30 @@ export function AccountsView() {
                   使用 <span className="font-mono">{`{url}`}</span> 作为链接占位符。
                 </p>
               </div>
+              <div>
+                <Label>图片相似度阈值 (0-1)</Label>
+                <Input
+                  type="number"
+                  step="0.01"
+                  value={editingWebsite.image_similarity_threshold ?? ''}
+                  onChange={e => setEditingWebsite(prev => ({ ...prev, image_similarity_threshold: e.target.value }))}
+                  placeholder="留空=使用全局阈值"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  单独设置优先级高于全局。
+                </p>
+              </div>
+              <div>
+                <Label>屏蔽身份组ID</Label>
+                <Input
+                  value={editingWebsite.blocked_role_ids ?? ''}
+                  onChange={e => setEditingWebsite(prev => ({ ...prev, blocked_role_ids: e.target.value }))}
+                  placeholder="逗号分隔，例如: 123,456"
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  命中身份组的用户不回复。
+                </p>
+              </div>
                 <div>
                   <Label>ID提取模式</Label>
                   <Input
@@ -1374,6 +1438,30 @@ export function AccountsView() {
                         </p>
                       </div>
                       <div>
+                        <Label>图片相似度阈值 (0-1)</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={newWebsite.image_similarity_threshold}
+                          onChange={e => setNewWebsite(prev => ({ ...prev, image_similarity_threshold: e.target.value }))}
+                          placeholder="留空=使用全局阈值"
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                          单独设置优先级高于全局。
+                        </p>
+                      </div>
+                      <div>
+                        <Label>屏蔽身份组ID</Label>
+                        <Input
+                          value={newWebsite.blocked_role_ids}
+                          onChange={e => setNewWebsite(prev => ({ ...prev, blocked_role_ids: e.target.value }))}
+                          placeholder="逗号分隔，例如: 123,456"
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                          命中身份组的用户不回复。
+                        </p>
+                      </div>
+                      <div>
                         <Label>ID提取模式</Label>
                         <Input
                           value={newWebsite.id_pattern}
@@ -1439,7 +1527,7 @@ export function AccountsView() {
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => setEditingWebsite(website)}
+                              onClick={() => setEditingWebsite(formatWebsiteForEdit(website))}
                             >
                               <Edit className="w-4 h-4" />
                             </Button>

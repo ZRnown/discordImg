@@ -310,7 +310,7 @@ class DiscordBotClient(discord.Client):
             logger.error(f"❌ 刷新频道白名单缓存失败: {e}")
             # 失败时不更新时间戳，下次会重试
 
-    async def schedule_reply(self, message, product, custom_reply=None):
+    async def schedule_reply(self, message, product, custom_reply=None, match_context=None):
         """调度回复到合适的发送账号 (增强版：带详细状态诊断)"""
 
         try:
@@ -345,10 +345,68 @@ class DiscordBotClient(discord.Client):
                 except (TypeError, ValueError):
                     return default
 
+            def _coerce_float(value):
+                try:
+                    if value is None or value == '':
+                        return None
+                    return float(value)
+                except (TypeError, ValueError):
+                    return None
+
+            def _coerce_role_ids(value):
+                if not value:
+                    return []
+                if isinstance(value, list):
+                    return [str(v).strip() for v in value if str(v).strip()]
+                if isinstance(value, str):
+                    try:
+                        parsed = json.loads(value)
+                        if isinstance(parsed, list):
+                            return [str(v).strip() for v in parsed if str(v).strip()]
+                    except Exception:
+                        pass
+                    return [v.strip() for v in value.split(',') if v.strip()]
+                return []
+
             # === 获取当前真正在线的机器人账号 ID ===
             online_client_ids = [c.account_id for c in bot_clients if c.is_ready() and not c.is_closed()]
 
             for website_config in website_configs:
+                blocked_role_ids = _coerce_role_ids(website_config.get('blocked_role_ids'))
+                if blocked_role_ids and getattr(message, 'guild', None):
+                    author_roles = getattr(message.author, 'roles', []) or []
+                    author_role_ids = {str(role.id) for role in author_roles if getattr(role, 'id', None) is not None}
+                    blocked_hit = author_role_ids.intersection(set(blocked_role_ids))
+                    if blocked_hit:
+                        logger.info(
+                            f"⛔ 身份组过滤: 频道 {message.channel.id} 用户 {message.author.id} "
+                            f"命中屏蔽身份组 {sorted(blocked_hit)}，跳过回复"
+                        )
+                        continue
+
+                if match_context and match_context.get('type') == 'image':
+                    similarity = _coerce_float(match_context.get('similarity')) or 0.0
+                    base_threshold = _coerce_float(match_context.get('base_threshold'))
+                    if base_threshold is None:
+                        base_threshold = config.DISCORD_SIMILARITY_THRESHOLD
+                    website_threshold = _coerce_float(website_config.get('image_similarity_threshold'))
+                    threshold_to_use = website_threshold if website_threshold is not None else base_threshold
+                    block_threshold = _coerce_float(match_context.get('block_threshold'))
+                    if block_threshold is None:
+                        block_threshold = getattr(config, 'DISCORD_SIMILARITY_BLOCK_THRESHOLD', 0.995)
+
+                    if similarity >= block_threshold:
+                        logger.info(
+                            f"🚫 图片相似度过高: {similarity:.3f} >= {block_threshold:.3f}，已屏蔽回复"
+                        )
+                        continue
+
+                    if similarity < threshold_to_use:
+                        logger.info(
+                            f"📷 图片相似度 {similarity:.3f} 低于网站阈值 {threshold_to_use:.3f}，跳过回复"
+                        )
+                        continue
+
                 active_custom_reply = custom_reply
                 response_content = self._generate_reply_content(
                     product,
@@ -1181,72 +1239,84 @@ class DiscordBotClient(discord.Client):
 
                 logger.debug(f'最佳匹配相似度: {similarity:.4f}, 用户阈值: {user_threshold:.4f}')
 
-                # 严格执行用户设置的阈值
-                if similarity >= user_threshold:
-                    product = best_match.get('product', {})
-                    product_title = (product.get('title') or '').strip()
+                block_threshold = getattr(config, 'DISCORD_SIMILARITY_BLOCK_THRESHOLD', 0.995)
+                if similarity >= block_threshold:
                     logger.info(
-                        f'📷 图片匹配: 商品 {product.get("id")} {product_title} | 相似度 {similarity:.2f} | 频道: {message.channel.name}'
+                        f'🚫 图片相似度过高已屏蔽: {similarity:.3f} >= {block_threshold:.3f} | 频道: {message.channel.name}'
                     )
+                    return
 
-                    product_rule_enabled = product.get('ruleEnabled', True)
-                    if isinstance(product_rule_enabled, str):
-                        product_rule_enabled = product_rule_enabled.strip().lower() not in {'0', 'false', 'no', 'off'}
-                    elif isinstance(product_rule_enabled, (int, float)):
-                        product_rule_enabled = bool(product_rule_enabled)
+                product = best_match.get('product', {})
+                product_title = (product.get('title') or '').strip()
+                logger.info(
+                    f'📷 图片匹配: 商品 {product.get("id")} {product_title} | 相似度 {similarity:.2f} | 频道: {message.channel.name}'
+                )
 
-                    def _coerce_list(value):
-                        if not value:
-                            return []
-                        if isinstance(value, list):
-                            return value
-                        if isinstance(value, str):
-                            try:
-                                parsed = json.loads(value)
-                            except json.JSONDecodeError:
-                                return []
-                            return parsed if isinstance(parsed, list) else []
+                product_rule_enabled = product.get('ruleEnabled', True)
+                if isinstance(product_rule_enabled, str):
+                    product_rule_enabled = product_rule_enabled.strip().lower() not in {'0', 'false', 'no', 'off'}
+                elif isinstance(product_rule_enabled, (int, float)):
+                    product_rule_enabled = bool(product_rule_enabled)
+
+                def _coerce_list(value):
+                    if not value:
                         return []
+                    if isinstance(value, list):
+                        return value
+                    if isinstance(value, str):
+                        try:
+                            parsed = json.loads(value)
+                        except json.JSONDecodeError:
+                            return []
+                        return parsed if isinstance(parsed, list) else []
+                    return []
 
-                    custom_reply = None
-                    image_source = product.get('imageSource') or product.get('image_source') or 'product'
-                    has_custom_images = False
+                custom_reply = None
+                image_source = product.get('imageSource') or product.get('image_source') or 'product'
+                has_custom_images = False
 
-                    if image_source == 'upload':
-                        uploaded_imgs = _coerce_list(product.get('uploaded_reply_images'))
-                        product['uploaded_reply_images'] = uploaded_imgs
-                        has_custom_images = bool(uploaded_imgs)
-                    elif image_source == 'custom':
-                        custom_urls = _coerce_list(product.get('customImageUrls') or product.get('custom_image_urls'))
-                        if custom_urls:
-                            product['customImageUrls'] = custom_urls
-                        has_custom_images = bool(custom_urls)
-                    elif image_source == 'product':
-                        selected_indexes = _coerce_list(product.get('selectedImageIndexes') or product.get('custom_reply_images'))
-                        if selected_indexes:
-                            product['selectedImageIndexes'] = selected_indexes
-                        has_custom_images = bool(selected_indexes)
+                if image_source == 'upload':
+                    uploaded_imgs = _coerce_list(product.get('uploaded_reply_images'))
+                    product['uploaded_reply_images'] = uploaded_imgs
+                    has_custom_images = bool(uploaded_imgs)
+                elif image_source == 'custom':
+                    custom_urls = _coerce_list(product.get('customImageUrls') or product.get('custom_image_urls'))
+                    if custom_urls:
+                        product['customImageUrls'] = custom_urls
+                    has_custom_images = bool(custom_urls)
+                elif image_source == 'product':
+                    selected_indexes = _coerce_list(product.get('selectedImageIndexes') or product.get('custom_reply_images'))
+                    if selected_indexes:
+                        product['selectedImageIndexes'] = selected_indexes
+                    has_custom_images = bool(selected_indexes)
 
-                    if not product_rule_enabled or has_custom_images:
-                        custom_text = (product.get('custom_reply_text') or '').strip()
-                        custom_reply = {
-                            'reply_type': 'text' if custom_text else 'custom_only',
-                            'content': custom_text,
-                            'product_data': product
-                        }
-                        if not product_rule_enabled:
-                            logger.info(f"商品 {product.get('id')} 规则已禁用，准备发送自定义回复")
-                        elif has_custom_images:
-                            logger.info(f"商品 {product.get('id')} 配置了自定义图片，准备发送自定义回复")
-                    elif product_rule_enabled:
-                        custom_reply = self._get_custom_reply()
+                if not product_rule_enabled or has_custom_images:
+                    custom_text = (product.get('custom_reply_text') or '').strip()
+                    custom_reply = {
+                        'reply_type': 'text' if custom_text else 'custom_only',
+                        'content': custom_text,
+                        'product_data': product
+                    }
+                    if not product_rule_enabled:
+                        logger.info(f"商品 {product.get('id')} 规则已禁用，准备发送自定义回复")
+                    elif has_custom_images:
+                        logger.info(f"商品 {product.get('id')} 配置了自定义图片，准备发送自定义回复")
+                elif product_rule_enabled:
+                    custom_reply = self._get_custom_reply()
 
-                    await self.schedule_reply(message, product, custom_reply)
+                await self.schedule_reply(
+                    message,
+                    product,
+                    custom_reply,
+                    match_context={
+                        'type': 'image',
+                        'similarity': similarity,
+                        'base_threshold': user_threshold,
+                        'block_threshold': block_threshold
+                    }
+                )
 
-                    logger.debug(f'图片识别成功，相似度: {similarity:.4f}')
-                else:
-                    # 相似度低于阈值，不回复任何消息
-                    logger.info(f'图片识别未匹配，最高相似度 {similarity:.2f} 低于阈值 {user_threshold:.2f}')
+                logger.debug(f'图片识别完成，相似度: {similarity:.4f}')
 
         except Exception as e:
             logger.error(f'Error handling image: {e}')
@@ -1357,9 +1427,6 @@ class DiscordBotClient(discord.Client):
                 return
 
             query_lower = re.sub(r'\s+', ' ', search_query.strip().lower())
-            query_compact = re.sub(r'\s+', ' ', re.sub(r'[^\w\s]+', ' ', query_lower)).strip()
-            query_terms = [term for term in re.findall(r'\w+', query_lower) if term]
-            query_has_multiple_words = len(query_terms) >= 2
 
             def _normalize_phrase(value: str) -> str:
                 return re.sub(r'\s+', ' ', value).strip().lower()
@@ -1401,12 +1468,6 @@ class DiscordBotClient(discord.Client):
                             'source': source,
                             'rule': 'phrase_in_query'
                         }
-                    if query_has_multiple_words and query_compact and query_compact in phrase:
-                        return True, {
-                            'phrase': phrase,
-                            'source': source,
-                            'rule': 'query_in_phrase'
-                        }
                 return False, None
 
             matched_products = []
@@ -1429,8 +1490,6 @@ class DiscordBotClient(discord.Client):
                 if not reason:
                     continue
                 rule_desc = '关键词出现在消息中'
-                if reason.get('rule') == 'query_in_phrase':
-                    rule_desc = '消息多词组合包含于商品标题/关键词'
                 logger.info(
                     f'关键词命中: query="{search_query}" | 商品 {product_id} | 命中词 "{reason.get("phrase")}" '
                     f'({reason.get("source")}) | 原因: {rule_desc}'

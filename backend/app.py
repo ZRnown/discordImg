@@ -1309,11 +1309,56 @@ def add_website_config():
         id_pattern = data.get('id_pattern')
         badge_color = data.get('badge_color', 'blue')
         reply_template = data.get('reply_template') or '{url}'
+        image_similarity_threshold = data.get('image_similarity_threshold', None)
+        blocked_role_ids = data.get('blocked_role_ids', None)
 
         if not all([name, display_name, url_template, id_pattern]):
             return jsonify({'error': '所有字段都是必填的'}), 400
 
-        if db.add_website_config(name, display_name, url_template, id_pattern, badge_color, reply_template):
+        def _normalize_similarity(value):
+            if value is None or value == '':
+                return None
+            try:
+                val = float(value)
+            except (TypeError, ValueError):
+                raise ValueError('相似度必须是数字')
+            if not (0.0 <= val <= 1.0):
+                raise ValueError('相似度必须在0.0-1.0之间')
+            return val
+
+        def _normalize_blocked_roles(value):
+            if value is None:
+                return '[]'
+            roles = []
+            if isinstance(value, list):
+                roles = [str(r).strip() for r in value if str(r).strip()]
+            elif isinstance(value, str):
+                try:
+                    parsed = json.loads(value)
+                    if isinstance(parsed, list):
+                        roles = [str(r).strip() for r in parsed if str(r).strip()]
+                    else:
+                        roles = [s.strip() for s in value.split(',') if s.strip()]
+                except Exception:
+                    roles = [s.strip() for s in value.split(',') if s.strip()]
+            return json.dumps(roles, ensure_ascii=False)
+
+        try:
+            image_similarity_threshold = _normalize_similarity(image_similarity_threshold)
+            blocked_role_ids = _normalize_blocked_roles(blocked_role_ids)
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+
+        if db.add_website_config(
+            name,
+            display_name,
+            url_template,
+            id_pattern,
+            badge_color,
+            reply_template,
+            image_similarity_threshold,
+            blocked_role_ids
+        ):
             return jsonify({'success': True, 'message': '网站配置已添加'})
         else:
             return jsonify({'error': '添加失败'}), 500
@@ -1335,11 +1380,57 @@ def update_website_config(config_id):
         id_pattern = data.get('id_pattern')
         badge_color = data.get('badge_color', 'blue')
         reply_template = data.get('reply_template') or '{url}'
+        image_similarity_threshold = data.get('image_similarity_threshold', None)
+        blocked_role_ids = data.get('blocked_role_ids', None)
 
         if not all([name, display_name, url_template, id_pattern]):
             return jsonify({'error': '所有字段都是必填的'}), 400
 
-        if db.update_website_config(config_id, name, display_name, url_template, id_pattern, badge_color, reply_template):
+        def _normalize_similarity(value):
+            if value is None or value == '':
+                return None
+            try:
+                val = float(value)
+            except (TypeError, ValueError):
+                raise ValueError('相似度必须是数字')
+            if not (0.0 <= val <= 1.0):
+                raise ValueError('相似度必须在0.0-1.0之间')
+            return val
+
+        def _normalize_blocked_roles(value):
+            if value is None:
+                return '[]'
+            roles = []
+            if isinstance(value, list):
+                roles = [str(r).strip() for r in value if str(r).strip()]
+            elif isinstance(value, str):
+                try:
+                    parsed = json.loads(value)
+                    if isinstance(parsed, list):
+                        roles = [str(r).strip() for r in parsed if str(r).strip()]
+                    else:
+                        roles = [s.strip() for s in value.split(',') if s.strip()]
+                except Exception:
+                    roles = [s.strip() for s in value.split(',') if s.strip()]
+            return json.dumps(roles, ensure_ascii=False)
+
+        try:
+            image_similarity_threshold = _normalize_similarity(image_similarity_threshold)
+            blocked_role_ids = _normalize_blocked_roles(blocked_role_ids)
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+
+        if db.update_website_config(
+            config_id,
+            name,
+            display_name,
+            url_template,
+            id_pattern,
+            badge_color,
+            reply_template,
+            image_similarity_threshold,
+            blocked_role_ids
+        ):
             return jsonify({'success': True, 'message': '网站配置已更新'})
         else:
             return jsonify({'error': '更新失败'}), 500

@@ -27,6 +27,8 @@ class Config:
     # === Discord 配置 ===
     DISCORD_CHANNEL_ID = int(os.getenv('DISCORD_CHANNEL_ID', 0)) if os.getenv('DISCORD_CHANNEL_ID') else 0
     DISCORD_SIMILARITY_THRESHOLD = 0.6
+    # 相似度过高时不回复（用于屏蔽过于相似的图片）
+    DISCORD_SIMILARITY_BLOCK_THRESHOLD = 0.995
 
     # === 延迟配置 ===
     GLOBAL_REPLY_MIN_DELAY = 3.0
