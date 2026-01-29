@@ -353,22 +353,7 @@ class DiscordBotClient(discord.Client):
                 except (TypeError, ValueError):
                     return None
 
-            def _coerce_role_ids(value):
-                if not value:
-                    return []
-                if isinstance(value, list):
-                    return [str(v).strip() for v in value if str(v).strip()]
-                if isinstance(value, str):
-                    try:
-                        parsed = json.loads(value)
-                        if isinstance(parsed, list):
-                            return [str(v).strip() for v in parsed if str(v).strip()]
-                    except Exception:
-                        pass
-                    return [v.strip() for v in value.split(',') if v.strip()]
-                return []
-
-            def _filters_block_message(filters):
+            def _filters_block_message(filters, match_context=None):
                 message_content = (message.content or '').lower()
                 for filter_rule in filters:
                     raw_filter_value = filter_rule.get('filter_value') or ''
@@ -429,27 +414,49 @@ class DiscordBotClient(discord.Client):
                             blocked_id = blocked_id.strip()
                             if blocked_id == sender_id or blocked_id.lower() in sender_name:
                                 return True
+                    elif filter_type == 'role_id':
+                        role_ids = [rid.strip() for rid in filter_value.split(',') if rid.strip()]
+                        if role_ids and getattr(message, 'guild', None):
+                            author_roles = getattr(message.author, 'roles', []) or []
+                            author_role_ids = {str(role.id) for role in author_roles if getattr(role, 'id', None) is not None}
+                            if author_role_ids.intersection(set(role_ids)):
+                                return True
                     elif filter_type == 'image':
                         if self._message_has_image(message):
                             return True
+                    elif filter_type == 'image_similarity':
+                        if not match_context or match_context.get('type') != 'image':
+                            continue
+                        try:
+                            threshold = float(raw_filter_value)
+                        except (TypeError, ValueError):
+                            continue
+                        similarity = match_context.get('similarity', 0)
+                        try:
+                            similarity = float(similarity)
+                        except (TypeError, ValueError):
+                            similarity = 0
+                        if similarity >= threshold:
+                            return True
                 return False
+
+            global_image_filters = []
+            if match_context and match_context.get('type') == 'image':
+                try:
+                    global_filters = await asyncio.get_event_loop().run_in_executor(None, db.get_message_filters)
+                    global_image_filters = [
+                        f for f in (global_filters or []) if f.get('filter_type') == 'image_similarity'
+                    ]
+                except Exception as e:
+                    logger.error(f"获取全局过滤规则失败: {e}")
 
             # === 获取当前真正在线的机器人账号 ID ===
             online_client_ids = [c.account_id for c in bot_clients if c.is_ready() and not c.is_closed()]
 
             for website_config in website_configs:
-                blocked_role_ids = _coerce_role_ids(website_config.get('blocked_role_ids'))
-                if blocked_role_ids and getattr(message, 'guild', None):
-                    author_roles = getattr(message.author, 'roles', []) or []
-                    author_role_ids = {str(role.id) for role in author_roles if getattr(role, 'id', None) is not None}
-                    blocked_hit = author_role_ids.intersection(set(blocked_role_ids))
-                    if blocked_hit:
-                        logger.info(
-                            f"⛔ 身份组过滤: 频道 {message.channel.id} 用户 {message.author.id} "
-                            f"命中屏蔽身份组 {sorted(blocked_hit)}，跳过回复"
-                        )
-                        continue
-
+                if global_image_filters and _filters_block_message(global_image_filters, match_context=match_context):
+                    logger.info("消息被过滤(全局图片相似度)")
+                    return
                 if match_context and match_context.get('type') == 'image':
                     similarity = _coerce_float(match_context.get('similarity')) or 0.0
                     base_threshold = _coerce_float(match_context.get('base_threshold'))
@@ -538,7 +545,7 @@ class DiscordBotClient(discord.Client):
                             website_filters = json.loads(user_website_settings.get('message_filters', '[]') or '[]')
                         except json.JSONDecodeError:
                             website_filters = []
-                        if website_filters and _filters_block_message(website_filters):
+                        if website_filters and _filters_block_message(website_filters, match_context=match_context):
                             logger.info(f"消息被过滤(网站规则): {website_config.get('name')}")
                             continue
 

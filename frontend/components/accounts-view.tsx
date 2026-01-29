@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
-import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit, Clock } from "lucide-react"
+import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit, Clock, Sparkles } from "lucide-react"
 
 type NumericRangeFilterValue = {
   keyword: string
@@ -55,8 +55,14 @@ const formatMessageFilterLabel = (filter: any) => {
     const maxLabel = fields.max !== '' ? fields.max : '不限'
     return `数字范围: ${keyword} (${minLabel}-${maxLabel})`
   }
+  if (filter.filter_type === 'image_similarity') {
+    return `图片相似度 ≥ ${filter.filter_value}`
+  }
   if (filter.filter_type === 'image') {
     return '图片消息'
+  }
+  if (filter.filter_type === 'role_id') {
+    return `身份组ID: ${filter.filter_value}`
   }
   return `${filter.filter_type} "${filter.filter_value}"`
 }
@@ -127,7 +133,6 @@ export function AccountsView() {
   const [websiteFilters, setWebsiteFilters] = useState<{[key: number]: any[]}>({})
   const [showAddWebsiteFilter, setShowAddWebsiteFilter] = useState<number | null>(null)
   const [websiteSimilarityInputs, setWebsiteSimilarityInputs] = useState<{[key: number]: string}>({})
-  const [websiteBlockedRoleInputs, setWebsiteBlockedRoleInputs] = useState<{[key: number]: string}>({})
 
   // 消息过滤相关状态
   const [messageFilters, setMessageFilters] = useState<any[]>([])
@@ -138,23 +143,6 @@ export function AccountsView() {
     filter_value: ''
   })
 
-  const formatRoleIdsForInput = (value: any) => {
-    if (!value) return ''
-    if (Array.isArray(value)) return value.join(',')
-    if (typeof value === 'string') {
-      try {
-        const parsed = JSON.parse(value)
-        if (Array.isArray(parsed)) {
-          return parsed.join(',')
-        }
-      } catch {
-        // ignore
-      }
-      return value
-    }
-    return ''
-  }
-
   const formatThresholdForInput = (value: any) => {
     if (value === null || value === undefined || value === '') return ''
     const num = Number(value)
@@ -163,8 +151,7 @@ export function AccountsView() {
 
   const formatWebsiteForEdit = (website: any) => ({
     ...website,
-    image_similarity_threshold: formatThresholdForInput(website?.image_similarity_threshold),
-    blocked_role_ids: formatRoleIdsForInput(website?.blocked_role_ids)
+    image_similarity_threshold: formatThresholdForInput(website?.image_similarity_threshold)
   })
 
 
@@ -183,7 +170,6 @@ export function AccountsView() {
       const accounts: {[key: number]: any[]} = {}
       const filters: {[key: number]: any[]} = {}
       const similarityInputs: {[key: number]: string} = {}
-      const blockedRoleInputs: {[key: number]: string} = {}
 
       // 并行获取所有网站的过滤规则
       const filterPromises = websites.map(async (website: any) => {
@@ -206,7 +192,6 @@ export function AccountsView() {
         setRotationEnabled(prev => ({ ...prev, [website.id]: website.rotation_enabled !== 0 }))
         setRotationInputs(prev => ({ ...prev, [website.id]: (website.rotation_interval || 180).toString() }))
         similarityInputs[website.id] = formatThresholdForInput(website.image_similarity_threshold)
-        blockedRoleInputs[website.id] = formatRoleIdsForInput(website.blocked_role_ids)
       })
 
       // 等待所有过滤规则获取完成
@@ -217,7 +202,6 @@ export function AccountsView() {
       setWebsiteAccounts(accounts)
       setWebsiteFilters(filters)
       setWebsiteSimilarityInputs(similarityInputs)
-      setWebsiteBlockedRoleInputs(blockedRoleInputs)
     } catch (e) {
       console.error('获取网站配置失败:', e)
     }
@@ -575,7 +559,7 @@ export function AccountsView() {
           badge_color: website.badge_color,
           reply_template: website.reply_template || '{url}',
           image_similarity_threshold: websiteSimilarityInputs[websiteId] ?? '',
-          blocked_role_ids: websiteBlockedRoleInputs[websiteId] ?? ''
+          blocked_role_ids: website.blocked_role_ids ?? ''
         })
       })
       if (res.ok) {
@@ -745,6 +729,17 @@ export function AccountsView() {
   // 网站过滤规则管理
   const handleAddFilter = async (websiteId: number) => {
     try {
+      if (newFilter.filter_type === 'image_similarity') {
+        const value = Number(newFilter.filter_value)
+        if (!Number.isFinite(value) || value < 0 || value > 1) {
+          toast.error('相似度必须在0-1之间')
+          return
+        }
+      }
+      if (newFilter.filter_type === 'role_id' && !newFilter.filter_value.trim()) {
+        toast.error('身份组ID不能为空')
+        return
+      }
       // 首先获取当前网站的过滤规则
       const res = await fetch(`/api/websites/${websiteId}/filters`, { credentials: 'include' })
       if (!res.ok) {
@@ -872,6 +867,14 @@ export function AccountsView() {
   const handleAddMessageFilter = async () => {
     try {
       let payload = { ...newFilter }
+      if (newFilter.filter_type === 'image_similarity') {
+        const value = Number(newFilter.filter_value)
+        if (!Number.isFinite(value) || value < 0 || value > 1) {
+          toast.error('相似度必须在0-1之间')
+          return
+        }
+        payload = { filter_type: 'image_similarity', filter_value: String(value) }
+      }
       if (newFilter.filter_type === 'numeric_range') {
         const normalized = normalizeNumericRangeFilter(newFilter.filter_value)
         if (!normalized.ok) {
@@ -909,6 +912,17 @@ export function AccountsView() {
         is_active: editingFilter.is_active
       }
 
+      if (editingFilter.filter_type === 'image_similarity') {
+        const value = Number(editingFilter.filter_value)
+        if (!Number.isFinite(value) || value < 0 || value > 1) {
+          toast.error('相似度必须在0-1之间')
+          return
+        }
+        payload = {
+          ...payload,
+          filter_value: String(value)
+        }
+      }
       if (editingFilter.filter_type === 'numeric_range') {
         const normalized = normalizeNumericRangeFilter(editingFilter.filter_value)
         if (!normalized.ok) {
@@ -1285,7 +1299,7 @@ export function AccountsView() {
                             <SelectItem value="ends_with">结尾是</SelectItem>
                             <SelectItem value="regex">正则表达式</SelectItem>
                             <SelectItem value="user_id">用户ID</SelectItem>
-                            <SelectItem value="image">图片消息</SelectItem>
+                            <SelectItem value="image_similarity">图片相似度≥</SelectItem>
                             <SelectItem value="numeric_range">数字范围</SelectItem>
                           </SelectContent>
                         </Select>
@@ -1329,8 +1343,14 @@ export function AccountsView() {
                               匹配关键词后面的数字（如 "size 49"），超出范围将忽略该消息。
                             </p>
                           </div>
-                        ) : newFilter.filter_type === 'image' ? (
-                          <div className="text-xs text-muted-foreground py-2">无需过滤值</div>
+                        ) : newFilter.filter_type === 'image_similarity' ? (
+                          <Input
+                            type="number"
+                            step="0.01"
+                            value={newFilter.filter_value}
+                            onChange={e => setNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
+                            placeholder="0-1之间，例如: 0.95"
+                          />
                         ) : (
                           <Input
                             value={newFilter.filter_value}
@@ -1812,7 +1832,7 @@ export function AccountsView() {
                             <div className="space-y-4">
                               <div>
                                 <Label>过滤类型</Label>
-                                <Select value={newFilter.filter_type} onValueChange={value => setNewFilter(prev => ({ ...prev, filter_type: value }))}>
+                                <Select value={newFilter.filter_type} onValueChange={value => setNewFilter(prev => ({ ...prev, filter_type: value, filter_value: '' }))}>
                                   <SelectTrigger>
                                     <SelectValue />
                                   </SelectTrigger>
@@ -1821,15 +1841,28 @@ export function AccountsView() {
                                     <SelectItem value="starts_with">开头是</SelectItem>
                                     <SelectItem value="ends_with">结尾是</SelectItem>
                                     <SelectItem value="regex">正则表达式</SelectItem>
-                                    <SelectItem value="image">图片消息</SelectItem>
+                                    <SelectItem value="image_similarity">图片相似度≥</SelectItem>
                                     <SelectItem value="user_id">用户ID</SelectItem>
+                                    <SelectItem value="role_id">身份组ID</SelectItem>
                                   </SelectContent>
                                 </Select>
                               </div>
                               <div>
                                 <Label>过滤值</Label>
-                                {newFilter.filter_type === 'image' ? (
-                                  <div className="text-xs text-muted-foreground py-2">无需过滤值</div>
+                                {newFilter.filter_type === 'image_similarity' ? (
+                                  <Input
+                                    type="number"
+                                    step="0.01"
+                                    value={newFilter.filter_value}
+                                    onChange={e => setNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
+                                    placeholder="0-1之间，例如: 0.95"
+                                  />
+                                ) : newFilter.filter_type === 'role_id' ? (
+                                  <Input
+                                    value={newFilter.filter_value}
+                                    onChange={e => setNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
+                                    placeholder="逗号分隔的身份组ID"
+                                  />
                                 ) : (
                                   <Input
                                     value={newFilter.filter_value}
@@ -1847,42 +1880,49 @@ export function AccountsView() {
                         </Dialog>
                       </div>
 
-                      <div className="rounded-md border bg-muted/30 p-3 space-y-2">
-                        <div className="grid gap-3 md:grid-cols-2">
-                          <div>
-                            <Label className="text-xs">图片相似度阈值 (0-1)</Label>
-                            <Input
-                              type="number"
-                              step="0.01"
-                              value={websiteSimilarityInputs[website.id] ?? ''}
-                              onChange={e => setWebsiteSimilarityInputs(prev => ({ ...prev, [website.id]: e.target.value }))}
-                              placeholder="留空=使用全局阈值"
-                              className="h-8 text-xs"
-                              disabled={currentUser?.role !== 'admin'}
-                            />
+                      <div className="relative overflow-hidden rounded-xl border border-emerald-200/70 bg-gradient-to-br from-emerald-50/80 via-white to-sky-50/70 p-4 shadow-sm">
+                        <div className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-emerald-200/40 blur-2xl" />
+                        <div className="relative flex flex-col gap-3">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-600/10 text-emerald-700">
+                                <Sparkles className="h-4 w-4" />
+                              </div>
+                              <div>
+                                <div className="text-sm font-semibold">图片相似度门槛</div>
+                                <div className="text-xs text-muted-foreground">相似度达到门槛才回复（优先级高于全局）</div>
+                              </div>
+                            </div>
+                            <Badge variant="outline" className="border-emerald-200 bg-emerald-50/80 text-emerald-700">
+                              优先级↑
+                            </Badge>
                           </div>
-                          <div>
-                            <Label className="text-xs">屏蔽身份组ID</Label>
-                            <Input
-                              value={websiteBlockedRoleInputs[website.id] ?? ''}
-                              onChange={e => setWebsiteBlockedRoleInputs(prev => ({ ...prev, [website.id]: e.target.value }))}
-                              placeholder="逗号分隔，例如: 123,456"
-                              className="h-8 text-xs"
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+                            <div className="flex-1 space-y-1">
+                              <Label className="text-xs">最小相似度 (0-1)</Label>
+                              <div className="flex items-center gap-2">
+                                <Input
+                                  type="number"
+                                  step="0.01"
+                                  value={websiteSimilarityInputs[website.id] ?? ''}
+                                  onChange={e => setWebsiteSimilarityInputs(prev => ({ ...prev, [website.id]: e.target.value }))}
+                                  placeholder="留空=使用全局阈值"
+                                  className="h-9 w-36 bg-white/80 text-sm"
+                                  disabled={currentUser?.role !== 'admin'}
+                                />
+                                <span className="text-xs text-muted-foreground">越高越严格</span>
+                              </div>
+                            </div>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-9 px-4 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                              onClick={() => handleUpdateWebsiteExtras(website.id)}
                               disabled={currentUser?.role !== 'admin'}
-                            />
+                            >
+                              保存
+                            </Button>
                           </div>
-                        </div>
-                        <div className="flex items-center justify-between text-xs text-muted-foreground">
-                          <span>单独设置优先级高于全局；命中身份组将不回复。</span>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="h-7 px-3"
-                            onClick={() => handleUpdateWebsiteExtras(website.id)}
-                            disabled={currentUser?.role !== 'admin'}
-                          >
-                            保存
-                          </Button>
                         </div>
                       </div>
 
@@ -1894,10 +1934,18 @@ export function AccountsView() {
                                filter.filter_type === 'starts_with' ? '开头' :
                                filter.filter_type === 'ends_with' ? '结尾' :
                                filter.filter_type === 'regex' ? '正则' :
-                               filter.filter_type === 'image' ? '图片' : '用户ID'}
+                               filter.filter_type === 'image' ? '图片' :
+                               filter.filter_type === 'image_similarity' ? '相似度' :
+                               filter.filter_type === 'role_id' ? '身份组' : '用户ID'}
                             </Badge>
                             <span className="text-xs truncate max-w-20" title={filter.filter_value}>
-                              {filter.filter_type === 'image' ? '图片消息' : filter.filter_value}
+                              {filter.filter_type === 'image_similarity'
+                                ? `>= ${filter.filter_value}`
+                                : filter.filter_type === 'role_id'
+                                  ? `ID: ${filter.filter_value}`
+                                  : filter.filter_type === 'image'
+                                    ? '图片消息'
+                                    : filter.filter_value}
                             </span>
                             <Button
                               variant="ghost"
@@ -1951,7 +1999,7 @@ export function AccountsView() {
                       <SelectItem value="ends_with">结尾是</SelectItem>
                       <SelectItem value="regex">正则表达式</SelectItem>
                       <SelectItem value="user_id">用户ID</SelectItem>
-                      <SelectItem value="image">图片消息</SelectItem>
+                      <SelectItem value="image_similarity">图片相似度≥</SelectItem>
                       <SelectItem value="numeric_range">数字范围</SelectItem>
                     </SelectContent>
                   </Select>
@@ -1992,8 +2040,14 @@ export function AccountsView() {
                         </div>
                       </div>
                     </div>
-                  ) : editingFilter.filter_type === 'image' ? (
-                    <div className="text-xs text-muted-foreground py-2">无需过滤值</div>
+                  ) : editingFilter.filter_type === 'image_similarity' ? (
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={editingFilter.filter_value}
+                      onChange={e => setEditingFilter((prev: any) => ({ ...prev, filter_value: e.target.value }))}
+                      placeholder="0-1之间，例如: 0.95"
+                    />
                   ) : (
                     <Input
                       value={editingFilter.filter_value}
