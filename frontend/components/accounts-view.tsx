@@ -55,6 +55,9 @@ const formatMessageFilterLabel = (filter: any) => {
     const maxLabel = fields.max !== '' ? fields.max : '不限'
     return `数字范围: ${keyword} (${minLabel}-${maxLabel})`
   }
+  if (filter.filter_type === 'image') {
+    return '图片消息'
+  }
   return `${filter.filter_type} "${filter.filter_value}"`
 }
 
@@ -102,9 +105,7 @@ export function AccountsView() {
     url_template: '',
     id_pattern: '',
     badge_color: 'blue',
-    reply_template: '{url}',
-    image_similarity_threshold: '',
-    blocked_role_ids: ''
+    reply_template: '{url}'
   })
   const [websiteChannels, setWebsiteChannels] = useState<{[key: number]: string[]}>({})
   const [channelInputs, setChannelInputs] = useState<{[key: number]: string}>({})
@@ -125,6 +126,8 @@ export function AccountsView() {
   // 网站过滤规则相关状态
   const [websiteFilters, setWebsiteFilters] = useState<{[key: number]: any[]}>({})
   const [showAddWebsiteFilter, setShowAddWebsiteFilter] = useState<number | null>(null)
+  const [websiteSimilarityInputs, setWebsiteSimilarityInputs] = useState<{[key: number]: string}>({})
+  const [websiteBlockedRoleInputs, setWebsiteBlockedRoleInputs] = useState<{[key: number]: string}>({})
 
   // 消息过滤相关状态
   const [messageFilters, setMessageFilters] = useState<any[]>([])
@@ -179,6 +182,8 @@ export function AccountsView() {
         const channels: {[key: number]: string[]} = {}
       const accounts: {[key: number]: any[]} = {}
       const filters: {[key: number]: any[]} = {}
+      const similarityInputs: {[key: number]: string} = {}
+      const blockedRoleInputs: {[key: number]: string} = {}
 
       // 并行获取所有网站的过滤规则
       const filterPromises = websites.map(async (website: any) => {
@@ -200,6 +205,8 @@ export function AccountsView() {
         accounts[website.id] = website.accounts || []
         setRotationEnabled(prev => ({ ...prev, [website.id]: website.rotation_enabled !== 0 }))
         setRotationInputs(prev => ({ ...prev, [website.id]: (website.rotation_interval || 180).toString() }))
+        similarityInputs[website.id] = formatThresholdForInput(website.image_similarity_threshold)
+        blockedRoleInputs[website.id] = formatRoleIdsForInput(website.blocked_role_ids)
       })
 
       // 等待所有过滤规则获取完成
@@ -209,6 +216,8 @@ export function AccountsView() {
         setWebsiteChannels(channels)
       setWebsiteAccounts(accounts)
       setWebsiteFilters(filters)
+      setWebsiteSimilarityInputs(similarityInputs)
+      setWebsiteBlockedRoleInputs(blockedRoleInputs)
     } catch (e) {
       console.error('获取网站配置失败:', e)
     }
@@ -495,16 +504,7 @@ export function AccountsView() {
       if (res.ok) {
         toast.success('网站配置已添加')
         setShowAddWebsite(false)
-        setNewWebsite({
-          name: '',
-          display_name: '',
-          url_template: '',
-          id_pattern: '',
-          badge_color: 'blue',
-          reply_template: '{url}',
-          image_similarity_threshold: '',
-          blocked_role_ids: ''
-        })
+        setNewWebsite({ name: '', display_name: '', url_template: '', id_pattern: '', badge_color: 'blue', reply_template: '{url}' })
         fetchWebsites(true)
       } else {
         toast.error('添加失败')
@@ -547,6 +547,43 @@ export function AccountsView() {
         fetchWebsites(true)
       } else {
         toast.error('删除失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
+  const handleUpdateWebsiteExtras = async (websiteId: number) => {
+    const website = websites.find(w => w.id === websiteId)
+    if (!website) return
+
+    if (currentUser?.role !== 'admin') {
+      toast.error('需要管理员权限')
+      return
+    }
+
+    try {
+      const res = await fetch(`/api/websites/${websiteId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          name: website.name,
+          display_name: website.display_name,
+          url_template: website.url_template,
+          id_pattern: website.id_pattern,
+          badge_color: website.badge_color,
+          reply_template: website.reply_template || '{url}',
+          image_similarity_threshold: websiteSimilarityInputs[websiteId] ?? '',
+          blocked_role_ids: websiteBlockedRoleInputs[websiteId] ?? ''
+        })
+      })
+      if (res.ok) {
+        toast.success('过滤设置已更新')
+        fetchWebsites(true)
+      } else {
+        const data = await res.json().catch(() => ({}))
+        toast.error(data.error || '更新失败')
       }
     } catch (e) {
       toast.error('网络错误')
@@ -1173,30 +1210,6 @@ export function AccountsView() {
                   使用 <span className="font-mono">{`{url}`}</span> 作为链接占位符。
                 </p>
               </div>
-              <div>
-                <Label>图片相似度阈值 (0-1)</Label>
-                <Input
-                  type="number"
-                  step="0.01"
-                  value={editingWebsite.image_similarity_threshold ?? ''}
-                  onChange={e => setEditingWebsite(prev => ({ ...prev, image_similarity_threshold: e.target.value }))}
-                  placeholder="留空=使用全局阈值"
-                />
-                <p className="text-xs text-muted-foreground mt-1">
-                  单独设置优先级高于全局。
-                </p>
-              </div>
-              <div>
-                <Label>屏蔽身份组ID</Label>
-                <Input
-                  value={editingWebsite.blocked_role_ids ?? ''}
-                  onChange={e => setEditingWebsite(prev => ({ ...prev, blocked_role_ids: e.target.value }))}
-                  placeholder="逗号分隔，例如: 123,456"
-                />
-                <p className="text-xs text-muted-foreground mt-1">
-                  命中身份组的用户不回复。
-                </p>
-              </div>
                 <div>
                   <Label>ID提取模式</Label>
                   <Input
@@ -1272,6 +1285,7 @@ export function AccountsView() {
                             <SelectItem value="ends_with">结尾是</SelectItem>
                             <SelectItem value="regex">正则表达式</SelectItem>
                             <SelectItem value="user_id">用户ID</SelectItem>
+                            <SelectItem value="image">图片消息</SelectItem>
                             <SelectItem value="numeric_range">数字范围</SelectItem>
                           </SelectContent>
                         </Select>
@@ -1315,6 +1329,8 @@ export function AccountsView() {
                               匹配关键词后面的数字（如 "size 49"），超出范围将忽略该消息。
                             </p>
                           </div>
+                        ) : newFilter.filter_type === 'image' ? (
+                          <div className="text-xs text-muted-foreground py-2">无需过滤值</div>
                         ) : (
                           <Input
                             value={newFilter.filter_value}
@@ -1435,30 +1451,6 @@ export function AccountsView() {
                         />
                         <p className="text-xs text-muted-foreground mt-1">
                           使用 <span className="font-mono">{`{url}`}</span> 作为链接占位符。
-                        </p>
-                      </div>
-                      <div>
-                        <Label>图片相似度阈值 (0-1)</Label>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          value={newWebsite.image_similarity_threshold}
-                          onChange={e => setNewWebsite(prev => ({ ...prev, image_similarity_threshold: e.target.value }))}
-                          placeholder="留空=使用全局阈值"
-                        />
-                        <p className="text-xs text-muted-foreground mt-1">
-                          单独设置优先级高于全局。
-                        </p>
-                      </div>
-                      <div>
-                        <Label>屏蔽身份组ID</Label>
-                        <Input
-                          value={newWebsite.blocked_role_ids}
-                          onChange={e => setNewWebsite(prev => ({ ...prev, blocked_role_ids: e.target.value }))}
-                          placeholder="逗号分隔，例如: 123,456"
-                        />
-                        <p className="text-xs text-muted-foreground mt-1">
-                          命中身份组的用户不回复。
                         </p>
                       </div>
                       <div>
@@ -1829,17 +1821,22 @@ export function AccountsView() {
                                     <SelectItem value="starts_with">开头是</SelectItem>
                                     <SelectItem value="ends_with">结尾是</SelectItem>
                                     <SelectItem value="regex">正则表达式</SelectItem>
+                                    <SelectItem value="image">图片消息</SelectItem>
                                     <SelectItem value="user_id">用户ID</SelectItem>
                                   </SelectContent>
                                 </Select>
                               </div>
                               <div>
                                 <Label>过滤值</Label>
-                                <Input
-                                  value={newFilter.filter_value}
-                                  onChange={e => setNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
-                                  placeholder="输入过滤条件"
-                                />
+                                {newFilter.filter_type === 'image' ? (
+                                  <div className="text-xs text-muted-foreground py-2">无需过滤值</div>
+                                ) : (
+                                  <Input
+                                    value={newFilter.filter_value}
+                                    onChange={e => setNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
+                                    placeholder="输入过滤条件"
+                                  />
+                                )}
                               </div>
                             </div>
                             <DialogFooter>
@@ -1850,6 +1847,45 @@ export function AccountsView() {
                         </Dialog>
                       </div>
 
+                      <div className="rounded-md border bg-muted/30 p-3 space-y-2">
+                        <div className="grid gap-3 md:grid-cols-2">
+                          <div>
+                            <Label className="text-xs">图片相似度阈值 (0-1)</Label>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              value={websiteSimilarityInputs[website.id] ?? ''}
+                              onChange={e => setWebsiteSimilarityInputs(prev => ({ ...prev, [website.id]: e.target.value }))}
+                              placeholder="留空=使用全局阈值"
+                              className="h-8 text-xs"
+                              disabled={currentUser?.role !== 'admin'}
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-xs">屏蔽身份组ID</Label>
+                            <Input
+                              value={websiteBlockedRoleInputs[website.id] ?? ''}
+                              onChange={e => setWebsiteBlockedRoleInputs(prev => ({ ...prev, [website.id]: e.target.value }))}
+                              placeholder="逗号分隔，例如: 123,456"
+                              className="h-8 text-xs"
+                              disabled={currentUser?.role !== 'admin'}
+                            />
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-between text-xs text-muted-foreground">
+                          <span>单独设置优先级高于全局；命中身份组将不回复。</span>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 px-3"
+                            onClick={() => handleUpdateWebsiteExtras(website.id)}
+                            disabled={currentUser?.role !== 'admin'}
+                          >
+                            保存
+                          </Button>
+                        </div>
+                      </div>
+
                       <div className="flex flex-wrap gap-2">
                         {(websiteFilters[website.id] || []).map((filter: any, index: number) => (
                           <div key={index} className="flex items-center gap-1 bg-muted rounded px-2 py-1">
@@ -1857,10 +1893,11 @@ export function AccountsView() {
                               {filter.filter_type === 'contains' ? '包含' :
                                filter.filter_type === 'starts_with' ? '开头' :
                                filter.filter_type === 'ends_with' ? '结尾' :
-                               filter.filter_type === 'regex' ? '正则' : '用户ID'}
+                               filter.filter_type === 'regex' ? '正则' :
+                               filter.filter_type === 'image' ? '图片' : '用户ID'}
                             </Badge>
                             <span className="text-xs truncate max-w-20" title={filter.filter_value}>
-                              {filter.filter_value}
+                              {filter.filter_type === 'image' ? '图片消息' : filter.filter_value}
                             </span>
                             <Button
                               variant="ghost"
@@ -1914,6 +1951,7 @@ export function AccountsView() {
                       <SelectItem value="ends_with">结尾是</SelectItem>
                       <SelectItem value="regex">正则表达式</SelectItem>
                       <SelectItem value="user_id">用户ID</SelectItem>
+                      <SelectItem value="image">图片消息</SelectItem>
                       <SelectItem value="numeric_range">数字范围</SelectItem>
                     </SelectContent>
                   </Select>
@@ -1954,6 +1992,8 @@ export function AccountsView() {
                         </div>
                       </div>
                     </div>
+                  ) : editingFilter.filter_type === 'image' ? (
+                    <div className="text-xs text-muted-foreground py-2">无需过滤值</div>
                   ) : (
                     <Input
                       value={editingFilter.filter_value}

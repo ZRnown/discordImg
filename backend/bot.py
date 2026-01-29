@@ -368,6 +368,72 @@ class DiscordBotClient(discord.Client):
                     return [v.strip() for v in value.split(',') if v.strip()]
                 return []
 
+            def _filters_block_message(filters):
+                message_content = (message.content or '').lower()
+                for filter_rule in filters:
+                    raw_filter_value = filter_rule.get('filter_value') or ''
+                    filter_value = raw_filter_value.lower()
+                    filter_type = filter_rule.get('filter_type')
+
+                    if filter_type == 'contains':
+                        if filter_value in message_content:
+                            return True
+                    elif filter_type == 'starts_with':
+                        if message_content.startswith(filter_value):
+                            return True
+                    elif filter_type == 'ends_with':
+                        if message_content.endswith(filter_value):
+                            return True
+                    elif filter_type == 'regex':
+                        try:
+                            if re.search(filter_value, message_content, re.IGNORECASE):
+                                return True
+                        except re.error:
+                            continue
+                    elif filter_type == 'numeric_range':
+                        try:
+                            rule = json.loads(raw_filter_value) if raw_filter_value else {}
+                        except json.JSONDecodeError:
+                            rule = {}
+
+                        keyword = str(rule.get('keyword') or '').strip()
+                        min_value = rule.get('min')
+                        max_value = rule.get('max')
+
+                        if not keyword:
+                            continue
+
+                        try:
+                            min_value = int(min_value)
+                            max_value = int(max_value)
+                        except (TypeError, ValueError):
+                            continue
+
+                        if min_value >= max_value:
+                            continue
+
+                        pattern = rf'(?i){re.escape(keyword)}\s*[:=-]?\s*(\d+)'
+                        value_matches = re.findall(pattern, message.content or '')
+                        for value_str in value_matches:
+                            try:
+                                value = int(value_str)
+                                if value < min_value or value > max_value:
+                                    return True
+                            except ValueError:
+                                continue
+                    elif filter_type == 'user_id':
+                        filter_user_ids = [uid.strip() for uid in filter_value.split(',') if uid.strip()]
+                        sender_id = str(message.author.id)
+                        sender_name = str(message.author.name).lower()
+                        for blocked_id in filter_user_ids:
+                            blocked_id = blocked_id.strip()
+                            if blocked_id == sender_id or blocked_id.lower() in sender_name:
+                                return True
+                    elif filter_type == 'image':
+                        if self._message_has_image(message):
+                            return True
+                return False
+
             # === 获取当前真正在线的机器人账号 ID ===
             online_client_ids = [c.account_id for c in bot_clients if c.is_ready() and not c.is_closed()]
 
@@ -468,6 +534,13 @@ class DiscordBotClient(discord.Client):
                         logger.info(
                             f"📋 使用用户级别设置: rotation_interval={rotation_interval}秒, rotation_enabled={rotation_enabled}"
                         )
+                        try:
+                            website_filters = json.loads(user_website_settings.get('message_filters', '[]') or '[]')
+                        except json.JSONDecodeError:
+                            website_filters = []
+                        if website_filters and _filters_block_message(website_filters):
+                            logger.info(f"消息被过滤(网站规则): {website_config.get('name')}")
+                            continue
 
                 available_senders = [
                     uid for uid in valid_senders
@@ -861,6 +934,21 @@ class DiscordBotClient(discord.Client):
         configs = await self.get_website_configs_by_channel_async(channel_id)
         return configs[0] if configs else None
 
+    def _message_has_image(self, message) -> bool:
+        """判断消息是否包含图片附件"""
+        try:
+            attachments = getattr(message, 'attachments', None) or []
+            for att in attachments:
+                content_type = (getattr(att, 'content_type', '') or '').lower()
+                if content_type.startswith('image/'):
+                    return True
+                filename = (getattr(att, 'filename', '') or '').lower()
+                if filename.endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.tif', '.heic', '.heif')):
+                    return True
+        except Exception:
+            return False
+        return False
+
     def _should_filter_message(self, message):
         """检查消息是否应该被过滤"""
         try:
@@ -978,6 +1066,10 @@ class DiscordBotClient(discord.Client):
                         if blocked_id == sender_id or blocked_id.lower() in sender_name:
                             logger.info(f'消息被过滤: 用户 {message.author.name} (ID: {sender_id}) 在过滤列表中')
                             return True
+                elif filter_type == 'image':
+                    if self._message_has_image(message):
+                        logger.info('消息被过滤: 图片消息')
+                        return True
 
             # 2. 检查用户个性化设置的过滤规则
             if user_settings:

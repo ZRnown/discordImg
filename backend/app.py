@@ -1873,8 +1873,11 @@ def add_message_filter():
         filter_type = data.get('filter_type')
         filter_value = data.get('filter_value')
 
-        if not filter_type or not filter_value:
+        if not filter_type or (filter_type != 'image' and not filter_value):
             return jsonify({'error': '过滤类型和值都是必填的'}), 400
+
+        if filter_type == 'image' and not filter_value:
+            filter_value = ''
 
         if db.add_message_filter(filter_type, filter_value):
             return jsonify({'success': True, 'message': '过滤规则添加成功'})
@@ -1896,8 +1899,11 @@ def update_message_filter(filter_id):
         filter_value = data.get('filter_value')
         is_active = data.get('is_active', True)
 
-        if not filter_type or not filter_value:
+        if not filter_type or (filter_type != 'image' and not filter_value):
             return jsonify({'error': '过滤类型和值都是必填的'}), 400
+
+        if filter_type == 'image' and not filter_value:
+            filter_value = ''
 
         if db.update_message_filter(filter_id, filter_type, filter_value, is_active):
             return jsonify({'success': True, 'message': '过滤规则更新成功'})
