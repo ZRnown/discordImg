@@ -1412,6 +1412,11 @@ def get_website_configs():
             user_settings = db.get_user_website_settings(current_user['id'], config_id)
             config['rotation_interval'] = user_settings.get('rotation_interval', 180)
             config['rotation_enabled'] = user_settings.get('rotation_enabled', 1)
+            try:
+                raw_filters = user_settings.get('message_filters', '[]') if user_settings else '[]'
+                config['message_filters'] = json.loads(raw_filters) if isinstance(raw_filters, str) else (raw_filters or [])
+            except Exception:
+                config['message_filters'] = []
 
         return jsonify({'websites': configs})
     except Exception as e:

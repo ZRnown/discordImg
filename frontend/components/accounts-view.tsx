@@ -203,13 +203,17 @@ export function AccountsView() {
       const filters: {[key: number]: any[]} = {}
       const similarityInputs: {[key: number]: string} = {}
 
-      // 并行获取所有网站的过滤规则
-      const filterPromises = websites.map(async (website: any) => {
+      websites.forEach((website: any) => {
+        channels[website.id] = website.channels || []
+        accounts[website.id] = website.accounts || []
+        setRotationEnabled(prev => ({ ...prev, [website.id]: website.rotation_enabled !== 0 }))
+        setRotationInputs(prev => ({ ...prev, [website.id]: (website.rotation_interval || 180).toString() }))
+        similarityInputs[website.id] = formatThresholdForInput(website.image_similarity_threshold)
         try {
-          const res = await fetch(`/api/websites/${website.id}/filters`, { credentials: 'include' })
-          if (res.ok) {
-            const data = await res.json()
-            filters[website.id] = data.filters || []
+          if (Array.isArray(website.message_filters)) {
+            filters[website.id] = website.message_filters
+          } else if (typeof website.message_filters === 'string') {
+            filters[website.id] = JSON.parse(website.message_filters || '[]')
           } else {
             filters[website.id] = []
           }
@@ -217,17 +221,6 @@ export function AccountsView() {
           filters[website.id] = []
         }
       })
-
-      websites.forEach((website: any) => {
-        channels[website.id] = website.channels || []
-        accounts[website.id] = website.accounts || []
-        setRotationEnabled(prev => ({ ...prev, [website.id]: website.rotation_enabled !== 0 }))
-        setRotationInputs(prev => ({ ...prev, [website.id]: (website.rotation_interval || 180).toString() }))
-        similarityInputs[website.id] = formatThresholdForInput(website.image_similarity_threshold)
-      })
-
-      // 等待所有过滤规则获取完成
-      await Promise.all(filterPromises)
 
       setWebsites(websites)
         setWebsiteChannels(channels)
@@ -530,6 +523,32 @@ export function AccountsView() {
       window.removeEventListener('bot-status-changed', handleStatusChange)
     }
   }, [])
+
+  useEffect(() => {
+    if (!editingFilter) return
+    if (editingFilter.filter_type === 'image_filter') {
+      fetchMessageFilterImages(editingFilter.id)
+      return
+    }
+    setEditingFilterImages([])
+    setEditingFilterNewFiles([])
+    if (editingFilterImageInputRef.current) {
+      editingFilterImageInputRef.current.value = ''
+    }
+  }, [editingFilter])
+
+  useEffect(() => {
+    if (!editingWebsiteFilter) return
+    if (editingWebsiteFilter.filter?.filter_type === 'image_filter') {
+      fetchWebsiteFilterImages(editingWebsiteFilter.websiteId, editingWebsiteFilter.filter.id)
+      return
+    }
+    setEditingWebsiteFilterImages([])
+    setEditingWebsiteFilterNewFiles([])
+    if (websiteEditingFilterImageInputRef.current) {
+      websiteEditingFilterImageInputRef.current.value = ''
+    }
+  }, [editingWebsiteFilter])
 
   const fetchSettings = async (usePreload: boolean = true) => {
     try {
