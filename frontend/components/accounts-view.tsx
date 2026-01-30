@@ -109,7 +109,7 @@ export function AccountsView() {
   const [deleteAccountConfirm, setDeleteAccountConfirm] = useState<any>(null)
 
   // 使用API缓存hook
-  const { cachedFetch } = useApiCache()
+  const { cachedFetch, invalidateCache } = useApiCache()
 
   // 网站配置相关状态
   const [websites, setWebsites] = useState<any[]>([])
@@ -192,6 +192,7 @@ export function AccountsView() {
       if (forceRefresh) {
         // 强制刷新：清除缓存
         sessionStorage.removeItem(`cache_${cacheKey}`)
+        invalidateCache('/api/websites')
       }
       const data = await cachedFetch('/api/websites', { credentials: 'include' })
       const websites = data.websites || []
@@ -325,6 +326,21 @@ export function AccountsView() {
     }
   }
 
+  const fetchWebsiteFiltersForWebsite = async (websiteId: number) => {
+    try {
+      const res = await fetch(`/api/websites/${websiteId}/filters`, { credentials: 'include' })
+      if (res.ok) {
+        const data = await res.json()
+        const filters = data.filters || []
+        setWebsiteFilters(prev => ({ ...prev, [websiteId]: filters }))
+        return filters
+      }
+    } catch (e) {
+      console.error('获取网站过滤规则失败:', e)
+    }
+    return null
+  }
+
   const uploadWebsiteFilterImages = async (websiteId: number, filterId: string, files: File[]) => {
     if (!files.length) return true
     setEditingWebsiteFilterImagesUploading(true)
@@ -349,6 +365,40 @@ export function AccountsView() {
       return false
     } finally {
       setEditingWebsiteFilterImagesUploading(false)
+    }
+  }
+
+  const handleWebsiteFilterFileSelect = async (files: FileList | null) => {
+    if (!editingWebsiteFilter) return
+    const fileList = Array.from(files || [])
+    if (!fileList.length) return
+    if (editingWebsiteFilter.filter?.filter_type !== 'image_filter') {
+      toast.error('请先将过滤类型设置为图片过滤并保存')
+      return
+    }
+
+    const websiteId = editingWebsiteFilter.websiteId
+    const filterId = editingWebsiteFilter.filter?.id
+    if (!websiteId || !filterId) {
+      toast.error('过滤规则不存在，请先保存')
+      return
+    }
+
+    const exists = (websiteFilters[websiteId] || []).some((item: any) => String(item.id) === String(filterId))
+    if (!exists) {
+      toast.error('过滤规则不存在，请先保存')
+      return
+    }
+
+    setEditingWebsiteFilterNewFiles(fileList)
+    const ok = await uploadWebsiteFilterImages(websiteId, String(filterId), fileList)
+    if (ok) {
+      toast.success('图片已上传')
+      fetchWebsiteFilterImages(websiteId, String(filterId))
+    }
+    setEditingWebsiteFilterNewFiles([])
+    if (websiteEditingFilterImageInputRef.current) {
+      websiteEditingFilterImageInputRef.current.value = ''
     }
   }
 
@@ -933,8 +983,22 @@ export function AccountsView() {
       })
 
       if (updateRes.ok) {
+        const currentIds = new Set(currentFilters.map((item: any) => String(item.id)))
+        const refreshedFilters = await fetchWebsiteFiltersForWebsite(websiteId)
+        const finalFilters = refreshedFilters || newFilters
+        let actualFilterId = newFilterId
+
+        if (finalFilters.length > 0) {
+          const matchById = finalFilters.find(item => String(item.id) === String(newFilterId))
+          const addedFilters = finalFilters.filter(item => !currentIds.has(String(item.id)))
+          const matchByValue = finalFilters.find(item =>
+            item.filter_type === payload.filter_type && String(item.filter_value) === String(payload.filter_value)
+          )
+          actualFilterId = (matchById || addedFilters[0] || matchByValue || { id: newFilterId }).id
+        }
+
         if (payload.filter_type === 'image_filter') {
-          const uploadOk = await uploadWebsiteFilterImages(websiteId, newFilterId, websiteNewFilterImages)
+          const uploadOk = await uploadWebsiteFilterImages(websiteId, String(actualFilterId), websiteNewFilterImages)
           if (!uploadOk) {
             toast.error('部分图片上传失败')
           } else {
@@ -944,10 +1008,12 @@ export function AccountsView() {
           toast.success('过滤规则已添加')
         }
 
-        setWebsiteFilters(prev => ({
-          ...prev,
-          [websiteId]: newFilters
-        }))
+        if (!refreshedFilters) {
+          setWebsiteFilters(prev => ({
+            ...prev,
+            [websiteId]: newFilters
+          }))
+        }
         setShowAddWebsiteFilter(null)
         setWebsiteNewFilter({ filter_type: 'contains', filter_value: '' })
         setWebsiteNewFilterImages([])
@@ -1007,13 +1073,29 @@ export function AccountsView() {
       })
 
       if (updateRes.ok) {
+        let finalFilters = updatedFilters
+        let resolvedFilterId = String(filter.id)
+        const refreshedFilters = await fetchWebsiteFiltersForWebsite(websiteId)
+
+        if (refreshedFilters) {
+          finalFilters = refreshedFilters
+          const matchById = refreshedFilters.find(item => String(item.id) === String(filter.id))
+          const matchByValue = refreshedFilters.find(item =>
+            item.filter_type === filter.filter_type && String(item.filter_value) === String(filter.filter_value)
+          )
+          const resolved = matchById || matchByValue
+          if (resolved?.id) {
+            resolvedFilterId = String(resolved.id)
+          }
+        }
+
         if (filter.filter_type === 'image_filter' && editingWebsiteFilterNewFiles.length > 0) {
-          const uploadOk = await uploadWebsiteFilterImages(websiteId, filter.id, editingWebsiteFilterNewFiles)
+          const uploadOk = await uploadWebsiteFilterImages(websiteId, resolvedFilterId, editingWebsiteFilterNewFiles)
           if (!uploadOk) {
             toast.error('部分图片上传失败')
           } else {
             toast.success('过滤规则已更新')
-            fetchWebsiteFilterImages(websiteId, filter.id)
+            fetchWebsiteFilterImages(websiteId, resolvedFilterId)
           }
           setEditingWebsiteFilterNewFiles([])
           if (websiteEditingFilterImageInputRef.current) {
@@ -1022,10 +1104,12 @@ export function AccountsView() {
         } else {
           toast.success('过滤规则已更新')
         }
-        setWebsiteFilters(prev => ({
-          ...prev,
-          [websiteId]: updatedFilters
-        }))
+        if (!refreshedFilters) {
+          setWebsiteFilters(prev => ({
+            ...prev,
+            [websiteId]: finalFilters
+          }))
+        }
         setEditingWebsiteFilter(null)
       } else {
         toast.error('更新失败')
@@ -2307,14 +2391,21 @@ export function AccountsView() {
                                       <span className="text-xs text-muted-foreground">≥该值即过滤</span>
                                     </div>
                                     <div className="flex flex-wrap items-center gap-2">
-                                      <Input
+                                      <input
                                         ref={websiteNewFilterImageInputRef}
                                         type="file"
                                         accept="image/*"
                                         multiple
-                                        className="h-8 text-xs"
+                                        className="hidden"
                                         onChange={(e) => setWebsiteNewFilterImages(Array.from(e.target.files || []))}
                                       />
+                                      <Button
+                                        size="sm"
+                                        className="h-8 px-3 text-xs"
+                                        onClick={() => websiteNewFilterImageInputRef.current?.click()}
+                                      >
+                                        上传图片
+                                      </Button>
                                       <span className="text-xs text-muted-foreground">
                                         已选 {websiteNewFilterImages.length} 张
                                       </span>
@@ -2698,38 +2789,21 @@ export function AccountsView() {
                         <span className="text-xs text-muted-foreground">≥该值即过滤</span>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
-                        <Input
+                        <input
                           ref={websiteEditingFilterImageInputRef}
                           type="file"
                           accept="image/*"
                           multiple
-                          className="h-8 text-xs"
-                          onChange={(e) => setEditingWebsiteFilterNewFiles(Array.from(e.target.files || []))}
+                          className="hidden"
+                          onChange={(e) => handleWebsiteFilterFileSelect(e.target.files)}
                         />
                         <Button
                           size="sm"
                           className="h-8 px-3 text-xs"
-                          onClick={async () => {
-                            const websiteId = editingWebsiteFilter?.websiteId
-                            const filterId = editingWebsiteFilter?.filter?.id
-                            if (!websiteId || !filterId) return
-                            if (!editingWebsiteFilterNewFiles.length) {
-                              toast.error('请先选择图片')
-                              return
-                            }
-                            const ok = await uploadWebsiteFilterImages(websiteId, filterId, editingWebsiteFilterNewFiles)
-                            if (ok) {
-                              toast.success('图片已上传')
-                              setEditingWebsiteFilterNewFiles([])
-                              if (websiteEditingFilterImageInputRef.current) {
-                                websiteEditingFilterImageInputRef.current.value = ''
-                              }
-                              fetchWebsiteFilterImages(websiteId, filterId)
-                            }
-                          }}
+                          onClick={() => websiteEditingFilterImageInputRef.current?.click()}
                           disabled={editingWebsiteFilterImagesUploading}
                         >
-                          {editingWebsiteFilterImagesUploading ? '上传中...' : '上传'}
+                          {editingWebsiteFilterImagesUploading ? '上传中...' : '上传图片'}
                         </Button>
                       </div>
                       <div className="flex flex-wrap gap-2">
