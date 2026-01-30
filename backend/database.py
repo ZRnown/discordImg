@@ -520,6 +520,20 @@ class Database:
                 )
             ''')
 
+            # 创建网站过滤图片表（用户级别）
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS website_filter_images (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    website_id INTEGER NOT NULL,
+                    filter_id TEXT NOT NULL,
+                    image_path TEXT NOT NULL,
+                    features TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+                )
+            ''')
+
             # 创建用户设置表（每个用户的个性化设置）
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS user_settings (
@@ -2620,6 +2634,126 @@ class Database:
                 return paths
         except Exception as e:
             logger.error(f"删除过滤图片失败: {e}")
+            return []
+
+    def get_all_user_website_filters(self, user_id: int) -> List[Dict]:
+        """获取用户所有网站的过滤设置"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT website_id, message_filters
+                    FROM user_website_settings
+                    WHERE user_id = ?
+                ''', (user_id,))
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"获取用户网站过滤失败: {e}")
+            return []
+
+    def add_website_filter_image(self, user_id: int, website_id: int, filter_id: str, image_path: str, features: np.ndarray) -> int:
+        """添加网站过滤图片，返回记录ID"""
+        try:
+            features_str = None
+            if features is not None:
+                import json
+                features_str = json.dumps(features.tolist())
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO website_filter_images (user_id, website_id, filter_id, image_path, features)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (user_id, website_id, filter_id, image_path, features_str))
+                conn.commit()
+                return cursor.lastrowid
+        except Exception as e:
+            logger.error(f"添加网站过滤图片失败: {e}")
+            raise e
+
+    def get_website_filter_images(self, user_id: int, website_id: int, filter_id: str, include_features: bool = False) -> List[Dict]:
+        """获取网站过滤图片列表"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                if include_features:
+                    cursor.execute('''
+                        SELECT id, image_path, features, created_at
+                        FROM website_filter_images
+                        WHERE user_id = ? AND website_id = ? AND filter_id = ?
+                        ORDER BY created_at DESC
+                    ''', (user_id, website_id, filter_id))
+                else:
+                    cursor.execute('''
+                        SELECT id, image_path, created_at
+                        FROM website_filter_images
+                        WHERE user_id = ? AND website_id = ? AND filter_id = ?
+                        ORDER BY created_at DESC
+                    ''', (user_id, website_id, filter_id))
+                rows = [dict(row) for row in cursor.fetchall()]
+                if include_features:
+                    import json
+                    for row in rows:
+                        try:
+                            row['features'] = json.loads(row.get('features') or '[]')
+                        except Exception:
+                            row['features'] = []
+                return rows
+        except Exception as e:
+            logger.error(f"获取网站过滤图片失败: {e}")
+            return []
+
+    def get_website_filter_image_by_id(self, image_id: int) -> Optional[Dict]:
+        """获取单条网站过滤图片记录"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT id, user_id, website_id, filter_id, image_path, created_at
+                    FROM website_filter_images
+                    WHERE id = ?
+                ''', (image_id,))
+                row = cursor.fetchone()
+                return dict(row) if row else None
+        except Exception as e:
+            logger.error(f"获取网站过滤图片失败: {e}")
+            return None
+
+    def delete_website_filter_image(self, image_id: int) -> Optional[str]:
+        """删除网站过滤图片并返回文件路径"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT image_path FROM website_filter_images WHERE id = ?', (image_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                image_path = row['image_path']
+                cursor.execute('DELETE FROM website_filter_images WHERE id = ?', (image_id,))
+                conn.commit()
+                return image_path
+        except Exception as e:
+            logger.error(f"删除网站过滤图片失败: {e}")
+            return None
+
+    def delete_website_filter_images_by_filter(self, user_id: int, website_id: int, filter_id: str) -> List[str]:
+        """删除某条网站过滤规则的所有图片并返回文件路径列表"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT image_path FROM website_filter_images
+                    WHERE user_id = ? AND website_id = ? AND filter_id = ?
+                ''', (user_id, website_id, filter_id))
+                rows = cursor.fetchall()
+                paths = [row['image_path'] for row in rows]
+                cursor.execute('''
+                    DELETE FROM website_filter_images
+                    WHERE user_id = ? AND website_id = ? AND filter_id = ?
+                ''', (user_id, website_id, filter_id))
+                conn.commit()
+                return paths
+        except Exception as e:
+            logger.error(f"删除网站过滤图片失败: {e}")
             return []
 
     def get_custom_replies(self) -> List[Dict]:

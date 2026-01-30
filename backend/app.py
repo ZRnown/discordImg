@@ -635,16 +635,18 @@ def search_similar():
             if query_features is None:
                 return jsonify({'error': 'Feature extraction failed'}), 500
 
+            query_vec = np.array(query_features, dtype='float32')
+            q_norm = np.linalg.norm(query_vec)
+            if q_norm > 0:
+                query_vec = query_vec / q_norm
+
             # === 图片过滤规则匹配（基于上传图片） ===
             blocked_filter_match = None
+            blocked_website_filter_matches = []
             try:
                 image_filters = db.get_message_filters()
                 image_filters = [f for f in (image_filters or []) if f.get('filter_type') == 'image_filter']
                 if image_filters:
-                    query_vec = np.array(query_features, dtype='float32')
-                    q_norm = np.linalg.norm(query_vec)
-                    if q_norm > 0:
-                        query_vec = query_vec / q_norm
                     best_match = None
                     best_similarity = -1.0
                     for filter_rule in image_filters:
@@ -681,6 +683,76 @@ def search_similar():
                     blocked_filter_match = best_match
             except Exception as e:
                 logger.error(f"图片过滤匹配失败: {e}")
+
+            # === 网站级图片过滤规则匹配 ===
+            try:
+                user_id = request.form.get('user_id')
+                if user_id:
+                    try:
+                        user_id = int(user_id)
+                    except (TypeError, ValueError):
+                        user_id = None
+                if user_id:
+                    website_settings = db.get_all_user_website_filters(user_id)
+                    best_by_website = {}
+                    for setting in website_settings or []:
+                        website_id = setting.get('website_id')
+                        try:
+                            filters = json.loads(setting.get('message_filters', '[]'))
+                        except Exception:
+                            filters = []
+
+                        for filter_rule in filters:
+                            if not isinstance(filter_rule, dict):
+                                continue
+                            if filter_rule.get('filter_type') != 'image_filter':
+                                continue
+                            filter_id = filter_rule.get('id')
+                            if not filter_id:
+                                continue
+                            try:
+                                threshold_val = float(filter_rule.get('filter_value') or 0.95)
+                            except (TypeError, ValueError):
+                                threshold_val = 0.95
+
+                            filter_images = db.get_website_filter_images(
+                                user_id,
+                                website_id,
+                                str(filter_id),
+                                include_features=True
+                            )
+                            if not filter_images:
+                                continue
+
+                            local_best = None
+                            local_best_sim = -1.0
+                            for item in filter_images:
+                                feats = item.get('features') or []
+                                if not feats:
+                                    continue
+                                vec = np.array(feats, dtype='float32')
+                                v_norm = np.linalg.norm(vec)
+                                if v_norm > 0:
+                                    vec = vec / v_norm
+                                sim = float(np.dot(query_vec, vec))
+                                if sim > local_best_sim:
+                                    local_best_sim = sim
+                                    local_best = item
+
+                            if local_best is not None and local_best_sim >= threshold_val:
+                                prev = best_by_website.get(website_id)
+                                if not prev or local_best_sim > prev.get('similarity', -1):
+                                    best_by_website[website_id] = {
+                                        'website_id': website_id,
+                                        'filter_id': filter_id,
+                                        'image_id': local_best.get('id'),
+                                        'similarity': local_best_sim,
+                                        'threshold': threshold_val
+                                    }
+
+                    blocked_website_filter_matches = list(best_by_website.values())
+            except Exception as e:
+                logger.error(f"网站图片过滤匹配失败: {e}")
 
             # 记录用户搜索次数（未登录则跳过，不影响机器人调用）
             try:
@@ -775,6 +847,7 @@ def search_similar():
                 'message': f'未找到相似度超过{threshold*100:.0f}%的商品',
                 'searchTime': datetime.now().isoformat(),
                 'blocked_filter_match': blocked_filter_match,
+                'blocked_website_filter_matches': blocked_website_filter_matches,
                 'debugInfo': {
                     'totalIndexedImages': db.get_total_indexed_images(),
                     'threshold': threshold,
@@ -873,6 +946,7 @@ def search_similar():
                     'totalResults': len(processed_results),
                     'searchTime': datetime.now().isoformat(),
                     'blocked_filter_match': blocked_filter_match,
+                    'blocked_website_filter_matches': blocked_website_filter_matches,
                     'debugInfo': {
                         'totalIndexedImages': db.get_total_indexed_images(),
                         'threshold': threshold,
@@ -1715,7 +1789,15 @@ def get_website_filters(config_id):
         settings = db.get_user_website_settings(current_user['id'], config_id)
 
         import json
+        import uuid
         filters = json.loads(settings.get('message_filters', '[]'))
+        updated = False
+        for item in filters:
+            if isinstance(item, dict) and not item.get('id'):
+                item['id'] = uuid.uuid4().hex
+                updated = True
+        if updated:
+            db.update_user_website_filters(current_user['id'], config_id, json.dumps(filters))
         return jsonify({'filters': filters})
     except Exception as e:
         logger.error(f"获取网站过滤条件失败: {e}")
@@ -1733,19 +1815,220 @@ def update_website_filters(config_id):
         filters = data.get('filters', [])
 
         # 验证过滤条件格式
+        import json
+        import uuid
+        settings = db.get_user_website_settings(current_user['id'], config_id)
+        existing_filters = json.loads(settings.get('message_filters', '[]'))
+        existing_by_id = {f.get('id'): f for f in existing_filters if isinstance(f, dict) and f.get('id')}
+
+        normalized_filters = []
+        seen_ids = set()
         for filter_item in filters:
-            if not isinstance(filter_item, dict) or 'filter_type' not in filter_item or 'filter_value' not in filter_item:
+            if not isinstance(filter_item, dict) or 'filter_type' not in filter_item:
                 return jsonify({'error': '过滤条件格式无效'}), 400
 
-        import json
-        filters_json = json.dumps(filters)
+            filter_type = filter_item.get('filter_type')
+            filter_value = filter_item.get('filter_value', '')
+            filter_id = filter_item.get('id') or uuid.uuid4().hex
+            if filter_id in seen_ids:
+                filter_id = uuid.uuid4().hex
+            seen_ids.add(filter_id)
+
+            if not filter_type or (filter_type not in {'image', 'image_filter'} and filter_value in (None, '')):
+                return jsonify({'error': '过滤类型和值都是必填的'}), 400
+
+            if filter_type == 'image' and not filter_value:
+                filter_value = ''
+            if filter_type == 'image_filter':
+                try:
+                    val = float(filter_value) if filter_value not in (None, '') else 0.95
+                except (TypeError, ValueError):
+                    return jsonify({'error': '相似度必须是数字'}), 400
+                if not (0.0 <= val <= 1.0):
+                    return jsonify({'error': '相似度必须在0.0-1.0之间'}), 400
+                filter_value = str(val)
+
+            normalized_filters.append({
+                'id': filter_id,
+                'filter_type': filter_type,
+                'filter_value': filter_value
+            })
+
+        new_by_id = {f.get('id'): f for f in normalized_filters if f.get('id')}
+        removed_ids = set(existing_by_id.keys()) - set(new_by_id.keys())
+
+        def _cleanup_filter_images(filter_id: str):
+            image_paths = db.delete_website_filter_images_by_filter(current_user['id'], config_id, filter_id)
+            for path in image_paths:
+                try:
+                    if path and os.path.exists(path):
+                        os.remove(path)
+                except Exception as cleanup_error:
+                    logger.warning(f"删除网站过滤图片文件失败: {cleanup_error}")
+
+        for filter_id in removed_ids:
+            _cleanup_filter_images(filter_id)
+
+        for filter_id, old_filter in existing_by_id.items():
+            new_filter = new_by_id.get(filter_id)
+            if not new_filter:
+                continue
+            if old_filter.get('filter_type') == 'image_filter' and new_filter.get('filter_type') != 'image_filter':
+                _cleanup_filter_images(filter_id)
+
+        filters_json = json.dumps(normalized_filters)
 
         if db.update_user_website_filters(current_user['id'], config_id, filters_json):
-            return jsonify({'success': True, 'message': f'已更新 {len(filters)} 个过滤条件'})
+            return jsonify({'success': True, 'message': f'已更新 {len(normalized_filters)} 个过滤条件'})
         else:
             return jsonify({'error': '更新失败'}), 500
     except Exception as e:
         logger.error(f"更新网站过滤条件失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/websites/<int:config_id>/filters/<filter_id>/images', methods=['GET'])
+def get_website_filter_images(config_id, filter_id):
+    """获取网站过滤规则的图片列表"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        current_user = get_current_user()
+        settings = db.get_user_website_settings(current_user['id'], config_id)
+        import json
+        filters = json.loads(settings.get('message_filters', '[]'))
+        matched_filter = next((f for f in filters if str(f.get('id')) == str(filter_id)), None)
+        if not matched_filter:
+            return jsonify({'error': '过滤规则不存在'}), 404
+
+        images = db.get_website_filter_images(current_user['id'], config_id, str(filter_id))
+        for img in images:
+            img['url'] = f"/api/websites/filters/images/{img['id']}/file"
+        return jsonify({'images': images})
+    except Exception as e:
+        logger.error(f"获取网站过滤图片失败: {e}")
+        return jsonify({'error': '获取失败'}), 500
+
+
+@app.route('/api/websites/<int:config_id>/filters/<filter_id>/images', methods=['POST'])
+def add_website_filter_image(config_id, filter_id):
+    """上传并添加网站过滤图片"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        current_user = get_current_user()
+        settings = db.get_user_website_settings(current_user['id'], config_id)
+        import json
+        filters = json.loads(settings.get('message_filters', '[]'))
+        matched_filter = next((f for f in filters if str(f.get('id')) == str(filter_id)), None)
+        if not matched_filter:
+            return jsonify({'error': '过滤规则不存在'}), 404
+        if matched_filter.get('filter_type') != 'image_filter':
+            return jsonify({'error': '仅图片过滤支持上传图片'}), 400
+
+        if 'image' not in request.files:
+            return jsonify({'error': '缺少图片文件'}), 400
+
+        image_file = request.files['image']
+        if not image_file or not image_file.filename:
+            return jsonify({'error': '无效的图片文件'}), 400
+
+        import uuid
+        from PIL import Image
+
+        save_dir = os.path.join(
+            config.WEBSITE_FILTER_IMAGE_DIR,
+            str(current_user['id']),
+            str(config_id),
+            str(filter_id)
+        )
+        os.makedirs(save_dir, exist_ok=True)
+        filename = f"{uuid.uuid4().hex}.jpg"
+        save_path = os.path.join(save_dir, filename)
+        image_file.save(save_path)
+
+        try:
+            if os.path.getsize(save_path) == 0:
+                os.remove(save_path)
+                return jsonify({'error': '图片文件为空'}), 400
+            with Image.open(save_path) as img:
+                img.verify()
+        except Exception:
+            try:
+                os.remove(save_path)
+            except Exception:
+                pass
+            return jsonify({'error': '图片文件无效或损坏'}), 400
+
+        features = extract_features(save_path)
+        if features is None:
+            try:
+                os.remove(save_path)
+            except Exception:
+                pass
+            return jsonify({'error': '特征提取失败'}), 500
+
+        image_id = db.add_website_filter_image(current_user['id'], config_id, str(filter_id), save_path, features)
+        return jsonify({
+            'success': True,
+            'image': {
+                'id': image_id,
+                'url': f"/api/websites/filters/images/{image_id}/file"
+            }
+        })
+    except Exception as e:
+        logger.error(f"添加网站过滤图片失败: {e}")
+        return jsonify({'error': '添加失败'}), 500
+
+
+@app.route('/api/websites/<int:config_id>/filters/<filter_id>/images/<int:image_id>', methods=['DELETE'])
+def delete_website_filter_image(config_id, filter_id, image_id):
+    """删除网站过滤图片"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+    try:
+        current_user = get_current_user()
+        record = db.get_website_filter_image_by_id(image_id)
+        if not record:
+            return jsonify({'error': '图片不存在'}), 404
+        if record.get('user_id') != current_user['id'] or record.get('website_id') != config_id:
+            return jsonify({'error': '无权限'}), 403
+        if str(record.get('filter_id')) != str(filter_id):
+            return jsonify({'error': '过滤规则不匹配'}), 400
+
+        image_path = db.delete_website_filter_image(image_id)
+        if image_path:
+            try:
+                if os.path.exists(image_path):
+                    os.remove(image_path)
+            except Exception as e:
+                logger.warning(f"删除网站过滤图片文件失败: {e}")
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f"删除网站过滤图片失败: {e}")
+        return jsonify({'error': '删除失败'}), 500
+
+
+@app.route('/api/websites/filters/images/<int:image_id>/file', methods=['GET'])
+def serve_website_filter_image(image_id):
+    """返回网站过滤图片文件"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+    try:
+        current_user = get_current_user()
+        record = db.get_website_filter_image_by_id(image_id)
+        if not record:
+            return jsonify({'error': 'Image not found'}), 404
+        if record.get('user_id') != current_user['id']:
+            return jsonify({'error': '无权限'}), 403
+        image_path = record['image_path']
+        if not os.path.exists(image_path):
+            return jsonify({'error': 'Image file missing'}), 404
+        from flask import send_file
+        return send_file(image_path, mimetype='image/jpeg')
+    except Exception as e:
+        logger.error(f"serve_website_filter_image 失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/products/<int:product_id>/urls', methods=['GET'])

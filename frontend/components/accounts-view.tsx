@@ -70,6 +70,13 @@ const formatMessageFilterLabel = (filter: any) => {
   return `${filter.filter_type} "${filter.filter_value}"`
 }
 
+const createFilterId = () => {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID()
+  }
+  return `f_${Date.now()}_${Math.random().toString(16).slice(2)}`
+}
+
 function CooldownTimer({ remaining }: { remaining: number }) {
   if (remaining <= 0) return null
   return (
@@ -136,6 +143,18 @@ export function AccountsView() {
   const [websiteFilters, setWebsiteFilters] = useState<{[key: number]: any[]}>({})
   const [showAddWebsiteFilter, setShowAddWebsiteFilter] = useState<number | null>(null)
   const [websiteSimilarityInputs, setWebsiteSimilarityInputs] = useState<{[key: number]: string}>({})
+  const [websiteNewFilter, setWebsiteNewFilter] = useState({
+    filter_type: 'contains',
+    filter_value: ''
+  })
+  const [websiteNewFilterImages, setWebsiteNewFilterImages] = useState<File[]>([])
+  const [editingWebsiteFilter, setEditingWebsiteFilter] = useState<any>(null)
+  const [editingWebsiteFilterImages, setEditingWebsiteFilterImages] = useState<any[]>([])
+  const [editingWebsiteFilterNewFiles, setEditingWebsiteFilterNewFiles] = useState<File[]>([])
+  const [editingWebsiteFilterImagesLoading, setEditingWebsiteFilterImagesLoading] = useState(false)
+  const [editingWebsiteFilterImagesUploading, setEditingWebsiteFilterImagesUploading] = useState(false)
+  const websiteNewFilterImageInputRef = useRef<HTMLInputElement | null>(null)
+  const websiteEditingFilterImageInputRef = useRef<HTMLInputElement | null>(null)
 
   // 消息过滤相关状态
   const [messageFilters, setMessageFilters] = useState<any[]>([])
@@ -281,6 +300,66 @@ export function AccountsView() {
       })
       if (res.ok) {
         setEditingFilterImages(prev => prev.filter(img => img.id !== imageId))
+        toast.success('已移除')
+      } else {
+        const data = await res.json().catch(() => ({}))
+        toast.error(data.error || '删除失败')
+      }
+    } catch (e) {
+      toast.error('删除失败')
+    }
+  }
+
+  const fetchWebsiteFilterImages = async (websiteId: number, filterId: string) => {
+    setEditingWebsiteFilterImagesLoading(true)
+    try {
+      const res = await fetch(`/api/websites/${websiteId}/filters/${filterId}/images`, { credentials: 'include' })
+      if (res.ok) {
+        const data = await res.json()
+        setEditingWebsiteFilterImages(data.images || [])
+      }
+    } catch (e) {
+      console.error('获取网站过滤图片失败:', e)
+    } finally {
+      setEditingWebsiteFilterImagesLoading(false)
+    }
+  }
+
+  const uploadWebsiteFilterImages = async (websiteId: number, filterId: string, files: File[]) => {
+    if (!files.length) return true
+    setEditingWebsiteFilterImagesUploading(true)
+    try {
+      for (const file of files) {
+        const formData = new FormData()
+        formData.append('image', file)
+        const res = await fetch(`/api/websites/${websiteId}/filters/${filterId}/images`, {
+          method: 'POST',
+          body: formData,
+          credentials: 'include'
+        })
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          toast.error(data.error || '上传失败')
+          return false
+        }
+      }
+      return true
+    } catch (e) {
+      toast.error('上传失败')
+      return false
+    } finally {
+      setEditingWebsiteFilterImagesUploading(false)
+    }
+  }
+
+  const handleDeleteWebsiteFilterImage = async (websiteId: number, filterId: string, imageId: number) => {
+    try {
+      const res = await fetch(`/api/websites/${websiteId}/filters/${filterId}/images/${imageId}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      })
+      if (res.ok) {
+        setEditingWebsiteFilterImages(prev => prev.filter(img => img.id !== imageId))
         toast.success('已移除')
       } else {
         const data = await res.json().catch(() => ({}))
@@ -799,36 +878,53 @@ export function AccountsView() {
   }
 
   // 网站过滤规则管理
-  const handleAddFilter = async (websiteId: number) => {
+  const handleAddWebsiteFilter = async (websiteId: number) => {
     try {
-      if (newFilter.filter_type === 'image_similarity') {
-        const value = Number(newFilter.filter_value)
-        if (!Number.isFinite(value) || value < 0 || value > 1) {
+      let payload = { ...websiteNewFilter }
+
+      if (websiteNewFilter.filter_type === 'image_filter') {
+        const value = Number(websiteNewFilter.filter_value)
+        const normalized = Number.isFinite(value) ? value : 0.95
+        if (normalized < 0 || normalized > 1) {
           toast.error('相似度必须在0-1之间')
           return
         }
+        if (websiteNewFilterImages.length === 0) {
+          toast.error('请至少上传一张图片')
+          return
+        }
+        payload = { filter_type: 'image_filter', filter_value: String(normalized) }
       }
-      if (newFilter.filter_type === 'role_id' && !newFilter.filter_value.trim()) {
+
+      if (websiteNewFilter.filter_type === 'numeric_range') {
+        const normalized = normalizeNumericRangeFilter(websiteNewFilter.filter_value)
+        if (!normalized.ok) {
+          toast.error(normalized.error)
+          return
+        }
+        payload = { filter_type: 'numeric_range', filter_value: normalized.value }
+      }
+
+      if (websiteNewFilter.filter_type === 'image') {
+        payload = { filter_type: 'image', filter_value: '' }
+      }
+
+      if (websiteNewFilter.filter_type === 'role_id' && !websiteNewFilter.filter_value.trim()) {
         toast.error('身份组ID不能为空')
         return
       }
-      // 首先获取当前网站的过滤规则
-      const res = await fetch(`/api/websites/${websiteId}/filters`, { credentials: 'include' })
-      if (!res.ok) {
-        toast.error('获取当前过滤规则失败')
-        return
-      }
 
-      const currentData = await res.json()
-      const currentFilters = currentData.filters || []
+      const currentFilters = websiteFilters[websiteId] || []
+      const newFilterId = createFilterId()
+      const newFilters = [
+        ...currentFilters,
+        {
+          id: newFilterId,
+          filter_type: payload.filter_type,
+          filter_value: payload.filter_value
+        }
+      ]
 
-      // 添加新规则
-      const newFilters = [...currentFilters, {
-        filter_type: newFilter.filter_type,
-        filter_value: newFilter.filter_value
-      }]
-
-      // 更新过滤规则
       const updateRes = await fetch(`/api/websites/${websiteId}/filters`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -837,15 +933,27 @@ export function AccountsView() {
       })
 
       if (updateRes.ok) {
-        toast.success('过滤规则已添加')
-        setNewFilter({ filter_type: 'contains', filter_value: '' })
-        setShowAddWebsiteFilter(null)
+        if (payload.filter_type === 'image_filter') {
+          const uploadOk = await uploadWebsiteFilterImages(websiteId, newFilterId, websiteNewFilterImages)
+          if (!uploadOk) {
+            toast.error('部分图片上传失败')
+          } else {
+            toast.success('图片过滤已添加')
+          }
+        } else {
+          toast.success('过滤规则已添加')
+        }
 
-        // 立即更新前端状态，而不是重新获取所有数据
         setWebsiteFilters(prev => ({
           ...prev,
           [websiteId]: newFilters
         }))
+        setShowAddWebsiteFilter(null)
+        setWebsiteNewFilter({ filter_type: 'contains', filter_value: '' })
+        setWebsiteNewFilterImages([])
+        if (websiteNewFilterImageInputRef.current) {
+          websiteNewFilterImageInputRef.current.value = ''
+        }
       } else {
         toast.error('添加过滤规则失败')
       }
@@ -854,15 +962,84 @@ export function AccountsView() {
     }
   }
 
-  const handleRemoveWebsiteFilter = async (websiteId: number, filterIndex: number) => {
+  const handleUpdateWebsiteFilter = async () => {
+    if (!editingWebsiteFilter) return
     try {
-      // 获取当前网站的过滤规则
+      const { websiteId } = editingWebsiteFilter
+      let filter = { ...editingWebsiteFilter.filter }
+      if (!filter.id) {
+        filter = { ...filter, id: createFilterId() }
+      }
+
+      if (filter.filter_type === 'image_filter') {
+        const value = Number(filter.filter_value)
+        const normalized = Number.isFinite(value) ? value : 0.95
+        if (normalized < 0 || normalized > 1) {
+          toast.error('相似度必须在0-1之间')
+          return
+        }
+        filter.filter_value = String(normalized)
+      }
+
+      if (filter.filter_type === 'numeric_range') {
+        const normalized = normalizeNumericRangeFilter(filter.filter_value)
+        if (!normalized.ok) {
+          toast.error(normalized.error)
+          return
+        }
+        filter.filter_value = normalized.value
+      }
+
+      if (filter.filter_type === 'image') {
+        filter.filter_value = ''
+      }
+
       const currentFilters = websiteFilters[websiteId] || []
+      const updatedFilters = currentFilters.map(item =>
+        String(item.id || '') === String(filter.id) ? filter : item
+      )
 
-      // 移除指定索引的规则
-      const newFilters = currentFilters.filter((_, index) => index !== filterIndex)
+      const updateRes = await fetch(`/api/websites/${websiteId}/filters`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ filters: updatedFilters })
+      })
 
-      // 更新过滤规则
+      if (updateRes.ok) {
+        if (filter.filter_type === 'image_filter' && editingWebsiteFilterNewFiles.length > 0) {
+          const uploadOk = await uploadWebsiteFilterImages(websiteId, filter.id, editingWebsiteFilterNewFiles)
+          if (!uploadOk) {
+            toast.error('部分图片上传失败')
+          } else {
+            toast.success('过滤规则已更新')
+            fetchWebsiteFilterImages(websiteId, filter.id)
+          }
+          setEditingWebsiteFilterNewFiles([])
+          if (websiteEditingFilterImageInputRef.current) {
+            websiteEditingFilterImageInputRef.current.value = ''
+          }
+        } else {
+          toast.success('过滤规则已更新')
+        }
+        setWebsiteFilters(prev => ({
+          ...prev,
+          [websiteId]: updatedFilters
+        }))
+        setEditingWebsiteFilter(null)
+      } else {
+        toast.error('更新失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
+  const handleRemoveWebsiteFilter = async (websiteId: number, filterId: string) => {
+    try {
+      const currentFilters = websiteFilters[websiteId] || []
+      const newFilters = currentFilters.filter((filter: any) => String(filter.id) !== String(filterId))
+
       const updateRes = await fetch(`/api/websites/${websiteId}/filters`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -872,7 +1049,6 @@ export function AccountsView() {
 
       if (updateRes.ok) {
         toast.success('过滤规则已删除')
-        // 立即更新前端状态，而不是重新获取所有数据
         setWebsiteFilters(prev => ({
           ...prev,
           [websiteId]: newFilters
@@ -933,6 +1109,28 @@ export function AccountsView() {
     setEditingFilter((prev: any) => ({
       ...prev,
       filter_value: buildNumericRangeFilterValue(next)
+    }))
+  }
+
+  const updateWebsiteNewNumericFilter = (patch: Partial<NumericRangeFilterValue>) => {
+    const current = parseNumericRangeFilterValue(websiteNewFilter.filter_value)
+    const next = { ...current, ...patch }
+    setWebsiteNewFilter(prev => ({
+      ...prev,
+      filter_value: buildNumericRangeFilterValue(next)
+    }))
+  }
+
+  const updateWebsiteEditingNumericFilter = (patch: Partial<NumericRangeFilterValue>) => {
+    if (!editingWebsiteFilter) return
+    const current = parseNumericRangeFilterValue(editingWebsiteFilter.filter.filter_value)
+    const next = { ...current, ...patch }
+    setEditingWebsiteFilter((prev: any) => ({
+      ...prev,
+      filter: {
+        ...prev.filter,
+        filter_value: buildNumericRangeFilterValue(next)
+      }
     }))
   }
 
@@ -1088,6 +1286,18 @@ export function AccountsView() {
       }
     }
   }, [editingFilter?.id, editingFilter?.filter_type])
+
+  useEffect(() => {
+    if (editingWebsiteFilter && editingWebsiteFilter.filter?.filter_type === 'image_filter') {
+      fetchWebsiteFilterImages(editingWebsiteFilter.websiteId, editingWebsiteFilter.filter.id)
+    } else {
+      setEditingWebsiteFilterImages([])
+      setEditingWebsiteFilterNewFiles([])
+      if (websiteEditingFilterImageInputRef.current) {
+        websiteEditingFilterImageInputRef.current.value = ''
+      }
+    }
+  }, [editingWebsiteFilter?.websiteId, editingWebsiteFilter?.filter?.id, editingWebsiteFilter?.filter?.filter_type])
 
 
   return (
@@ -1429,6 +1639,7 @@ export function AccountsView() {
                             <SelectItem value="starts_with">开头是</SelectItem>
                             <SelectItem value="ends_with">结尾是</SelectItem>
                             <SelectItem value="regex">正则表达式</SelectItem>
+                            <SelectItem value="image">图片消息</SelectItem>
                             <SelectItem value="user_id">用户ID</SelectItem>
                             <SelectItem value="role_id">身份组ID</SelectItem>
                             <SelectItem value="image_filter">图片过滤</SelectItem>
@@ -1520,6 +1731,8 @@ export function AccountsView() {
                               </div>
                             )}
                           </div>
+                        ) : newFilter.filter_type === 'image' ? (
+                          <div className="text-xs text-muted-foreground">图片消息无需填写过滤值</div>
                         ) : (
                           <Input
                             value={newFilter.filter_value}
@@ -1987,10 +2200,10 @@ export function AccountsView() {
                         <span className="text-sm font-medium">消息过滤</span>
                         <Dialog open={showAddWebsiteFilter === website.id} onOpenChange={(open) => {
                           setShowAddWebsiteFilter(open ? website.id : null)
-                          setNewFilter({ filter_type: 'contains', filter_value: '' })
-                          setNewFilterImages([])
-                          if (newFilterImageInputRef.current) {
-                            newFilterImageInputRef.current.value = ''
+                          setWebsiteNewFilter({ filter_type: 'contains', filter_value: '' })
+                          setWebsiteNewFilterImages([])
+                          if (websiteNewFilterImageInputRef.current) {
+                            websiteNewFilterImageInputRef.current.value = ''
                           }
                         }}>
                           <DialogTrigger asChild>
@@ -2007,7 +2220,26 @@ export function AccountsView() {
                             <div className="space-y-4">
                               <div>
                                 <Label>过滤类型</Label>
-                                <Select value={newFilter.filter_type} onValueChange={value => setNewFilter(prev => ({ ...prev, filter_type: value, filter_value: '' }))}>
+                                <Select
+                                  value={websiteNewFilter.filter_type}
+                                  onValueChange={value => {
+                                    setWebsiteNewFilter(prev => ({
+                                      ...prev,
+                                      filter_type: value,
+                                      filter_value: value === 'numeric_range'
+                                        ? buildNumericRangeFilterValue({ keyword: '', min: '', max: '' })
+                                        : value === 'image_filter'
+                                          ? '0.95'
+                                          : ''
+                                    }))
+                                    if (value !== 'image_filter') {
+                                      setWebsiteNewFilterImages([])
+                                      if (websiteNewFilterImageInputRef.current) {
+                                        websiteNewFilterImageInputRef.current.value = ''
+                                      }
+                                    }
+                                  }}
+                                >
                                   <SelectTrigger>
                                     <SelectValue />
                                   </SelectTrigger>
@@ -2016,40 +2248,115 @@ export function AccountsView() {
                                     <SelectItem value="starts_with">开头是</SelectItem>
                                     <SelectItem value="ends_with">结尾是</SelectItem>
                                     <SelectItem value="regex">正则表达式</SelectItem>
-                                    <SelectItem value="image_similarity">图片相似度≥</SelectItem>
+                                    <SelectItem value="image">图片消息</SelectItem>
                                     <SelectItem value="user_id">用户ID</SelectItem>
                                     <SelectItem value="role_id">身份组ID</SelectItem>
+                                    <SelectItem value="image_filter">图片过滤</SelectItem>
+                                    <SelectItem value="numeric_range">数字范围</SelectItem>
                                   </SelectContent>
                                 </Select>
                               </div>
                               <div>
                                 <Label>过滤值</Label>
-                                {newFilter.filter_type === 'image_similarity' ? (
-                                  <Input
-                                    type="number"
-                                    step="0.01"
-                                    value={newFilter.filter_value}
-                                    onChange={e => setNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
-                                    placeholder="0-1之间，例如: 0.95"
-                                  />
-                                ) : newFilter.filter_type === 'role_id' ? (
-                                  <Input
-                                    value={newFilter.filter_value}
-                                    onChange={e => setNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
-                                    placeholder="逗号分隔的身份组ID"
-                                  />
+                                {websiteNewFilter.filter_type === 'numeric_range' ? (
+                                  <div className="space-y-3">
+                                    <div className="space-y-1">
+                                      <Label className="text-xs text-muted-foreground">匹配关键词</Label>
+                                      <Input
+                                        value={parseNumericRangeFilterValue(websiteNewFilter.filter_value).keyword}
+                                        onChange={e => updateWebsiteNewNumericFilter({ keyword: e.target.value })}
+                                        placeholder="例如: size"
+                                        className="h-9"
+                                      />
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-xs text-muted-foreground">小于</span>
+                                        <Input
+                                          type="number"
+                                          value={parseNumericRangeFilterValue(websiteNewFilter.filter_value).min}
+                                          onChange={e => updateWebsiteNewNumericFilter({ min: e.target.value })}
+                                          className="w-24 h-9"
+                                        />
+                                        <span className="text-xs text-muted-foreground">不回复</span>
+                                      </div>
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-xs text-muted-foreground">大于</span>
+                                        <Input
+                                          type="number"
+                                          value={parseNumericRangeFilterValue(websiteNewFilter.filter_value).max}
+                                          onChange={e => updateWebsiteNewNumericFilter({ max: e.target.value })}
+                                          className="w-24 h-9"
+                                        />
+                                        <span className="text-xs text-muted-foreground">不回复</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ) : websiteNewFilter.filter_type === 'image_filter' ? (
+                                  <div className="space-y-3">
+                                    <div className="flex items-center gap-2">
+                                      <Label className="text-xs text-muted-foreground">相似度阈值(0-1)</Label>
+                                      <Input
+                                        type="number"
+                                        step="0.01"
+                                        value={websiteNewFilter.filter_value}
+                                        onChange={e => setWebsiteNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
+                                        placeholder="0.95"
+                                        className="h-8 w-24 text-xs"
+                                      />
+                                      <span className="text-xs text-muted-foreground">≥该值即过滤</span>
+                                    </div>
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <Input
+                                        ref={websiteNewFilterImageInputRef}
+                                        type="file"
+                                        accept="image/*"
+                                        multiple
+                                        className="h-8 text-xs"
+                                        onChange={(e) => setWebsiteNewFilterImages(Array.from(e.target.files || []))}
+                                      />
+                                      <span className="text-xs text-muted-foreground">
+                                        已选 {websiteNewFilterImages.length} 张
+                                      </span>
+                                    </div>
+                                    {websiteNewFilterImages.length > 0 && (
+                                      <div className="flex flex-wrap gap-2">
+                                        {websiteNewFilterImages.map((file, idx) => (
+                                          <div key={`${file.name}-${idx}`} className="flex items-center gap-1 rounded bg-muted px-2 py-1 text-xs">
+                                            <span className="max-w-[140px] truncate">{file.name}</span>
+                                            <Button
+                                              variant="ghost"
+                                              size="sm"
+                                              className="h-4 w-4 p-0"
+                                              onClick={() => setWebsiteNewFilterImages(prev => prev.filter((_, i) => i !== idx))}
+                                            >
+                                              <X className="w-3 h-3" />
+                                            </Button>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : websiteNewFilter.filter_type === 'image' ? (
+                                  <div className="text-xs text-muted-foreground">图片消息无需填写过滤值</div>
                                 ) : (
                                   <Input
-                                    value={newFilter.filter_value}
-                                    onChange={e => setNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
-                                    placeholder="输入过滤条件"
+                                    value={websiteNewFilter.filter_value}
+                                    onChange={e => setWebsiteNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
+                                    placeholder={
+                                      websiteNewFilter.filter_type === 'user_id'
+                                        ? "输入用户ID，多个用逗号分隔"
+                                        : websiteNewFilter.filter_type === 'role_id'
+                                          ? "输入身份组ID，多个用逗号分隔"
+                                          : "输入过滤条件"
+                                    }
                                   />
                                 )}
                               </div>
                             </div>
                             <DialogFooter>
                               <Button variant="outline" onClick={() => setShowAddWebsiteFilter(null)}>取消</Button>
-                              <Button onClick={() => handleAddFilter(website.id)}>添加</Button>
+                              <Button onClick={() => handleAddWebsiteFilter(website.id)}>添加</Button>
                             </DialogFooter>
                           </DialogContent>
                         </Dialog>
@@ -2057,30 +2364,23 @@ export function AccountsView() {
 
                       <div className="flex flex-wrap gap-2">
                         {(websiteFilters[website.id] || []).map((filter: any, index: number) => (
-                          <div key={index} className="flex items-center gap-1 bg-muted rounded px-2 py-1">
-                            <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">
-                              {filter.filter_type === 'contains' ? '包含' :
-                               filter.filter_type === 'starts_with' ? '开头' :
-                               filter.filter_type === 'ends_with' ? '结尾' :
-                               filter.filter_type === 'regex' ? '正则' :
-                               filter.filter_type === 'image' ? '图片' :
-                               filter.filter_type === 'image_similarity' ? '相似度' :
-                               filter.filter_type === 'role_id' ? '身份组' : '用户ID'}
-                            </Badge>
-                            <span className="text-xs truncate max-w-20" title={filter.filter_value}>
-                              {filter.filter_type === 'image_similarity'
-                                ? `>= ${filter.filter_value}`
-                                : filter.filter_type === 'role_id'
-                                  ? `ID: ${filter.filter_value}`
-                                  : filter.filter_type === 'image'
-                                    ? '图片消息'
-                                    : filter.filter_value}
+                          <div key={filter.id || index} className="flex items-center gap-1 bg-muted rounded px-2 py-1">
+                            <span className="text-xs truncate max-w-56" title={formatMessageFilterLabel(filter)}>
+                              {formatMessageFilterLabel(filter)}
                             </span>
                             <Button
                               variant="ghost"
                               size="sm"
                               className="h-4 w-4 p-0"
-                              onClick={() => handleRemoveWebsiteFilter(website.id, index)}
+                              onClick={() => setEditingWebsiteFilter({ websiteId: website.id, filter: { ...filter } })}
+                            >
+                              <Edit className="w-3 h-3" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-4 w-4 p-0"
+                              onClick={() => handleRemoveWebsiteFilter(website.id, filter.id)}
                             >
                               <X className="w-3 h-3" />
                             </Button>
@@ -2090,22 +2390,22 @@ export function AccountsView() {
                       <div className="text-xs text-muted-foreground">
                         网站特定的过滤规则 (独立于全局规则)
                       </div>
-                      <div className="flex flex-wrap items-center gap-2 rounded-md border border-emerald-200/70 bg-emerald-50/60 px-2 py-1 text-xs">
-                        <span className="font-medium text-emerald-700">图片相似度门槛(0-1)</span>
+                      <div className="flex flex-wrap items-center gap-2 rounded-md border border-emerald-100 bg-emerald-50/40 px-2 py-1 text-[11px] text-muted-foreground">
+                        <span className="font-medium text-emerald-700">图片相似度</span>
                         <Input
                           type="number"
                           step="0.01"
                           value={websiteSimilarityInputs[website.id] ?? ''}
                           onChange={e => setWebsiteSimilarityInputs(prev => ({ ...prev, [website.id]: e.target.value }))}
                           placeholder="空=全局"
-                          className="h-7 w-24 bg-white/80 text-xs"
+                          className="h-6 w-20 bg-white/80 text-[11px]"
                           disabled={currentUser?.role !== 'admin'}
                         />
-                        <span className="text-[11px] text-muted-foreground">仅此网站生效，优先级高于全局</span>
+                        <span className="text-[11px] text-muted-foreground">仅此网站生效</span>
                         <Button
                           variant="outline"
                           size="sm"
-                          className="h-7 px-2 text-xs border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                          className="h-6 px-2 text-[11px] border-emerald-200 text-emerald-700 hover:bg-emerald-50"
                           onClick={() => handleUpdateWebsiteExtras(website.id)}
                           disabled={currentUser?.role !== 'admin'}
                         >
@@ -2151,6 +2451,7 @@ export function AccountsView() {
                       <SelectItem value="starts_with">开头是</SelectItem>
                       <SelectItem value="ends_with">结尾是</SelectItem>
                       <SelectItem value="regex">正则表达式</SelectItem>
+                      <SelectItem value="image">图片消息</SelectItem>
                       <SelectItem value="user_id">用户ID</SelectItem>
                       <SelectItem value="role_id">身份组ID</SelectItem>
                       <SelectItem value="image_filter">图片过滤</SelectItem>
@@ -2268,6 +2569,8 @@ export function AccountsView() {
                         )}
                       </div>
                     </div>
+                  ) : editingFilter.filter_type === 'image' ? (
+                    <div className="text-xs text-muted-foreground">图片消息无需填写过滤值</div>
                   ) : (
                     <Input
                       value={editingFilter.filter_value}
@@ -2286,6 +2589,199 @@ export function AccountsView() {
               <DialogFooter>
                 <Button variant="outline" onClick={() => setEditingFilter(null)}>取消</Button>
                 <Button onClick={handleUpdateMessageFilter}>保存修改</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        )}
+
+        {/* 编辑网站过滤对话框 */}
+        {editingWebsiteFilter && (
+          <Dialog open={!!editingWebsiteFilter} onOpenChange={() => setEditingWebsiteFilter(null)}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>编辑网站过滤规则</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div>
+                  <Label>过滤类型</Label>
+                  <Select
+                    value={editingWebsiteFilter.filter.filter_type}
+                    onValueChange={value => {
+                      setEditingWebsiteFilter((prev: any) => ({
+                        ...prev,
+                        filter: {
+                          ...prev.filter,
+                          filter_type: value,
+                          filter_value: value === 'numeric_range'
+                            ? buildNumericRangeFilterValue({ keyword: '', min: '', max: '' })
+                            : value === 'image_filter'
+                              ? '0.95'
+                              : ''
+                        }
+                      }))
+                      if (value !== 'image_filter') {
+                        setEditingWebsiteFilterImages([])
+                        setEditingWebsiteFilterNewFiles([])
+                        if (websiteEditingFilterImageInputRef.current) {
+                          websiteEditingFilterImageInputRef.current.value = ''
+                        }
+                      }
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="contains">包含文本</SelectItem>
+                      <SelectItem value="starts_with">开头是</SelectItem>
+                      <SelectItem value="ends_with">结尾是</SelectItem>
+                      <SelectItem value="regex">正则表达式</SelectItem>
+                      <SelectItem value="image">图片消息</SelectItem>
+                      <SelectItem value="user_id">用户ID</SelectItem>
+                      <SelectItem value="role_id">身份组ID</SelectItem>
+                      <SelectItem value="image_filter">图片过滤</SelectItem>
+                      <SelectItem value="numeric_range">数字范围</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label>过滤值</Label>
+                  {editingWebsiteFilter.filter.filter_type === 'numeric_range' ? (
+                    <div className="space-y-3">
+                      <div className="space-y-1">
+                        <Label className="text-xs text-muted-foreground">匹配关键词</Label>
+                        <Input
+                          value={parseNumericRangeFilterValue(editingWebsiteFilter.filter.filter_value).keyword}
+                          onChange={e => updateWebsiteEditingNumericFilter({ keyword: e.target.value })}
+                          placeholder="例如: size"
+                          className="h-9"
+                        />
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-muted-foreground">小于</span>
+                          <Input
+                            type="number"
+                            value={parseNumericRangeFilterValue(editingWebsiteFilter.filter.filter_value).min}
+                            onChange={e => updateWebsiteEditingNumericFilter({ min: e.target.value })}
+                            className="w-24 h-9"
+                          />
+                          <span className="text-xs text-muted-foreground">不回复</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-muted-foreground">大于</span>
+                          <Input
+                            type="number"
+                            value={parseNumericRangeFilterValue(editingWebsiteFilter.filter.filter_value).max}
+                            onChange={e => updateWebsiteEditingNumericFilter({ max: e.target.value })}
+                            className="w-24 h-9"
+                          />
+                          <span className="text-xs text-muted-foreground">不回复</span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : editingWebsiteFilter.filter.filter_type === 'image_filter' ? (
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2">
+                        <Label className="text-xs text-muted-foreground">相似度阈值(0-1)</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={editingWebsiteFilter.filter.filter_value}
+                          onChange={e => setEditingWebsiteFilter((prev: any) => ({
+                            ...prev,
+                            filter: { ...prev.filter, filter_value: e.target.value }
+                          }))}
+                          placeholder="0.95"
+                          className="h-8 w-24 text-xs"
+                        />
+                        <span className="text-xs text-muted-foreground">≥该值即过滤</span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Input
+                          ref={websiteEditingFilterImageInputRef}
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          className="h-8 text-xs"
+                          onChange={(e) => setEditingWebsiteFilterNewFiles(Array.from(e.target.files || []))}
+                        />
+                        <Button
+                          size="sm"
+                          className="h-8 px-3 text-xs"
+                          onClick={async () => {
+                            const websiteId = editingWebsiteFilter?.websiteId
+                            const filterId = editingWebsiteFilter?.filter?.id
+                            if (!websiteId || !filterId) return
+                            if (!editingWebsiteFilterNewFiles.length) {
+                              toast.error('请先选择图片')
+                              return
+                            }
+                            const ok = await uploadWebsiteFilterImages(websiteId, filterId, editingWebsiteFilterNewFiles)
+                            if (ok) {
+                              toast.success('图片已上传')
+                              setEditingWebsiteFilterNewFiles([])
+                              if (websiteEditingFilterImageInputRef.current) {
+                                websiteEditingFilterImageInputRef.current.value = ''
+                              }
+                              fetchWebsiteFilterImages(websiteId, filterId)
+                            }
+                          }}
+                          disabled={editingWebsiteFilterImagesUploading}
+                        >
+                          {editingWebsiteFilterImagesUploading ? '上传中...' : '上传'}
+                        </Button>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {editingWebsiteFilterImagesLoading ? (
+                          <span className="text-xs text-muted-foreground">加载中...</span>
+                        ) : editingWebsiteFilterImages.length === 0 ? (
+                          <span className="text-xs text-muted-foreground">暂无图片</span>
+                        ) : (
+                          editingWebsiteFilterImages.map((img: any) => (
+                            <div key={img.id} className="group relative h-12 w-12">
+                              <img
+                                src={img.url}
+                                alt={`website-filter-${img.id}`}
+                                className="h-12 w-12 rounded border object-cover"
+                                loading="lazy"
+                              />
+                              <Button
+                                variant="destructive"
+                                size="icon"
+                                className="absolute -top-2 -right-2 h-5 w-5 opacity-0 transition-opacity group-hover:opacity-100"
+                                onClick={() => handleDeleteWebsiteFilterImage(editingWebsiteFilter.websiteId, editingWebsiteFilter.filter.id, img.id)}
+                              >
+                                <X className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  ) : editingWebsiteFilter.filter.filter_type === 'image' ? (
+                    <div className="text-xs text-muted-foreground">图片消息无需填写过滤值</div>
+                  ) : (
+                    <Input
+                      value={editingWebsiteFilter.filter.filter_value}
+                      onChange={e => setEditingWebsiteFilter((prev: any) => ({
+                        ...prev,
+                        filter: { ...prev.filter, filter_value: e.target.value }
+                      }))}
+                      placeholder={
+                        editingWebsiteFilter.filter.filter_type === 'user_id'
+                          ? "输入用户ID，多个用逗号分隔"
+                          : editingWebsiteFilter.filter.filter_type === 'role_id'
+                            ? "输入身份组ID，多个用逗号分隔"
+                            : "输入过滤条件"
+                      }
+                    />
+                  )}
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setEditingWebsiteFilter(null)}>取消</Button>
+                <Button onClick={handleUpdateWebsiteFilter}>保存</Button>
               </DialogFooter>
             </DialogContent>
           </Dialog>

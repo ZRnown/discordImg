@@ -458,6 +458,24 @@ class DiscordBotClient(discord.Client):
                     logger.info("消息被过滤(全局图片相似度)")
                     return
                 if match_context and match_context.get('type') == 'image':
+                    website_filter_matches = match_context.get('website_filter_matches') or []
+                    matched_filter = next(
+                        (m for m in website_filter_matches if str(m.get('website_id')) == str(website_config.get('id'))),
+                        None
+                    )
+                    if matched_filter:
+                        try:
+                            sim = float(matched_filter.get('similarity', 0))
+                            threshold_val = float(matched_filter.get('threshold', 0))
+                            if sim >= threshold_val:
+                                logger.info(
+                                    f"🚫 网站图片过滤命中: 网站 {website_config.get('name')} "
+                                    f"规则 {matched_filter.get('filter_id')} 相似度 {sim:.3f} >= {threshold_val:.3f}"
+                                )
+                                continue
+                        except Exception:
+                            continue
+                if match_context and match_context.get('type') == 'image':
                     similarity = _coerce_float(match_context.get('similarity')) or 0.0
                     base_threshold = _coerce_float(match_context.get('base_threshold'))
                     if base_threshold is None:
@@ -1326,6 +1344,7 @@ class DiscordBotClient(discord.Client):
 
             if result:
                 blocked_filter_match = result.get('blocked_filter_match')
+                blocked_website_filter_matches = result.get('blocked_website_filter_matches') or []
                 try:
                     if blocked_filter_match:
                         sim = float(blocked_filter_match.get('similarity', 0))
@@ -1434,7 +1453,8 @@ class DiscordBotClient(discord.Client):
                         'type': 'image',
                         'similarity': similarity,
                         'base_threshold': user_threshold,
-                        'block_threshold': block_threshold
+                        'block_threshold': block_threshold,
+                        'website_filter_matches': blocked_website_filter_matches
                     }
                 )
 
