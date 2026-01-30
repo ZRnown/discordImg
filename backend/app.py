@@ -635,38 +635,29 @@ def search_similar():
             if query_features is None:
                 return jsonify({'error': 'Feature extraction failed'}), 500
 
-            # === 屏蔽图片库匹配（用户级） ===
-            blocked_match = None
-            blocked_threshold = None
+            # === 图片过滤规则匹配（基于上传图片） ===
+            blocked_filter_match = None
             try:
-                current_user = None
-                try:
-                    current_user = get_current_user()
-                except Exception:
-                    current_user = None
-
-                user_id = None
-                if current_user:
-                    user_id = current_user.get('id')
-                if not user_id:
-                    form_user_id = request.form.get('user_id') or request.form.get('userId')
-                    try:
-                        user_id = int(form_user_id) if form_user_id else None
-                    except (TypeError, ValueError):
-                        user_id = None
-
-                if user_id:
-                    user_settings = db.get_user_settings(user_id)
-                    blocked_threshold = user_settings.get('blocked_image_threshold', 0.95)
-                    blocked_images = db.get_blocked_images(user_id, include_features=True)
-                    if blocked_images:
-                        query_vec = np.array(query_features, dtype='float32')
-                        q_norm = np.linalg.norm(query_vec)
-                        if q_norm > 0:
-                            query_vec = query_vec / q_norm
-                        best = None
-                        best_sim = -1.0
-                        for item in blocked_images:
+                image_filters = db.get_message_filters()
+                image_filters = [f for f in (image_filters or []) if f.get('filter_type') == 'image_filter']
+                if image_filters:
+                    query_vec = np.array(query_features, dtype='float32')
+                    q_norm = np.linalg.norm(query_vec)
+                    if q_norm > 0:
+                        query_vec = query_vec / q_norm
+                    best_match = None
+                    best_similarity = -1.0
+                    for filter_rule in image_filters:
+                        try:
+                            threshold_val = float(filter_rule.get('filter_value') or 0.95)
+                        except (TypeError, ValueError):
+                            threshold_val = 0.95
+                        filter_images = db.get_message_filter_images(filter_rule.get('id'), include_features=True)
+                        if not filter_images:
+                            continue
+                        local_best = None
+                        local_best_sim = -1.0
+                        for item in filter_images:
                             feats = item.get('features') or []
                             if not feats:
                                 continue
@@ -675,16 +666,21 @@ def search_similar():
                             if v_norm > 0:
                                 vec = vec / v_norm
                             sim = float(np.dot(query_vec, vec))
-                            if sim > best_sim:
-                                best_sim = sim
-                                best = item
-                        if best is not None and best_sim >= 0:
-                            blocked_match = {
-                                'id': best.get('id'),
-                                'similarity': best_sim
-                            }
+                            if sim > local_best_sim:
+                                local_best_sim = sim
+                                local_best = item
+                        if local_best is not None and local_best_sim >= threshold_val:
+                            if local_best_sim > best_similarity:
+                                best_similarity = local_best_sim
+                                best_match = {
+                                    'filter_id': filter_rule.get('id'),
+                                    'image_id': local_best.get('id'),
+                                    'similarity': local_best_sim,
+                                    'threshold': threshold_val
+                                }
+                    blocked_filter_match = best_match
             except Exception as e:
-                logger.error(f"屏蔽图片库匹配失败: {e}")
+                logger.error(f"图片过滤匹配失败: {e}")
 
             # 记录用户搜索次数（未登录则跳过，不影响机器人调用）
             try:
@@ -778,8 +774,7 @@ def search_similar():
                 'totalResults': 0,
                 'message': f'未找到相似度超过{threshold*100:.0f}%的商品',
                 'searchTime': datetime.now().isoformat(),
-                'blocked_match': blocked_match,
-                'blocked_threshold': blocked_threshold,
+                'blocked_filter_match': blocked_filter_match,
                 'debugInfo': {
                     'totalIndexedImages': db.get_total_indexed_images(),
                     'threshold': threshold,
@@ -877,8 +872,7 @@ def search_similar():
                     'results': processed_results,
                     'totalResults': len(processed_results),
                     'searchTime': datetime.now().isoformat(),
-                    'blocked_match': blocked_match,
-                    'blocked_threshold': blocked_threshold,
+                    'blocked_filter_match': blocked_filter_match,
                     'debugInfo': {
                         'totalIndexedImages': db.get_total_indexed_images(),
                         'threshold': threshold,
@@ -1928,22 +1922,23 @@ def add_message_filter():
         filter_type = data.get('filter_type')
         filter_value = data.get('filter_value')
 
-        if not filter_type or (filter_type not in {'image'} and not filter_value):
+        if not filter_type or (filter_type not in {'image', 'image_filter'} and not filter_value):
             return jsonify({'error': '过滤类型和值都是必填的'}), 400
 
         if filter_type == 'image' and not filter_value:
             filter_value = ''
-        if filter_type == 'image_similarity':
+        if filter_type in {'image_similarity', 'image_filter'}:
             try:
-                val = float(filter_value)
+                val = float(filter_value) if filter_value not in (None, '') else 0.95
             except (TypeError, ValueError):
                 return jsonify({'error': '相似度必须是数字'}), 400
             if not (0.0 <= val <= 1.0):
                 return jsonify({'error': '相似度必须在0.0-1.0之间'}), 400
             filter_value = str(val)
 
-        if db.add_message_filter(filter_type, filter_value):
-            return jsonify({'success': True, 'message': '过滤规则添加成功'})
+        filter_id = db.add_message_filter(filter_type, filter_value)
+        if filter_id:
+            return jsonify({'success': True, 'message': '过滤规则添加成功', 'id': filter_id})
         else:
             return jsonify({'error': '添加失败'}), 500
     except Exception as e:
@@ -1962,14 +1957,14 @@ def update_message_filter(filter_id):
         filter_value = data.get('filter_value')
         is_active = data.get('is_active', True)
 
-        if not filter_type or (filter_type not in {'image'} and not filter_value):
+        if not filter_type or (filter_type not in {'image', 'image_filter'} and not filter_value):
             return jsonify({'error': '过滤类型和值都是必填的'}), 400
 
         if filter_type == 'image' and not filter_value:
             filter_value = ''
-        if filter_type == 'image_similarity':
+        if filter_type in {'image_similarity', 'image_filter'}:
             try:
-                val = float(filter_value)
+                val = float(filter_value) if filter_value not in (None, '') else 0.95
             except (TypeError, ValueError):
                 return jsonify({'error': '相似度必须是数字'}), 400
             if not (0.0 <= val <= 1.0):
@@ -1991,7 +1986,14 @@ def delete_message_filter(filter_id):
         return jsonify({'error': '需要管理员权限'}), 403
 
     try:
+        image_paths = db.delete_message_filter_images_by_filter_id(filter_id)
         if db.delete_message_filter(filter_id):
+            for path in image_paths:
+                try:
+                    if path and os.path.exists(path):
+                        os.remove(path)
+                except Exception as e:
+                    logger.warning(f"删除过滤图片文件失败: {e}")
             return jsonify({'success': True, 'message': '过滤规则删除成功'})
         else:
             return jsonify({'error': '删除失败'}), 500
@@ -2000,28 +2002,26 @@ def delete_message_filter(filter_id):
         return jsonify({'error': str(e)}), 500
 
 
-@app.route('/api/blocked-images', methods=['GET'])
-def get_blocked_images():
-    """获取当前用户的屏蔽图片库"""
-    user = get_current_user()
-    if not user:
-        return jsonify({'error': '需要登录'}), 401
+@app.route('/api/message-filters/<int:filter_id>/images', methods=['GET'])
+def get_message_filter_images(filter_id: int):
+    """获取过滤规则的图片列表"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
     try:
-        images = db.get_blocked_images(user['id'])
+        images = db.get_message_filter_images(filter_id)
         for img in images:
-            img['url'] = f"/api/blocked-images/{img['id']}/file"
+            img['url'] = f"/api/message-filters/images/{img['id']}/file"
         return jsonify({'images': images})
     except Exception as e:
-        logger.error(f"获取屏蔽图片失败: {e}")
+        logger.error(f"获取过滤图片失败: {e}")
         return jsonify({'error': '获取失败'}), 500
 
 
-@app.route('/api/blocked-images', methods=['POST'])
-def add_blocked_image():
-    """上传并添加屏蔽图片"""
-    user = get_current_user()
-    if not user:
-        return jsonify({'error': '需要登录'}), 401
+@app.route('/api/message-filters/<int:filter_id>/images', methods=['POST'])
+def add_message_filter_image(filter_id: int):
+    """上传并添加过滤图片"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
     try:
         if 'image' not in request.files:
             return jsonify({'error': '缺少图片文件'}), 400
@@ -2033,7 +2033,7 @@ def add_blocked_image():
         import uuid
         from PIL import Image
 
-        save_dir = os.path.join(config.BLOCKED_IMAGE_DIR, str(user['id']))
+        save_dir = os.path.join(config.MESSAGE_FILTER_IMAGE_DIR, str(filter_id))
         os.makedirs(save_dir, exist_ok=True)
         filename = f"{uuid.uuid4().hex}.jpg"
         save_path = os.path.join(save_dir, filename)
@@ -2060,48 +2060,46 @@ def add_blocked_image():
                 pass
             return jsonify({'error': '特征提取失败'}), 500
 
-        image_id = db.add_blocked_image(user['id'], save_path, features)
+        image_id = db.add_message_filter_image(filter_id, save_path, features)
         return jsonify({
             'success': True,
             'image': {
                 'id': image_id,
-                'url': f"/api/blocked-images/{image_id}/file"
+                'url': f"/api/message-filters/images/{image_id}/file"
             }
         })
     except Exception as e:
-        logger.error(f"添加屏蔽图片失败: {e}")
+        logger.error(f"添加过滤图片失败: {e}")
         return jsonify({'error': '添加失败'}), 500
 
 
-@app.route('/api/blocked-images/<int:image_id>', methods=['DELETE'])
-def delete_blocked_image(image_id: int):
-    """删除屏蔽图片"""
-    user = get_current_user()
-    if not user:
-        return jsonify({'error': '需要登录'}), 401
+@app.route('/api/message-filters/<int:filter_id>/images/<int:image_id>', methods=['DELETE'])
+def delete_message_filter_image(filter_id: int, image_id: int):
+    """删除过滤图片"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
     try:
-        image_path = db.delete_blocked_image(user['id'], image_id)
+        image_path = db.delete_message_filter_image(image_id)
         if not image_path:
             return jsonify({'error': '图片不存在'}), 404
         try:
             if os.path.exists(image_path):
                 os.remove(image_path)
         except Exception as e:
-            logger.warning(f"删除屏蔽图片文件失败: {e}")
+            logger.warning(f"删除过滤图片文件失败: {e}")
         return jsonify({'success': True})
     except Exception as e:
-        logger.error(f"删除屏蔽图片失败: {e}")
+        logger.error(f"删除过滤图片失败: {e}")
         return jsonify({'error': '删除失败'}), 500
 
 
-@app.route('/api/blocked-images/<int:image_id>/file', methods=['GET'])
-def serve_blocked_image(image_id: int):
-    """返回屏蔽图片文件"""
-    user = get_current_user()
-    if not user:
-        return jsonify({'error': '需要登录'}), 401
+@app.route('/api/message-filters/images/<int:image_id>/file', methods=['GET'])
+def serve_message_filter_image(image_id: int):
+    """返回过滤图片文件"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
     try:
-        record = db.get_blocked_image_by_id(user['id'], image_id)
+        record = db.get_message_filter_image_by_id(image_id)
         if not record:
             return jsonify({'error': 'Image not found'}), 404
         image_path = record['image_path']
@@ -2110,7 +2108,7 @@ def serve_blocked_image(image_id: int):
         from flask import send_file
         return send_file(image_path, mimetype='image/jpeg')
     except Exception as e:
-        logger.error(f"serve_blocked_image 失败: {e}")
+        logger.error(f"serve_message_filter_image 失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 # === 新增：自定义回复内容API ===

@@ -508,15 +508,15 @@ class Database:
                 )
             ''')
 
-            # 创建屏蔽图片库表（用户级别）
+            # 创建消息过滤图片表（全局）
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS blocked_images (
+                CREATE TABLE IF NOT EXISTS message_filter_images (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER NOT NULL,
+                    filter_id INTEGER NOT NULL,
                     image_path TEXT NOT NULL,
                     features TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+                    FOREIGN KEY (filter_id) REFERENCES message_filters (id) ON DELETE CASCADE
                 )
             ''')
 
@@ -2480,7 +2480,7 @@ class Database:
             logger.error(f"获取消息过滤规则失败: {e}")
             return []
 
-    def add_message_filter(self, filter_type: str, filter_value: str) -> bool:
+    def add_message_filter(self, filter_type: str, filter_value: str) -> int:
         """添加消息过滤规则"""
         try:
             with self.get_connection() as conn:
@@ -2490,10 +2490,10 @@ class Database:
                     VALUES (?, ?)
                 ''', (filter_type, filter_value))
                 conn.commit()
-                return True
+                return cursor.lastrowid
         except Exception as e:
             logger.error(f"添加消息过滤规则失败: {e}")
-            return False
+            return 0
 
     def update_message_filter(self, filter_id: int, filter_type: str, filter_value: str, is_active: bool) -> bool:
         """更新消息过滤规则"""
@@ -2523,8 +2523,8 @@ class Database:
             logger.error(f"删除消息过滤规则失败: {e}")
             return False
 
-    def add_blocked_image(self, user_id: int, image_path: str, features: np.ndarray) -> int:
-        """添加屏蔽图片记录，返回记录ID"""
+    def add_message_filter_image(self, filter_id: int, image_path: str, features: np.ndarray) -> int:
+        """添加消息过滤图片，返回记录ID"""
         try:
             features_str = None
             if features is not None:
@@ -2533,34 +2533,34 @@ class Database:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    INSERT INTO blocked_images (user_id, image_path, features)
+                    INSERT INTO message_filter_images (filter_id, image_path, features)
                     VALUES (?, ?, ?)
-                ''', (user_id, image_path, features_str))
+                ''', (filter_id, image_path, features_str))
                 conn.commit()
                 return cursor.lastrowid
         except Exception as e:
-            logger.error(f"添加屏蔽图片失败: {e}")
+            logger.error(f"添加过滤图片失败: {e}")
             raise e
 
-    def get_blocked_images(self, user_id: int, include_features: bool = False) -> List[Dict]:
-        """获取用户屏蔽图片列表"""
+    def get_message_filter_images(self, filter_id: int, include_features: bool = False) -> List[Dict]:
+        """获取某条过滤规则的图片列表"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 if include_features:
                     cursor.execute('''
                         SELECT id, image_path, features, created_at
-                        FROM blocked_images
-                        WHERE user_id = ?
+                        FROM message_filter_images
+                        WHERE filter_id = ?
                         ORDER BY created_at DESC
-                    ''', (user_id,))
+                    ''', (filter_id,))
                 else:
                     cursor.execute('''
                         SELECT id, image_path, created_at
-                        FROM blocked_images
-                        WHERE user_id = ?
+                        FROM message_filter_images
+                        WHERE filter_id = ?
                         ORDER BY created_at DESC
-                    ''', (user_id,))
+                    ''', (filter_id,))
                 rows = [dict(row) for row in cursor.fetchall()]
                 if include_features:
                     import json
@@ -2571,41 +2571,56 @@ class Database:
                             row['features'] = []
                 return rows
         except Exception as e:
-            logger.error(f"获取屏蔽图片失败: {e}")
+            logger.error(f"获取过滤图片失败: {e}")
             return []
 
-    def get_blocked_image_by_id(self, user_id: int, image_id: int) -> Optional[Dict]:
-        """获取单条屏蔽图片记录"""
+    def get_message_filter_image_by_id(self, image_id: int) -> Optional[Dict]:
+        """获取单条过滤图片记录"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT id, image_path, created_at
-                    FROM blocked_images
-                    WHERE user_id = ? AND id = ?
-                ''', (user_id, image_id))
+                    SELECT id, filter_id, image_path, created_at
+                    FROM message_filter_images
+                    WHERE id = ?
+                ''', (image_id,))
                 row = cursor.fetchone()
                 return dict(row) if row else None
         except Exception as e:
-            logger.error(f"获取屏蔽图片失败: {e}")
+            logger.error(f"获取过滤图片失败: {e}")
             return None
 
-    def delete_blocked_image(self, user_id: int, image_id: int) -> Optional[str]:
-        """删除屏蔽图片记录并返回文件路径"""
+    def delete_message_filter_image(self, image_id: int) -> Optional[str]:
+        """删除过滤图片记录并返回文件路径"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute('SELECT image_path FROM blocked_images WHERE id = ? AND user_id = ?', (image_id, user_id))
+                cursor.execute('SELECT image_path FROM message_filter_images WHERE id = ?', (image_id,))
                 row = cursor.fetchone()
                 if not row:
                     return None
                 image_path = row['image_path']
-                cursor.execute('DELETE FROM blocked_images WHERE id = ? AND user_id = ?', (image_id, user_id))
+                cursor.execute('DELETE FROM message_filter_images WHERE id = ?', (image_id,))
                 conn.commit()
                 return image_path
         except Exception as e:
-            logger.error(f"删除屏蔽图片失败: {e}")
+            logger.error(f"删除过滤图片失败: {e}")
             return None
+
+    def delete_message_filter_images_by_filter_id(self, filter_id: int) -> List[str]:
+        """删除某条过滤规则的所有图片并返回文件路径列表"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT image_path FROM message_filter_images WHERE filter_id = ?', (filter_id,))
+                rows = cursor.fetchall()
+                paths = [row['image_path'] for row in rows]
+                cursor.execute('DELETE FROM message_filter_images WHERE filter_id = ?', (filter_id,))
+                conn.commit()
+                return paths
+        except Exception as e:
+            logger.error(f"删除过滤图片失败: {e}")
+            return []
 
     def get_custom_replies(self) -> List[Dict]:
         """获取自定义回复内容"""

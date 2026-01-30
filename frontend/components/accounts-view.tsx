@@ -61,6 +61,9 @@ const formatMessageFilterLabel = (filter: any) => {
   if (filter.filter_type === 'image') {
     return '图片消息'
   }
+  if (filter.filter_type === 'image_filter') {
+    return `图片过滤 ≥ ${filter.filter_value || '0.95'}`
+  }
   if (filter.filter_type === 'role_id') {
     return `身份组ID: ${filter.filter_value}`
   }
@@ -91,7 +94,6 @@ export function AccountsView() {
     discord_similarity_threshold: 0.6,
     global_reply_min_delay: 3.0,
     global_reply_max_delay: 8.0,
-    blocked_image_threshold: 0.95,
   })
   const [settingsLoading, setSettingsLoading] = useState(false)
 
@@ -144,12 +146,14 @@ export function AccountsView() {
     filter_value: ''
   })
 
-  // 屏蔽图片库相关状态
-  const [blockedImages, setBlockedImages] = useState<any[]>([])
-  const [blockedImagesLoading, setBlockedImagesLoading] = useState(false)
-  const [blockedImageUploading, setBlockedImageUploading] = useState(false)
-  const [blockedImageFile, setBlockedImageFile] = useState<File | null>(null)
-  const blockedImageInputRef = useRef<HTMLInputElement | null>(null)
+  // 图片过滤相关状态
+  const [newFilterImages, setNewFilterImages] = useState<File[]>([])
+  const [editingFilterImages, setEditingFilterImages] = useState<any[]>([])
+  const [editingFilterNewFiles, setEditingFilterNewFiles] = useState<File[]>([])
+  const [editingFilterImagesLoading, setEditingFilterImagesLoading] = useState(false)
+  const [editingFilterImagesUploading, setEditingFilterImagesUploading] = useState(false)
+  const newFilterImageInputRef = useRef<HTMLInputElement | null>(null)
+  const editingFilterImageInputRef = useRef<HTMLInputElement | null>(null)
 
   const formatThresholdForInput = (value: any) => {
     if (value === null || value === undefined || value === '') return ''
@@ -227,61 +231,56 @@ export function AccountsView() {
     }
   }
 
-  const fetchBlockedImages = async () => {
-    setBlockedImagesLoading(true)
+  const fetchMessageFilterImages = async (filterId: number) => {
+    setEditingFilterImagesLoading(true)
     try {
-      const res = await fetch('/api/blocked-images', { credentials: 'include' })
+      const res = await fetch(`/api/message-filters/${filterId}/images`, { credentials: 'include' })
       if (res.ok) {
         const data = await res.json()
-        setBlockedImages(data.images || [])
+        setEditingFilterImages(data.images || [])
       }
     } catch (e) {
-      console.error('获取屏蔽图片失败:', e)
+      console.error('获取过滤图片失败:', e)
     } finally {
-      setBlockedImagesLoading(false)
+      setEditingFilterImagesLoading(false)
     }
   }
 
-  const handleUploadBlockedImage = async () => {
-    if (!blockedImageFile) {
-      toast.error('请先选择图片')
-      return
-    }
-    setBlockedImageUploading(true)
+  const uploadMessageFilterImages = async (filterId: number, files: File[]) => {
+    if (!files.length) return true
+    setEditingFilterImagesUploading(true)
     try {
-      const formData = new FormData()
-      formData.append('image', blockedImageFile)
-      const res = await fetch('/api/blocked-images', {
-        method: 'POST',
-        body: formData,
-        credentials: 'include'
-      })
-      if (res.ok) {
-        toast.success('已加入屏蔽库')
-        setBlockedImageFile(null)
-        if (blockedImageInputRef.current) {
-          blockedImageInputRef.current.value = ''
+      for (const file of files) {
+        const formData = new FormData()
+        formData.append('image', file)
+        const res = await fetch(`/api/message-filters/${filterId}/images`, {
+          method: 'POST',
+          body: formData,
+          credentials: 'include'
+        })
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}))
+          toast.error(data.error || '上传失败')
+          return false
         }
-        fetchBlockedImages()
-      } else {
-        const data = await res.json().catch(() => ({}))
-        toast.error(data.error || '上传失败')
       }
+      return true
     } catch (e) {
       toast.error('上传失败')
+      return false
     } finally {
-      setBlockedImageUploading(false)
+      setEditingFilterImagesUploading(false)
     }
   }
 
-  const handleDeleteBlockedImage = async (imageId: number) => {
+  const handleDeleteMessageFilterImage = async (filterId: number, imageId: number) => {
     try {
-      const res = await fetch(`/api/blocked-images/${imageId}`, {
+      const res = await fetch(`/api/message-filters/${filterId}/images/${imageId}`, {
         method: 'DELETE',
         credentials: 'include'
       })
       if (res.ok) {
-        setBlockedImages(prev => prev.filter(img => img.id !== imageId))
+        setEditingFilterImages(prev => prev.filter(img => img.id !== imageId))
         toast.success('已移除')
       } else {
         const data = await res.json().catch(() => ({}))
@@ -348,7 +347,6 @@ export function AccountsView() {
     fetchSettings();
     fetchWebsites(true); // 强制刷新，清除旧的缓存数据
     fetchMessageFilters();
-    fetchBlockedImages();
     fetchCooldowns();
 
     // 优化轮询频率：每15秒刷新一次账号状态（降低服务器负载）
@@ -390,7 +388,6 @@ export function AccountsView() {
               discord_similarity_threshold: data.discord_similarity_threshold || 0.6,
               global_reply_min_delay: data.global_reply_min_delay || 3.0,
               global_reply_max_delay: data.global_reply_max_delay || 8.0,
-              blocked_image_threshold: data.blocked_image_threshold ?? 0.95,
             })
 
             // 清除预加载数据，避免重复使用
@@ -428,7 +425,6 @@ export function AccountsView() {
           discord_similarity_threshold: data.discord_similarity_threshold || 0.6,
           global_reply_min_delay: data.global_reply_min_delay || 3.0,
           global_reply_max_delay: data.global_reply_max_delay || 8.0,
-          blocked_image_threshold: data.blocked_image_threshold ?? 0.95,
         })
       }
     } catch (error) {
@@ -943,13 +939,18 @@ export function AccountsView() {
   const handleAddMessageFilter = async () => {
     try {
       let payload = { ...newFilter }
-      if (newFilter.filter_type === 'image_similarity') {
+      if (newFilter.filter_type === 'image_filter') {
         const value = Number(newFilter.filter_value)
-        if (!Number.isFinite(value) || value < 0 || value > 1) {
+        const normalized = Number.isFinite(value) ? value : 0.95
+        if (normalized < 0 || normalized > 1) {
           toast.error('相似度必须在0-1之间')
           return
         }
-        payload = { filter_type: 'image_similarity', filter_value: String(value) }
+        if (newFilterImages.length === 0) {
+          toast.error('请至少上传一张图片')
+          return
+        }
+        payload = { filter_type: 'image_filter', filter_value: String(normalized) }
       }
       if (newFilter.filter_type === 'numeric_range') {
         const normalized = normalizeNumericRangeFilter(newFilter.filter_value)
@@ -966,13 +967,32 @@ export function AccountsView() {
         credentials: 'include',
         body: JSON.stringify(payload)
       })
+      const data = await res.json().catch(() => ({}))
       if (res.ok) {
-        toast.success('过滤规则添加成功')
+        if (newFilter.filter_type === 'image_filter') {
+          const filterId = data.id
+          if (!filterId) {
+            toast.error('创建过滤规则失败')
+            return
+          }
+          const uploadOk = await uploadMessageFilterImages(filterId, newFilterImages)
+          if (!uploadOk) {
+            toast.error('部分图片上传失败，请检查')
+          } else {
+            toast.success('图片过滤已添加')
+          }
+          setNewFilterImages([])
+          if (newFilterImageInputRef.current) {
+            newFilterImageInputRef.current.value = ''
+          }
+        } else {
+          toast.success('过滤规则添加成功')
+        }
         setShowAddFilter(false)
         setNewFilter({ filter_type: 'contains', filter_value: '' })
         fetchMessageFilters()
       } else {
-        toast.error('添加失败')
+        toast.error(data.error || '添加失败')
       }
     } catch (e) {
       toast.error('网络错误')
@@ -988,15 +1008,16 @@ export function AccountsView() {
         is_active: editingFilter.is_active
       }
 
-      if (editingFilter.filter_type === 'image_similarity') {
+      if (editingFilter.filter_type === 'image_filter') {
         const value = Number(editingFilter.filter_value)
-        if (!Number.isFinite(value) || value < 0 || value > 1) {
+        const normalized = Number.isFinite(value) ? value : 0.95
+        if (normalized < 0 || normalized > 1) {
           toast.error('相似度必须在0-1之间')
           return
         }
         payload = {
           ...payload,
-          filter_value: String(value)
+          filter_value: String(normalized)
         }
       }
       if (editingFilter.filter_type === 'numeric_range') {
@@ -1055,6 +1076,18 @@ export function AccountsView() {
       setAccountPage(totalAccountPages)
     }
   }, [accountPage, totalAccountPages])
+
+  useEffect(() => {
+    if (editingFilter && editingFilter.filter_type === 'image_filter') {
+      fetchMessageFilterImages(editingFilter.id)
+    } else {
+      setEditingFilterImages([])
+      setEditingFilterNewFiles([])
+      if (editingFilterImageInputRef.current) {
+        editingFilterImageInputRef.current.value = ''
+      }
+    }
+  }, [editingFilter?.id, editingFilter?.filter_type])
 
 
   return (
@@ -1341,7 +1374,19 @@ export function AccountsView() {
                   <CardTitle className="text-lg">消息过滤</CardTitle>
                   <CardDescription>设置账号不回复的消息内容规则</CardDescription>
                 </div>
-                <Dialog open={showAddFilter} onOpenChange={setShowAddFilter}>
+                <Dialog
+                  open={showAddFilter}
+                  onOpenChange={(open) => {
+                    setShowAddFilter(open)
+                    if (!open) {
+                      setNewFilter({ filter_type: 'contains', filter_value: '' })
+                      setNewFilterImages([])
+                      if (newFilterImageInputRef.current) {
+                        newFilterImageInputRef.current.value = ''
+                      }
+                    }
+                  }}
+                >
                   <DialogTrigger asChild>
                     <Button size="sm">
                       <Plus className="w-4 h-4 mr-2" />
@@ -1358,13 +1403,23 @@ export function AccountsView() {
                         <Label>过滤类型</Label>
                         <Select
                           value={newFilter.filter_type}
-                          onValueChange={value => setNewFilter(prev => ({
-                            ...prev,
-                            filter_type: value,
-                            filter_value: value === 'numeric_range'
-                              ? buildNumericRangeFilterValue({ keyword: '', min: '', max: '' })
-                              : ''
-                          }))}
+                          onValueChange={value => {
+                            setNewFilter(prev => ({
+                              ...prev,
+                              filter_type: value,
+                              filter_value: value === 'numeric_range'
+                                ? buildNumericRangeFilterValue({ keyword: '', min: '', max: '' })
+                                : value === 'image_filter'
+                                  ? '0.95'
+                                  : ''
+                            }))
+                            if (value !== 'image_filter') {
+                              setNewFilterImages([])
+                              if (newFilterImageInputRef.current) {
+                                newFilterImageInputRef.current.value = ''
+                              }
+                            }
+                          }}
                         >
                           <SelectTrigger>
                             <SelectValue />
@@ -1376,7 +1431,7 @@ export function AccountsView() {
                             <SelectItem value="regex">正则表达式</SelectItem>
                             <SelectItem value="user_id">用户ID</SelectItem>
                             <SelectItem value="role_id">身份组ID</SelectItem>
-                            <SelectItem value="image_similarity">图片相似度≥</SelectItem>
+                            <SelectItem value="image_filter">图片过滤</SelectItem>
                             <SelectItem value="numeric_range">数字范围</SelectItem>
                           </SelectContent>
                         </Select>
@@ -1420,14 +1475,51 @@ export function AccountsView() {
                               匹配关键词后面的数字（如 "size 49"），超出范围将忽略该消息。
                             </p>
                           </div>
-                        ) : newFilter.filter_type === 'image_similarity' ? (
-                          <Input
-                            type="number"
-                            step="0.01"
-                            value={newFilter.filter_value}
-                            onChange={e => setNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
-                            placeholder="0-1之间，例如: 0.95"
-                          />
+                        ) : newFilter.filter_type === 'image_filter' ? (
+                          <div className="space-y-3">
+                            <div className="flex items-center gap-2">
+                              <Label className="text-xs text-muted-foreground">相似度阈值(0-1)</Label>
+                              <Input
+                                type="number"
+                                step="0.01"
+                                value={newFilter.filter_value}
+                                onChange={e => setNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
+                                placeholder="0.95"
+                                className="h-8 w-24 text-xs"
+                              />
+                              <span className="text-xs text-muted-foreground">≥该值即过滤</span>
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <Input
+                                ref={newFilterImageInputRef}
+                                type="file"
+                                accept="image/*"
+                                multiple
+                                className="h-8 text-xs"
+                                onChange={(e) => setNewFilterImages(Array.from(e.target.files || []))}
+                              />
+                              <span className="text-xs text-muted-foreground">
+                                已选 {newFilterImages.length} 张
+                              </span>
+                            </div>
+                            {newFilterImages.length > 0 && (
+                              <div className="flex flex-wrap gap-2">
+                                {newFilterImages.map((file, idx) => (
+                                  <div key={`${file.name}-${idx}`} className="flex items-center gap-1 rounded bg-muted px-2 py-1 text-xs">
+                                    <span className="max-w-[140px] truncate">{file.name}</span>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-4 w-4 p-0"
+                                      onClick={() => setNewFilterImages(prev => prev.filter((_, i) => i !== idx))}
+                                    >
+                                      <X className="w-3 h-3" />
+                                    </Button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         ) : (
                           <Input
                             value={newFilter.filter_value}
@@ -1484,80 +1576,6 @@ export function AccountsView() {
                     暂无过滤规则
                   </div>
                 )}
-              </div>
-              <div className="mt-4 border-t pt-4 space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="text-sm font-medium">屏蔽图片库</div>
-                  <div className="flex flex-wrap items-center gap-2 text-xs">
-                    <Label className="text-xs">相似度阈值(0-1)</Label>
-                    <Input
-                      type="number"
-                      step="0.01"
-                      value={settings.blocked_image_threshold ?? ''}
-                      onChange={(e) => setSettings(prev => ({
-                        ...prev,
-                        blocked_image_threshold: e.target.value === '' ? null : parseFloat(e.target.value)
-                      }))}
-                      className="h-7 w-20 text-xs"
-                    />
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-7 px-2 text-xs"
-                      onClick={handleSaveSettings}
-                      disabled={settingsLoading}
-                    >
-                      保存阈值
-                    </Button>
-                  </div>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <Input
-                    ref={blockedImageInputRef}
-                    type="file"
-                    accept="image/*"
-                    className="h-8 text-xs"
-                    onChange={(e) => setBlockedImageFile(e.target.files?.[0] || null)}
-                  />
-                  <Button
-                    size="sm"
-                    className="h-8 px-3 text-xs"
-                    onClick={handleUploadBlockedImage}
-                    disabled={blockedImageUploading || !blockedImageFile}
-                  >
-                    {blockedImageUploading ? '上传中...' : '上传'}
-                  </Button>
-                  <span className="text-xs text-muted-foreground">
-                    命中该库且相似度≥阈值时，不回复
-                  </span>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {blockedImagesLoading ? (
-                    <span className="text-xs text-muted-foreground">加载中...</span>
-                  ) : blockedImages.length === 0 ? (
-                    <span className="text-xs text-muted-foreground">暂无屏蔽图片</span>
-                  ) : (
-                    blockedImages.map((img: any) => (
-                      <div key={img.id} className="group relative h-12 w-12">
-                        <img
-                          src={img.url}
-                          alt={`blocked-${img.id}`}
-                          className="h-12 w-12 rounded border object-cover"
-                          loading="lazy"
-                          title={`ID: ${img.id}`}
-                        />
-                        <Button
-                          variant="destructive"
-                          size="icon"
-                          className="absolute -top-2 -right-2 h-5 w-5 opacity-0 transition-opacity group-hover:opacity-100"
-                          onClick={() => handleDeleteBlockedImage(img.id)}
-                        >
-                          <X className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    ))
-                  )}
-                </div>
               </div>
             </CardContent>
           </Card>
@@ -1969,7 +1987,11 @@ export function AccountsView() {
                         <span className="text-sm font-medium">消息过滤</span>
                         <Dialog open={showAddWebsiteFilter === website.id} onOpenChange={(open) => {
                           setShowAddWebsiteFilter(open ? website.id : null)
-                          if (!open) setNewFilter({ filter_type: 'contains', filter_value: '' })
+                          setNewFilter({ filter_type: 'contains', filter_value: '' })
+                          setNewFilterImages([])
+                          if (newFilterImageInputRef.current) {
+                            newFilterImageInputRef.current.value = ''
+                          }
                         }}>
                           <DialogTrigger asChild>
                             <Button variant="outline" size="sm">
@@ -2116,7 +2138,9 @@ export function AccountsView() {
                       filter_type: value,
                       filter_value: value === 'numeric_range'
                         ? buildNumericRangeFilterValue({ keyword: '', min: '', max: '' })
-                        : ''
+                        : value === 'image_filter'
+                          ? '0.95'
+                          : ''
                     }))}
                   >
                     <SelectTrigger>
@@ -2129,7 +2153,7 @@ export function AccountsView() {
                       <SelectItem value="regex">正则表达式</SelectItem>
                       <SelectItem value="user_id">用户ID</SelectItem>
                       <SelectItem value="role_id">身份组ID</SelectItem>
-                      <SelectItem value="image_similarity">图片相似度≥</SelectItem>
+                      <SelectItem value="image_filter">图片过滤</SelectItem>
                       <SelectItem value="numeric_range">数字范围</SelectItem>
                     </SelectContent>
                   </Select>
@@ -2170,14 +2194,80 @@ export function AccountsView() {
                         </div>
                       </div>
                     </div>
-                  ) : editingFilter.filter_type === 'image_similarity' ? (
-                    <Input
-                      type="number"
-                      step="0.01"
-                      value={editingFilter.filter_value}
-                      onChange={e => setEditingFilter((prev: any) => ({ ...prev, filter_value: e.target.value }))}
-                      placeholder="0-1之间，例如: 0.95"
-                    />
+                  ) : editingFilter.filter_type === 'image_filter' ? (
+                    <div className="space-y-3">
+                      <div className="flex items-center gap-2">
+                        <Label className="text-xs text-muted-foreground">相似度阈值(0-1)</Label>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={editingFilter.filter_value}
+                          onChange={e => setEditingFilter((prev: any) => ({ ...prev, filter_value: e.target.value }))}
+                          placeholder="0.95"
+                          className="h-8 w-24 text-xs"
+                        />
+                        <span className="text-xs text-muted-foreground">≥该值即过滤</span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Input
+                          ref={editingFilterImageInputRef}
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          className="h-8 text-xs"
+                          onChange={(e) => setEditingFilterNewFiles(Array.from(e.target.files || []))}
+                        />
+                        <Button
+                          size="sm"
+                          className="h-8 px-3 text-xs"
+                          onClick={async () => {
+                            if (!editingFilter?.id) return
+                            if (!editingFilterNewFiles.length) {
+                              toast.error('请先选择图片')
+                              return
+                            }
+                            const ok = await uploadMessageFilterImages(editingFilter.id, editingFilterNewFiles)
+                            if (ok) {
+                              toast.success('图片已上传')
+                              setEditingFilterNewFiles([])
+                              if (editingFilterImageInputRef.current) {
+                                editingFilterImageInputRef.current.value = ''
+                              }
+                              fetchMessageFilterImages(editingFilter.id)
+                            }
+                          }}
+                          disabled={editingFilterImagesUploading}
+                        >
+                          {editingFilterImagesUploading ? '上传中...' : '上传'}
+                        </Button>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {editingFilterImagesLoading ? (
+                          <span className="text-xs text-muted-foreground">加载中...</span>
+                        ) : editingFilterImages.length === 0 ? (
+                          <span className="text-xs text-muted-foreground">暂无图片</span>
+                        ) : (
+                          editingFilterImages.map((img: any) => (
+                            <div key={img.id} className="group relative h-12 w-12">
+                              <img
+                                src={img.url}
+                                alt={`filter-${img.id}`}
+                                className="h-12 w-12 rounded border object-cover"
+                                loading="lazy"
+                              />
+                              <Button
+                                variant="destructive"
+                                size="icon"
+                                className="absolute -top-2 -right-2 h-5 w-5 opacity-0 transition-opacity group-hover:opacity-100"
+                                onClick={() => handleDeleteMessageFilterImage(editingFilter.id, img.id)}
+                              >
+                                <X className="h-3 w-3" />
+                              </Button>
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
                   ) : (
                     <Input
                       value={editingFilter.filter_value}

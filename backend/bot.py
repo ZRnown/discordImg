@@ -1325,15 +1325,15 @@ class DiscordBotClient(discord.Client):
             )
 
             if result:
-                blocked_match = result.get('blocked_match')
-                blocked_threshold = result.get('blocked_threshold')
+                blocked_filter_match = result.get('blocked_filter_match')
                 try:
-                    if blocked_match and blocked_threshold is not None:
-                        sim = float(blocked_match.get('similarity', 0))
-                        threshold_val = float(blocked_threshold)
+                    if blocked_filter_match:
+                        sim = float(blocked_filter_match.get('similarity', 0))
+                        threshold_val = float(blocked_filter_match.get('threshold', 0))
                         if sim >= threshold_val:
                             logger.info(
-                                f'🚫 命中屏蔽图片库: 相似度 {sim:.3f} >= {threshold_val:.3f} | 频道: {message.channel.name}'
+                                f'🚫 命中图片过滤: 规则 {blocked_filter_match.get("filter_id")} '
+                                f'相似度 {sim:.3f} >= {threshold_val:.3f} | 频道: {message.channel.name}'
                             )
                             return
                 except Exception:
