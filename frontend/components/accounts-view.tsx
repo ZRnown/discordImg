@@ -368,6 +368,33 @@ export function AccountsView() {
     }
   }
 
+  const handleMessageFilterFileSelect = async (files: FileList | null) => {
+    if (!editingFilter) return
+    if (editingFilter.filter_type !== 'image_filter') {
+      toast.error('请先将过滤类型设置为图片过滤并保存')
+      return
+    }
+    const fileList = Array.from(files || [])
+    if (!fileList.length) return
+
+    const filterId = editingFilter.id
+    if (!filterId) {
+      toast.error('过滤规则不存在，请先保存')
+      return
+    }
+
+    setEditingFilterNewFiles(fileList)
+    const ok = await uploadMessageFilterImages(filterId, fileList)
+    if (ok) {
+      toast.success('图片已上传')
+      fetchMessageFilterImages(filterId)
+    }
+    setEditingFilterNewFiles([])
+    if (editingFilterImageInputRef.current) {
+      editingFilterImageInputRef.current.value = ''
+    }
+  }
+
   const handleWebsiteFilterFileSelect = async (files: FileList | null) => {
     if (!editingWebsiteFilter) return
     const fileList = Array.from(files || [])
@@ -2601,36 +2628,21 @@ export function AccountsView() {
                         <span className="text-xs text-muted-foreground">≥该值即过滤</span>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
-                        <Input
+                        <input
                           ref={editingFilterImageInputRef}
                           type="file"
                           accept="image/*"
                           multiple
-                          className="h-8 text-xs"
-                          onChange={(e) => setEditingFilterNewFiles(Array.from(e.target.files || []))}
+                          className="hidden"
+                          onChange={(e) => handleMessageFilterFileSelect(e.target.files)}
                         />
                         <Button
                           size="sm"
                           className="h-8 px-3 text-xs"
-                          onClick={async () => {
-                            if (!editingFilter?.id) return
-                            if (!editingFilterNewFiles.length) {
-                              toast.error('请先选择图片')
-                              return
-                            }
-                            const ok = await uploadMessageFilterImages(editingFilter.id, editingFilterNewFiles)
-                            if (ok) {
-                              toast.success('图片已上传')
-                              setEditingFilterNewFiles([])
-                              if (editingFilterImageInputRef.current) {
-                                editingFilterImageInputRef.current.value = ''
-                              }
-                              fetchMessageFilterImages(editingFilter.id)
-                            }
-                          }}
+                          onClick={() => editingFilterImageInputRef.current?.click()}
                           disabled={editingFilterImagesUploading}
                         >
-                          {editingFilterImagesUploading ? '上传中...' : '上传'}
+                          {editingFilterImagesUploading ? '上传中...' : '上传图片'}
                         </Button>
                       </div>
                       <div className="flex flex-wrap gap-2">
