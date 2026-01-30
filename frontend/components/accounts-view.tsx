@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
-import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit, Clock, Sparkles } from "lucide-react"
+import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit, Clock } from "lucide-react"
 
 type NumericRangeFilterValue = {
   keyword: string
@@ -1880,52 +1880,6 @@ export function AccountsView() {
                         </Dialog>
                       </div>
 
-                      <div className="relative overflow-hidden rounded-xl border border-emerald-200/70 bg-gradient-to-br from-emerald-50/80 via-white to-sky-50/70 p-4 shadow-sm">
-                        <div className="pointer-events-none absolute -right-10 -top-10 h-28 w-28 rounded-full bg-emerald-200/40 blur-2xl" />
-                        <div className="relative flex flex-col gap-3">
-                          <div className="flex flex-wrap items-center justify-between gap-3">
-                            <div className="flex items-center gap-3">
-                              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-600/10 text-emerald-700">
-                                <Sparkles className="h-4 w-4" />
-                              </div>
-                              <div>
-                                <div className="text-sm font-semibold">图片相似度门槛</div>
-                                <div className="text-xs text-muted-foreground">相似度达到门槛才回复（优先级高于全局）</div>
-                              </div>
-                            </div>
-                            <Badge variant="outline" className="border-emerald-200 bg-emerald-50/80 text-emerald-700">
-                              优先级↑
-                            </Badge>
-                          </div>
-                          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-                            <div className="flex-1 space-y-1">
-                              <Label className="text-xs">最小相似度 (0-1)</Label>
-                              <div className="flex items-center gap-2">
-                                <Input
-                                  type="number"
-                                  step="0.01"
-                                  value={websiteSimilarityInputs[website.id] ?? ''}
-                                  onChange={e => setWebsiteSimilarityInputs(prev => ({ ...prev, [website.id]: e.target.value }))}
-                                  placeholder="留空=使用全局阈值"
-                                  className="h-9 w-36 bg-white/80 text-sm"
-                                  disabled={currentUser?.role !== 'admin'}
-                                />
-                                <span className="text-xs text-muted-foreground">越高越严格</span>
-                              </div>
-                            </div>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-9 px-4 border-emerald-200 text-emerald-700 hover:bg-emerald-50"
-                              onClick={() => handleUpdateWebsiteExtras(website.id)}
-                              disabled={currentUser?.role !== 'admin'}
-                            >
-                              保存
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-
                       <div className="flex flex-wrap gap-2">
                         {(websiteFilters[website.id] || []).map((filter: any, index: number) => (
                           <div key={index} className="flex items-center gap-1 bg-muted rounded px-2 py-1">
@@ -1960,6 +1914,28 @@ export function AccountsView() {
                       </div>
                       <div className="text-xs text-muted-foreground">
                         网站特定的过滤规则 (独立于全局规则)
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2 rounded-md border border-emerald-200/70 bg-emerald-50/60 px-2 py-1 text-xs">
+                        <span className="font-medium text-emerald-700">图片相似度门槛(0-1)</span>
+                        <Input
+                          type="number"
+                          step="0.01"
+                          value={websiteSimilarityInputs[website.id] ?? ''}
+                          onChange={e => setWebsiteSimilarityInputs(prev => ({ ...prev, [website.id]: e.target.value }))}
+                          placeholder="空=全局"
+                          className="h-7 w-24 bg-white/80 text-xs"
+                          disabled={currentUser?.role !== 'admin'}
+                        />
+                        <span className="text-[11px] text-muted-foreground">仅此网站生效，优先级高于全局</span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 px-2 text-xs border-emerald-200 text-emerald-700 hover:bg-emerald-50"
+                          onClick={() => handleUpdateWebsiteExtras(website.id)}
+                          disabled={currentUser?.role !== 'admin'}
+                        >
+                          保存
+                        </Button>
                       </div>
                     </div>
 
