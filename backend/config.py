@@ -82,6 +82,7 @@ class Config:
     DATA_DIR = os.path.join(BASE_DIR, 'backend', 'data')
     # 确保这些路径是绝对路径
     IMAGE_SAVE_DIR = os.path.join(DATA_DIR, 'scraped_images')
+    BLOCKED_IMAGE_DIR = os.path.join(DATA_DIR, 'blocked_images')
     LOG_DIR = os.path.join(DATA_DIR, 'logs')
     DATABASE_PATH = os.path.join(DATA_DIR, 'metadata.db')
 
@@ -94,7 +95,7 @@ class Config:
 
     @classmethod
     def init_dirs(cls):
-        for dir_path in [cls.DATA_DIR, cls.IMAGE_SAVE_DIR, cls.LOG_DIR]:
+        for dir_path in [cls.DATA_DIR, cls.IMAGE_SAVE_DIR, cls.BLOCKED_IMAGE_DIR, cls.LOG_DIR]:
             os.makedirs(dir_path, exist_ok=True)
 
 # 初始化

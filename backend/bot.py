@@ -1073,6 +1073,14 @@ class DiscordBotClient(discord.Client):
                         if blocked_id == sender_id or blocked_id.lower() in sender_name:
                             logger.info(f'消息被过滤: 用户 {message.author.name} (ID: {sender_id}) 在过滤列表中')
                             return True
+                elif filter_type == 'role_id':
+                    role_ids = [rid.strip() for rid in filter_value.split(',') if rid.strip()]
+                    if role_ids and getattr(message, 'guild', None):
+                        author_roles = getattr(message.author, 'roles', []) or []
+                        author_role_ids = {str(role.id) for role in author_roles if getattr(role, 'id', None) is not None}
+                        if author_role_ids.intersection(set(role_ids)):
+                            logger.info(f'消息被过滤: 用户 {message.author.name} 命中身份组过滤')
+                            return True
                 elif filter_type == 'image':
                     if self._message_has_image(message):
                         logger.info('消息被过滤: 图片消息')
@@ -1315,6 +1323,21 @@ class DiscordBotClient(discord.Client):
                 f'图片识别结果: success={result.get("success") if result else False}, '
                 f'results_count={len(result.get("results", [])) if result else 0}'
             )
+
+            if result:
+                blocked_match = result.get('blocked_match')
+                blocked_threshold = result.get('blocked_threshold')
+                try:
+                    if blocked_match and blocked_threshold is not None:
+                        sim = float(blocked_match.get('similarity', 0))
+                        threshold_val = float(blocked_threshold)
+                        if sim >= threshold_val:
+                            logger.info(
+                                f'🚫 命中屏蔽图片库: 相似度 {sim:.3f} >= {threshold_val:.3f} | 频道: {message.channel.name}'
+                            )
+                            return
+                except Exception:
+                    pass
 
             if result and result.get('success') and result.get('results'):
                 # 获取最佳匹配结果
@@ -1771,6 +1794,8 @@ class DiscordBotClient(discord.Client):
 
                 form_data.add_field('threshold', str(api_threshold))
                 form_data.add_field('limit', '1')  # Discord只返回最相似的一个结果
+                if self.user_id:
+                    form_data.add_field('user_id', str(self.user_id))
 
                 # 如果指定了用户店铺权限，添加到请求中
                 if user_shops:

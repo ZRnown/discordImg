@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useApiCache } from "@/hooks/use-api-cache"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -91,6 +91,7 @@ export function AccountsView() {
     discord_similarity_threshold: 0.6,
     global_reply_min_delay: 3.0,
     global_reply_max_delay: 8.0,
+    blocked_image_threshold: 0.95,
   })
   const [settingsLoading, setSettingsLoading] = useState(false)
 
@@ -142,6 +143,13 @@ export function AccountsView() {
     filter_type: 'contains',
     filter_value: ''
   })
+
+  // 屏蔽图片库相关状态
+  const [blockedImages, setBlockedImages] = useState<any[]>([])
+  const [blockedImagesLoading, setBlockedImagesLoading] = useState(false)
+  const [blockedImageUploading, setBlockedImageUploading] = useState(false)
+  const [blockedImageFile, setBlockedImageFile] = useState<File | null>(null)
+  const blockedImageInputRef = useRef<HTMLInputElement | null>(null)
 
   const formatThresholdForInput = (value: any) => {
     if (value === null || value === undefined || value === '') return ''
@@ -219,6 +227,71 @@ export function AccountsView() {
     }
   }
 
+  const fetchBlockedImages = async () => {
+    setBlockedImagesLoading(true)
+    try {
+      const res = await fetch('/api/blocked-images', { credentials: 'include' })
+      if (res.ok) {
+        const data = await res.json()
+        setBlockedImages(data.images || [])
+      }
+    } catch (e) {
+      console.error('获取屏蔽图片失败:', e)
+    } finally {
+      setBlockedImagesLoading(false)
+    }
+  }
+
+  const handleUploadBlockedImage = async () => {
+    if (!blockedImageFile) {
+      toast.error('请先选择图片')
+      return
+    }
+    setBlockedImageUploading(true)
+    try {
+      const formData = new FormData()
+      formData.append('image', blockedImageFile)
+      const res = await fetch('/api/blocked-images', {
+        method: 'POST',
+        body: formData,
+        credentials: 'include'
+      })
+      if (res.ok) {
+        toast.success('已加入屏蔽库')
+        setBlockedImageFile(null)
+        if (blockedImageInputRef.current) {
+          blockedImageInputRef.current.value = ''
+        }
+        fetchBlockedImages()
+      } else {
+        const data = await res.json().catch(() => ({}))
+        toast.error(data.error || '上传失败')
+      }
+    } catch (e) {
+      toast.error('上传失败')
+    } finally {
+      setBlockedImageUploading(false)
+    }
+  }
+
+  const handleDeleteBlockedImage = async (imageId: number) => {
+    try {
+      const res = await fetch(`/api/blocked-images/${imageId}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      })
+      if (res.ok) {
+        setBlockedImages(prev => prev.filter(img => img.id !== imageId))
+        toast.success('已移除')
+      } else {
+        const data = await res.json().catch(() => ({}))
+        toast.error(data.error || '删除失败')
+      }
+    } catch (e) {
+      toast.error('删除失败')
+    }
+  }
+
 
   const fetchCooldowns = async () => {
     try {
@@ -275,6 +348,7 @@ export function AccountsView() {
     fetchSettings();
     fetchWebsites(true); // 强制刷新，清除旧的缓存数据
     fetchMessageFilters();
+    fetchBlockedImages();
     fetchCooldowns();
 
     // 优化轮询频率：每15秒刷新一次账号状态（降低服务器负载）
@@ -316,6 +390,7 @@ export function AccountsView() {
               discord_similarity_threshold: data.discord_similarity_threshold || 0.6,
               global_reply_min_delay: data.global_reply_min_delay || 3.0,
               global_reply_max_delay: data.global_reply_max_delay || 8.0,
+              blocked_image_threshold: data.blocked_image_threshold ?? 0.95,
             })
 
             // 清除预加载数据，避免重复使用
@@ -353,6 +428,7 @@ export function AccountsView() {
           discord_similarity_threshold: data.discord_similarity_threshold || 0.6,
           global_reply_min_delay: data.global_reply_min_delay || 3.0,
           global_reply_max_delay: data.global_reply_max_delay || 8.0,
+          blocked_image_threshold: data.blocked_image_threshold ?? 0.95,
         })
       }
     } catch (error) {
@@ -1299,6 +1375,7 @@ export function AccountsView() {
                             <SelectItem value="ends_with">结尾是</SelectItem>
                             <SelectItem value="regex">正则表达式</SelectItem>
                             <SelectItem value="user_id">用户ID</SelectItem>
+                            <SelectItem value="role_id">身份组ID</SelectItem>
                             <SelectItem value="image_similarity">图片相似度≥</SelectItem>
                             <SelectItem value="numeric_range">数字范围</SelectItem>
                           </SelectContent>
@@ -1358,6 +1435,8 @@ export function AccountsView() {
                             placeholder={
                               newFilter.filter_type === 'user_id'
                                 ? "输入用户ID，多个用逗号分隔"
+                                : newFilter.filter_type === 'role_id'
+                                  ? "输入身份组ID，多个用逗号分隔"
                                 : "输入要过滤的内容"
                             }
                           />
@@ -1405,6 +1484,80 @@ export function AccountsView() {
                     暂无过滤规则
                   </div>
                 )}
+              </div>
+              <div className="mt-4 border-t pt-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="text-sm font-medium">屏蔽图片库</div>
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <Label className="text-xs">相似度阈值(0-1)</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      value={settings.blocked_image_threshold ?? ''}
+                      onChange={(e) => setSettings(prev => ({
+                        ...prev,
+                        blocked_image_threshold: e.target.value === '' ? null : parseFloat(e.target.value)
+                      }))}
+                      className="h-7 w-20 text-xs"
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 px-2 text-xs"
+                      onClick={handleSaveSettings}
+                      disabled={settingsLoading}
+                    >
+                      保存阈值
+                    </Button>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Input
+                    ref={blockedImageInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="h-8 text-xs"
+                    onChange={(e) => setBlockedImageFile(e.target.files?.[0] || null)}
+                  />
+                  <Button
+                    size="sm"
+                    className="h-8 px-3 text-xs"
+                    onClick={handleUploadBlockedImage}
+                    disabled={blockedImageUploading || !blockedImageFile}
+                  >
+                    {blockedImageUploading ? '上传中...' : '上传'}
+                  </Button>
+                  <span className="text-xs text-muted-foreground">
+                    命中该库且相似度≥阈值时，不回复
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {blockedImagesLoading ? (
+                    <span className="text-xs text-muted-foreground">加载中...</span>
+                  ) : blockedImages.length === 0 ? (
+                    <span className="text-xs text-muted-foreground">暂无屏蔽图片</span>
+                  ) : (
+                    blockedImages.map((img: any) => (
+                      <div key={img.id} className="group relative h-12 w-12">
+                        <img
+                          src={img.url}
+                          alt={`blocked-${img.id}`}
+                          className="h-12 w-12 rounded border object-cover"
+                          loading="lazy"
+                          title={`ID: ${img.id}`}
+                        />
+                        <Button
+                          variant="destructive"
+                          size="icon"
+                          className="absolute -top-2 -right-2 h-5 w-5 opacity-0 transition-opacity group-hover:opacity-100"
+                          onClick={() => handleDeleteBlockedImage(img.id)}
+                        >
+                          <X className="h-3 w-3" />
+                        </Button>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -1975,6 +2128,7 @@ export function AccountsView() {
                       <SelectItem value="ends_with">结尾是</SelectItem>
                       <SelectItem value="regex">正则表达式</SelectItem>
                       <SelectItem value="user_id">用户ID</SelectItem>
+                      <SelectItem value="role_id">身份组ID</SelectItem>
                       <SelectItem value="image_similarity">图片相似度≥</SelectItem>
                       <SelectItem value="numeric_range">数字范围</SelectItem>
                     </SelectContent>
@@ -2028,6 +2182,13 @@ export function AccountsView() {
                     <Input
                       value={editingFilter.filter_value}
                       onChange={e => setEditingFilter((prev: any) => ({ ...prev, filter_value: e.target.value }))}
+                      placeholder={
+                        editingFilter.filter_type === 'role_id'
+                          ? '输入身份组ID，多个用逗号分隔'
+                          : editingFilter.filter_type === 'user_id'
+                            ? '输入用户ID，多个用逗号分隔'
+                            : undefined
+                      }
                     />
                   )}
                 </div>

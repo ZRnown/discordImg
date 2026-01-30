@@ -508,6 +508,18 @@ class Database:
                 )
             ''')
 
+            # 创建屏蔽图片库表（用户级别）
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS blocked_images (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    image_path TEXT NOT NULL,
+                    features TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+                )
+            ''')
+
             # 创建用户设置表（每个用户的个性化设置）
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS user_settings (
@@ -526,6 +538,7 @@ class Database:
                     numeric_filter_keyword TEXT DEFAULT '',
                     filter_size_min INTEGER DEFAULT 35,
                     filter_size_max INTEGER DEFAULT 46,
+                    blocked_image_threshold REAL DEFAULT 0.95,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
@@ -561,6 +574,10 @@ class Database:
 
             try:
                 cursor.execute('ALTER TABLE user_settings ADD COLUMN filter_size_max INTEGER DEFAULT 46')
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN blocked_image_threshold REAL DEFAULT 0.95')
             except sqlite3.OperationalError:
                 pass
 
@@ -2506,6 +2523,90 @@ class Database:
             logger.error(f"删除消息过滤规则失败: {e}")
             return False
 
+    def add_blocked_image(self, user_id: int, image_path: str, features: np.ndarray) -> int:
+        """添加屏蔽图片记录，返回记录ID"""
+        try:
+            features_str = None
+            if features is not None:
+                import json
+                features_str = json.dumps(features.tolist())
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO blocked_images (user_id, image_path, features)
+                    VALUES (?, ?, ?)
+                ''', (user_id, image_path, features_str))
+                conn.commit()
+                return cursor.lastrowid
+        except Exception as e:
+            logger.error(f"添加屏蔽图片失败: {e}")
+            raise e
+
+    def get_blocked_images(self, user_id: int, include_features: bool = False) -> List[Dict]:
+        """获取用户屏蔽图片列表"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                if include_features:
+                    cursor.execute('''
+                        SELECT id, image_path, features, created_at
+                        FROM blocked_images
+                        WHERE user_id = ?
+                        ORDER BY created_at DESC
+                    ''', (user_id,))
+                else:
+                    cursor.execute('''
+                        SELECT id, image_path, created_at
+                        FROM blocked_images
+                        WHERE user_id = ?
+                        ORDER BY created_at DESC
+                    ''', (user_id,))
+                rows = [dict(row) for row in cursor.fetchall()]
+                if include_features:
+                    import json
+                    for row in rows:
+                        try:
+                            row['features'] = json.loads(row.get('features') or '[]')
+                        except Exception:
+                            row['features'] = []
+                return rows
+        except Exception as e:
+            logger.error(f"获取屏蔽图片失败: {e}")
+            return []
+
+    def get_blocked_image_by_id(self, user_id: int, image_id: int) -> Optional[Dict]:
+        """获取单条屏蔽图片记录"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT id, image_path, created_at
+                    FROM blocked_images
+                    WHERE user_id = ? AND id = ?
+                ''', (user_id, image_id))
+                row = cursor.fetchone()
+                return dict(row) if row else None
+        except Exception as e:
+            logger.error(f"获取屏蔽图片失败: {e}")
+            return None
+
+    def delete_blocked_image(self, user_id: int, image_id: int) -> Optional[str]:
+        """删除屏蔽图片记录并返回文件路径"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT image_path FROM blocked_images WHERE id = ? AND user_id = ?', (image_id, user_id))
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                image_path = row['image_path']
+                cursor.execute('DELETE FROM blocked_images WHERE id = ? AND user_id = ?', (image_id, user_id))
+                conn.commit()
+                return image_path
+        except Exception as e:
+            logger.error(f"删除屏蔽图片失败: {e}")
+            return None
+
     def get_custom_replies(self) -> List[Dict]:
         """获取自定义回复内容"""
         try:
@@ -2871,7 +2972,7 @@ class Database:
                     SELECT download_threads, feature_extract_threads, discord_similarity_threshold,
                            global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
                            keyword_reply_enabled, image_reply_enabled, global_reply_template,
-                           numeric_filter_keyword, filter_size_min, filter_size_max
+                           numeric_filter_keyword, filter_size_min, filter_size_max, blocked_image_threshold
                     FROM user_settings WHERE user_id = ?
                 ''', (user_id,))
                 row = cursor.fetchone()
@@ -2890,6 +2991,7 @@ class Database:
                         'numeric_filter_keyword': row[10] if row[10] is not None else '',
                         'filter_size_min': row[11] if row[11] is not None else 35,
                         'filter_size_max': row[12] if row[12] is not None else 46,
+                        'blocked_image_threshold': row[13] if row[13] is not None else 0.95,
                     }
                 # 如果用户没有设置，返回默认值
                 return {
@@ -2906,6 +3008,7 @@ class Database:
                     'numeric_filter_keyword': '',
                     'filter_size_min': 35,
                     'filter_size_max': 46,
+                    'blocked_image_threshold': 0.95,
                 }
         except Exception as e:
             logger.error(f"获取用户设置失败: {e}")
@@ -2923,6 +3026,7 @@ class Database:
                 'numeric_filter_keyword': '',
                 'filter_size_min': 35,
                 'filter_size_max': 46,
+                'blocked_image_threshold': 0.95,
             }
 
     def update_user_settings(self, user_id: int, download_threads: int = None,
@@ -2931,7 +3035,8 @@ class Database:
                            user_blacklist: str = None, keyword_filters: str = None,
                            keyword_reply_enabled: int = None, image_reply_enabled: int = None,
                            global_reply_template: str = None, numeric_filter_keyword: str = None,
-                           filter_size_min: int = None, filter_size_max: int = None) -> bool:
+                           filter_size_min: int = None, filter_size_max: int = None,
+                           blocked_image_threshold: float = None) -> bool:
         """更新用户个性化设置"""
         try:
             with self.get_connection() as conn:
@@ -2998,6 +3103,10 @@ class Database:
                         update_fields.append('filter_size_max = ?')
                         params.append(filter_size_max)
 
+                    if blocked_image_threshold is not None:
+                        update_fields.append('blocked_image_threshold = ?')
+                        params.append(blocked_image_threshold)
+
                     if update_fields:
                         update_fields.append('updated_at = CURRENT_TIMESTAMP')
                         sql = f'UPDATE user_settings SET {", ".join(update_fields)} WHERE user_id = ?'
@@ -3010,8 +3119,8 @@ class Database:
                         (user_id, download_threads, feature_extract_threads, discord_similarity_threshold,
                          global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
                          keyword_reply_enabled, image_reply_enabled, global_reply_template, numeric_filter_keyword,
-                         filter_size_min, filter_size_max)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         filter_size_min, filter_size_max, blocked_image_threshold)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         user_id,
                         download_threads or 4,
@@ -3026,7 +3135,8 @@ class Database:
                         global_reply_template or '',
                         numeric_filter_keyword or '',
                         filter_size_min if filter_size_min is not None else 35,
-                        filter_size_max if filter_size_max is not None else 46
+                        filter_size_max if filter_size_max is not None else 46,
+                        blocked_image_threshold if blocked_image_threshold is not None else 0.95
                     ))
 
                 conn.commit()
