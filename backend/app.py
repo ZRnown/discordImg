@@ -41,14 +41,20 @@ except ImportError:
 
 try:
     from feature_extractor import get_feature_extractor, DINOv2FeatureExtractor
-except ImportError:
-    from .feature_extractor import get_feature_extractor, DINOv2FeatureExtractor
+except ModuleNotFoundError as e:
+    if e.name == 'feature_extractor':
+        from .feature_extractor import get_feature_extractor, DINOv2FeatureExtractor
+    else:
+        raise
 try:
     from database import db
     from config import config
-except ImportError:
-    from .database import db
-    from .config import config
+except ModuleNotFoundError as e:
+    if e.name in {'database', 'config'}:
+        from .database import db
+        from .config import config
+    else:
+        raise
 import requests
 import json
 from flask_cors import CORS

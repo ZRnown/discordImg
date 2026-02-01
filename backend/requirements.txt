@@ -2,6 +2,7 @@
 flask==2.3.3
 flask_cors
 numpy>=1.21.0
+opencv-python-headless>=4.8.0
 Pillow>=8.0.0
 python-dotenv>=1.0.0
 

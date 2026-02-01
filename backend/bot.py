@@ -1568,10 +1568,22 @@ class DiscordBotClient(discord.Client):
                 logger.info(f'关键词搜索无结果: {search_query}')
                 return
 
-            query_lower = re.sub(r'\s+', ' ', search_query.strip().lower())
+            def _normalize_text(value: str) -> str:
+                if not value:
+                    return ''
+                value = re.sub(r'[\u200b-\u200d\uFEFF]', '', str(value))
+                value = value.lower()
+                value = re.sub(r'[^a-z0-9\u4e00-\u9fff]+', ' ', value)
+                value = re.sub(r'\s+', ' ', value).strip()
+                return value
 
-            def _normalize_phrase(value: str) -> str:
-                return re.sub(r'\s+', ' ', value).strip().lower()
+            def _tokenize(value: str):
+                normalized = _normalize_text(value)
+                return [tok for tok in normalized.split(' ') if tok]
+
+            query_normalized = _normalize_text(search_query)
+            query_tokens = _tokenize(search_query)
+            query_token_set = set(query_tokens)
 
             def _split_keywords(raw_value):
                 if not raw_value:
@@ -1584,7 +1596,7 @@ class DiscordBotClient(discord.Client):
                     parts = re.split(r'[,\uFF0C]', str(raw_value))
                 keywords = []
                 for part in parts:
-                    normalized = _normalize_phrase(part)
+                    normalized = _normalize_text(part)
                     if len(normalized) >= 2:
                         keywords.append(normalized)
                 return keywords
@@ -1594,7 +1606,7 @@ class DiscordBotClient(discord.Client):
                 english_title = product.get('english_title') or product.get('englishTitle') or ''
                 for phrase in _split_keywords(english_title):
                     phrases.append((phrase, 'english_title'))
-                title = _normalize_phrase(product.get('title') or '')
+                title = _normalize_text(product.get('title') or '')
                 if title:
                     phrases.append((title, 'title'))
                 if not phrases:
@@ -1604,12 +1616,35 @@ class DiscordBotClient(discord.Client):
                     if phrase in seen:
                         continue
                     seen.add(phrase)
-                    if phrase and phrase in query_lower:
+                    if phrase and phrase in query_normalized:
                         return True, {
                             'phrase': phrase,
                             'source': source,
                             'rule': 'phrase_in_query'
                         }
+                    if query_normalized and query_normalized in phrase:
+                        return True, {
+                            'phrase': phrase,
+                            'source': source,
+                            'rule': 'query_in_phrase'
+                        }
+                    if query_tokens:
+                        phrase_tokens = set(_tokenize(phrase))
+                        if len(query_tokens) >= 2:
+                            if query_token_set.issubset(phrase_tokens):
+                                return True, {
+                                    'phrase': phrase,
+                                    'source': source,
+                                    'rule': 'query_tokens_in_phrase'
+                                }
+                        else:
+                            token = query_tokens[0]
+                            if (len(token) >= 4 or token.isdigit()) and token in phrase_tokens:
+                                return True, {
+                                    'phrase': phrase,
+                                    'source': source,
+                                    'rule': 'single_token_in_phrase'
+                                }
                 return False, None
 
             matched_products = []
