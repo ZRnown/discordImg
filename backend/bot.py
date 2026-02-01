@@ -1781,7 +1781,7 @@ class DiscordBotClient(discord.Client):
                 # 构建搜索请求
                 search_data = {
                     'query': keyword,
-                    'limit': 20  # 搜索更多结果以便筛选
+                    'limit': 80  # 搜索更多结果以便筛选
                 }
 
                 # 调用后端搜索API

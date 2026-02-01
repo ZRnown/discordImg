@@ -4223,6 +4223,22 @@ def search_similar_text():
             raw_tokens = re.findall(r'\w+', query_normalized)
             tokens = [kw for kw in raw_tokens if len(kw) >= 2 or kw.isdigit()]
             extra_terms = []
+            numeric_terms = []
+            if tokens:
+                seen_numeric = set()
+                for idx, token in enumerate(tokens):
+                    if not any(ch.isdigit() for ch in token):
+                        continue
+                    if idx - 1 >= 0:
+                        phrase = f"{tokens[idx - 1]} {token}"
+                        if phrase not in seen_numeric:
+                            numeric_terms.append(phrase)
+                            seen_numeric.add(phrase)
+                    if idx - 2 >= 0:
+                        phrase = f"{tokens[idx - 2]} {tokens[idx - 1]} {token}"
+                        if phrase not in seen_numeric:
+                            numeric_terms.append(phrase)
+                            seen_numeric.add(phrase)
             if len(tokens) >= 2:
                 for i in range(len(tokens) - 1):
                     term = f"{tokens[i]} {tokens[i + 1]}"
@@ -4231,6 +4247,12 @@ def search_similar_text():
             for token in tokens:
                 if any(ch.isdigit() for ch in token) and len(token) >= 2 and token not in extra_terms:
                     extra_terms.append(token)
+
+            if numeric_terms and len(rows) < limit:
+                remaining = limit - len(rows)
+                extra_rows = fetch_by_terms(numeric_terms, remaining, found_ids)
+                rows.extend(extra_rows)
+                found_ids.update({row['id'] for row in extra_rows})
 
             if extra_terms and len(rows) < limit:
                 remaining = limit - len(rows)
