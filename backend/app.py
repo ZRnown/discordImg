@@ -4220,7 +4220,8 @@ def search_similar_text():
             rows = fetch_by_terms([query_normalized], limit)
             found_ids = {row['id'] for row in rows}
 
-            tokens = [kw for kw in re.findall(r'\w+', query_normalized) if len(kw) >= 2]
+            raw_tokens = re.findall(r'\w+', query_normalized)
+            tokens = [kw for kw in raw_tokens if len(kw) >= 2 or kw.isdigit()]
             extra_terms = []
             if len(tokens) >= 2:
                 for i in range(len(tokens) - 1):
@@ -4228,7 +4229,7 @@ def search_similar_text():
                     if term not in extra_terms:
                         extra_terms.append(term)
             for token in tokens:
-                if any(ch.isdigit() for ch in token) and token not in extra_terms:
+                if any(ch.isdigit() for ch in token) and len(token) >= 2 and token not in extra_terms:
                     extra_terms.append(token)
 
             if extra_terms and len(rows) < limit:

@@ -1598,11 +1598,15 @@ class DiscordBotClient(discord.Client):
             def _product_matches_query(product):
                 phrases = []
                 english_title = product.get('english_title') or product.get('englishTitle') or ''
-                for phrase in _split_keywords(english_title):
+                english_phrases = _split_keywords(english_title)
+                for phrase in english_phrases:
                     phrases.append((phrase, 'english_title'))
-                title = _normalize_text(product.get('title') or '')
-                if title:
-                    phrases.append((title, 'title'))
+
+                # 只有在没有英文关键词时才回退到中文标题匹配
+                if not english_phrases:
+                    title = _normalize_text(product.get('title') or '')
+                    if title:
+                        phrases.append((title, 'title'))
                 if not phrases:
                     return False, None
                 seen = set()
