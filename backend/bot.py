@@ -1284,7 +1284,15 @@ class DiscordBotClient(discord.Client):
         # 处理图片
         if image_reply_enabled and message.attachments:
             for attachment in message.attachments:
-                if attachment.content_type and attachment.content_type.startswith('image/'):
+                content_type = (getattr(attachment, 'content_type', '') or '').lower()
+                filename = (getattr(attachment, 'filename', '') or '').lower()
+                is_image = False
+                if content_type.startswith('image/'):
+                    is_image = True
+                elif filename.endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.tif', '.heic', '.heif')):
+                    is_image = True
+
+                if is_image:
                     logger.debug(f"📷 检测到图片，开始处理: {attachment.filename}")
                     await self.handle_image(message, attachment)
 
