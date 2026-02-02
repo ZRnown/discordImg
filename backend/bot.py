@@ -1585,6 +1585,20 @@ class DiscordBotClient(discord.Client):
                 value = re.sub(r'\s+', ' ', value).strip()
                 return value
 
+            if self.user_shops:
+                allowed_shops = {_normalize_text(s) for s in self.user_shops if s}
+                if allowed_shops:
+                    filtered_products = []
+                    for product in all_products:
+                        shop_value = product.get('shop_name') or product.get('shopName') or ''
+                        if _normalize_text(shop_value) in allowed_shops:
+                            filtered_products.append(product)
+                    if filtered_products:
+                        all_products = filtered_products
+                    else:
+                        logger.info(f'关键词搜索结果被店铺权限过滤: {search_query}')
+                        return
+
             query_normalized = _normalize_text(search_query)
 
             def _split_keywords(raw_value):

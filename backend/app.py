@@ -4523,6 +4523,16 @@ def start_discord_bot(user_id=None):
                 user = db.get_user_by_id(user_id)
                 if user:
                     user_shops = user.get('shops', [])
+                    if user_shops:
+                        allowed_shops = set()
+                        for shop_id in user_shops:
+                            if not shop_id:
+                                continue
+                            allowed_shops.add(str(shop_id))
+                            shop_info = db.get_shop_by_id(str(shop_id))
+                            if shop_info and shop_info.get('name'):
+                                allowed_shops.add(shop_info['name'])
+                        user_shops = list(allowed_shops)
 
             # 确定账号角色：检查是否绑定了任何网站配置
             account_bindings = db.get_account_website_bindings(account_id)
