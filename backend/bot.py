@@ -1587,11 +1587,31 @@ class DiscordBotClient(discord.Client):
 
             if self.user_shops:
                 allowed_shops = {_normalize_text(s) for s in self.user_shops if s}
+
+                def _contains_cjk(value: str) -> bool:
+                    return any('\u4e00' <= ch <= '\u9fff' for ch in value)
+
+                def _shop_matches(shop_value: str) -> bool:
+                    normalized = _normalize_text(shop_value)
+                    if not normalized:
+                        return False
+                    if normalized in allowed_shops:
+                        return True
+                    for allowed in allowed_shops:
+                        if not allowed or allowed.isdigit():
+                            continue
+                        min_len = 2 if _contains_cjk(allowed) else 3
+                        if len(allowed) < min_len:
+                            continue
+                        if allowed in normalized or normalized in allowed:
+                            return True
+                    return False
+
                 if allowed_shops:
                     filtered_products = []
                     for product in all_products:
                         shop_value = product.get('shop_name') or product.get('shopName') or ''
-                        if _normalize_text(shop_value) in allowed_shops:
+                        if _shop_matches(shop_value):
                             filtered_products.append(product)
                     if filtered_products:
                         all_products = filtered_products
