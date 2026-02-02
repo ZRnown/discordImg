@@ -604,6 +604,7 @@ class Database:
                     rotation_interval INTEGER DEFAULT 180,
                     rotation_enabled INTEGER DEFAULT 1,
                     message_filters TEXT DEFAULT '[]',
+                    image_similarity_threshold REAL DEFAULT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
@@ -611,6 +612,10 @@ class Database:
                     UNIQUE(user_id, website_id)
                 )
             ''')
+            try:
+                cursor.execute('ALTER TABLE user_website_settings ADD COLUMN image_similarity_threshold REAL DEFAULT NULL')
+            except sqlite3.OperationalError:
+                pass
 
             # 创建抓取状态表（持久化存储抓取状态）
             cursor.execute('''
@@ -1455,11 +1460,14 @@ class Database:
                 cursor.execute('''
                     SELECT id, username, password_hash, role, is_active, created_at
                     FROM users
-                    WHERE username = ? AND is_active = 1
+                    WHERE username = ?
                 ''', (username,))
                 user = cursor.fetchone()
                 if user:
                     user_dict = dict(user)
+                    is_active = user_dict.get('is_active')
+                    if is_active is not None and int(is_active) == 0:
+                        return None
                     stored_hash = user_dict.get('password_hash')
 
                     # 验证密码
@@ -1473,6 +1481,19 @@ class Database:
                         # 如果失败，尝试旧的哈希方式（兼容旧用户）
                         elif stored_hash == f"hashed_{password}":
                             authenticated = True
+
+                    if not authenticated and stored_hash == password:
+                        authenticated = True
+                        try:
+                            from werkzeug.security import generate_password_hash
+                            new_hash = generate_password_hash(password)
+                            cursor.execute('''
+                                UPDATE users SET password_hash = ?, updated_at = datetime('now')
+                                WHERE id = ?
+                            ''', (new_hash, user_dict['id']))
+                            conn.commit()
+                        except Exception as update_error:
+                            logger.warning(f"升级用户密码哈希失败: {update_error}")
 
                     if authenticated:
                         # 获取用户管理的店铺
@@ -1966,10 +1987,13 @@ class Database:
                 if user_id:
                     cursor.execute('''
                         SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern,
-                               wc.badge_color, wc.reply_template, wc.image_similarity_threshold, wc.blocked_role_ids,
-                               wc.rotation_interval, wc.rotation_enabled, wc.message_filters
+                               wc.badge_color, wc.reply_template,
+                               COALESCE(uws.image_similarity_threshold, wc.image_similarity_threshold) as image_similarity_threshold,
+                               wc.blocked_role_ids, wc.rotation_interval, wc.rotation_enabled, wc.message_filters
                         FROM website_configs wc
                         JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
+                        LEFT JOIN user_website_settings uws
+                            ON uws.website_id = wc.id AND uws.user_id = wcb.user_id
                         WHERE wcb.channel_id = ? AND wcb.user_id = ?
                         ORDER BY wcb.created_at, wc.created_at
                     ''', (str(channel_id), user_id))
@@ -2227,7 +2251,7 @@ class Database:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT rotation_interval, rotation_enabled, message_filters
+                    SELECT rotation_interval, rotation_enabled, message_filters, image_similarity_threshold
                     FROM user_website_settings
                     WHERE user_id = ? AND website_id = ?
                 ''', (user_id, website_id))
@@ -2236,17 +2260,42 @@ class Database:
                     return {
                         'rotation_interval': row['rotation_interval'],
                         'rotation_enabled': row['rotation_enabled'],
-                        'message_filters': row['message_filters']
+                        'message_filters': row['message_filters'],
+                        'image_similarity_threshold': row['image_similarity_threshold']
                     }
                 # 返回默认值
                 return {
                     'rotation_interval': 180,
                     'rotation_enabled': 1,
-                    'message_filters': '[]'
+                    'message_filters': '[]',
+                    'image_similarity_threshold': None
                 }
         except Exception as e:
             logger.error(f"获取用户网站设置失败: {e}")
-            return {'rotation_interval': 180, 'rotation_enabled': 1, 'message_filters': '[]'}
+            return {
+                'rotation_interval': 180,
+                'rotation_enabled': 1,
+                'message_filters': '[]',
+                'image_similarity_threshold': None
+            }
+
+    def update_user_website_similarity(self, user_id: int, website_id: int, threshold: float = None) -> bool:
+        """更新用户的网站图片相似度阈值"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO user_website_settings (user_id, website_id, image_similarity_threshold)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(user_id, website_id) DO UPDATE SET
+                        image_similarity_threshold = excluded.image_similarity_threshold,
+                        updated_at = CURRENT_TIMESTAMP
+                ''', (user_id, website_id, threshold))
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"更新用户网站相似度阈值失败: {e}")
+            return False
 
     def update_user_website_rotation(self, user_id: int, website_id: int, rotation_interval: int = None, rotation_enabled: int = None) -> bool:
         """更新用户的网站轮换设置"""

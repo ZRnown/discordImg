@@ -1423,6 +1423,9 @@ def get_website_configs():
                 config['message_filters'] = json.loads(raw_filters) if isinstance(raw_filters, str) else (raw_filters or [])
             except Exception:
                 config['message_filters'] = []
+            user_threshold = user_settings.get('image_similarity_threshold') if user_settings else None
+            if user_threshold is not None:
+                config['image_similarity_threshold'] = user_threshold
 
         return jsonify({'websites': configs})
     except Exception as e:
@@ -1787,6 +1790,33 @@ def update_website_rotation(config_id):
             return jsonify({'error': '更新失败'}), 500
     except Exception as e:
         logger.error(f"更新网站轮换配置失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/websites/<int:config_id>/similarity', methods=['PUT'])
+def update_website_similarity(config_id):
+    """更新用户的网站图片相似度阈值"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+    try:
+        current_user = get_current_user()
+        data = request.get_json() or {}
+        raw_value = data.get('image_similarity_threshold', None)
+
+        if raw_value is None or raw_value == '':
+            threshold = None
+        else:
+            try:
+                threshold = float(raw_value)
+            except (TypeError, ValueError):
+                return jsonify({'error': '相似度必须是数字'}), 400
+            if not (0.0 <= threshold <= 1.0):
+                return jsonify({'error': '相似度必须在0.0-1.0之间'}), 400
+
+        if db.update_user_website_similarity(current_user['id'], config_id, threshold):
+            return jsonify({'success': True, 'message': '相似度阈值已更新'})
+        return jsonify({'error': '更新失败'}), 500
+    except Exception as e:
+        logger.error(f"更新网站相似度阈值失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/websites/<int:config_id>/filters', methods=['GET'])

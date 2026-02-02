@@ -821,6 +821,30 @@ export function AccountsView() {
     }
   }
 
+  const handleUpdateWebsiteSimilarity = async (websiteId: number) => {
+    const rawValue = websiteSimilarityInputs[websiteId] ?? ''
+    const payload = {
+      image_similarity_threshold: rawValue === '' ? '' : rawValue
+    }
+    try {
+      const res = await fetch(`/api/websites/${websiteId}/similarity`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      })
+      if (res.ok) {
+        toast.success('图片相似度已更新')
+        fetchWebsites(true)
+      } else {
+        const data = await res.json().catch(() => ({}))
+        toast.error(data.error || '更新失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
   const handleAddChannel = async (websiteId: number, channelId: string) => {
     if (!channelId.trim()) {
       toast.warning("频道ID不能为空")
@@ -2536,15 +2560,19 @@ export function AccountsView() {
                           onChange={e => setWebsiteSimilarityInputs(prev => ({ ...prev, [website.id]: e.target.value }))}
                           placeholder="空=全局"
                           className="h-6 w-20 bg-white/80 text-[11px]"
-                          disabled={currentUser?.role !== 'admin'}
                         />
                         <span className="text-[11px] text-muted-foreground">仅此网站生效</span>
                         <Button
                           variant="outline"
                           size="sm"
                           className="h-6 px-2 text-[11px] border-emerald-200 text-emerald-700 hover:bg-emerald-50"
-                          onClick={() => handleUpdateWebsiteExtras(website.id)}
-                          disabled={currentUser?.role !== 'admin'}
+                          onClick={() => {
+                            if (currentUser?.role === 'admin') {
+                              handleUpdateWebsiteExtras(website.id)
+                            } else {
+                              handleUpdateWebsiteSimilarity(website.id)
+                            }
+                          }}
                         >
                           保存
                         </Button>
