@@ -370,6 +370,8 @@ logger = logging.getLogger(__name__)
 # [修改] 从 bot 模块导入列表，确保 app.py 和 bot.py 操作同一个列表对象
 from bot import bot_clients, bot_tasks, get_all_cooldowns
 bot_running = False  # 标记机器人是否正在运行
+bot_loop = None  # 机器人事件循环
+bot_thread = None  # 机器人事件循环线程
 
 # 全局特征提取器实例（在应用启动时创建）
 feature_extractor_instance = None
@@ -4470,11 +4472,7 @@ def add_external_log():
 
 def start_discord_bot(user_id=None):
     """启动Discord机器人 - 支持多账号"""
-    global bot_running
-
-    if bot_running:
-        logger.warning("机器人已经在运行中")
-        return
+    global bot_running, bot_loop, bot_thread
 
     try:
         import asyncio
@@ -4491,20 +4489,33 @@ def start_discord_bot(user_id=None):
 
         if not accounts:
             logger.warning("没有找到可用的Discord账号")
-            return
+            return 0
+
+        if bot_running:
+            logger.info("机器人已在运行中，尝试补启动未运行账号")
 
         logger.info(f"找到 {len(accounts)} 个Discord账号，开始启动...")
 
-        # 在新的事件循环中运行机器人
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        # 确保事件循环存在并运行
+        if bot_loop is None or bot_thread is None or not bot_thread.is_alive():
+            bot_loop = asyncio.new_event_loop()
+            bot_thread = threading.Thread(target=bot_loop.run_forever, daemon=True)
+            bot_thread.start()
+            logger.info("已创建新的机器人事件循环")
+        loop = bot_loop
 
         # 为每个账号创建机器人实例
+        existing_account_ids = {client.account_id for client in bot_clients}
+        started_count = 0
         for account in accounts:
             account_id = account['id']
             token = account['token']
             username = account.get('username', f'account_{account_id}')
             user_id = account.get('user_id')
+
+            if account_id in existing_account_ids:
+                logger.info(f"机器人账号已在运行: {username} (ID: {account_id})")
+                continue
 
             # 获取用户管理的店铺
             user_shops = None
@@ -4538,34 +4549,33 @@ def start_discord_bot(user_id=None):
 
             # 启动机器人
             try:
-                task = loop.create_task(client.start(token, reconnect=True))
+                task = asyncio.run_coroutine_threadsafe(client.start(token, reconnect=True), loop)
                 bot_clients.append(client)
                 bot_tasks.append(task)
+                started_count += 1
                 logger.info(f"Discord机器人启动成功: {username}")
             except Exception as e:
                 logger.error(f"启动机器人失败 {username}: {e}")
-
-        # 在后台线程中运行事件循环
-        import threading
-        bot_thread = threading.Thread(target=loop.run_forever, daemon=True)
-        bot_thread.start()
 
         if bot_clients:
             bot_running = True
             logger.info(f"共启动了 {len(bot_clients)} 个Discord机器人")
         else:
             logger.warning("没有成功启动任何机器人")
+        return started_count
 
     except ImportError as e:
         logger.warning(f"Discord机器人模块不可用: {e}")
         logger.info("Flask应用将继续运行，但机器人功能不可用")
+        return 0
     except Exception as e:
         logger.error(f"Discord机器人启动失败: {e}")
         logger.info("Flask应用将继续运行，但机器人功能不可用")
+        return 0
 
 def stop_discord_bot(user_id=None):
     """停止Discord机器人 (支持按用户停止)"""
-    global bot_running
+    global bot_running, bot_loop
 
     # 如果没有客户端，直接返回
     if not bot_clients:
@@ -4578,11 +4588,13 @@ def stop_discord_bot(user_id=None):
     try:
         import asyncio
         # 获取当前的事件循环，如果是在 Flask 线程中可能需要处理
-        try:
-            loop = asyncio.get_event_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+        loop = bot_loop
+        if loop is None:
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
 
         # 筛选需要停止的客户端索引
         indices_to_remove = []
@@ -4601,7 +4613,8 @@ def stop_discord_bot(user_id=None):
                         logger.info(f"账号 {client.account_id} 状态已更新为离线")
 
                     # 停止机器人
-                    asyncio.run_coroutine_threadsafe(client.close(), loop)
+                    if loop:
+                        asyncio.run_coroutine_threadsafe(client.close(), loop)
                     logger.info(f"Discord机器人 {i} (用户 {getattr(client, 'user_id', 'unknown')}) 已停止信号发送")
             except Exception as e:
                 logger.error(f"停止机器人 {i} 时出错: {e}")
@@ -4651,12 +4664,16 @@ def start_bot():
             return jsonify({'error': '用户没有Discord账号，请先添加账号'}), 400
 
         # 启动机器人（启动所有账号，不管是否在线）
-        start_discord_bot(user_id)
+        started_count = start_discord_bot(user_id)
 
-        logger.info(f"用户 {user_id} 启动机器人成功，共有 {len(user_accounts)} 个账号")
+        if started_count == 0:
+            logger.info(f"用户 {user_id} 的机器人已在运行中，共有 {len(user_accounts)} 个账号")
+        else:
+            logger.info(f"用户 {user_id} 启动机器人成功，新增 {started_count} 个账号，共有 {len(user_accounts)} 个账号")
         return jsonify({
-            'message': '账号启动成功',
-            'totalAccounts': len(user_accounts)
+            'message': '账号启动成功' if started_count > 0 else '账号已在运行',
+            'totalAccounts': len(user_accounts),
+            'startedAccounts': started_count
         })
 
     except Exception as e:
