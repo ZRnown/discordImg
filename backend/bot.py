@@ -522,7 +522,7 @@ class DiscordBotClient(discord.Client):
 
                 # 2. 获取数据库配置的发送者 ID
                 db_sender_ids = await asyncio.get_event_loop().run_in_executor(
-                    None, db.get_website_senders, website_config['id']
+                    None, db.get_website_senders, website_config['id'], self.user_id
                 )
 
                 if not db_sender_ids:

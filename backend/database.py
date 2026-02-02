@@ -2167,15 +2167,21 @@ class Database:
             logger.error(f"获取账号网站绑定失败: {e}")
             return []
 
-    def get_website_senders(self, website_id: int) -> List[int]:
-        """获取网站的发送账号ID列表"""
+    def get_website_senders(self, website_id: int, user_id: int = None) -> List[int]:
+        """获取网站的发送账号ID列表（可选按用户过滤）"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute('''
-                    SELECT account_id FROM website_account_bindings
-                    WHERE website_id = ? AND role IN ('sender', 'both')
-                ''', (website_id,))
+                if user_id:
+                    cursor.execute('''
+                        SELECT account_id FROM website_account_bindings
+                        WHERE website_id = ? AND user_id = ? AND role IN ('sender', 'both')
+                    ''', (website_id, user_id))
+                else:
+                    cursor.execute('''
+                        SELECT account_id FROM website_account_bindings
+                        WHERE website_id = ? AND role IN ('sender', 'both')
+                    ''', (website_id,))
                 return [row['account_id'] for row in cursor.fetchall()]
         except Exception as e:
             logger.error(f"获取网站发送账号失败: {e}")
