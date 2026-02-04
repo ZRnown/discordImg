@@ -405,7 +405,46 @@ class DiscordBotClient(discord.Client):
 
             product_id = product.get('id') if isinstance(product, dict) else None
             author_id = getattr(message.author, 'id', None)
+            repeat_product_ids = []
+            if custom_reply and isinstance(custom_reply, dict):
+                repeat_product_ids = custom_reply.get('repeat_product_ids') or []
+            if not repeat_product_ids and product_id:
+                repeat_product_ids = [product_id]
+            repeat_product_ids = [pid for pid in repeat_product_ids if pid]
             global_repeat_window = _get_repeat_filter_seconds()
+            user_website_settings_map = {}
+            user_website_filters_map = {}
+            channel_repeat_window = global_repeat_window
+
+            if self.user_id:
+                for website_config in website_configs:
+                    website_id = website_config.get('id')
+                    if not website_id:
+                        continue
+                    settings = await asyncio.get_event_loop().run_in_executor(
+                        None, db.get_user_website_settings, self.user_id, website_id
+                    )
+                    if not settings:
+                        continue
+                    user_website_settings_map[website_id] = settings
+                    try:
+                        website_filters = json.loads(settings.get('message_filters', '[]') or '[]')
+                    except json.JSONDecodeError:
+                        website_filters = []
+                    user_website_filters_map[website_id] = website_filters
+                    website_repeat_window = _get_repeat_seconds_from_filters(website_filters)
+                    if website_repeat_window > channel_repeat_window:
+                        channel_repeat_window = website_repeat_window
+
+            if channel_repeat_window and author_id and repeat_product_ids:
+                for pid in repeat_product_ids:
+                    if await _is_recent_repeat(author_id, pid, message.channel.id, channel_repeat_window):
+                        minutes = int(channel_repeat_window / 60) if channel_repeat_window >= 60 else channel_repeat_window / 60
+                        logger.info(
+                            f"🚫 用户重复发送过滤: user={author_id} 商品={pid} 频道={message.channel.id} "
+                            f"窗口={minutes}分钟"
+                        )
+                        return
 
             def _coerce_bool(value, default=True):
                 if isinstance(value, str):
@@ -618,61 +657,25 @@ class DiscordBotClient(discord.Client):
                 rotation_enabled = _coerce_bool(website_config.get('rotation_enabled', 1), True)
                 rotation_interval = _coerce_int(website_config.get('rotation_interval', 180), 180)
 
-                if self.user_id and website_config.get('id'):
-                    user_website_settings = await asyncio.get_event_loop().run_in_executor(
-                        None, db.get_user_website_settings, self.user_id, website_config['id']
+                website_id = website_config.get('id')
+                user_website_settings = user_website_settings_map.get(website_id)
+                website_filters = user_website_filters_map.get(website_id, [])
+
+                if user_website_settings:
+                    rotation_enabled = _coerce_bool(
+                        user_website_settings.get('rotation_enabled', rotation_enabled),
+                        rotation_enabled
                     )
-                    if user_website_settings:
-                        try:
-                            website_filters = json.loads(user_website_settings.get('message_filters', '[]') or '[]')
-                        except json.JSONDecodeError:
-                            website_filters = []
-
-                        website_repeat_window = _get_repeat_seconds_from_filters(website_filters)
-                        repeat_window = global_repeat_window
-                        if website_repeat_window > repeat_window:
-                            repeat_window = website_repeat_window
-                        if repeat_window and product_id and author_id:
-                            if await _is_recent_repeat(author_id, product_id, message.channel.id, repeat_window):
-                                minutes = int(repeat_window / 60) if repeat_window >= 60 else repeat_window / 60
-                                logger.info(
-                                    f"🚫 用户重复发送过滤: user={author_id} 商品={product_id} 频道={message.channel.id} "
-                                    f"窗口={minutes}分钟"
-                                )
-                                return
-
-                        rotation_enabled = _coerce_bool(
-                            user_website_settings.get('rotation_enabled', rotation_enabled),
-                            rotation_enabled
-                        )
-                        rotation_interval = _coerce_int(
-                            user_website_settings.get('rotation_interval', rotation_interval),
-                            rotation_interval
-                        )
-                        logger.info(
-                            f"📋 使用用户级别设置: rotation_interval={rotation_interval}秒, rotation_enabled={rotation_enabled}"
-                        )
-                        if website_filters and _filters_block_message(website_filters, match_context=match_context):
-                            logger.info(f"消息被过滤(网站规则): {website_config.get('name')}")
-                            continue
-                    else:
-                        if global_repeat_window and product_id and author_id:
-                            if await _is_recent_repeat(author_id, product_id, message.channel.id, global_repeat_window):
-                                minutes = int(global_repeat_window / 60) if global_repeat_window >= 60 else global_repeat_window / 60
-                                logger.info(
-                                    f"🚫 用户重复发送过滤: user={author_id} 商品={product_id} 频道={message.channel.id} "
-                                    f"窗口={minutes}分钟"
-                                )
-                                return
-                else:
-                    if global_repeat_window and product_id and author_id:
-                        if await _is_recent_repeat(author_id, product_id, message.channel.id, global_repeat_window):
-                            minutes = int(global_repeat_window / 60) if global_repeat_window >= 60 else global_repeat_window / 60
-                            logger.info(
-                                f"🚫 用户重复发送过滤: user={author_id} 商品={product_id} 频道={message.channel.id} "
-                                f"窗口={minutes}分钟"
-                            )
-                            return
+                    rotation_interval = _coerce_int(
+                        user_website_settings.get('rotation_interval', rotation_interval),
+                        rotation_interval
+                    )
+                    logger.info(
+                        f"📋 使用用户级别设置: rotation_interval={rotation_interval}秒, rotation_enabled={rotation_enabled}"
+                    )
+                    if website_filters and _filters_block_message(website_filters, match_context=match_context):
+                        logger.info(f"消息被过滤(网站规则): {website_config.get('name')}")
+                        continue
 
                 available_senders = [
                     uid for uid in valid_senders
@@ -843,8 +846,9 @@ class DiscordBotClient(discord.Client):
                                 mention_author=True
                             )
 
-                            if author_id and product_id:
-                                await _record_repeat(author_id, product_id, message.channel.id)
+                            if author_id and repeat_product_ids:
+                                for pid in repeat_product_ids:
+                                    await _record_repeat(author_id, pid, message.channel.id)
 
                             if hasattr(target_client, 'account_id') and target_client.account_id:
                                 set_account_cooldown(target_client.account_id, message.channel.id)
@@ -878,8 +882,9 @@ class DiscordBotClient(discord.Client):
                             if response_content:
                                 await target_channel.send(response_content)
 
-                            if author_id and product_id:
-                                await _record_repeat(author_id, product_id, message.channel.id)
+                            if author_id and repeat_product_ids:
+                                for pid in repeat_product_ids:
+                                    await _record_repeat(author_id, pid, message.channel.id)
 
                             if hasattr(target_client, 'account_id') and target_client.account_id:
                                 set_account_cooldown(target_client.account_id, message.channel.id)
@@ -1915,7 +1920,8 @@ class DiscordBotClient(discord.Client):
                     'reply_type': 'custom_only',
                     'content': combined_message,
                     'product_data': base_product,
-                    'skip_images': True
+                    'skip_images': True,
+                    'repeat_product_ids': [p.get('id') for p in reply_products if p.get('id')]
                 }
 
                 logger.info(f"发送合并回复，包含 {len(final_reply_lines)} 条内容")
