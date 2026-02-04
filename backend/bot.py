@@ -22,6 +22,64 @@ bot_tasks = []
 # 全局冷却管理器：(account_id, channel_id) -> timestamp (上次发送时间)
 account_last_sent = {}
 
+# 用户重复发送过滤缓存：(user_id, product_id, channel_id) -> timestamp
+_repeat_reply_cache = {}
+_repeat_filter_cache = {'seconds': 0.0, 'ts': 0.0}
+_repeat_cache_lock = asyncio.Lock()
+
+def _get_repeat_filter_seconds():
+    now = time.time()
+    cached = _repeat_filter_cache.get('seconds', 0.0)
+    cached_ts = _repeat_filter_cache.get('ts', 0.0)
+    if cached_ts and (now - cached_ts) < 30:
+        return cached
+
+    try:
+        try:
+            from database import db
+        except ImportError:
+            from .database import db
+        filters = db.get_message_filters()
+        max_minutes = 0.0
+        for rule in filters:
+            if rule.get('filter_type') != 'user_repeat':
+                continue
+            try:
+                minutes_val = float(rule.get('filter_value') or 0)
+            except (TypeError, ValueError):
+                continue
+            if minutes_val > max_minutes:
+                max_minutes = minutes_val
+        seconds = max_minutes * 60 if max_minutes > 0 else 0.0
+    except Exception as e:
+        logger.error(f"获取重复发送过滤配置失败: {e}")
+        seconds = 0.0
+
+    _repeat_filter_cache['seconds'] = seconds
+    _repeat_filter_cache['ts'] = now
+    return seconds
+
+async def _is_recent_repeat(user_id: str, product_id: str, channel_id: str, window_seconds: float) -> bool:
+    if not window_seconds or window_seconds <= 0:
+        return False
+    now = time.time()
+    key = (str(user_id), str(product_id), str(channel_id))
+    async with _repeat_cache_lock:
+        last = _repeat_reply_cache.get(key)
+        if last and (now - last) < window_seconds:
+            return True
+        # 清理过期记录
+        expiry = now - (window_seconds * 2)
+        for cached_key, ts in list(_repeat_reply_cache.items()):
+            if ts < expiry:
+                _repeat_reply_cache.pop(cached_key, None)
+    return False
+
+async def _record_repeat(user_id: str, product_id: str, channel_id: str):
+    key = (str(user_id), str(product_id), str(channel_id))
+    async with _repeat_cache_lock:
+        _repeat_reply_cache[key] = time.time()
+
 # 【新增】AI并发限制：最多同时2个AI推理任务，防止CPU饱和导致Flask阻塞
 ai_concurrency_limit = asyncio.Semaphore(2)
 
@@ -331,6 +389,19 @@ class DiscordBotClient(discord.Client):
             if not website_configs:
                 logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过回复")
                 return
+
+            # 用户重复发送过滤（同一用户、同一商品、同一频道在指定分钟内不回复）
+            repeat_window = _get_repeat_filter_seconds()
+            product_id = product.get('id') if isinstance(product, dict) else None
+            author_id = getattr(message.author, 'id', None)
+            if repeat_window and product_id and author_id:
+                if await _is_recent_repeat(author_id, product_id, message.channel.id, repeat_window):
+                    minutes = int(repeat_window / 60) if repeat_window >= 60 else repeat_window / 60
+                    logger.info(
+                        f"🚫 用户重复发送过滤: user={author_id} 商品={product_id} 频道={message.channel.id} "
+                        f"窗口={minutes}分钟"
+                    )
+                    return
 
             def _coerce_bool(value, default=True):
                 if isinstance(value, str):
@@ -736,6 +807,9 @@ class DiscordBotClient(discord.Client):
                                 mention_author=True
                             )
 
+                            if author_id and product_id:
+                                await _record_repeat(author_id, product_id, message.channel.id)
+
                             if hasattr(target_client, 'account_id') and target_client.account_id:
                                 set_account_cooldown(target_client.account_id, message.channel.id)
 
@@ -767,6 +841,9 @@ class DiscordBotClient(discord.Client):
                             logger.warning(f"回复失败，尝试直接发送: {reply_error}")
                             if response_content:
                                 await target_channel.send(response_content)
+
+                            if author_id and product_id:
+                                await _record_repeat(author_id, product_id, message.channel.id)
 
                             if hasattr(target_client, 'account_id') and target_client.account_id:
                                 set_account_cooldown(target_client.account_id, message.channel.id)

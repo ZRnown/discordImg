@@ -64,6 +64,9 @@ const formatMessageFilterLabel = (filter: any) => {
   if (filter.filter_type === 'image_filter') {
     return `图片过滤 ≥ ${filter.filter_value || '0.95'}`
   }
+  if (filter.filter_type === 'user_repeat') {
+    return `用户重复发送 ≤ ${filter.filter_value || '5'} 分钟`
+  }
   if (filter.filter_type === 'role_id') {
     return `身份组ID: ${filter.filter_value}`
   }
@@ -1312,6 +1315,14 @@ export function AccountsView() {
         }
         payload = { filter_type: 'numeric_range', filter_value: normalized.value }
       }
+      if (newFilter.filter_type === 'user_repeat') {
+        const minutes = Number(newFilter.filter_value)
+        if (!Number.isFinite(minutes) || minutes <= 0) {
+          toast.error('分钟必须大于0')
+          return
+        }
+        payload = { filter_type: 'user_repeat', filter_value: String(minutes) }
+      }
 
       const res = await fetch('/api/message-filters', {
         method: 'POST',
@@ -1381,6 +1392,17 @@ export function AccountsView() {
         payload = {
           ...payload,
           filter_value: normalized.value
+        }
+      }
+      if (editingFilter.filter_type === 'user_repeat') {
+        const minutes = Number(editingFilter.filter_value)
+        if (!Number.isFinite(minutes) || minutes <= 0) {
+          toast.error('分钟必须大于0')
+          return
+        }
+        payload = {
+          ...payload,
+          filter_value: String(minutes)
         }
       }
 
@@ -1775,7 +1797,9 @@ export function AccountsView() {
                                 ? buildNumericRangeFilterValue({ keyword: '', min: '', max: '' })
                                 : value === 'image_filter'
                                   ? '0.95'
-                                  : ''
+                                  : value === 'user_repeat'
+                                    ? '5'
+                                    : ''
                             }))
                             if (value !== 'image_filter') {
                               setNewFilterImages([])
@@ -1798,6 +1822,7 @@ export function AccountsView() {
                             <SelectItem value="role_id">身份组ID</SelectItem>
                             <SelectItem value="image_filter">图片过滤</SelectItem>
                             <SelectItem value="numeric_range">数字范围</SelectItem>
+                            <SelectItem value="user_repeat">用户重复发送</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -1839,6 +1864,20 @@ export function AccountsView() {
                             <p className="text-xs text-muted-foreground">
                               匹配关键词后面的数字（如 "size 49"），超出范围将忽略该消息。
                             </p>
+                          </div>
+                        ) : newFilter.filter_type === 'user_repeat' ? (
+                          <div className="flex items-center gap-2">
+                            <Label className="text-xs text-muted-foreground">重复间隔(分钟)</Label>
+                            <Input
+                              type="number"
+                              step="1"
+                              min="1"
+                              value={newFilter.filter_value}
+                              onChange={e => setNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
+                              className="h-8 w-24 text-xs"
+                              placeholder="5"
+                            />
+                            <span className="text-xs text-muted-foreground">同一用户相同商品</span>
                           </div>
                         ) : newFilter.filter_type === 'image_filter' ? (
                           <div className="space-y-3">
@@ -2596,20 +2635,22 @@ export function AccountsView() {
               <div className="space-y-4">
                 <div>
                   <Label>过滤类型</Label>
-                  <Select
-                    value={editingFilter.filter_type}
-                    onValueChange={value => setEditingFilter((prev: any) => ({
-                      ...prev,
-                      filter_type: value,
-                      filter_value: value === 'numeric_range'
-                        ? buildNumericRangeFilterValue({ keyword: '', min: '', max: '' })
-                        : value === 'image_filter'
-                          ? '0.95'
-                          : ''
-                    }))}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
+                    <Select
+                      value={editingFilter.filter_type}
+                      onValueChange={value => setEditingFilter((prev: any) => ({
+                        ...prev,
+                        filter_type: value,
+                        filter_value: value === 'numeric_range'
+                          ? buildNumericRangeFilterValue({ keyword: '', min: '', max: '' })
+                          : value === 'image_filter'
+                            ? '0.95'
+                            : value === 'user_repeat'
+                              ? '5'
+                              : ''
+                      }))}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="contains">包含文本</SelectItem>
@@ -2621,6 +2662,7 @@ export function AccountsView() {
                       <SelectItem value="role_id">身份组ID</SelectItem>
                       <SelectItem value="image_filter">图片过滤</SelectItem>
                       <SelectItem value="numeric_range">数字范围</SelectItem>
+                      <SelectItem value="user_repeat">用户重复发送</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -2659,6 +2701,20 @@ export function AccountsView() {
                           <span className="text-xs text-muted-foreground">不回复</span>
                         </div>
                       </div>
+                    </div>
+                  ) : editingFilter.filter_type === 'user_repeat' ? (
+                    <div className="flex items-center gap-2">
+                      <Label className="text-xs text-muted-foreground">重复间隔(分钟)</Label>
+                      <Input
+                        type="number"
+                        step="1"
+                        min="1"
+                        value={editingFilter.filter_value}
+                        onChange={e => setEditingFilter((prev: any) => ({ ...prev, filter_value: e.target.value }))}
+                        className="h-8 w-24 text-xs"
+                        placeholder="5"
+                      />
+                      <span className="text-xs text-muted-foreground">同一用户相同商品</span>
                     </div>
                   ) : editingFilter.filter_type === 'image_filter' ? (
                     <div className="space-y-3">

@@ -2253,6 +2253,14 @@ def add_message_filter():
 
         if filter_type == 'image' and not filter_value:
             filter_value = ''
+        if filter_type == 'user_repeat':
+            try:
+                minutes_val = float(filter_value)
+            except (TypeError, ValueError):
+                return jsonify({'error': '分钟必须是数字'}), 400
+            if minutes_val <= 0:
+                return jsonify({'error': '分钟必须大于0'}), 400
+            filter_value = str(minutes_val)
         if filter_type in {'image_similarity', 'image_filter'}:
             try:
                 val = float(filter_value) if filter_value not in (None, '') else 0.95
@@ -2288,6 +2296,14 @@ def update_message_filter(filter_id):
 
         if filter_type == 'image' and not filter_value:
             filter_value = ''
+        if filter_type == 'user_repeat':
+            try:
+                minutes_val = float(filter_value)
+            except (TypeError, ValueError):
+                return jsonify({'error': '分钟必须是数字'}), 400
+            if minutes_val <= 0:
+                return jsonify({'error': '分钟必须大于0'}), 400
+            filter_value = str(minutes_val)
         if filter_type in {'image_similarity', 'image_filter'}:
             try:
                 val = float(filter_value) if filter_value not in (None, '') else 0.95
