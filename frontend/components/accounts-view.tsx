@@ -1028,6 +1028,15 @@ export function AccountsView() {
         payload = { filter_type: 'numeric_range', filter_value: normalized.value }
       }
 
+      if (websiteNewFilter.filter_type === 'user_repeat') {
+        const minutes = Number(websiteNewFilter.filter_value)
+        if (!Number.isFinite(minutes) || minutes <= 0) {
+          toast.error('分钟必须大于0')
+          return
+        }
+        payload = { filter_type: 'user_repeat', filter_value: String(minutes) }
+      }
+
       if (websiteNewFilter.filter_type === 'image') {
         payload = { filter_type: 'image', filter_value: '' }
       }
@@ -1127,6 +1136,15 @@ export function AccountsView() {
           return
         }
         filter.filter_value = normalized.value
+      }
+
+      if (filter.filter_type === 'user_repeat') {
+        const minutes = Number(filter.filter_value)
+        if (!Number.isFinite(minutes) || minutes <= 0) {
+          toast.error('分钟必须大于0')
+          return
+        }
+        filter.filter_value = String(minutes)
       }
 
       if (filter.filter_type === 'image') {
@@ -2423,7 +2441,9 @@ export function AccountsView() {
                                         ? buildNumericRangeFilterValue({ keyword: '', min: '', max: '' })
                                         : value === 'image_filter'
                                           ? '0.95'
-                                          : ''
+                                          : value === 'user_repeat'
+                                            ? '5'
+                                            : ''
                                     }))
                                     if (value !== 'image_filter') {
                                       setWebsiteNewFilterImages([])
@@ -2446,6 +2466,7 @@ export function AccountsView() {
                                     <SelectItem value="role_id">身份组ID</SelectItem>
                                     <SelectItem value="image_filter">图片过滤</SelectItem>
                                     <SelectItem value="numeric_range">数字范围</SelectItem>
+                                    <SelectItem value="user_repeat">用户重复发送</SelectItem>
                                   </SelectContent>
                                 </Select>
                               </div>
@@ -2484,6 +2505,20 @@ export function AccountsView() {
                                         <span className="text-xs text-muted-foreground">不回复</span>
                                       </div>
                                     </div>
+                                  </div>
+                                ) : websiteNewFilter.filter_type === 'user_repeat' ? (
+                                  <div className="flex items-center gap-2">
+                                    <Label className="text-xs text-muted-foreground">重复间隔(分钟)</Label>
+                                    <Input
+                                      type="number"
+                                      step="1"
+                                      min="1"
+                                      value={websiteNewFilter.filter_value}
+                                      onChange={e => setWebsiteNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
+                                      className="h-8 w-24 text-xs"
+                                      placeholder="5"
+                                    />
+                                    <span className="text-xs text-muted-foreground">同一用户相同商品</span>
                                   </div>
                                 ) : websiteNewFilter.filter_type === 'image_filter' ? (
                                   <div className="space-y-3">
@@ -2822,7 +2857,9 @@ export function AccountsView() {
                             ? buildNumericRangeFilterValue({ keyword: '', min: '', max: '' })
                             : value === 'image_filter'
                               ? '0.95'
-                              : ''
+                              : value === 'user_repeat'
+                                ? '5'
+                                : ''
                         }
                       }))
                       if (value !== 'image_filter') {
@@ -2847,6 +2884,7 @@ export function AccountsView() {
                       <SelectItem value="role_id">身份组ID</SelectItem>
                       <SelectItem value="image_filter">图片过滤</SelectItem>
                       <SelectItem value="numeric_range">数字范围</SelectItem>
+                      <SelectItem value="user_repeat">用户重复发送</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -2885,6 +2923,23 @@ export function AccountsView() {
                           <span className="text-xs text-muted-foreground">不回复</span>
                         </div>
                       </div>
+                    </div>
+                  ) : editingWebsiteFilter.filter.filter_type === 'user_repeat' ? (
+                    <div className="flex items-center gap-2">
+                      <Label className="text-xs text-muted-foreground">重复间隔(分钟)</Label>
+                      <Input
+                        type="number"
+                        step="1"
+                        min="1"
+                        value={editingWebsiteFilter.filter.filter_value}
+                        onChange={e => setEditingWebsiteFilter((prev: any) => ({
+                          ...prev,
+                          filter: { ...prev.filter, filter_value: e.target.value }
+                        }))}
+                        className="h-8 w-24 text-xs"
+                        placeholder="5"
+                      />
+                      <span className="text-xs text-muted-foreground">同一用户相同商品</span>
                     </div>
                   ) : editingWebsiteFilter.filter.filter_type === 'image_filter' ? (
                     <div className="space-y-3">
