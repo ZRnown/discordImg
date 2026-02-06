@@ -65,7 +65,7 @@ const formatMessageFilterLabel = (filter: any) => {
     return `图片过滤 ≥ ${filter.filter_value || '0.95'}`
   }
   if (filter.filter_type === 'user_repeat') {
-    return `用户重复发送 ≤ ${filter.filter_value || '5'} 分钟`
+    return `用户重复发送 ≤ ${filter.filter_value || '5'} 秒`
   }
   if (filter.filter_type === 'role_id') {
     return `身份组ID: ${filter.filter_value}`
@@ -1029,12 +1029,12 @@ export function AccountsView() {
       }
 
       if (websiteNewFilter.filter_type === 'user_repeat') {
-        const minutes = Number(websiteNewFilter.filter_value)
-        if (!Number.isFinite(minutes) || minutes <= 0) {
-          toast.error('分钟必须大于0')
+        const seconds = Number(websiteNewFilter.filter_value)
+        if (!Number.isFinite(seconds) || seconds <= 0) {
+          toast.error('秒必须大于0')
           return
         }
-        payload = { filter_type: 'user_repeat', filter_value: String(minutes) }
+        payload = { filter_type: 'user_repeat', filter_value: String(seconds) }
       }
 
       if (websiteNewFilter.filter_type === 'image') {
@@ -1139,12 +1139,12 @@ export function AccountsView() {
       }
 
       if (filter.filter_type === 'user_repeat') {
-        const minutes = Number(filter.filter_value)
-        if (!Number.isFinite(minutes) || minutes <= 0) {
-          toast.error('分钟必须大于0')
+        const seconds = Number(filter.filter_value)
+        if (!Number.isFinite(seconds) || seconds <= 0) {
+          toast.error('秒必须大于0')
           return
         }
-        filter.filter_value = String(minutes)
+        filter.filter_value = String(seconds)
       }
 
       if (filter.filter_type === 'image') {
@@ -1334,12 +1334,12 @@ export function AccountsView() {
         payload = { filter_type: 'numeric_range', filter_value: normalized.value }
       }
       if (newFilter.filter_type === 'user_repeat') {
-        const minutes = Number(newFilter.filter_value)
-        if (!Number.isFinite(minutes) || minutes <= 0) {
-          toast.error('分钟必须大于0')
+        const seconds = Number(newFilter.filter_value)
+        if (!Number.isFinite(seconds) || seconds <= 0) {
+          toast.error('秒必须大于0')
           return
         }
-        payload = { filter_type: 'user_repeat', filter_value: String(minutes) }
+        payload = { filter_type: 'user_repeat', filter_value: String(seconds) }
       }
 
       const res = await fetch('/api/message-filters', {
@@ -1413,14 +1413,14 @@ export function AccountsView() {
         }
       }
       if (editingFilter.filter_type === 'user_repeat') {
-        const minutes = Number(editingFilter.filter_value)
-        if (!Number.isFinite(minutes) || minutes <= 0) {
-          toast.error('分钟必须大于0')
+        const seconds = Number(editingFilter.filter_value)
+        if (!Number.isFinite(seconds) || seconds <= 0) {
+          toast.error('秒必须大于0')
           return
         }
         payload = {
           ...payload,
-          filter_value: String(minutes)
+          filter_value: String(seconds)
         }
       }
 
@@ -1885,7 +1885,7 @@ export function AccountsView() {
                           </div>
                         ) : newFilter.filter_type === 'user_repeat' ? (
                           <div className="flex items-center gap-2">
-                            <Label className="text-xs text-muted-foreground">重复间隔(分钟)</Label>
+                          <Label className="text-xs text-muted-foreground">重复间隔(秒)</Label>
                             <Input
                               type="number"
                               step="1"
@@ -2508,7 +2508,7 @@ export function AccountsView() {
                                   </div>
                                 ) : websiteNewFilter.filter_type === 'user_repeat' ? (
                                   <div className="flex items-center gap-2">
-                                    <Label className="text-xs text-muted-foreground">重复间隔(分钟)</Label>
+                                    <Label className="text-xs text-muted-foreground">重复间隔(秒)</Label>
                                     <Input
                                       type="number"
                                       step="1"
@@ -2739,7 +2739,7 @@ export function AccountsView() {
                     </div>
                   ) : editingFilter.filter_type === 'user_repeat' ? (
                     <div className="flex items-center gap-2">
-                      <Label className="text-xs text-muted-foreground">重复间隔(分钟)</Label>
+                      <Label className="text-xs text-muted-foreground">重复间隔(秒)</Label>
                       <Input
                         type="number"
                         step="1"
@@ -2926,7 +2926,7 @@ export function AccountsView() {
                     </div>
                   ) : editingWebsiteFilter.filter.filter_type === 'user_repeat' ? (
                     <div className="flex items-center gap-2">
-                      <Label className="text-xs text-muted-foreground">重复间隔(分钟)</Label>
+                      <Label className="text-xs text-muted-foreground">重复间隔(秒)</Label>
                       <Input
                         type="number"
                         step="1"

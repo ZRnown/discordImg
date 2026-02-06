@@ -28,17 +28,17 @@ _repeat_filter_cache = {'seconds': 0.0, 'ts': 0.0}
 _repeat_cache_lock = asyncio.Lock()
 
 def _get_repeat_seconds_from_filters(filters):
-    max_minutes = 0.0
+    max_seconds = 0.0
     for rule in filters or []:
         if rule.get('filter_type') != 'user_repeat':
             continue
         try:
-            minutes_val = float(rule.get('filter_value') or 0)
+            seconds_val = float(rule.get('filter_value') or 0)
         except (TypeError, ValueError):
             continue
-        if minutes_val > max_minutes:
-            max_minutes = minutes_val
-    return max_minutes * 60 if max_minutes > 0 else 0.0
+        if seconds_val > max_seconds:
+            max_seconds = seconds_val
+    return max_seconds if max_seconds > 0 else 0.0
 
 def _get_repeat_filter_seconds():
     now = time.time()
@@ -53,17 +53,17 @@ def _get_repeat_filter_seconds():
         except ImportError:
             from .database import db
         filters = db.get_message_filters()
-        max_minutes = 0.0
+        max_seconds = 0.0
         for rule in filters:
             if rule.get('filter_type') != 'user_repeat':
                 continue
             try:
-                minutes_val = float(rule.get('filter_value') or 0)
+                seconds_val = float(rule.get('filter_value') or 0)
             except (TypeError, ValueError):
                 continue
-            if minutes_val > max_minutes:
-                max_minutes = minutes_val
-        seconds = max_minutes * 60 if max_minutes > 0 else 0.0
+            if seconds_val > max_seconds:
+                max_seconds = seconds_val
+        seconds = max_seconds if max_seconds > 0 else 0.0
     except Exception as e:
         logger.error(f"获取重复发送过滤配置失败: {e}")
         seconds = 0.0
@@ -439,10 +439,9 @@ class DiscordBotClient(discord.Client):
             if channel_repeat_window and author_id and repeat_product_ids:
                 for pid in repeat_product_ids:
                     if await _is_recent_repeat(author_id, pid, message.channel.id, channel_repeat_window):
-                        minutes = int(channel_repeat_window / 60) if channel_repeat_window >= 60 else channel_repeat_window / 60
                         logger.info(
                             f"🚫 用户重复发送过滤: user={author_id} 商品={pid} 频道={message.channel.id} "
-                            f"窗口={minutes}分钟"
+                            f"窗口={int(channel_repeat_window)}秒"
                         )
                         return
 
@@ -872,7 +871,8 @@ class DiscordBotClient(discord.Client):
                                         db.increment_website_stats,
                                         website_config['id'],
                                         has_text,
-                                        has_image
+                                        has_image,
+                                        self.user_id
                                     )
                             except Exception as stat_error:
                                 logger.error(f"统计更新失败: {stat_error}")
@@ -904,7 +904,8 @@ class DiscordBotClient(discord.Client):
                                         db.increment_website_stats,
                                         website_config['id'],
                                         True,
-                                        False
+                                        False,
+                                        self.user_id
                                     )
                             except Exception as stat_error:
                                 logger.error(f"统计更新失败: {stat_error}")

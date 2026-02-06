@@ -534,6 +534,31 @@ class Database:
                 )
             ''')
 
+            # 创建用户回复统计表（累计）
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_reply_stats (
+                    user_id INTEGER PRIMARY KEY,
+                    stat_replies_text INTEGER DEFAULT 0,
+                    stat_replies_image INTEGER DEFAULT 0,
+                    stat_replies_total INTEGER DEFAULT 0,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+                )
+            ''')
+
+            # 创建用户回复统计表（每日）
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_reply_stats_daily (
+                    user_id INTEGER NOT NULL,
+                    stat_date DATE NOT NULL,
+                    stat_replies_text INTEGER DEFAULT 0,
+                    stat_replies_image INTEGER DEFAULT 0,
+                    stat_replies_total INTEGER DEFAULT 0,
+                    PRIMARY KEY (user_id, stat_date),
+                    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+                )
+            ''')
+
             # 创建用户设置表（每个用户的个性化设置）
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS user_settings (
@@ -1814,43 +1839,117 @@ class Database:
             logger.error(f"获取网站配置失败: {e}")
             return []
 
-    def increment_website_stats(self, website_id: int, has_text: bool, has_image: bool) -> bool:
-        """增加网站回复统计"""
+    def increment_website_stats(self, website_id: int, has_text: bool, has_image: bool, user_id: int = None) -> bool:
+        """增加网站回复统计（普通用户不计入全局统计）"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                updates = ['stat_replies_total = stat_replies_total + 1']
-                if has_text:
-                    updates.append('stat_replies_text = stat_replies_text + 1')
-                if has_image:
-                    updates.append('stat_replies_image = stat_replies_image + 1')
-
-                cursor.execute(f'''
-                    UPDATE website_configs
-                    SET {', '.join(updates)}
-                    WHERE id = ?
-                ''', (website_id,))
                 daily_text = 1 if has_text else 0
                 daily_image = 1 if has_image else 0
-                cursor.execute('''
-                    INSERT INTO website_reply_stats_daily (
-                        website_id,
-                        stat_date,
-                        stat_replies_total,
-                        stat_replies_text,
-                        stat_replies_image
-                    )
-                    VALUES (?, date('now','localtime'), 1, ?, ?)
-                    ON CONFLICT(website_id, stat_date) DO UPDATE SET
-                        stat_replies_total = stat_replies_total + 1,
-                        stat_replies_text = stat_replies_text + excluded.stat_replies_text,
-                        stat_replies_image = stat_replies_image + excluded.stat_replies_image
-                ''', (website_id, daily_text, daily_image))
+                should_update_global = True
+
+                if user_id:
+                    cursor.execute('SELECT role FROM users WHERE id = ?', (user_id,))
+                    row = cursor.fetchone()
+                    role = row['role'] if row else None
+                    if role and role != 'admin':
+                        should_update_global = False
+
+                    cursor.execute('''
+                        INSERT INTO user_reply_stats (
+                            user_id,
+                            stat_replies_total,
+                            stat_replies_text,
+                            stat_replies_image
+                        )
+                        VALUES (?, 1, ?, ?)
+                        ON CONFLICT(user_id) DO UPDATE SET
+                            stat_replies_total = stat_replies_total + 1,
+                            stat_replies_text = stat_replies_text + excluded.stat_replies_text,
+                            stat_replies_image = stat_replies_image + excluded.stat_replies_image,
+                            updated_at = CURRENT_TIMESTAMP
+                    ''', (user_id, daily_text, daily_image))
+
+                    cursor.execute('''
+                        INSERT INTO user_reply_stats_daily (
+                            user_id,
+                            stat_date,
+                            stat_replies_total,
+                            stat_replies_text,
+                            stat_replies_image
+                        )
+                        VALUES (?, date('now','localtime'), 1, ?, ?)
+                        ON CONFLICT(user_id, stat_date) DO UPDATE SET
+                            stat_replies_total = stat_replies_total + 1,
+                            stat_replies_text = stat_replies_text + excluded.stat_replies_text,
+                            stat_replies_image = stat_replies_image + excluded.stat_replies_image
+                    ''', (user_id, daily_text, daily_image))
+
+                if should_update_global:
+                    updates = ['stat_replies_total = stat_replies_total + 1']
+                    if has_text:
+                        updates.append('stat_replies_text = stat_replies_text + 1')
+                    if has_image:
+                        updates.append('stat_replies_image = stat_replies_image + 1')
+
+                    cursor.execute(f'''
+                        UPDATE website_configs
+                        SET {', '.join(updates)}
+                        WHERE id = ?
+                    ''', (website_id,))
+
+                    cursor.execute('''
+                        INSERT INTO website_reply_stats_daily (
+                            website_id,
+                            stat_date,
+                            stat_replies_total,
+                            stat_replies_text,
+                            stat_replies_image
+                        )
+                        VALUES (?, date('now','localtime'), 1, ?, ?)
+                        ON CONFLICT(website_id, stat_date) DO UPDATE SET
+                            stat_replies_total = stat_replies_total + 1,
+                            stat_replies_text = stat_replies_text + excluded.stat_replies_text,
+                            stat_replies_image = stat_replies_image + excluded.stat_replies_image
+                    ''', (website_id, daily_text, daily_image))
+
                 conn.commit()
                 return cursor.rowcount > 0
         except Exception as e:
             logger.error(f"更新网站回复统计失败: {e}")
             return False
+
+    def get_user_reply_stats(self, user_id: int) -> Dict[str, int]:
+        """获取用户回复统计（累计 + 今日）"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT stat_replies_total, stat_replies_text, stat_replies_image
+                    FROM user_reply_stats
+                    WHERE user_id = ?
+                ''', (user_id,))
+                total_row = cursor.fetchone()
+                total_replies = total_row['stat_replies_total'] if total_row else 0
+
+                cursor.execute('''
+                    SELECT stat_replies_total, stat_replies_text, stat_replies_image
+                    FROM user_reply_stats_daily
+                    WHERE user_id = ? AND stat_date = date('now','localtime')
+                ''', (user_id,))
+                daily_row = cursor.fetchone()
+                daily_replies = daily_row['stat_replies_total'] if daily_row else 0
+
+                return {
+                    'total_replies': total_replies or 0,
+                    'daily_replies_total': daily_replies or 0
+                }
+        except Exception as e:
+            logger.error(f"获取用户回复统计失败: {e}")
+            return {
+                'total_replies': 0,
+                'daily_replies_total': 0
+            }
 
     def add_website_config(self, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str = 'blue', reply_template: str = '{url}', image_similarity_threshold: float = None, blocked_role_ids: str = '[]', rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> bool:
         """添加网站配置"""
@@ -2386,14 +2485,30 @@ class Database:
                 shop_names_str = shop_result[1]
                 shop_names = shop_names_str.split(',') if shop_names_str else []
 
-                cursor.execute("SELECT COALESCE(SUM(stat_replies_total), 0) FROM website_configs")
-                total_replies = cursor.fetchone()[0] or 0
-                cursor.execute("""
-                    SELECT COALESCE(SUM(stat_replies_total), 0)
-                    FROM website_reply_stats_daily
-                    WHERE stat_date = date('now','localtime')
-                """)
-                daily_replies = cursor.fetchone()[0] or 0
+                if role == 'admin' or user_id is None:
+                    cursor.execute("SELECT COALESCE(SUM(stat_replies_total), 0) FROM website_configs")
+                    total_replies = cursor.fetchone()[0] or 0
+                    cursor.execute("""
+                        SELECT COALESCE(SUM(stat_replies_total), 0)
+                        FROM website_reply_stats_daily
+                        WHERE stat_date = date('now','localtime')
+                    """)
+                    daily_replies = cursor.fetchone()[0] or 0
+                else:
+                    cursor.execute('''
+                        SELECT stat_replies_total
+                        FROM user_reply_stats
+                        WHERE user_id = ?
+                    ''', (user_id,))
+                    total_row = cursor.fetchone()
+                    total_replies = total_row[0] if total_row else 0
+                    cursor.execute('''
+                        SELECT stat_replies_total
+                        FROM user_reply_stats_daily
+                        WHERE user_id = ? AND stat_date = date('now','localtime')
+                    ''', (user_id,))
+                    daily_row = cursor.fetchone()
+                    daily_replies = daily_row[0] if daily_row else 0
 
                 if shop_count == 0 and role != 'admin':
                     return {
