@@ -156,13 +156,16 @@ def cleanup_expired_cooldowns():
     if expired_keys:
         logger.info(f"清理了 {len(expired_keys)} 个过期的冷却状态")
 
-def mark_message_as_processed(message_id):
-    """检查消息是否已处理（原子操作）"""
+def mark_message_as_processed(message_id, user_id=None):
+    """检查消息是否已处理（按用户隔离的原子去重）"""
     try:
         from database import db
+        scoped_message_id = str(message_id)
+        if user_id is not None:
+            scoped_message_id = f"{user_id}:{message_id}"
         with db.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("INSERT INTO processed_messages (message_id) VALUES (?)", (str(message_id),))
+            cursor.execute("INSERT INTO processed_messages (message_id) VALUES (?)", (scoped_message_id,))
             conn.commit()
         return True  # 抢锁成功
     except sqlite3.IntegrityError:
@@ -1367,7 +1370,7 @@ class DiscordBotClient(discord.Client):
         # 【核心修复】确认我有资格处理后，再抢全局锁
         # =================================================================
         try:
-            if not mark_message_as_processed(message.id):
+            if not mark_message_as_processed(message.id, self.user_id):
                 logger.info(f"消息 {message.id} 已被其他(合法的)Bot处理，跳过")
                 return
         except Exception as e:
