@@ -171,6 +171,18 @@ def mark_message_as_processed(message_id, user_id=None):
     except sqlite3.IntegrityError:
         return False  # 已经被其他Bot抢锁
 
+def _should_block_similarity(similarity, block_threshold):
+    """高相似度屏蔽：保留 100% 完全一致图片，屏蔽接近重复但非 100% 的情况"""
+    try:
+        similarity_val = float(similarity)
+        threshold_val = float(block_threshold)
+    except (TypeError, ValueError):
+        return False
+
+    # 归一化，避免浮点误差导致 1.000000x 误判
+    similarity_val = max(0.0, min(1.0, similarity_val))
+    return similarity_val >= threshold_val and similarity_val < (1.0 - 1e-9)
+
 def get_response_url_for_channel(product, channel_id, user_id=None, website_config=None):
     """根据频道ID和网站配置决定发送哪个链接"""
     import re
@@ -331,6 +343,8 @@ class DiscordBotClient(discord.Client):
     _bound_channels_cache = set()  # 已绑定的频道ID集合
     _last_cache_update = 0  # 上次缓存更新时间戳
     _cache_ttl = 60  # 缓存有效期（秒）
+    # 全局串行处理锁：保证“上一条处理完成后再处理下一条”
+    _message_processing_lock = asyncio.Lock()
 
     def __init__(self, account_id=None, user_id=None, user_shops=None, role='both'):
         # discord.py-self 可能不需要 intents，或者使用不同的语法
@@ -387,6 +401,7 @@ class DiscordBotClient(discord.Client):
     async def schedule_reply(self, message, product, custom_reply=None, match_context=None):
         """调度回复到合适的发送账号 (增强版：带详细状态诊断)"""
 
+        sent_any = False
         try:
             # 清理过期的冷却状态
             cleanup_expired_cooldowns()
@@ -404,7 +419,7 @@ class DiscordBotClient(discord.Client):
             website_configs = await self.get_website_configs_by_channel_async(message.channel.id)
             if not website_configs:
                 logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过回复")
-                return
+                return False
 
             product_id = product.get('id') if isinstance(product, dict) else None
             author_id = getattr(message.author, 'id', None)
@@ -446,7 +461,7 @@ class DiscordBotClient(discord.Client):
                             f"🚫 用户重复发送过滤: user={author_id} 商品={pid} 频道={message.channel.id} "
                             f"窗口={int(channel_repeat_window)}秒"
                         )
-                        return
+                        return False
 
             def _coerce_bool(value, default=True):
                 if isinstance(value, str):
@@ -572,7 +587,7 @@ class DiscordBotClient(discord.Client):
             for website_config in website_configs:
                 if global_image_filters and _filters_block_message(global_image_filters, match_context=match_context):
                     logger.info("消息被过滤(全局图片相似度)")
-                    return
+                    return False
                 if match_context and match_context.get('type') == 'image':
                     website_filter_matches = match_context.get('website_filter_matches') or []
                     matched_filter = next(
@@ -602,9 +617,9 @@ class DiscordBotClient(discord.Client):
                     if block_threshold is None:
                         block_threshold = getattr(config, 'DISCORD_SIMILARITY_BLOCK_THRESHOLD', 0.995)
 
-                    if similarity >= block_threshold:
+                    if _should_block_similarity(similarity, block_threshold):
                         logger.info(
-                            f"🚫 图片相似度过高: {similarity:.3f} >= {block_threshold:.3f}，已屏蔽回复"
+                            f"🚫 图片相似度过高且非100%: {similarity:.3f} >= {block_threshold:.3f}，已屏蔽回复"
                         )
                         continue
 
@@ -615,6 +630,13 @@ class DiscordBotClient(discord.Client):
                         continue
 
                 active_custom_reply = custom_reply
+                if isinstance(custom_reply, dict):
+                    per_website_content = custom_reply.get('per_website_content')
+                    if isinstance(per_website_content, dict):
+                        scoped_content = per_website_content.get(str(website_config.get('id')))
+                        if scoped_content:
+                            active_custom_reply = dict(custom_reply)
+                            active_custom_reply['content'] = scoped_content
                 response_content = self._generate_reply_content(
                     product,
                     message.channel.id,
@@ -685,11 +707,34 @@ class DiscordBotClient(discord.Client):
                 ]
 
                 if not available_senders:
-                    logger.info(
-                        f"⏳ [冷却中] 频道 {message.channel.id} 所有在线账号 ({len(valid_senders)}个) "
-                        f"均处于 {rotation_interval}秒 冷却期内，跳过发送"
-                    )
-                    continue
+                    now_ts = time.time()
+                    wait_candidates = []
+                    channel_id_str = str(message.channel.id)
+                    for uid in valid_senders:
+                        key = (int(uid), channel_id_str)
+                        last_sent = account_last_sent.get(key, 0)
+                        remain = rotation_interval - (now_ts - last_sent)
+                        if remain > 0:
+                            wait_candidates.append(remain)
+
+                    wait_seconds = min(wait_candidates) if wait_candidates else 0.0
+                    if wait_seconds > 0:
+                        logger.info(
+                            f"⏳ [排队等待] 频道 {message.channel.id} 暂无可用发送账号，"
+                            f"等待 {wait_seconds:.1f} 秒后重试"
+                        )
+                        await asyncio.sleep(wait_seconds + 0.05)
+                        available_senders = [
+                            uid for uid in valid_senders
+                            if not is_account_on_cooldown(uid, message.channel.id, rotation_interval)
+                        ]
+
+                    if not available_senders:
+                        logger.warning(
+                            f"⏳ [重试后仍冷却] 频道 {message.channel.id} 在线账号 ({len(valid_senders)}个) "
+                            f"均不可用，跳过当前网站配置"
+                        )
+                        continue
 
                 if rotation_enabled:
                     selected_id = random.choice(available_senders)
@@ -847,6 +892,7 @@ class DiscordBotClient(discord.Client):
                                 reference=message,
                                 mention_author=True
                             )
+                            sent_any = True
 
                             if author_id and repeat_product_ids:
                                 for pid in repeat_product_ids:
@@ -882,8 +928,22 @@ class DiscordBotClient(discord.Client):
 
                         except Exception as reply_error:
                             logger.warning(f"回复失败，尝试直接发送: {reply_error}")
+                            fallback_sent = False
                             if response_content:
-                                await target_channel.send(response_content)
+                                try:
+                                    await target_channel.send(response_content)
+                                    fallback_sent = True
+                                except Exception as fallback_error:
+                                    logger.error(f"文本兜底发送失败: {fallback_error}")
+                                    continue
+                            elif files:
+                                logger.error(
+                                    f"图片消息发送失败且无法复用附件重试，跳过本次发送。商品ID: {product.get('id')}"
+                                )
+                                continue
+
+                            if not fallback_sent:
+                                continue
 
                             if author_id and repeat_product_ids:
                                 for pid in repeat_product_ids:
@@ -891,6 +951,7 @@ class DiscordBotClient(discord.Client):
 
                             if hasattr(target_client, 'account_id') and target_client.account_id:
                                 set_account_cooldown(target_client.account_id, message.channel.id)
+                            sent_any = True
 
                             reply_preview = (response_content or '').replace('\n', ' ').strip()
                             if len(reply_preview) > 120:
@@ -924,6 +985,9 @@ class DiscordBotClient(discord.Client):
 
         except Exception as e:
             logger.error(f"❌ 严重错误: {e}")
+            return sent_any
+
+        return sent_any
 
     def _generate_reply_content(self, product, channel_id, custom_reply=None, website_config=None):
         """生成回复内容（支持 {url}、范围与全局模板）"""
@@ -1366,57 +1430,58 @@ class DiscordBotClient(discord.Client):
             logger.error(f"检查频道绑定权限失败: {e}")
             return
 
-        # =================================================================
-        # 【核心修复】确认我有资格处理后，再抢全局锁
-        # =================================================================
-        try:
-            if not mark_message_as_processed(message.id, self.user_id):
-                logger.info(f"消息 {message.id} 已被其他(合法的)Bot处理，跳过")
-                return
-        except Exception as e:
-            logger.error(f"消息去重检查失败: {e}")
-            return
-
-        # 4. 触发内容过滤规则
-        if self._should_filter_message(message):
-            return
-
-        logger.info(f'📨 [接收] 账号:{self.user.name} | 频道:{message.channel.name} | 内容: "{message.content[:50]}..."')
-
-        # 获取用户设置
-        keyword_reply_enabled = True
-        image_reply_enabled = True
-        if self.user_id:
+        async with DiscordBotClient._message_processing_lock:
+            # =================================================================
+            # 全局串行处理：保证“上一条处理完成后再处理下一条”，降低并发丢消息概率
+            # =================================================================
             try:
-                user_settings = await asyncio.get_event_loop().run_in_executor(
-                    None, db.get_user_settings, self.user_id
-                )
-                keyword_reply_enabled = user_settings.get('keyword_reply_enabled', 1) == 1
-                image_reply_enabled = user_settings.get('image_reply_enabled', 1) == 1
+                if not mark_message_as_processed(message.id, self.user_id):
+                    logger.info(f"消息 {message.id} 已被其他(合法的)Bot处理，跳过")
+                    return
             except Exception as e:
-                logger.error(f'获取用户回复开关设置失败: {e}')
+                logger.error(f"消息去重检查失败: {e}")
+                return
 
-        # 处理关键词消息转发
-        await self.handle_keyword_forward(message)
+            # 4. 触发内容过滤规则
+            if self._should_filter_message(message):
+                return
 
-        # 处理关键词搜索
-        if keyword_reply_enabled:
-            await self.handle_keyword_search(message)
+            logger.info(f'📨 [接收] 账号:{self.user.name} | 频道:{message.channel.name} | 内容: "{message.content[:50]}..."')
 
-        # 处理图片
-        if image_reply_enabled and message.attachments:
-            for attachment in message.attachments:
-                content_type = (getattr(attachment, 'content_type', '') or '').lower()
-                filename = (getattr(attachment, 'filename', '') or '').lower()
-                is_image = False
-                if content_type.startswith('image/'):
-                    is_image = True
-                elif filename.endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.tif', '.heic', '.heif')):
-                    is_image = True
+            # 获取用户设置
+            keyword_reply_enabled = True
+            image_reply_enabled = True
+            if self.user_id:
+                try:
+                    user_settings = await asyncio.get_event_loop().run_in_executor(
+                        None, db.get_user_settings, self.user_id
+                    )
+                    keyword_reply_enabled = user_settings.get('keyword_reply_enabled', 1) == 1
+                    image_reply_enabled = user_settings.get('image_reply_enabled', 1) == 1
+                except Exception as e:
+                    logger.error(f'获取用户回复开关设置失败: {e}')
 
-                if is_image:
-                    logger.debug(f"📷 检测到图片，开始处理: {attachment.filename}")
-                    await self.handle_image(message, attachment)
+            # 处理关键词消息转发
+            await self.handle_keyword_forward(message)
+
+            # 处理关键词搜索
+            if keyword_reply_enabled:
+                await self.handle_keyword_search(message)
+
+            # 处理图片
+            if image_reply_enabled and message.attachments:
+                for attachment in message.attachments:
+                    content_type = (getattr(attachment, 'content_type', '') or '').lower()
+                    filename = (getattr(attachment, 'filename', '') or '').lower()
+                    is_image = False
+                    if content_type.startswith('image/'):
+                        is_image = True
+                    elif filename.endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.tif', '.heic', '.heif')):
+                        is_image = True
+
+                    if is_image:
+                        logger.debug(f"📷 检测到图片，开始处理: {attachment.filename}")
+                        await self.handle_image(message, attachment)
 
     async def handle_image(self, message, attachment):
         try:
@@ -1462,8 +1527,9 @@ class DiscordBotClient(discord.Client):
             async with ai_concurrency_limit:
                 logger.debug(f"🔒 获取AI并发锁，当前等待队列: {ai_concurrency_limit._value}")
 
-                # 调用 DINOv2 服务识别图片，不使用店铺过滤（所有用户都能识别所有商品）
-                result = await self.recognize_image(image_data, user_shops=None)
+                # 传入用户店铺权限，避免 A 店铺命中结果串到 B 店铺
+                scoped_user_shops = self.user_shops if self.user_shops else None
+                result = await self.recognize_image(image_data, user_shops=scoped_user_shops)
 
                 logger.debug(f"🔓 释放AI并发锁")
 
@@ -1495,6 +1561,7 @@ class DiscordBotClient(discord.Client):
 
                 # 获取用户个性化相似度阈值，如果没有则使用全局默认值
                 user_threshold = config.DISCORD_SIMILARITY_THRESHOLD  # 默认值
+                user_block_threshold = getattr(config, 'DISCORD_SIMILARITY_BLOCK_THRESHOLD', 0.995)
                 if self.user_id:
                     try:
                         try:
@@ -1503,17 +1570,20 @@ class DiscordBotClient(discord.Client):
                             from .database import db
                         # 异步获取用户设置
                         user_settings = await asyncio.get_event_loop().run_in_executor(None, db.get_user_settings, self.user_id)
-                        if user_settings and 'discord_similarity_threshold' in user_settings:
-                            user_threshold = user_settings['discord_similarity_threshold']
+                        if user_settings:
+                            if user_settings.get('discord_similarity_threshold') is not None:
+                                user_threshold = user_settings['discord_similarity_threshold']
+                            if user_settings.get('blocked_image_threshold') is not None:
+                                user_block_threshold = user_settings['blocked_image_threshold']
                     except Exception as e:
                         logger.error(f'获取用户相似度设置失败: {e}')
 
                 logger.debug(f'最佳匹配相似度: {similarity:.4f}, 用户阈值: {user_threshold:.4f}')
 
-                block_threshold = getattr(config, 'DISCORD_SIMILARITY_BLOCK_THRESHOLD', 0.995)
-                if similarity >= block_threshold:
+                block_threshold = user_block_threshold
+                if _should_block_similarity(similarity, block_threshold):
                     logger.info(
-                        f'🚫 图片相似度过高已屏蔽: {similarity:.3f} >= {block_threshold:.3f} | 频道: {message.channel.name}'
+                        f'🚫 图片相似度过高且非100%已屏蔽: {similarity:.3f} >= {block_threshold:.3f} | 频道: {message.channel.name}'
                     )
                     return
 
@@ -1875,11 +1945,10 @@ class DiscordBotClient(discord.Client):
                 return
 
             # 多商品合并回复
-            final_reply_lines = []
-            reply_products = []
+            reply_entries = []
 
             for product in matched_products:
-                if len(final_reply_lines) >= 5:
+                if len(reply_entries) >= 5:
                     break
 
                 rule_enabled = product.get('autoReplyEnabled', product.get('ruleEnabled', True))
@@ -1898,25 +1967,51 @@ class DiscordBotClient(discord.Client):
                         'skip_images': True
                     }
 
-                reply_text = self._generate_reply_content(product, message.channel.id, custom_reply)
-                if not reply_text and custom_reply and custom_reply.get('product_data'):
-                    reply_text = self._generate_reply_content(product, message.channel.id, None)
-                if reply_text:
-                    final_reply_lines.append(reply_text)
-                    reply_products.append(product)
+                reply_entries.append({
+                    'product': product,
+                    'custom_reply': custom_reply
+                })
 
-            if final_reply_lines:
-                combined_message = "\n".join(final_reply_lines)
-                base_product = reply_products[0]
+            per_website_content = {}
+            for website_config in website_configs:
+                website_lines = []
+                for entry in reply_entries:
+                    reply_text = self._generate_reply_content(
+                        entry['product'],
+                        message.channel.id,
+                        entry['custom_reply'],
+                        website_config=website_config
+                    )
+                    if not reply_text and entry['custom_reply'] and entry['custom_reply'].get('product_data'):
+                        reply_text = self._generate_reply_content(
+                            entry['product'],
+                            message.channel.id,
+                            None,
+                            website_config=website_config
+                        )
+                    if reply_text:
+                        website_lines.append(reply_text)
+                if website_lines:
+                    per_website_content[str(website_config.get('id'))] = "\n".join(website_lines)
+
+            if per_website_content:
+                base_product = reply_entries[0]['product']
+                default_content = next(iter(per_website_content.values()))
                 agg_custom_reply = {
                     'reply_type': 'custom_only',
-                    'content': combined_message,
+                    'content': default_content,
                     'product_data': base_product,
                     'skip_images': True,
-                    'repeat_product_ids': [p.get('id') for p in reply_products if p.get('id')]
+                    'repeat_product_ids': [
+                        entry['product'].get('id')
+                        for entry in reply_entries
+                        if entry['product'].get('id')
+                    ],
+                    'per_website_content': per_website_content
                 }
 
-                logger.info(f"发送合并回复，包含 {len(final_reply_lines)} 条内容")
+                max_lines = max(content.count('\n') + 1 for content in per_website_content.values())
+                logger.info(f"发送合并回复，最多包含 {max_lines} 条内容")
                 await self.schedule_reply(message, base_product, agg_custom_reply)
             else:
                 logger.info(f'关键词搜索无可用回复内容: {search_query}')
@@ -1936,6 +2031,10 @@ class DiscordBotClient(discord.Client):
                     'query': keyword,
                     'limit': 80  # 搜索更多结果以便筛选
                 }
+                if self.user_id:
+                    search_data['user_id'] = self.user_id
+                if self.user_shops:
+                    search_data['user_shops'] = self.user_shops
 
                 # 调用后端搜索API
                 async with session.post(f'{config.BACKEND_API_URL}/api/search_similar_text',

@@ -373,6 +373,39 @@ bot_running = False  # 标记机器人是否正在运行
 bot_loop = None  # 机器人事件循环
 bot_thread = None  # 机器人事件循环线程
 
+def build_user_shop_scope(user_id):
+    """构建用户可访问店铺集合（同时包含店铺ID与店铺名）"""
+    if not user_id:
+        return []
+
+    user = db.get_user_by_id(user_id)
+    if not user:
+        return []
+
+    user_shops = user.get('shops', []) or []
+    allowed_shops = set()
+    for shop_id in user_shops:
+        if not shop_id:
+            continue
+        allowed_shops.add(str(shop_id))
+        shop_info = db.get_shop_by_id(str(shop_id))
+        if shop_info and shop_info.get('name'):
+            allowed_shops.add(str(shop_info['name']))
+
+    return list(allowed_shops)
+
+def refresh_running_bot_user_shops(user_id):
+    """更新运行中 Bot 的 user_shops，避免修改绑定后需要重启进程"""
+    scoped_shops = build_user_shop_scope(user_id)
+    updated_clients = 0
+
+    for client in bot_clients:
+        if getattr(client, 'user_id', None) == user_id:
+            client.user_shops = scoped_shops
+            updated_clients += 1
+
+    return updated_clients, scoped_shops
+
 # 全局特征提取器实例（在应用启动时创建）
 feature_extractor_instance = None
 feature_extractor_lock = threading.Lock()
@@ -539,6 +572,13 @@ def search_similar():
         limit = int(request.form.get('limit', 5))  # 返回结果数量，默认5个
         debug_enabled = bool(getattr(config, 'DEBUG', False))
 
+        user_id = request.form.get('user_id')
+        if user_id:
+            try:
+                user_id = int(user_id)
+            except (TypeError, ValueError):
+                user_id = None
+
         # 获取用户店铺权限过滤（用于Discord机器人）
         user_shops = None
         user_shops_json = request.form.get('user_shops')
@@ -547,6 +587,8 @@ def search_similar():
                 user_shops = json.loads(user_shops_json)
             except:
                 user_shops = None
+        if user_shops is None and user_id:
+            user_shops = build_user_shop_scope(user_id)
 
         if debug_enabled:
             logger.debug(f"Received threshold: {threshold}")
@@ -694,12 +736,6 @@ def search_similar():
 
             # === 网站级图片过滤规则匹配 ===
             try:
-                user_id = request.form.get('user_id')
-                if user_id:
-                    try:
-                        user_id = int(user_id)
-                    except (TypeError, ValueError):
-                        user_id = None
                 if user_id:
                     website_settings = db.get_all_user_website_filters(user_id)
                     best_by_website = {}
@@ -2547,7 +2583,14 @@ def update_user_shops(user_id):
         shop_ids = data.get('shops', [])
 
         if db.update_user_shops(user_id, shop_ids):
-            return jsonify({'message': '权限更新成功'})
+            updated_clients, scoped_shops = refresh_running_bot_user_shops(user_id)
+            logger.info(
+                f"用户 {user_id} 店铺权限已更新，已刷新 {updated_clients} 个运行中Bot实例的店铺上下文: {scoped_shops}"
+            )
+            return jsonify({
+                'message': '权限更新成功',
+                'refreshed_bot_clients': updated_clients
+            })
         else:
             return jsonify({'error': '权限更新失败'}), 500
     except Exception as e:
@@ -4232,16 +4275,52 @@ def search_similar_text():
 
         query = data.get('query', '').strip()
         limit = min(int(data.get('limit', 5)), 20)
+        user_id = data.get('user_id')
+        raw_user_shops = data.get('user_shops')
 
         if not query:
             return jsonify({'error': 'Query is required'}), 400
 
+        try:
+            user_id = int(user_id) if user_id is not None else None
+        except (TypeError, ValueError):
+            user_id = None
+
+        def _normalize_shop(value):
+            if value is None:
+                return ''
+            return re.sub(r'\s+', ' ', str(value)).strip().lower()
+
+        scoped_shops = set()
+        if isinstance(raw_user_shops, list):
+            scoped_shops.update(_normalize_shop(v) for v in raw_user_shops if v is not None)
+        if user_id:
+            scoped_shops.update(_normalize_shop(v) for v in build_user_shop_scope(user_id))
+        scoped_shops.discard('')
+        scoped_shop_list = sorted(scoped_shops)
+
         logger.info(f'文字搜索请求: "{query}", 限制: {limit}')
+
+        if user_id is not None and not scoped_shop_list:
+            logger.info(f'文字搜索被店铺权限拦截: user_id={user_id} 无可用店铺')
+            return jsonify({
+                'success': True,
+                'query': query,
+                'products': [],
+                'total': 0
+            })
 
         with db.get_connection() as conn:
             cursor = conn.cursor()
             query_lower = query.lower()
             query_normalized = re.sub(r'\s+', ' ', query_lower).strip()
+
+            scoped_clause = ""
+            scoped_params = ()
+            if scoped_shop_list:
+                placeholders = ",".join("?" for _ in scoped_shop_list)
+                scoped_clause = f" AND LOWER(TRIM(COALESCE(shop_name, ''))) IN ({placeholders})"
+                scoped_params = tuple(scoped_shop_list)
 
             def fetch_by_terms(terms, remaining_limit, exclude_ids=None):
                 if not terms or remaining_limit <= 0:
@@ -4267,10 +4346,10 @@ def search_similar_text():
                            reply_scope,
                            uploaded_reply_images
                     FROM products
-                    WHERE ({where_clause}){exclude_clause}
+                    WHERE ({where_clause}){exclude_clause}{scoped_clause}
                     ORDER BY created_at DESC
                     LIMIT ?
-                """, (*params, *exclude_params, remaining_limit))
+                """, (*params, *exclude_params, *scoped_params, remaining_limit))
                 return cursor.fetchall()
 
             rows = fetch_by_terms([query_normalized], limit)
@@ -4330,7 +4409,7 @@ def search_similar_text():
                            reply_scope,
                            uploaded_reply_images
                     FROM products
-                    WHERE (
+                    WHERE ((
                         english_title IS NOT NULL
                         AND LENGTH(TRIM(english_title)) >= 2
                         AND INSTR(?, LOWER(english_title)) > 0
@@ -4339,10 +4418,10 @@ def search_similar_text():
                         title IS NOT NULL
                         AND LENGTH(TRIM(title)) >= 2
                         AND INSTR(?, LOWER(title)) > 0
-                    )
+                    ))""" + scoped_clause + """
                     ORDER BY created_at DESC
                     LIMIT ?
-                """, (query_normalized, query_normalized, limit))
+                """, (query_normalized, query_normalized, *scoped_params, limit))
                 rows = cursor.fetchall()
 
             products = []
@@ -4541,22 +4620,8 @@ def start_discord_bot(user_id=None):
                 logger.info(f"机器人账号已在运行: {username} (ID: {account_id})")
                 continue
 
-            # 获取用户管理的店铺
-            user_shops = None
-            if user_id:
-                user = db.get_user_by_id(user_id)
-                if user:
-                    user_shops = user.get('shops', [])
-                    if user_shops:
-                        allowed_shops = set()
-                        for shop_id in user_shops:
-                            if not shop_id:
-                                continue
-                            allowed_shops.add(str(shop_id))
-                            shop_info = db.get_shop_by_id(str(shop_id))
-                            if shop_info and shop_info.get('name'):
-                                allowed_shops.add(shop_info['name'])
-                        user_shops = list(allowed_shops)
+            # 获取用户管理的店铺（包含店铺ID与店铺名）
+            user_shops = build_user_shop_scope(user_id) if user_id else None
 
             # 确定账号角色：检查是否绑定了任何网站配置
             account_bindings = db.get_account_website_bindings(account_id)
