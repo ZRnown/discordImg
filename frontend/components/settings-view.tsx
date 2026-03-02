@@ -20,6 +20,7 @@ interface User {
 
 interface UserSettings {
   discord_similarity_threshold: number
+  blocked_image_threshold: number
   global_reply_min_delay: number
   global_reply_max_delay: number
   user_blacklist: string
@@ -41,6 +42,7 @@ interface SystemSettings {
 export function SettingsView() {
   const [settings, setSettings] = useState<UserSettings>({
     discord_similarity_threshold: 0.6,
+    blocked_image_threshold: 0.95,
     global_reply_min_delay: 3.0,
     global_reply_max_delay: 8.0,
     user_blacklist: '',
@@ -80,6 +82,7 @@ export function SettingsView() {
         const data = await response.json()
         setSettings({
           discord_similarity_threshold: data.discord_similarity_threshold ?? 0.6,
+          blocked_image_threshold: data.blocked_image_threshold ?? 0.95,
           global_reply_min_delay: data.global_reply_min_delay ?? 3.0,
           global_reply_max_delay: data.global_reply_max_delay ?? 8.0,
           user_blacklist: data.user_blacklist ?? '',
@@ -163,6 +166,16 @@ export function SettingsView() {
 
       if (settings.global_reply_min_delay < 0 || settings.global_reply_max_delay < 0) {
         toast.error("延迟时间不能为负数")
+        setSaving(false)
+        return
+      }
+
+      if (
+        !Number.isFinite(settings.blocked_image_threshold) ||
+        settings.blocked_image_threshold < 0 ||
+        settings.blocked_image_threshold > 1
+      ) {
+        toast.error("高相似度屏蔽阈值必须在 0-1 之间")
         setSaving(false)
         return
       }
@@ -347,6 +360,36 @@ export function SettingsView() {
                 />
                 <p className="text-xs text-muted-foreground">
                   匹配阈值，范围 0.1-1.0
+                </p>
+              </div>
+            </div>
+
+            {/* 全局高相似度屏蔽阈值 */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="blocked-image-threshold" className="text-sm font-medium">高相似度屏蔽</Label>
+                <span className="text-sm font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                  {(settings.blocked_image_threshold * 100).toFixed(1)}%
+                </span>
+              </div>
+              <div className="space-y-1">
+                <Input
+                  id="blocked-image-threshold"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  max="1"
+                  value={settings.blocked_image_threshold}
+                  onChange={(e) => {
+                    const value = Number(e.target.value)
+                    if (!Number.isNaN(value)) {
+                      setSettings(prev => ({ ...prev, blocked_image_threshold: value }))
+                    }
+                  }}
+                  className="h-9"
+                />
+                <p className="text-xs text-muted-foreground">
+                  全局规则，≥该值且&lt;1.0 的图片会被屏蔽
                 </p>
               </div>
             </div>

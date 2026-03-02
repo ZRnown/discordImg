@@ -1013,7 +1013,7 @@ export function AccountsView() {
           return
         }
         if (websiteNewFilterImages.length === 0) {
-          toast.error('请至少上传一张图片')
+          toast.error('图片过滤规则需要先上传至少1张图片')
           return
         }
         payload = { filter_type: 'image_filter', filter_value: String(normalized) }
@@ -1320,7 +1320,7 @@ export function AccountsView() {
           return
         }
         if (newFilterImages.length === 0) {
-          toast.error('请至少上传一张图片')
+          toast.error('图片过滤规则需要先上传至少1张图片')
           return
         }
         payload = { filter_type: 'image_filter', filter_value: String(normalized) }
@@ -1924,6 +1924,11 @@ export function AccountsView() {
                                 已选 {newFilterImages.length} 张
                               </span>
                             </div>
+                            {newFilterImages.length === 0 && (
+                              <p className="text-xs text-amber-600">
+                                添加前请先上传至少 1 张图片
+                              </p>
+                            )}
                             {newFilterImages.length > 0 && (
                               <div className="flex flex-wrap gap-2">
                                 {newFilterImages.map((file, idx) => (
@@ -1961,7 +1966,12 @@ export function AccountsView() {
                     </div>
                     <DialogFooter>
                       <Button variant="outline" onClick={() => setShowAddFilter(false)}>取消</Button>
-                      <Button onClick={handleAddMessageFilter}>添加规则</Button>
+                      <Button
+                        onClick={handleAddMessageFilter}
+                        disabled={newFilter.filter_type === 'image_filter' && newFilterImages.length === 0}
+                      >
+                        添加规则
+                      </Button>
                     </DialogFooter>
                   </DialogContent>
                 </Dialog>
@@ -2554,6 +2564,14 @@ export function AccountsView() {
                                         已选 {websiteNewFilterImages.length} 张
                                       </span>
                                     </div>
+                                    {websiteNewFilterImages.length === 0 && (
+                                      <p className="text-xs text-amber-600">
+                                        添加前请先上传至少 1 张图片
+                                      </p>
+                                    )}
+                                    <p className="text-xs text-muted-foreground">
+                                      注意：网站过滤规则独立于全局图片屏蔽阈值，全局阈值可在「个人设置」里调整。
+                                    </p>
                                     {websiteNewFilterImages.length > 0 && (
                                       <div className="flex flex-wrap gap-2">
                                         {websiteNewFilterImages.map((file, idx) => (
@@ -2591,7 +2609,12 @@ export function AccountsView() {
                             </div>
                             <DialogFooter>
                               <Button variant="outline" onClick={() => setShowAddWebsiteFilter(null)}>取消</Button>
-                              <Button onClick={() => handleAddWebsiteFilter(website.id)}>添加</Button>
+                              <Button
+                                onClick={() => handleAddWebsiteFilter(website.id)}
+                                disabled={websiteNewFilter.filter_type === 'image_filter' && websiteNewFilterImages.length === 0}
+                              >
+                                添加
+                              </Button>
                             </DialogFooter>
                           </DialogContent>
                         </Dialog>
