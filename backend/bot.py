@@ -96,6 +96,12 @@ async def _record_repeat(user_id: str, product_id: str, channel_id: str):
 # 【新增】AI并发限制：最多同时2个AI推理任务，防止CPU饱和导致Flask阻塞
 ai_concurrency_limit = asyncio.Semaphore(2)
 
+# 冷却等待保护：避免在高并发下长时间占用消息处理链路
+MAX_COOLDOWN_WAIT_SECONDS = 3.0
+
+# 关键词搜索候选上限（覆盖每页200商品的测试场景）
+KEYWORD_SEARCH_LIMIT = 600
+
 
 def get_all_cooldowns():
     """获取所有活跃的冷却状态（供 API 查询）"""
@@ -643,17 +649,6 @@ class DiscordBotClient(discord.Client):
                     active_custom_reply,
                     website_config=website_config
                 )
-                if response_content is None and active_custom_reply and active_custom_reply.get('product_data'):
-                    response_content = self._generate_reply_content(
-                        product,
-                        message.channel.id,
-                        None,
-                        website_config=website_config
-                    )
-                    if response_content:
-                        active_custom_reply = None
-                        logger.info(f"商品 {product.get('id')} 自定义回复范围不匹配，使用默认回复")
-
                 if response_content is None:
                     logger.info(f"商品 {product.get('id')} 回复范围不匹配，跳过发送")
                     continue
@@ -719,6 +714,12 @@ class DiscordBotClient(discord.Client):
 
                     wait_seconds = min(wait_candidates) if wait_candidates else 0.0
                     if wait_seconds > 0:
+                        if wait_seconds > MAX_COOLDOWN_WAIT_SECONDS:
+                            logger.info(
+                                f"⏭️ [跳过长等待] 频道 {message.channel.id} 冷却等待 {wait_seconds:.1f} 秒，"
+                                f"超过阈值 {MAX_COOLDOWN_WAIT_SECONDS:.1f} 秒，跳过本次发送"
+                            )
+                            continue
                         logger.info(
                             f"⏳ [排队等待] 频道 {message.channel.id} 暂无可用发送账号，"
                             f"等待 {wait_seconds:.1f} 秒后重试"
@@ -766,6 +767,7 @@ class DiscordBotClient(discord.Client):
                         try:
                             # === 1. 收集所有要发送的图片文件 ===
                             files = []
+                            image_download_timeout = aiohttp.ClientTimeout(total=10)
 
                             # 检查是否是自定义模式，且有图片
                             skip_images = bool(active_custom_reply and active_custom_reply.get('skip_images'))
@@ -795,7 +797,7 @@ class DiscordBotClient(discord.Client):
                                         if len(files) >= 10:
                                             break
                                         try:
-                                            async with aiohttp.ClientSession() as session:
+                                            async with aiohttp.ClientSession(timeout=image_download_timeout) as session:
                                                 async with session.get(url) as resp:
                                                     if resp.status == 200:
                                                         data = await resp.read()
@@ -824,7 +826,7 @@ class DiscordBotClient(discord.Client):
                                                 break
                                             img_url = f"{config.BACKEND_API_URL}/api/custom_reply_image/{pid}/{filename}"
                                             try:
-                                                async with aiohttp.ClientSession() as session:
+                                                async with aiohttp.ClientSession(timeout=image_download_timeout) as session:
                                                     async with session.get(img_url) as resp:
                                                         if resp.status == 200:
                                                             data = await resp.read()
@@ -871,7 +873,7 @@ class DiscordBotClient(discord.Client):
 
                                             img_url = f"{config.BACKEND_API_URL}/api/image/{pid}/{idx_key}"
                                             try:
-                                                async with aiohttp.ClientSession() as session:
+                                                async with aiohttp.ClientSession(timeout=image_download_timeout) as session:
                                                     async with session.get(img_url) as resp:
                                                         if resp.status == 200:
                                                             data = await resp.read()
@@ -1982,13 +1984,6 @@ class DiscordBotClient(discord.Client):
                         entry['custom_reply'],
                         website_config=website_config
                     )
-                    if not reply_text and entry['custom_reply'] and entry['custom_reply'].get('product_data'):
-                        reply_text = self._generate_reply_content(
-                            entry['product'],
-                            message.channel.id,
-                            None,
-                            website_config=website_config
-                        )
                     if reply_text:
                         website_lines.append(reply_text)
                 if website_lines:
@@ -2029,7 +2024,7 @@ class DiscordBotClient(discord.Client):
                 # 构建搜索请求
                 search_data = {
                     'query': keyword,
-                    'limit': 80  # 搜索更多结果以便筛选
+                    'limit': KEYWORD_SEARCH_LIMIT
                 }
                 if self.user_id:
                     search_data['user_id'] = self.user_id

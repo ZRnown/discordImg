@@ -145,6 +145,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   const [deletingProductId, setDeletingProductId] = useState<number | null>(null)
   // 图片上传 ref
   const uploadInputRef = useRef<HTMLInputElement>(null)
+  const productsFetchSeqRef = useRef(0)
   const [isUploadingImg, setIsUploadingImg] = useState(false)
   const [selectedFiles, setSelectedFiles] = useState<FileList | null>(null)
   const [batchUploading, setBatchUploading] = useState(false)
@@ -386,6 +387,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   }, [isShopScraping, isBatchScraping, isStopping, currentPage, itemsPerPage, keywordSearch, shopFilter, searchType])
 
   const fetchProducts = async (page: number = currentPage) => {
+    const fetchSeq = ++productsFetchSeqRef.current
     try {
       const params = new URLSearchParams({
         page: String(page),
@@ -401,6 +403,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
       const res = await fetch(`/api/products?${params.toString()}`)
       const data = await res.json()
+      if (fetchSeq !== productsFetchSeqRef.current) return
 
       const processedProducts = (Array.isArray(data.products) ? data.products : []).map((product: any) => ({
         ...product,
@@ -427,6 +430,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
       setSelectedProducts([])
       setTotalProducts(data.total || 0)
     } catch (e) {
+      if (fetchSeq !== productsFetchSeqRef.current) return
       toast.error("加载商品库失败")
     }
   }

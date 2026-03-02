@@ -1398,7 +1398,7 @@ class Database:
                     FROM search_history sh
                     LEFT JOIN products p ON sh.matched_product_id = p.id
                     LEFT JOIN product_images pi ON sh.matched_product_id = pi.product_id AND sh.matched_image_index = pi.image_index
-                    ORDER BY sh.search_time DESC
+                    ORDER BY sh.search_time DESC, sh.id DESC
                     LIMIT ? OFFSET ?
                 ''', (limit, offset))
                 rows = cursor.fetchall()
@@ -3060,7 +3060,7 @@ class Database:
                     LEFT JOIN product_images pi ON p.id = pi.product_id
                     {where_sql}
                     GROUP BY p.id
-                    ORDER BY p.created_at DESC
+                    ORDER BY p.created_at DESC, p.id DESC
                 '''
 
                 query_params = list(params)
@@ -3198,7 +3198,7 @@ class Database:
                         params.extend([keyword, like, like, f"%itemid={keyword_lower}%"])
 
                 where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
-                query = f"SELECT p.id FROM products p {where_sql} ORDER BY p.created_at DESC"
+                query = f"SELECT p.id FROM products p {where_sql} ORDER BY p.created_at DESC, p.id DESC"
 
                 cursor.execute(query, params)
                 rows = cursor.fetchall()

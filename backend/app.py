@@ -286,7 +286,8 @@ shutdown_event = None
 # 日志配置现在在 initialize_runtime() 中执行
 
 # 日志队列和客户端列表（数据结构，需要在全局）
-log_queue = queue.Queue()
+# 注意：日志队列仅用于调试缓冲，必须避免无限增长导致内存膨胀
+log_queue = queue.Queue(maxsize=5000)
 log_clients = []
 all_logs = []
 
@@ -311,13 +312,25 @@ class QueueHandler(logging.Handler):
             if len(all_logs) > 500:  # 最多保存500条日志
                 all_logs.pop(0)
 
-            log_queue.put(log_entry)
+            try:
+                log_queue.put_nowait(log_entry)
+            except queue.Full:
+                # 队列满时丢弃最旧日志，确保日志处理不阻塞主业务线程
+                try:
+                    log_queue.get_nowait()
+                    log_queue.put_nowait(log_entry)
+                except Exception:
+                    pass
 
             # 通知所有连接的客户端
             for client_queue in log_clients[:]:  # 复制列表以避免修改时的问题
                 try:
-                    client_queue.put(log_entry)
-                except:
+                    client_queue.put_nowait(log_entry)
+                except queue.Full:
+                    # 客户端消费过慢，移除该连接避免阻塞
+                    if client_queue in log_clients:
+                        log_clients.remove(client_queue)
+                except Exception:
                     # 如果客户端队列已满或断开，移除它
                     if client_queue in log_clients:
                         log_clients.remove(client_queue)
@@ -2622,9 +2635,10 @@ def list_products():
 
     current_user = get_current_user()
     try:
-        # 获取分页参数
-        page = int(request.args.get('page', 1))
+        # 获取分页参数（增加边界保护，避免非法入参破坏分页稳定性）
+        page = max(int(request.args.get('page', 1)), 1)
         limit = int(request.args.get('limit', 50))  # 默认每页50条
+        limit = max(1, min(limit, 500))
         offset = (page - 1) * limit
         keyword = (request.args.get('keyword') or '').strip()
         search_type = request.args.get('search_type', 'all')
@@ -4250,7 +4264,8 @@ def update_discord_channel():
 def get_search_history():
     """获取搜索历史记录（支持分页）"""
     try:
-        limit = min(int(request.args.get('limit', 20)), 100)  # 最多100条
+        limit = int(request.args.get('limit', 20))
+        limit = max(1, min(limit, 100))  # 1~100
         offset = max(int(request.args.get('offset', 0)), 0)
         page = max(int(request.args.get('page', 1)), 1)
 
@@ -4274,7 +4289,9 @@ def search_similar_text():
             return jsonify({'error': 'Invalid request body'}), 400
 
         query = data.get('query', '').strip()
-        limit = min(int(data.get('limit', 5)), 20)
+        requested_limit = int(data.get('limit', 80))
+        # 放宽上限，支持大库分页场景；同时保留边界保护避免一次性拉取过大数据
+        limit = max(1, min(requested_limit, 1000))
         user_id = data.get('user_id')
         raw_user_shops = data.get('user_shops')
 
@@ -4347,7 +4364,7 @@ def search_similar_text():
                            uploaded_reply_images
                     FROM products
                     WHERE ({where_clause}){exclude_clause}{scoped_clause}
-                    ORDER BY created_at DESC
+                    ORDER BY created_at DESC, id DESC
                     LIMIT ?
                 """, (*params, *exclude_params, *scoped_params, remaining_limit))
                 return cursor.fetchall()
@@ -4419,7 +4436,7 @@ def search_similar_text():
                         AND LENGTH(TRIM(title)) >= 2
                         AND INSTR(?, LOWER(title)) > 0
                     ))""" + scoped_clause + """
-                    ORDER BY created_at DESC
+                    ORDER BY created_at DESC, id DESC
                     LIMIT ?
                 """, (query_normalized, query_normalized, *scoped_params, limit))
                 rows = cursor.fetchall()
@@ -4565,8 +4582,15 @@ def add_external_log():
         if len(all_logs) > 500:
             all_logs.pop(0)
 
-        # 添加到队列
-        log_queue.put(log_entry)
+        # 添加到队列（非阻塞，防止日志洪峰卡住请求线程）
+        try:
+            log_queue.put_nowait(log_entry)
+        except queue.Full:
+            try:
+                log_queue.get_nowait()
+                log_queue.put_nowait(log_entry)
+            except Exception:
+                pass
 
         return jsonify({'success': True})
     except Exception as e:
