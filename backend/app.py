@@ -3543,15 +3543,6 @@ def update_user_settings():
         max_delay = data.get('global_reply_max_delay')
         logger.info(f"用户设置延迟 - 最小: {min_delay}, 最大: {max_delay}")
 
-        blocked_threshold = data.get('blocked_image_threshold')
-        if blocked_threshold is not None:
-            try:
-                blocked_threshold = float(blocked_threshold)
-            except (TypeError, ValueError):
-                return jsonify({'error': '屏蔽相似度必须是数字'}), 400
-            if not (0.0 <= blocked_threshold <= 1.0):
-                return jsonify({'error': '屏蔽相似度必须在0.0-1.0之间'}), 400
-
         # 处理开关设置（boolean 转 integer）
         keyword_reply = data.get('keyword_reply_enabled')
         image_reply = data.get('image_reply_enabled')
@@ -3574,8 +3565,7 @@ def update_user_settings():
             global_reply_template=data.get('global_reply_template'),
             numeric_filter_keyword=data.get('numeric_filter_keyword'),
             filter_size_min=data.get('filter_size_min'),
-            filter_size_max=data.get('filter_size_max'),
-            blocked_image_threshold=blocked_threshold
+            filter_size_max=data.get('filter_size_max')
         )
 
         if success:
