@@ -177,18 +177,6 @@ def mark_message_as_processed(message_id, user_id=None):
     except sqlite3.IntegrityError:
         return False  # 已经被其他Bot抢锁
 
-def _should_block_similarity(similarity, block_threshold):
-    """高相似度屏蔽：保留 100% 完全一致图片，屏蔽接近重复但非 100% 的情况"""
-    try:
-        similarity_val = float(similarity)
-        threshold_val = float(block_threshold)
-    except (TypeError, ValueError):
-        return False
-
-    # 归一化，避免浮点误差导致 1.000000x 误判
-    similarity_val = max(0.0, min(1.0, similarity_val))
-    return similarity_val >= threshold_val and similarity_val < (1.0 - 1e-9)
-
 def get_response_url_for_channel(product, channel_id, user_id=None, website_config=None):
     """根据频道ID和网站配置决定发送哪个链接"""
     import re
@@ -619,15 +607,6 @@ class DiscordBotClient(discord.Client):
                         base_threshold = config.DISCORD_SIMILARITY_THRESHOLD
                     website_threshold = _coerce_float(website_config.get('image_similarity_threshold'))
                     threshold_to_use = website_threshold if website_threshold is not None else base_threshold
-                    block_threshold = _coerce_float(match_context.get('block_threshold'))
-                    if block_threshold is None:
-                        block_threshold = getattr(config, 'DISCORD_SIMILARITY_BLOCK_THRESHOLD', 0.995)
-
-                    if _should_block_similarity(similarity, block_threshold):
-                        logger.info(
-                            f"🚫 图片相似度过高且非100%: {similarity:.3f} >= {block_threshold:.3f}，已屏蔽回复"
-                        )
-                        continue
 
                     if similarity < threshold_to_use:
                         logger.info(
@@ -1563,7 +1542,6 @@ class DiscordBotClient(discord.Client):
 
                 # 获取用户个性化相似度阈值，如果没有则使用全局默认值
                 user_threshold = config.DISCORD_SIMILARITY_THRESHOLD  # 默认值
-                user_block_threshold = getattr(config, 'DISCORD_SIMILARITY_BLOCK_THRESHOLD', 0.995)
                 if self.user_id:
                     try:
                         try:
@@ -1575,19 +1553,10 @@ class DiscordBotClient(discord.Client):
                         if user_settings:
                             if user_settings.get('discord_similarity_threshold') is not None:
                                 user_threshold = user_settings['discord_similarity_threshold']
-                            if user_settings.get('blocked_image_threshold') is not None:
-                                user_block_threshold = user_settings['blocked_image_threshold']
                     except Exception as e:
                         logger.error(f'获取用户相似度设置失败: {e}')
 
                 logger.debug(f'最佳匹配相似度: {similarity:.4f}, 用户阈值: {user_threshold:.4f}')
-
-                block_threshold = user_block_threshold
-                if _should_block_similarity(similarity, block_threshold):
-                    logger.info(
-                        f'🚫 图片相似度过高且非100%已屏蔽: {similarity:.3f} >= {block_threshold:.3f} | 频道: {message.channel.name}'
-                    )
-                    return
 
                 product = best_match.get('product', {})
                 product_title = (product.get('title') or '').strip()
@@ -1655,7 +1624,6 @@ class DiscordBotClient(discord.Client):
                         'type': 'image',
                         'similarity': similarity,
                         'base_threshold': user_threshold,
-                        'block_threshold': block_threshold,
                         'website_filter_matches': blocked_website_filter_matches
                     }
                 )

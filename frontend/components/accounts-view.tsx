@@ -2570,7 +2570,7 @@ export function AccountsView() {
                                       </p>
                                     )}
                                     <p className="text-xs text-muted-foreground">
-                                      注意：网站过滤规则独立于全局图片屏蔽阈值，全局阈值可在「个人设置」里调整。
+                                      仅你在此处上传的图片过滤规则才会生效。
                                     </p>
                                     {websiteNewFilterImages.length > 0 && (
                                       <div className="flex flex-wrap gap-2">
