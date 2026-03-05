@@ -365,6 +365,26 @@ class DiscordBotClient(discord.Client):
         self.user_id = user_id  # 用户ID，用于获取个性化设置
         self.user_shops = user_shops  # 用户管理的店铺列表
         self.role = role  # 'listener', 'sender', 'both' - 账号角色
+        # DM 会话提醒去重：避免“会话创建 + 首条DM消息”重复推送
+        self._dm_alert_cache = {}
+
+    def _mark_dm_alert(self, channel_id):
+        if channel_id is None:
+            return
+        now = time.time()
+        self._dm_alert_cache[int(channel_id)] = now
+        expiry = now - 120
+        for cid, ts in list(self._dm_alert_cache.items()):
+            if ts < expiry:
+                self._dm_alert_cache.pop(cid, None)
+
+    def _is_dm_alert_recent(self, channel_id, window_seconds=20):
+        if channel_id is None:
+            return False
+        ts = self._dm_alert_cache.get(int(channel_id))
+        if not ts:
+            return False
+        return (time.time() - ts) < window_seconds
 
     async def _refresh_channel_cache(self):
         """【新增】刷新频道白名单缓存（60秒TTL）
@@ -698,6 +718,9 @@ class DiscordBotClient(discord.Client):
             return
         if getattr(message.author, "bot", False):
             return
+        channel_id = getattr(message.channel, "id", None)
+        if self._is_dm_alert_recent(channel_id):
+            return
 
         user_settings = await self._get_user_settings_safe()
         bark_enabled = user_settings.get("bark_enabled", 0) in (1, True, "1", "true", "True")
@@ -749,6 +772,7 @@ class DiscordBotClient(discord.Client):
             body=body,
             jump_url=getattr(message, "jump_url", None),
         )
+        self._mark_dm_alert(channel_id)
 
         logger.info(
             f"📱 Bark通知已发送: 账号:{account_name} | 类型:发起私信 | 发送者:{sender_name}"
@@ -1911,11 +1935,20 @@ class DiscordBotClient(discord.Client):
 
         rel_type = getattr(relationship, "type", None)
         incoming_type = getattr(discord.RelationshipType, "incoming_request", None)
-        if rel_type != incoming_type:
+        friend_type = getattr(discord.RelationshipType, "friend", None)
+        if rel_type not in (incoming_type, friend_type):
             return
 
         user_obj = getattr(relationship, "user", None)
         try:
+            if rel_type == friend_type:
+                await self._notify_relationship_interaction_if_needed(
+                    user_obj=user_obj,
+                    interaction_label="添加好友",
+                    detail_text="双方已建立好友关系",
+                )
+                return
+
             await self._notify_relationship_interaction_if_needed(
                 user_obj=user_obj,
                 interaction_label="收到好友请求",
@@ -1946,6 +1979,60 @@ class DiscordBotClient(discord.Client):
             )
         except Exception as e:
             logger.error(f"处理添加好友 Bark 通知失败: {e}")
+
+    async def on_private_channel_create(self, channel):
+        """监听新私信会话创建并提醒（兜底）。"""
+        if not self.running or not self.user:
+            return
+        if channel is None:
+            return
+
+        channel_id = getattr(channel, "id", None)
+        if self._is_dm_alert_recent(channel_id):
+            return
+
+        recipient = getattr(channel, "recipient", None)
+        if recipient is None:
+            return
+        if getattr(recipient, "id", None) == getattr(self.user, "id", None):
+            return
+
+        user_settings = await self._get_user_settings_safe()
+        bark_enabled = user_settings.get("bark_enabled", 0) in (1, True, "1", "true", "True")
+        bark_device_key = (user_settings.get("bark_device_key") or "").strip()
+        if not bark_enabled or not bark_device_key:
+            return
+
+        bark_server_url = (user_settings.get("bark_server_url") or "https://api.day.app").strip()
+        account_name = getattr(self.user, "name", None) or f"账号#{self.account_id}"
+        sender_name = (
+            getattr(recipient, "display_name", None)
+            or getattr(recipient, "name", None)
+            or "未知用户"
+        )
+        time_text = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        title = f"{sender_name} 发起私信"
+        if len(title) > 60:
+            title = f"{title[:60]}..."
+
+        body = (
+            f"账号: {account_name}\n"
+            f"类型: 发起私信\n"
+            f"发送者: {sender_name}\n"
+            f"位置: 私信\n"
+            f"内容: [新私信会话]\n"
+            f"时间: {time_text}"
+        )
+
+        await self._send_bark_notification(
+            bark_server_url=bark_server_url,
+            bark_device_key=bark_device_key,
+            title=title,
+            body=body,
+            jump_url=None,
+        )
+        self._mark_dm_alert(channel_id)
+        logger.info(f"📱 Bark通知已发送: 账号:{account_name} | 类型:发起私信 | 发送者:{sender_name}")
 
     async def handle_image(self, message, attachment):
         try:
