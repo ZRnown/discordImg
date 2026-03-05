@@ -1639,16 +1639,16 @@ class DiscordBotClient(discord.Client):
         if message.author.bot or message.webhook_id:
             return
 
-        # 1. 角色过滤：纯 sender 账号完全不处理消息
-        if self.role == 'sender':
-            return
-
         # =================================================================
-        # 【核心修复】先检查：这条消息所在的频道，是否归当前账号"监听"？
+        # 1. 先检查：这条消息所在频道是否属于当前用户配置范围（监听或发送）
+        #    目的：保证 @/回复 Bark 通知覆盖 sender 账号，同时保持用户隔离。
         # =================================================================
         try:
-            listener_allowed, website_configs = await self._is_account_bound_in_channel(message.channel.id)
-            if not listener_allowed:
+            interaction_allowed, website_configs = await self._is_account_bound_in_channel(
+                message.channel.id,
+                include_sender=True
+            )
+            if not interaction_allowed:
                 return
 
         except Exception as e:
@@ -1661,11 +1661,24 @@ class DiscordBotClient(discord.Client):
         except Exception as e:
             logger.error(f"处理 @/回复 Bark 通知失败: {e}")
 
-        # 3. 忽略 @别人的信息（避免进入商品回复链路）
+        # 2. 纯 sender 账号只负责互动通知，不参与自动回复链路
+        if self.role == 'sender':
+            return
+
+        # 3. 仅监听角色进入自动回复链路（sender-only 绑定不会进入）
+        try:
+            listener_allowed, _ = await self._is_account_bound_in_channel(message.channel.id)
+            if not listener_allowed:
+                return
+        except Exception as e:
+            logger.error(f"检查监听权限失败: {e}")
+            return
+
+        # 4. 忽略 @别人的信息（避免进入商品回复链路）
         if message.mentions:
             return
 
-        # 4. 忽略回复别人的信息（避免进入商品回复链路）
+        # 5. 忽略回复别人的信息（避免进入商品回复链路）
         if message.reference is not None:
             return
 
@@ -1681,7 +1694,7 @@ class DiscordBotClient(discord.Client):
                 logger.error(f"消息去重检查失败: {e}")
                 return
 
-            # 4. 触发内容过滤规则
+            # 6. 触发内容过滤规则
             if self._should_filter_message(message):
                 return
 
@@ -1692,11 +1705,9 @@ class DiscordBotClient(discord.Client):
             image_reply_enabled = True
             if self.user_id:
                 try:
-                    user_settings = await asyncio.get_event_loop().run_in_executor(
-                        None, db.get_user_settings, self.user_id
-                    )
-                    keyword_reply_enabled = user_settings.get('keyword_reply_enabled', 1) == 1
-                    image_reply_enabled = user_settings.get('image_reply_enabled', 1) == 1
+                    user_settings = await self._get_user_settings_safe()
+                    keyword_reply_enabled = user_settings.get('keyword_reply_enabled', 1) in (1, True, "1", "true", "True")
+                    image_reply_enabled = user_settings.get('image_reply_enabled', 1) in (1, True, "1", "true", "True")
                 except Exception as e:
                     logger.error(f'获取用户回复开关设置失败: {e}')
 
