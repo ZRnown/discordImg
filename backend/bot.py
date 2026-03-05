@@ -412,6 +412,25 @@ class DiscordBotClient(discord.Client):
             logger.error(f"获取用户设置失败(user_id={self.user_id}): {e}")
             return {}
 
+    def _should_ignore_mass_or_activity_message(self, message):
+        """屏蔽 @everyone/@here 与 Discord 活动/系统类消息。"""
+        if message is None:
+            return True
+
+        if getattr(message, "mention_everyone", False):
+            return True
+
+        content_text = (getattr(message, "clean_content", None) or message.content or "").lower()
+        if "@everyone" in content_text or "@here" in content_text:
+            return True
+
+        message_type = getattr(message, "type", None)
+        allowed_types = {
+            getattr(discord.MessageType, "default", None),
+            getattr(discord.MessageType, "reply", None),
+        }
+        return message_type not in allowed_types
+
     async def _is_reply_to_self(self, message):
         """判断当前消息是否在回复当前账号发出的消息。"""
         if message.reference is None or not self.user:
@@ -1637,6 +1656,10 @@ class DiscordBotClient(discord.Client):
 
         # 忽略机器人和webhook的消息
         if message.author.bot or message.webhook_id:
+            return
+
+        # 屏蔽活动通知/系统消息以及 @everyone/@here 广播
+        if self._should_ignore_mass_or_activity_message(message):
             return
 
         # =================================================================
