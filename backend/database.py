@@ -577,6 +577,9 @@ class Database:
                     numeric_filter_keyword TEXT DEFAULT '',
                     filter_size_min INTEGER DEFAULT 35,
                     filter_size_max INTEGER DEFAULT 46,
+                    bark_enabled INTEGER DEFAULT 0,  -- 是否启用 Bark 通知
+                    bark_server_url TEXT DEFAULT 'https://api.day.app',  -- Bark 服务地址
+                    bark_device_key TEXT DEFAULT '',  -- Bark 设备密钥
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
@@ -612,6 +615,21 @@ class Database:
 
             try:
                 cursor.execute('ALTER TABLE user_settings ADD COLUMN filter_size_max INTEGER DEFAULT 46')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN bark_enabled INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN bark_server_url TEXT DEFAULT \'https://api.day.app\'')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN bark_device_key TEXT DEFAULT \'\'')
             except sqlite3.OperationalError:
                 pass
 
@@ -2281,15 +2299,21 @@ class Database:
             logger.error(f"获取网站发送账号失败: {e}")
             return []
 
-    def get_website_listeners(self, website_id: int) -> List[int]:
-        """获取网站的监听账号ID列表"""
+    def get_website_listeners(self, website_id: int, user_id: int = None) -> List[int]:
+        """获取网站的监听账号ID列表（可选按用户过滤）"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute('''
-                    SELECT account_id FROM website_account_bindings
-                    WHERE website_id = ? AND role IN ('listener', 'both')
-                ''', (website_id,))
+                if user_id:
+                    cursor.execute('''
+                        SELECT account_id FROM website_account_bindings
+                        WHERE website_id = ? AND user_id = ? AND role IN ('listener', 'both')
+                    ''', (website_id, user_id))
+                else:
+                    cursor.execute('''
+                        SELECT account_id FROM website_account_bindings
+                        WHERE website_id = ? AND role IN ('listener', 'both')
+                    ''', (website_id,))
                 return [row['account_id'] for row in cursor.fetchall()]
         except Exception as e:
             logger.error(f"获取网站监听账号失败: {e}")
@@ -3286,7 +3310,8 @@ class Database:
                     SELECT download_threads, feature_extract_threads, discord_similarity_threshold,
                            global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
                            keyword_reply_enabled, image_reply_enabled, global_reply_template,
-                           numeric_filter_keyword, filter_size_min, filter_size_max
+                           numeric_filter_keyword, filter_size_min, filter_size_max,
+                           bark_enabled, bark_server_url, bark_device_key
                     FROM user_settings WHERE user_id = ?
                 ''', (user_id,))
                 row = cursor.fetchone()
@@ -3305,6 +3330,9 @@ class Database:
                         'numeric_filter_keyword': row[10] if row[10] is not None else '',
                         'filter_size_min': row[11] if row[11] is not None else 35,
                         'filter_size_max': row[12] if row[12] is not None else 46,
+                        'bark_enabled': row[13] if row[13] is not None else 0,
+                        'bark_server_url': row[14] or 'https://api.day.app',
+                        'bark_device_key': row[15] or '',
                     }
                 # 如果用户没有设置，返回默认值
                 return {
@@ -3321,6 +3349,9 @@ class Database:
                     'numeric_filter_keyword': '',
                     'filter_size_min': 35,
                     'filter_size_max': 46,
+                    'bark_enabled': 0,
+                    'bark_server_url': 'https://api.day.app',
+                    'bark_device_key': '',
                 }
         except Exception as e:
             logger.error(f"获取用户设置失败: {e}")
@@ -3338,6 +3369,9 @@ class Database:
                 'numeric_filter_keyword': '',
                 'filter_size_min': 35,
                 'filter_size_max': 46,
+                'bark_enabled': 0,
+                'bark_server_url': 'https://api.day.app',
+                'bark_device_key': '',
             }
 
     def update_user_settings(self, user_id: int, download_threads: int = None,
@@ -3346,7 +3380,9 @@ class Database:
                            user_blacklist: str = None, keyword_filters: str = None,
                            keyword_reply_enabled: int = None, image_reply_enabled: int = None,
                            global_reply_template: str = None, numeric_filter_keyword: str = None,
-                           filter_size_min: int = None, filter_size_max: int = None) -> bool:
+                           filter_size_min: int = None, filter_size_max: int = None,
+                           bark_enabled: int = None, bark_server_url: str = None,
+                           bark_device_key: str = None) -> bool:
         """更新用户个性化设置"""
         try:
             with self.get_connection() as conn:
@@ -3413,6 +3449,18 @@ class Database:
                         update_fields.append('filter_size_max = ?')
                         params.append(filter_size_max)
 
+                    if bark_enabled is not None:
+                        update_fields.append('bark_enabled = ?')
+                        params.append(bark_enabled)
+
+                    if bark_server_url is not None:
+                        update_fields.append('bark_server_url = ?')
+                        params.append(bark_server_url)
+
+                    if bark_device_key is not None:
+                        update_fields.append('bark_device_key = ?')
+                        params.append(bark_device_key)
+
                     if update_fields:
                         update_fields.append('updated_at = CURRENT_TIMESTAMP')
                         sql = f'UPDATE user_settings SET {", ".join(update_fields)} WHERE user_id = ?'
@@ -3425,8 +3473,8 @@ class Database:
                         (user_id, download_threads, feature_extract_threads, discord_similarity_threshold,
                          global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
                          keyword_reply_enabled, image_reply_enabled, global_reply_template, numeric_filter_keyword,
-                         filter_size_min, filter_size_max)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         filter_size_min, filter_size_max, bark_enabled, bark_server_url, bark_device_key)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         user_id,
                         download_threads or 4,
@@ -3441,7 +3489,10 @@ class Database:
                         global_reply_template or '',
                         numeric_filter_keyword or '',
                         filter_size_min if filter_size_min is not None else 35,
-                        filter_size_max if filter_size_max is not None else 46
+                        filter_size_max if filter_size_max is not None else 46,
+                        bark_enabled if bark_enabled is not None else 0,
+                        bark_server_url if bark_server_url is not None else 'https://api.day.app',
+                        bark_device_key or ''
                     ))
 
                 conn.commit()

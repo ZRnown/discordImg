@@ -80,6 +80,59 @@ const createFilterId = () => {
   return `f_${Date.now()}_${Math.random().toString(16).slice(2)}`
 }
 
+const BARK_SETTINGS_CACHE_KEY = 'discord_marketing_bark_settings_v1'
+
+const hasOwn = (obj: any, key: string) => Object.prototype.hasOwnProperty.call(obj, key)
+const toBoolean = (value: any) => (
+  value === true ||
+  value === 1 ||
+  value === '1' ||
+  value === 'true' ||
+  value === 'True'
+)
+
+const pickBarkSettings = (source: any) => ({
+  bark_enabled: toBoolean(source?.bark_enabled),
+  bark_server_url: String(source?.bark_server_url || 'https://api.day.app').trim() || 'https://api.day.app',
+  bark_device_key: String(source?.bark_device_key || ''),
+})
+
+const readBarkSettingsCache = () => {
+  if (typeof window === 'undefined') {
+    return {}
+  }
+  try {
+    const raw = localStorage.getItem(BARK_SETTINGS_CACHE_KEY)
+    if (!raw) return {}
+    const parsed = JSON.parse(raw)
+    return {
+      bark_enabled: toBoolean(parsed?.bark_enabled),
+      bark_server_url: typeof parsed?.bark_server_url === 'string' ? parsed.bark_server_url : 'https://api.day.app',
+      bark_device_key: typeof parsed?.bark_device_key === 'string' ? parsed.bark_device_key : '',
+    }
+  } catch {
+    return {}
+  }
+}
+
+const writeBarkSettingsCache = (settings: any) => {
+  if (typeof window === 'undefined') {
+    return
+  }
+  try {
+    localStorage.setItem(
+      BARK_SETTINGS_CACHE_KEY,
+      JSON.stringify({
+        bark_enabled: !!settings?.bark_enabled,
+        bark_server_url: settings?.bark_server_url || 'https://api.day.app',
+        bark_device_key: settings?.bark_device_key || '',
+      })
+    )
+  } catch {
+    // ignore cache errors
+  }
+}
+
 function CooldownTimer({ remaining }: { remaining: number }) {
   if (remaining <= 0) return null
   return (
@@ -104,8 +157,16 @@ export function AccountsView() {
     discord_similarity_threshold: 0.6,
     global_reply_min_delay: 3.0,
     global_reply_max_delay: 8.0,
+    bark_enabled: false,
+    bark_server_url: 'https://api.day.app',
+    bark_device_key: '',
   })
   const [settingsLoading, setSettingsLoading] = useState(false)
+  const [barkTesting, setBarkTesting] = useState(false)
+  const [barkAutoSaving, setBarkAutoSaving] = useState(false)
+  const barkCacheHydratedRef = useRef(false)
+  const barkAutoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const barkAutoSaveLastPayloadRef = useRef('')
 
   // 新增：当前用户信息状态
   const [currentUser, setCurrentUser] = useState<any>(null)
@@ -187,6 +248,74 @@ export function AccountsView() {
     ...website,
     image_similarity_threshold: formatThresholdForInput(website?.image_similarity_threshold)
   })
+
+  const mergeIncomingSettings = (prev: any, data: any) => {
+    const next = {
+      ...prev,
+      discord_similarity_threshold: data?.discord_similarity_threshold ?? prev.discord_similarity_threshold ?? 0.6,
+      global_reply_min_delay: data?.global_reply_min_delay ?? prev.global_reply_min_delay ?? 3.0,
+      global_reply_max_delay: data?.global_reply_max_delay ?? prev.global_reply_max_delay ?? 8.0,
+    }
+
+    if (hasOwn(data, 'bark_enabled')) {
+      next.bark_enabled = toBoolean(data.bark_enabled)
+    }
+    if (hasOwn(data, 'bark_server_url')) {
+      next.bark_server_url = data.bark_server_url || 'https://api.day.app'
+    }
+    if (hasOwn(data, 'bark_device_key')) {
+      next.bark_device_key = data.bark_device_key || ''
+    }
+
+    return next
+  }
+
+  const saveBarkSettings = async (sourceSettings: any, options?: { silent?: boolean }) => {
+    const payload = pickBarkSettings(sourceSettings)
+    const payloadKey = JSON.stringify(payload)
+    if (payloadKey === barkAutoSaveLastPayloadRef.current) {
+      return true
+    }
+
+    if (!options?.silent) {
+      setBarkAutoSaving(true)
+    }
+
+    try {
+      const response = await fetch('/api/user/settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      })
+      if (!response.ok) {
+        if (!options?.silent) {
+          toast.error('Bark 配置自动保存失败，请点击“保存设置”重试')
+        }
+        return false
+      }
+      barkAutoSaveLastPayloadRef.current = payloadKey
+      return true
+    } catch {
+      if (!options?.silent) {
+        toast.error('Bark 配置自动保存失败，请点击“保存设置”重试')
+      }
+      return false
+    } finally {
+      if (!options?.silent) {
+        setBarkAutoSaving(false)
+      }
+    }
+  }
+
+  const scheduleBarkAutoSave = (nextSettings: any, delay = 600) => {
+    if (barkAutoSaveTimerRef.current) {
+      clearTimeout(barkAutoSaveTimerRef.current)
+    }
+    barkAutoSaveTimerRef.current = setTimeout(() => {
+      void saveBarkSettings(nextSettings)
+    }, delay)
+  }
 
 
   const fetchWebsites = async (forceRefresh = false) => {
@@ -479,6 +608,13 @@ export function AccountsView() {
   }
 
   useEffect(() => {
+    // 先恢复本地 Bark 配置缓存，避免后端响应缺字段时把输入框清空
+    const cached = readBarkSettingsCache()
+    if (Object.keys(cached).length > 0) {
+      setSettings(prev => ({ ...prev, ...cached }))
+    }
+    barkCacheHydratedRef.current = true
+
     // 先获取当前用户，再决定是否获取用户列表
     const init = async () => {
         const userRes = await fetch('/api/auth/me', { credentials: 'include' });
@@ -553,6 +689,21 @@ export function AccountsView() {
     }
   }, [editingWebsiteFilter])
 
+  useEffect(() => {
+    if (!barkCacheHydratedRef.current) {
+      return
+    }
+    writeBarkSettingsCache(settings)
+  }, [settings.bark_enabled, settings.bark_server_url, settings.bark_device_key])
+
+  useEffect(() => {
+    return () => {
+      if (barkAutoSaveTimerRef.current) {
+        clearTimeout(barkAutoSaveTimerRef.current)
+      }
+    }
+  }, [])
+
   const fetchSettings = async (usePreload: boolean = true) => {
     try {
       // 首先检查是否有预加载数据
@@ -562,10 +713,10 @@ export function AccountsView() {
           try {
             console.log('使用预加载设置数据')
             const data = JSON.parse(preloadData)
-            setSettings({
-              discord_similarity_threshold: data.discord_similarity_threshold || 0.6,
-              global_reply_min_delay: data.global_reply_min_delay || 3.0,
-              global_reply_max_delay: data.global_reply_max_delay || 8.0,
+            setSettings(prev => {
+              const merged = mergeIncomingSettings(prev, data)
+              barkAutoSaveLastPayloadRef.current = JSON.stringify(pickBarkSettings(merged))
+              return merged
             })
 
             // 清除预加载数据，避免重复使用
@@ -599,10 +750,10 @@ export function AccountsView() {
       })
       if (response.ok) {
         const data = await response.json()
-        setSettings({
-          discord_similarity_threshold: data.discord_similarity_threshold || 0.6,
-          global_reply_min_delay: data.global_reply_min_delay || 3.0,
-          global_reply_max_delay: data.global_reply_max_delay || 8.0,
+        setSettings(prev => {
+          const merged = mergeIncomingSettings(prev, data)
+          barkAutoSaveLastPayloadRef.current = JSON.stringify(pickBarkSettings(merged))
+          return merged
         })
       }
     } catch (error) {
@@ -611,6 +762,10 @@ export function AccountsView() {
   }
 
   const handleSaveSettings = async () => {
+    if (settings.bark_enabled && !settings.bark_device_key.trim()) {
+      toast.error("已启用 Bark 通知，请填写 Bark 设备 Key")
+      return
+    }
     setSettingsLoading(true)
     try {
       const response = await fetch('/api/user/settings', {
@@ -621,6 +776,7 @@ export function AccountsView() {
       })
 
       if (response.ok) {
+        barkAutoSaveLastPayloadRef.current = JSON.stringify(pickBarkSettings(settings))
         toast.success("设置已保存")
       } else {
         toast.error("保存设置失败")
@@ -629,6 +785,50 @@ export function AccountsView() {
       toast.error("保存设置失败")
     } finally {
       setSettingsLoading(false)
+    }
+  }
+
+  const handleTestBarkNotification = async () => {
+    if (!settings.bark_device_key.trim()) {
+      toast.error("请先填写 Bark 设备 Key")
+      return
+    }
+
+    setBarkTesting(true)
+    try {
+      // 先尝试保存当前配置，避免“测试后重启看起来丢失”
+      await saveBarkSettings(settings, { silent: true }).catch(() => null)
+
+      const response = await fetch('/internal-api/bark-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          bark_server_url: settings.bark_server_url,
+          bark_device_key: settings.bark_device_key,
+        })
+      })
+
+      const data = await response.json().catch(() => ({}))
+      if (response.ok) {
+        if (data?.device_key_updated) {
+          const nextSettings = { ...settings, bark_device_key: data.device_key_updated }
+          setSettings(nextSettings)
+          // 自动持久化转换后的 device_key，避免重启后丢失
+          await saveBarkSettings(nextSettings, { silent: true }).catch(() => null)
+        }
+        toast.success(data.message || "测试推送已发送")
+        if (data?.hint) {
+          toast.info(data.hint)
+        }
+      } else {
+        const extra = data?.stage ? ` (${data.stage})` : ''
+        toast.error((data.error || "测试推送失败") + extra)
+      }
+    } catch (error) {
+      toast.error("测试推送失败，请检查网络后重试")
+    } finally {
+      setBarkTesting(false)
     }
   }
 
@@ -1690,6 +1890,81 @@ export function AccountsView() {
                     每次回复随机延迟 {settings.global_reply_min_delay}-{settings.global_reply_max_delay} 秒
                   </p>
                 </div>
+              </div>
+            </div>
+
+            <div className="space-y-4 border-t pt-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label htmlFor="bark-enabled" className="text-sm font-medium">iPhone Bark 通知</Label>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    当任一已添加账号被他人回复或 @ 时，立即推送到 iPhone
+                  </p>
+                </div>
+                <Switch
+                  id="bark-enabled"
+                  checked={settings.bark_enabled}
+                  onCheckedChange={(checked) => {
+                    setSettings(prev => {
+                      const next = { ...prev, bark_enabled: checked }
+                      scheduleBarkAutoSave(next, 120)
+                      return next
+                    })
+                  }}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="space-y-1">
+                  <Label htmlFor="bark-server-url" className="text-sm">Bark 服务地址</Label>
+                  <Input
+                    id="bark-server-url"
+                    type="text"
+                    value={settings.bark_server_url}
+                    onChange={(e) => {
+                      const value = e.target.value
+                      setSettings(prev => {
+                        const next = { ...prev, bark_server_url: value }
+                        scheduleBarkAutoSave(next)
+                        return next
+                      })
+                    }}
+                    placeholder="https://api.day.app"
+                    className="h-9"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="bark-device-key" className="text-sm">Bark 设备 Key</Label>
+                  <Input
+                    id="bark-device-key"
+                    type="password"
+                    value={settings.bark_device_key}
+                    onChange={(e) => {
+                      const value = e.target.value
+                      setSettings(prev => {
+                        const next = { ...prev, bark_device_key: value }
+                        scheduleBarkAutoSave(next)
+                        return next
+                      })
+                    }}
+                    placeholder="从 Bark App 复制"
+                    className="h-9"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between">
+                <p className="text-xs text-muted-foreground">
+                  {barkAutoSaving ? "Bark 配置自动保存中..." : "Bark 配置改动会自动保存"}
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={handleTestBarkNotification}
+                  disabled={barkTesting}
+                >
+                  {barkTesting ? "测试推送中..." : "发送测试推送"}
+                </Button>
               </div>
             </div>
           </CardContent>

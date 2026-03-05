@@ -3546,10 +3546,13 @@ def update_user_settings():
         # 处理开关设置（boolean 转 integer）
         keyword_reply = data.get('keyword_reply_enabled')
         image_reply = data.get('image_reply_enabled')
+        bark_enabled = data.get('bark_enabled')
         if keyword_reply is not None:
             keyword_reply = 1 if keyword_reply else 0
         if image_reply is not None:
             image_reply = 1 if image_reply else 0
+        if bark_enabled is not None:
+            bark_enabled = 1 if bark_enabled else 0
 
         success = db.update_user_settings(
             user_id=user['id'],
@@ -3565,7 +3568,10 @@ def update_user_settings():
             global_reply_template=data.get('global_reply_template'),
             numeric_filter_keyword=data.get('numeric_filter_keyword'),
             filter_size_min=data.get('filter_size_min'),
-            filter_size_max=data.get('filter_size_max')
+            filter_size_max=data.get('filter_size_max'),
+            bark_enabled=bark_enabled,
+            bark_server_url=data.get('bark_server_url'),
+            bark_device_key=data.get('bark_device_key'),
         )
 
         if success:
@@ -3575,6 +3581,92 @@ def update_user_settings():
     except Exception as e:
         logger.error(f"更新用户设置失败: {e}")
         return jsonify({'error': '更新设置失败'}), 500
+
+@app.route('/api/user/bark-test', methods=['POST'])
+def send_bark_test_notification():
+    """发送 Bark 测试推送"""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        data = request.get_json(silent=True) or {}
+        user_settings = db.get_user_settings(user['id']) or {}
+
+        bark_server_url = (
+            data.get('bark_server_url')
+            or user_settings.get('bark_server_url')
+            or 'https://api.day.app'
+        ).strip()
+        bark_device_key = (
+            data.get('bark_device_key')
+            or user_settings.get('bark_device_key')
+            or ''
+        ).strip()
+
+        if not bark_device_key:
+            return jsonify({'error': '请先填写 Bark 设备 Key'}), 400
+
+        if not bark_server_url:
+            bark_server_url = 'https://api.day.app'
+        bark_server_url = bark_server_url.rstrip('/')
+        if not bark_server_url.startswith(('http://', 'https://')):
+            bark_server_url = f'https://{bark_server_url}'
+
+        peer_content = '@jerry_selfbot_01 这双AJ4有39码吗？'
+        title = peer_content
+        now_text = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        body = (
+            f"账号: jerry_selfbot_01\n"
+            f"类型: 被@提及\n"
+            f"发送者: mike_buyer\n"
+            f"位置: PandaBuy Group / #sneaker-qa\n"
+            f"内容: {peer_content}\n"
+            f"时间: {now_text}"
+        )
+
+        push_url = (
+            f"{bark_server_url}/"
+            f"{quote(bark_device_key, safe='')}/"
+            f"{quote(title, safe='')}/"
+            f"{quote(body, safe='')}"
+        )
+
+        params = {
+            'group': 'Discord营销系统',
+            'isArchive': '1',
+        }
+
+        with requests.Session() as session_obj:
+            session_obj.trust_env = False
+            response = session_obj.get(
+                push_url,
+                params=params,
+                timeout=8,
+                proxies={'http': None, 'https': None}
+            )
+
+        response_text = response.text[:500]
+        if response.status_code >= 400:
+            logger.warning(
+                f"Bark测试推送失败: status={response.status_code}, body={response_text}"
+            )
+            return jsonify({
+                'error': f'Bark 推送失败（HTTP {response.status_code}）',
+                'details': response_text
+            }), 502
+
+        logger.info(
+            f"📱 Bark测试推送成功: user={user.get('username')}({user.get('id')})"
+        )
+        return jsonify({
+            'success': True,
+            'message': '测试推送已发送，请检查 iPhone 的 Bark 通知',
+            'server_url': bark_server_url
+        })
+    except Exception as e:
+        logger.error(f"Bark测试推送异常: {e}")
+        return jsonify({'error': f'发送测试推送失败: {e}'}), 500
 
 @app.route('/api/accounts/rotation', methods=['POST'])
 def update_rotation_config():

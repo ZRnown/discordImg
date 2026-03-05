@@ -10,6 +10,7 @@ import io
 import sqlite3
 import re
 from datetime import datetime
+from urllib.parse import quote
 try:
     from config import config
 except ImportError:
@@ -348,6 +349,12 @@ class DiscordBotClient(discord.Client):
             intents.message_content = True
             intents.messages = True
             intents.guilds = True
+            if hasattr(intents, "reactions"):
+                intents.reactions = True
+            if hasattr(intents, "guild_reactions"):
+                intents.guild_reactions = True
+            if hasattr(intents, "dm_reactions"):
+                intents.dm_reactions = True
             super().__init__(intents=intents)
         except AttributeError:
             # 如果 Intents 不存在，直接初始化（discord.py-self 可能不需要）
@@ -391,6 +398,276 @@ class DiscordBotClient(discord.Client):
         except Exception as e:
             logger.error(f"❌ 刷新频道白名单缓存失败: {e}")
             # 失败时不更新时间戳，下次会重试
+
+    async def _get_user_settings_safe(self):
+        if not self.user_id:
+            return {}
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+            return await asyncio.get_event_loop().run_in_executor(None, db.get_user_settings, self.user_id)
+        except Exception as e:
+            logger.error(f"获取用户设置失败(user_id={self.user_id}): {e}")
+            return {}
+
+    async def _is_reply_to_self(self, message):
+        """判断当前消息是否在回复当前账号发出的消息。"""
+        if message.reference is None or not self.user:
+            return False
+
+        referenced_message = None
+        try:
+            referenced_message = getattr(message.reference, "cached_message", None)
+            if referenced_message is None:
+                resolved = getattr(message.reference, "resolved", None)
+                if isinstance(resolved, discord.Message):
+                    referenced_message = resolved
+
+            if referenced_message is None and getattr(message.reference, "message_id", None):
+                referenced_message = await message.channel.fetch_message(message.reference.message_id)
+        except Exception:
+            return False
+
+        if not referenced_message or not getattr(referenced_message, "author", None):
+            return False
+
+        return getattr(referenced_message.author, "id", None) == self.user.id
+
+    async def _classify_direct_interaction(self, message):
+        """识别是否出现对当前账号的直接互动（@ 或回复）。"""
+        if not self.user:
+            return None
+
+        # 回复优先级高于@，避免“回复 + @”时被误判为仅@提及
+        if await self._is_reply_to_self(message):
+            return "reply"
+
+        mentions = getattr(message, "mentions", None) or []
+        if any(getattr(user, "id", None) == self.user.id for user in mentions):
+            return "mention"
+
+        return None
+
+    async def _send_bark_notification(self, bark_server_url, bark_device_key, title, body, jump_url=None):
+        server_url = (bark_server_url or "https://api.day.app").strip().rstrip("/")
+        if not server_url:
+            server_url = "https://api.day.app"
+        if not server_url.startswith(("http://", "https://")):
+            server_url = f"https://{server_url}"
+        device_key = (bark_device_key or "").strip()
+        if not device_key:
+            return
+
+        encoded_key = quote(device_key, safe="")
+        encoded_title = quote(title or "Discord 通知", safe="")
+        encoded_body = quote(body or "", safe="")
+        push_url = f"{server_url}/{encoded_key}/{encoded_title}/{encoded_body}"
+
+        params = {
+            "group": "Discord营销系统",
+            "isArchive": "1",
+        }
+        if jump_url:
+            params["url"] = jump_url
+
+        timeout = aiohttp.ClientTimeout(total=8)
+        for attempt in range(2):
+            try:
+                async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+                    async with session.get(push_url, params=params) as response:
+                        if response.status < 400:
+                            return
+
+                        text = await response.text()
+                        retryable = response.status >= 500
+                        if retryable and attempt == 0:
+                            await asyncio.sleep(0.5)
+                            continue
+
+                        logger.warning(f"Bark 推送失败: status={response.status}, body={text[:200]}")
+                        return
+            except Exception as e:
+                if attempt == 0:
+                    await asyncio.sleep(0.5)
+                    continue
+                logger.error(f"Bark 推送异常: {e}")
+
+    async def _notify_direct_interaction_if_needed(self, message, website_configs=None):
+        interaction_type = await self._classify_direct_interaction(message)
+        if not interaction_type:
+            return
+
+        user_settings = await self._get_user_settings_safe()
+        bark_enabled = user_settings.get("bark_enabled", 0) in (1, True, "1", "true", "True")
+        bark_device_key = (user_settings.get("bark_device_key") or "").strip()
+        if not bark_enabled or not bark_device_key:
+            return
+
+        bark_server_url = (user_settings.get("bark_server_url") or "https://api.day.app").strip()
+        interaction_label = "被@提及" if interaction_type == "mention" else "被回复"
+        account_name = getattr(self.user, "name", None) or f"账号#{self.account_id}"
+        sender_name = (
+            getattr(message.author, "display_name", None)
+            or getattr(message.author, "name", None)
+            or "未知用户"
+        )
+        guild_name = message.guild.name if message.guild else "私信"
+        channel_name = getattr(message.channel, "name", str(getattr(message.channel, "id", "")))
+
+        # 优先使用 clean_content；若仍有原始 mention token，再兜底替换成 @名称
+        preview_source = getattr(message, "clean_content", None) or message.content or ""
+        if "<@" in preview_source:
+            for mentioned_user in (getattr(message, "mentions", None) or []):
+                mention_id = getattr(mentioned_user, "id", None)
+                if mention_id is None:
+                    continue
+                mention_name = (
+                    getattr(mentioned_user, "display_name", None)
+                    or getattr(mentioned_user, "name", None)
+                    or str(mention_id)
+                )
+                preview_source = preview_source.replace(f"<@{mention_id}>", f"@{mention_name}")
+                preview_source = preview_source.replace(f"<@!{mention_id}>", f"@{mention_name}")
+
+        content_preview = preview_source.replace("\n", " ").strip()
+        if not content_preview:
+            content_preview = "[无文本内容]"
+        if len(content_preview) > 120:
+            content_preview = f"{content_preview[:120]}..."
+
+        message_time = getattr(message, "created_at", None)
+        if isinstance(message_time, datetime):
+            try:
+                message_time = message_time.astimezone()
+            except Exception:
+                pass
+            time_text = message_time.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            time_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        title = content_preview
+        if title == "[无文本内容]":
+            title = f"{sender_name} {interaction_label}"
+        if len(title) > 60:
+            title = f"{title[:60]}..."
+
+        body = (
+            f"账号: {account_name}\n"
+            f"类型: {interaction_label}\n"
+            f"发送者: {sender_name}\n"
+            f"位置: {guild_name} / #{channel_name}\n"
+            f"内容: {content_preview}\n"
+            f"时间: {time_text}"
+        )
+
+        await self._send_bark_notification(
+            bark_server_url=bark_server_url,
+            bark_device_key=bark_device_key,
+            title=title,
+            body=body,
+            jump_url=getattr(message, "jump_url", None),
+        )
+
+        logger.info(
+            f"📱 Bark通知已发送: 账号:{account_name} | 类型:{interaction_label} | 发送者:{sender_name} | 频道:{channel_name}"
+        )
+
+    async def _is_account_bound_in_channel(self, channel_id, include_sender=False):
+        """检查当前账号是否在当前用户的该频道配置中具备可监听权限。"""
+        try:
+            website_configs = await self.get_website_configs_by_channel_async(channel_id)
+            if not website_configs:
+                return False, None
+
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+
+            for config in website_configs:
+                listener_ids = await asyncio.get_event_loop().run_in_executor(
+                    None, db.get_website_listeners, config['id'], self.user_id
+                )
+                if self.account_id in listener_ids:
+                    return True, website_configs
+
+                if include_sender:
+                    sender_ids = await asyncio.get_event_loop().run_in_executor(
+                        None, db.get_website_senders, config['id'], self.user_id
+                    )
+                    if self.account_id in sender_ids:
+                        return True, website_configs
+
+            return False, website_configs
+        except Exception as e:
+            logger.error(f"检查频道账号绑定权限失败: {e}")
+            return False, None
+
+    async def _notify_reaction_interaction_if_needed(self, message, reactor, emoji_text):
+        """当他人对当前账号发出的消息添加表情时发送 Bark 通知。"""
+        if not self.running or not self.user:
+            return
+        if not message or not reactor:
+            return
+
+        # 只通知“别人给当前账号消息加表情”
+        if getattr(reactor, "id", None) == getattr(self.user, "id", None):
+            return
+        if getattr(reactor, "bot", False):
+            return
+        if getattr(message.author, "id", None) != getattr(self.user, "id", None):
+            return
+
+        user_settings = await self._get_user_settings_safe()
+        bark_enabled = user_settings.get("bark_enabled", 0) in (1, True, "1", "true", "True")
+        bark_device_key = (user_settings.get("bark_device_key") or "").strip()
+        if not bark_enabled or not bark_device_key:
+            return
+
+        bark_server_url = (user_settings.get("bark_server_url") or "https://api.day.app").strip()
+        account_name = getattr(self.user, "name", None) or f"账号#{self.account_id}"
+        reactor_name = (
+            getattr(reactor, "display_name", None)
+            or getattr(reactor, "name", None)
+            or "未知用户"
+        )
+        guild_name = message.guild.name if message.guild else "私信"
+        channel_name = getattr(message.channel, "name", str(getattr(message.channel, "id", "")))
+        emoji_text = (emoji_text or "").strip() or "👍"
+
+        preview_source = getattr(message, "clean_content", None) or message.content or ""
+        content_preview = preview_source.replace("\n", " ").strip() or "[无文本内容]"
+        if len(content_preview) > 120:
+            content_preview = f"{content_preview[:120]}..."
+
+        now_text = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+        title = f"{reactor_name} {emoji_text}"
+        if len(title) > 60:
+            title = f"{title[:60]}..."
+
+        body = (
+            f"账号: {account_name}\n"
+            f"类型: 被表情互动\n"
+            f"发送者: {reactor_name}\n"
+            f"位置: {guild_name} / #{channel_name}\n"
+            f"表情: {emoji_text}\n"
+            f"内容: {content_preview}\n"
+            f"时间: {now_text}"
+        )
+
+        await self._send_bark_notification(
+            bark_server_url=bark_server_url,
+            bark_device_key=bark_device_key,
+            title=title,
+            body=body,
+            jump_url=getattr(message, "jump_url", None),
+        )
+
+        logger.info(
+            f"📱 Bark互动通知已发送: 账号:{account_name} | 类型:被表情互动 | 发送者:{reactor_name} | 频道:{channel_name} | 表情:{emoji_text}"
+        )
 
     async def schedule_reply(self, message, product, custom_reply=None, match_context=None):
         """调度回复到合适的发送账号 (增强版：带详细状态诊断)"""
@@ -1362,15 +1639,7 @@ class DiscordBotClient(discord.Client):
         if message.author.bot or message.webhook_id:
             return
 
-        # 1. 忽略 @别人的信息
-        if message.mentions:
-            return
-
-        # 2. 忽略回复别人的信息
-        if message.reference is not None:
-            return
-
-        # 3. 角色过滤：纯 sender 账号完全不处理消息
+        # 1. 角色过滤：纯 sender 账号完全不处理消息
         if self.role == 'sender':
             return
 
@@ -1378,37 +1647,26 @@ class DiscordBotClient(discord.Client):
         # 【核心修复】先检查：这条消息所在的频道，是否归当前账号"监听"？
         # =================================================================
         try:
-            # 异步获取该频道绑定的网站配置
-            website_configs = await self.get_website_configs_by_channel_async(message.channel.id)
-
-            # 如果这个频道没有绑定任何配置，直接忽略
-            if not website_configs:
-                # logger.debug(f"频道 {message.channel.id} 未绑定配置，账号 {self.account_id} 忽略此消息")
-                return
-
-            # 进一步检查：当前账号是否是该配置的合法监听者？
-            # 这是一个关键步骤，防止未绑定的账号处理已绑定频道的消息
-            try:
-                from database import db
-            except ImportError:
-                from .database import db
-
-            listener_allowed = False
-            for config in website_configs:
-                listener_ids = await asyncio.get_event_loop().run_in_executor(
-                    None, db.get_website_listeners, config['id']
-                )
-                if self.account_id in listener_ids:
-                    listener_allowed = True
-                    break
-
-            # 如果当前账号不在监听列表中，直接忽略
+            listener_allowed, website_configs = await self._is_account_bound_in_channel(message.channel.id)
             if not listener_allowed:
-                # logger.debug(f"账号 {self.account_id} 不是频道 {message.channel.id} 的监听者，忽略")
                 return
 
         except Exception as e:
             logger.error(f"检查频道绑定权限失败: {e}")
+            return
+
+        # 2. 仅在“用户自己的店铺+自己的监听账号”命中时发送 Bark 通知
+        try:
+            await self._notify_direct_interaction_if_needed(message, website_configs=website_configs)
+        except Exception as e:
+            logger.error(f"处理 @/回复 Bark 通知失败: {e}")
+
+        # 3. 忽略 @别人的信息（避免进入商品回复链路）
+        if message.mentions:
+            return
+
+        # 4. 忽略回复别人的信息（避免进入商品回复链路）
+        if message.reference is not None:
             return
 
         async with DiscordBotClient._message_processing_lock:
@@ -1463,6 +1721,49 @@ class DiscordBotClient(discord.Client):
                     if is_image:
                         logger.debug(f"📷 检测到图片，开始处理: {attachment.filename}")
                         await self.handle_image(message, attachment)
+
+    async def on_raw_reaction_add(self, payload):
+        """监听他人给当前账号消息添加表情（包含点赞）并发送 Bark 通知。"""
+        if not self.running:
+            return
+        if not self.user:
+            return
+
+        channel_id = getattr(payload, "channel_id", None)
+        message_id = getattr(payload, "message_id", None)
+        reactor_id = getattr(payload, "user_id", None)
+        if not channel_id or not message_id or not reactor_id:
+            return
+        if reactor_id == getattr(self.user, "id", None):
+            return
+
+        allowed, _ = await self._is_account_bound_in_channel(channel_id, include_sender=True)
+        if not allowed:
+            return
+
+        try:
+            channel = self.get_channel(channel_id) or await self.fetch_channel(channel_id)
+            if channel is None:
+                return
+
+            message = await channel.fetch_message(message_id)
+            if message is None:
+                return
+            if getattr(message.author, "id", None) != getattr(self.user, "id", None):
+                return
+
+            reactor = getattr(payload, "member", None)
+            if reactor is None:
+                reactor = self.get_user(reactor_id) or await self.fetch_user(reactor_id)
+            if reactor is None:
+                return
+
+            emoji_obj = getattr(payload, "emoji", None)
+            emoji_text = str(emoji_obj) if emoji_obj is not None else ""
+
+            await self._notify_reaction_interaction_if_needed(message, reactor, emoji_text)
+        except Exception as e:
+            logger.error(f"处理表情互动 Bark 通知失败: {e}")
 
     async def handle_image(self, message, attachment):
         try:
