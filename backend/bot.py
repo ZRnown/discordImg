@@ -513,7 +513,7 @@ class DiscordBotClient(discord.Client):
                     continue
                 logger.error(f"Bark 推送异常: {e}")
 
-    async def _notify_direct_interaction_if_needed(self, message, website_configs=None):
+    async def _notify_direct_interaction_if_needed(self, message):
         interaction_type = await self._classify_direct_interaction(message)
         if not interaction_type:
             return
@@ -1662,25 +1662,9 @@ class DiscordBotClient(discord.Client):
         if self._should_ignore_mass_or_activity_message(message):
             return
 
-        # =================================================================
-        # 1. 先检查：这条消息所在频道是否属于当前用户配置范围（监听或发送）
-        #    目的：保证 @/回复 Bark 通知覆盖 sender 账号，同时保持用户隔离。
-        # =================================================================
+        # 1. 所有账号都可触发互动通知（无需频道绑定）
         try:
-            interaction_allowed, website_configs = await self._is_account_bound_in_channel(
-                message.channel.id,
-                include_sender=True
-            )
-            if not interaction_allowed:
-                return
-
-        except Exception as e:
-            logger.error(f"检查频道绑定权限失败: {e}")
-            return
-
-        # 2. 仅在“用户自己的店铺+自己的监听账号”命中时发送 Bark 通知
-        try:
-            await self._notify_direct_interaction_if_needed(message, website_configs=website_configs)
+            await self._notify_direct_interaction_if_needed(message)
         except Exception as e:
             logger.error(f"处理 @/回复 Bark 通知失败: {e}")
 
@@ -1769,10 +1753,6 @@ class DiscordBotClient(discord.Client):
         if not channel_id or not message_id or not reactor_id:
             return
         if reactor_id == getattr(self.user, "id", None):
-            return
-
-        allowed, _ = await self._is_account_bound_in_channel(channel_id, include_sender=True)
-        if not allowed:
             return
 
         try:
