@@ -507,6 +507,7 @@ class DiscordBotClient(discord.Client):
         params = {
             "group": "Discord营销系统",
             "isArchive": "1",
+            "sound": "gotosleep",
         }
         if jump_url:
             params["url"] = jump_url

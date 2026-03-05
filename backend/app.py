@@ -3635,6 +3635,7 @@ def send_bark_test_notification():
         params = {
             'group': 'Discord营销系统',
             'isArchive': '1',
+            'sound': 'gotosleep',
         }
 
         with requests.Session() as session_obj:
