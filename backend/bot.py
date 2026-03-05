@@ -688,6 +688,121 @@ class DiscordBotClient(discord.Client):
             f"📱 Bark互动通知已发送: 账号:{account_name} | 类型:被表情互动 | 发送者:{reactor_name} | 频道:{channel_name} | 表情:{emoji_text}"
         )
 
+    async def _notify_dm_interaction_if_needed(self, message):
+        """当他人发起私信（DM）时发送 Bark 通知。"""
+        if not self.running or not self.user:
+            return
+        if not message or getattr(message, "guild", None) is not None:
+            return
+        if getattr(message.author, "id", None) == getattr(self.user, "id", None):
+            return
+        if getattr(message.author, "bot", False):
+            return
+
+        user_settings = await self._get_user_settings_safe()
+        bark_enabled = user_settings.get("bark_enabled", 0) in (1, True, "1", "true", "True")
+        bark_device_key = (user_settings.get("bark_device_key") or "").strip()
+        if not bark_enabled or not bark_device_key:
+            return
+
+        bark_server_url = (user_settings.get("bark_server_url") or "https://api.day.app").strip()
+        account_name = getattr(self.user, "name", None) or f"账号#{self.account_id}"
+        sender_name = (
+            getattr(message.author, "display_name", None)
+            or getattr(message.author, "name", None)
+            or "未知用户"
+        )
+
+        content_preview = (getattr(message, "clean_content", None) or message.content or "").replace("\n", " ").strip()
+        if not content_preview:
+            content_preview = "[无文本内容]"
+        if len(content_preview) > 120:
+            content_preview = f"{content_preview[:120]}..."
+
+        message_time = getattr(message, "created_at", None)
+        if isinstance(message_time, datetime):
+            try:
+                message_time = message_time.astimezone()
+            except Exception:
+                pass
+            time_text = message_time.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            time_text = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+        title = content_preview if content_preview != "[无文本内容]" else f"{sender_name} 发起私信"
+        if len(title) > 60:
+            title = f"{title[:60]}..."
+
+        body = (
+            f"账号: {account_name}\n"
+            f"类型: 发起私信\n"
+            f"发送者: {sender_name}\n"
+            f"位置: 私信\n"
+            f"内容: {content_preview}\n"
+            f"时间: {time_text}"
+        )
+
+        await self._send_bark_notification(
+            bark_server_url=bark_server_url,
+            bark_device_key=bark_device_key,
+            title=title,
+            body=body,
+            jump_url=getattr(message, "jump_url", None),
+        )
+
+        logger.info(
+            f"📱 Bark通知已发送: 账号:{account_name} | 类型:发起私信 | 发送者:{sender_name}"
+        )
+
+    async def _notify_relationship_interaction_if_needed(self, user_obj, interaction_label, detail_text):
+        """当发生好友相关互动（好友请求/添加好友）时发送 Bark 通知。"""
+        if not self.running or not self.user:
+            return
+        if user_obj is None:
+            return
+        if getattr(user_obj, "id", None) == getattr(self.user, "id", None):
+            return
+
+        user_settings = await self._get_user_settings_safe()
+        bark_enabled = user_settings.get("bark_enabled", 0) in (1, True, "1", "true", "True")
+        bark_device_key = (user_settings.get("bark_device_key") or "").strip()
+        if not bark_enabled or not bark_device_key:
+            return
+
+        bark_server_url = (user_settings.get("bark_server_url") or "https://api.day.app").strip()
+        account_name = getattr(self.user, "name", None) or f"账号#{self.account_id}"
+        sender_name = (
+            getattr(user_obj, "display_name", None)
+            or getattr(user_obj, "name", None)
+            or "未知用户"
+        )
+        time_text = datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+        title = f"{sender_name} {interaction_label}"
+        if len(title) > 60:
+            title = f"{title[:60]}..."
+
+        body = (
+            f"账号: {account_name}\n"
+            f"类型: {interaction_label}\n"
+            f"发送者: {sender_name}\n"
+            f"位置: 好友系统\n"
+            f"内容: {detail_text}\n"
+            f"时间: {time_text}"
+        )
+
+        await self._send_bark_notification(
+            bark_server_url=bark_server_url,
+            bark_device_key=bark_device_key,
+            title=title,
+            body=body,
+            jump_url=None,
+        )
+
+        logger.info(
+            f"📱 Bark通知已发送: 账号:{account_name} | 类型:{interaction_label} | 发送者:{sender_name}"
+        )
+
     async def schedule_reply(self, message, product, custom_reply=None, match_context=None):
         """调度回复到合适的发送账号 (增强版：带详细状态诊断)"""
 
@@ -1658,6 +1773,14 @@ class DiscordBotClient(discord.Client):
         if message.author.bot or message.webhook_id:
             return
 
+        # 他人发起私信（DM）立即通知；DM 不进入自动回复链路
+        if getattr(message, "guild", None) is None:
+            try:
+                await self._notify_dm_interaction_if_needed(message)
+            except Exception as e:
+                logger.error(f"处理私信 Bark 通知失败: {e}")
+            return
+
         # 屏蔽活动通知/系统消息以及 @everyone/@here 广播
         if self._should_ignore_mass_or_activity_message(message):
             return
@@ -1778,6 +1901,51 @@ class DiscordBotClient(discord.Client):
             await self._notify_reaction_interaction_if_needed(message, reactor, emoji_text)
         except Exception as e:
             logger.error(f"处理表情互动 Bark 通知失败: {e}")
+
+    async def on_relationship_add(self, relationship):
+        """监听好友关系新增（重点：收到好友请求）。"""
+        if not self.running or not self.user:
+            return
+        if relationship is None:
+            return
+
+        rel_type = getattr(relationship, "type", None)
+        incoming_type = getattr(discord.RelationshipType, "incoming_request", None)
+        if rel_type != incoming_type:
+            return
+
+        user_obj = getattr(relationship, "user", None)
+        try:
+            await self._notify_relationship_interaction_if_needed(
+                user_obj=user_obj,
+                interaction_label="收到好友请求",
+                detail_text="对方向该账号发起了好友请求",
+            )
+        except Exception as e:
+            logger.error(f"处理好友请求 Bark 通知失败: {e}")
+
+    async def on_relationship_update(self, before, after):
+        """监听好友关系更新（例如：请求通过后成为好友）。"""
+        if not self.running or not self.user:
+            return
+        if before is None or after is None:
+            return
+
+        friend_type = getattr(discord.RelationshipType, "friend", None)
+        before_type = getattr(before, "type", None)
+        after_type = getattr(after, "type", None)
+        if after_type != friend_type or before_type == friend_type:
+            return
+
+        user_obj = getattr(after, "user", None) or getattr(before, "user", None)
+        try:
+            await self._notify_relationship_interaction_if_needed(
+                user_obj=user_obj,
+                interaction_label="添加好友",
+                detail_text="双方已建立好友关系",
+            )
+        except Exception as e:
+            logger.error(f"处理添加好友 Bark 通知失败: {e}")
 
     async def handle_image(self, message, attachment):
         try:
