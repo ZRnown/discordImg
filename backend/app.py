@@ -1469,6 +1469,7 @@ def get_website_configs():
             user_settings = db.get_user_website_settings(current_user['id'], config_id)
             config['rotation_interval'] = user_settings.get('rotation_interval', 180)
             config['rotation_enabled'] = user_settings.get('rotation_enabled', 1)
+            config['keyword_reply_batch_size'] = user_settings.get('keyword_reply_batch_size', 0)
             try:
                 raw_filters = user_settings.get('message_filters', '[]') if user_settings else '[]'
                 config['message_filters'] = json.loads(raw_filters) if isinstance(raw_filters, str) else (raw_filters or [])
@@ -1803,7 +1804,8 @@ def get_website_rotation(config_id):
         settings = db.get_user_website_settings(current_user['id'], config_id)
         return jsonify({
             'rotation_interval': settings['rotation_interval'],
-            'rotation_enabled': settings['rotation_enabled']
+            'rotation_enabled': settings['rotation_enabled'],
+            'keyword_reply_batch_size': settings.get('keyword_reply_batch_size', 0)
         })
     except Exception as e:
         logger.error(f"获取网站轮换配置失败: {e}")
@@ -1822,20 +1824,34 @@ def update_website_rotation(config_id):
 
         rotation_interval = data.get('rotation_interval')
         rotation_enabled = data.get('rotation_enabled')
+        keyword_reply_batch_size = data.get('keyword_reply_batch_size')
 
         # 验证参数
         if rotation_interval is not None and rotation_interval <= 0:
             return jsonify({'error': '轮换间隔必须大于0秒'}), 400
         if rotation_enabled is not None and rotation_enabled not in [0, 1]:
             return jsonify({'error': '轮换启用状态必须是0或1'}), 400
+        if keyword_reply_batch_size is not None and keyword_reply_batch_size < 0:
+            return jsonify({'error': '每轮关键词回复数不能小于0'}), 400
 
         # 使用用户级别的设置方法
-        if db.update_user_website_rotation(current_user['id'], config_id, rotation_interval, rotation_enabled):
+        if db.update_user_website_rotation(
+            current_user['id'],
+            config_id,
+            rotation_interval,
+            rotation_enabled,
+            keyword_reply_batch_size,
+        ):
             if rotation_interval is not None:
                 messages.append(f'轮换间隔已设置为 {rotation_interval} 秒')
             if rotation_enabled is not None:
                 status_text = '启用' if rotation_enabled else '禁用'
                 messages.append(f'轮换功能已{status_text}')
+            if keyword_reply_batch_size is not None:
+                if keyword_reply_batch_size == 0:
+                    messages.append('每轮关键词回复数已设为不限')
+                else:
+                    messages.append(f'每轮关键词回复数已设为 {keyword_reply_batch_size}')
             return jsonify({'success': True, 'message': '; '.join(messages) if messages else '设置已更新'})
         else:
             return jsonify({'error': '更新失败'}), 500

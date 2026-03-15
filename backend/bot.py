@@ -15,6 +15,10 @@ try:
     from config import config
 except ImportError:
     from .config import config
+try:
+    from keyword_reply_window import KeywordReplyWindowManager
+except ImportError:
+    from .keyword_reply_window import KeywordReplyWindowManager
 
 # 全局变量用于多账号机器人管理
 bot_clients = []
@@ -27,6 +31,29 @@ account_last_sent = {}
 _repeat_reply_cache = {}
 _repeat_filter_cache = {'seconds': 0.0, 'ts': 0.0}
 _repeat_cache_lock = asyncio.Lock()
+_keyword_reply_window_manager = KeywordReplyWindowManager()
+_keyword_reply_window_lock = asyncio.Lock()
+_keyword_reply_flush_tasks = {}
+_keyword_reply_window_configs = {}
+
+
+def _coerce_int(value, default):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalize_keyword_batch_size(value):
+    return max(0, _coerce_int(value, 0))
+
+
+def _build_keyword_window_key(user_id, website_id, guild_id):
+    return (
+        _coerce_int(user_id, 0),
+        _coerce_int(website_id, 0),
+        _coerce_int(guild_id, 0),
+    )
 
 def _get_repeat_seconds_from_filters(filters):
     max_seconds = 0.0
@@ -432,6 +459,189 @@ class DiscordBotClient(discord.Client):
             logger.error(f"获取用户设置失败(user_id={self.user_id}): {e}")
             return {}
 
+    async def _get_keyword_window_settings(self, website_config):
+        website_id = website_config.get('id') if website_config else None
+        rotation_interval = _coerce_int((website_config or {}).get('rotation_interval', 180), 180)
+        batch_size = _normalize_keyword_batch_size((website_config or {}).get('keyword_reply_batch_size', 0))
+
+        if not self.user_id or not website_id:
+            return max(1, rotation_interval), batch_size
+
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+            user_settings = await asyncio.get_event_loop().run_in_executor(
+                None, db.get_user_website_settings, self.user_id, website_id
+            )
+            rotation_interval = _coerce_int(user_settings.get('rotation_interval', rotation_interval), rotation_interval)
+            batch_size = _normalize_keyword_batch_size(user_settings.get('keyword_reply_batch_size', batch_size))
+        except Exception as e:
+            logger.error(f"获取关键词窗口设置失败(user_id={self.user_id}, website_id={website_id}): {e}")
+
+        return max(1, rotation_interval), batch_size
+
+    async def _dispatch_keyword_reply_job(self, job):
+        listener_client = job.get('client')
+        if listener_client is None or not getattr(listener_client, 'running', False):
+            logger.warning("⏭️ [关键词排队] 监听账号已离线，跳过队列中的关键词回复")
+            return False
+
+        message = job.get('message')
+        if message is None:
+            logger.warning("⏭️ [关键词排队] 消息对象不存在，跳过队列中的关键词回复")
+            return False
+
+        website_id = job.get('website_id')
+        website_config = job.get('website_config') or {}
+        try:
+            current_configs = await listener_client.get_website_configs_by_channel_async(message.channel.id)
+            matched_config = next((cfg for cfg in current_configs if cfg.get('id') == website_id), None)
+            if not matched_config:
+                logger.info(
+                    f"⏭️ [关键词排队] 网站配置 {website_id} 已不再绑定频道 {message.channel.id}，跳过队列消息"
+                )
+                return False
+            website_config = matched_config
+        except Exception as e:
+            logger.error(f"刷新关键词队列网站配置失败(website_id={website_id}): {e}")
+
+        return await listener_client.schedule_reply(
+            message,
+            job.get('product'),
+            job.get('custom_reply'),
+            job.get('match_context'),
+            website_configs_override=[website_config],
+        )
+
+    async def _flush_keyword_reply_queue(self, window_key):
+        try:
+            while True:
+                async with _keyword_reply_window_lock:
+                    queue_size = _keyword_reply_window_manager.get_queue_size(window_key)
+                    config = _keyword_reply_window_configs.get(window_key, {})
+                    interval_seconds = max(1, _coerce_int(config.get('interval_seconds', 180), 180))
+                    batch_size = _normalize_keyword_batch_size(config.get('batch_size', 0))
+
+                    if queue_size <= 0:
+                        _keyword_reply_window_configs.pop(window_key, None)
+                        return
+
+                    wait_seconds = _keyword_reply_window_manager.seconds_until_next_window(
+                        window_key,
+                        interval_seconds,
+                    )
+
+                if wait_seconds > 0:
+                    await asyncio.sleep(wait_seconds)
+
+                async with _keyword_reply_window_lock:
+                    config = _keyword_reply_window_configs.get(window_key, config)
+                    interval_seconds = max(1, _coerce_int(config.get('interval_seconds', 180), 180))
+                    batch_size = _normalize_keyword_batch_size(config.get('batch_size', 0))
+                    jobs = _keyword_reply_window_manager.release_due_jobs(
+                        window_key,
+                        interval_seconds,
+                        batch_size,
+                    )
+                    remaining = _keyword_reply_window_manager.get_queue_size(window_key)
+
+                    if not jobs and remaining <= 0:
+                        _keyword_reply_window_configs.pop(window_key, None)
+                        return
+
+                for job in jobs:
+                    try:
+                        await self._dispatch_keyword_reply_job(job)
+                    except Exception as e:
+                        logger.error(f"队列中的关键词回复发送失败: {e}")
+
+        finally:
+            async with _keyword_reply_window_lock:
+                current_task = asyncio.current_task()
+                if _keyword_reply_flush_tasks.get(window_key) is current_task:
+                    _keyword_reply_flush_tasks.pop(window_key, None)
+                if _keyword_reply_window_manager.get_queue_size(window_key) <= 0:
+                    _keyword_reply_window_configs.pop(window_key, None)
+
+    async def _enqueue_or_dispatch_keyword_reply(
+        self,
+        message,
+        product,
+        custom_reply,
+        website_config,
+        match_context=None,
+    ):
+        if not website_config or not website_config.get('id'):
+            return False
+
+        preview_content = self._generate_reply_content(
+            product,
+            message.channel.id,
+            custom_reply,
+            website_config=website_config,
+        )
+        if preview_content is None:
+            logger.info(f"商品 {product.get('id')} 回复范围不匹配，跳过网站 {website_config.get('name')}")
+            return False
+
+        interval_seconds, batch_size = await self._get_keyword_window_settings(website_config)
+        if batch_size <= 0:
+            return await self.schedule_reply(
+                message,
+                product,
+                custom_reply,
+                match_context,
+                website_configs_override=[website_config],
+            )
+
+        guild_id = getattr(getattr(message, 'guild', None), 'id', None) or getattr(message.channel, 'id', None)
+        window_key = _build_keyword_window_key(self.user_id, website_config.get('id'), guild_id)
+        job = {
+            'client': self,
+            'message': message,
+            'product': product,
+            'custom_reply': custom_reply,
+            'website_id': website_config.get('id'),
+            'website_config': website_config,
+            'match_context': match_context,
+        }
+
+        should_dispatch_now = False
+        queue_size = 0
+        wait_seconds = 0.0
+        async with _keyword_reply_window_lock:
+            _keyword_reply_window_configs[window_key] = {
+                'interval_seconds': interval_seconds,
+                'batch_size': batch_size,
+            }
+            reservation = _keyword_reply_window_manager.reserve_or_enqueue(
+                window_key,
+                interval_seconds,
+                batch_size,
+                job,
+            )
+            should_dispatch_now = reservation.dispatch_now
+            queue_size = reservation.queue_size
+            wait_seconds = reservation.wait_seconds
+
+            if not should_dispatch_now:
+                flush_task = _keyword_reply_flush_tasks.get(window_key)
+                if flush_task is None or flush_task.done():
+                    _keyword_reply_flush_tasks[window_key] = asyncio.create_task(
+                        self._flush_keyword_reply_queue(window_key)
+                    )
+
+        if should_dispatch_now:
+            return await self._dispatch_keyword_reply_job(job)
+
+        logger.info(
+            f"⏳ [关键词排队] 网站:{website_config.get('name')} 服务器:{guild_id} "
+            f"队列:{queue_size} 等待:{wait_seconds:.1f}秒 批次上限:{batch_size}"
+        )
+        return False
+
     def _should_ignore_mass_or_activity_message(self, message):
         """屏蔽 @everyone/@here 与 Discord 活动/系统类消息。"""
         if message is None:
@@ -828,7 +1038,14 @@ class DiscordBotClient(discord.Client):
             f"📱 Bark通知已发送: 账号:{account_name} | 类型:{interaction_label} | 发送者:{sender_name}"
         )
 
-    async def schedule_reply(self, message, product, custom_reply=None, match_context=None):
+    async def schedule_reply(
+        self,
+        message,
+        product,
+        custom_reply=None,
+        match_context=None,
+        website_configs_override=None,
+    ):
         """调度回复到合适的发送账号 (增强版：带详细状态诊断)"""
 
         sent_any = False
@@ -846,7 +1063,7 @@ class DiscordBotClient(discord.Client):
             min_delay = user_settings.get('global_reply_min_delay', 3.0)
             max_delay = user_settings.get('global_reply_max_delay', 8.0)
 
-            website_configs = await self.get_website_configs_by_channel_async(message.channel.id)
+            website_configs = website_configs_override or await self.get_website_configs_by_channel_async(message.channel.id)
             if not website_configs:
                 logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过回复")
                 return False
@@ -2481,8 +2698,13 @@ class DiscordBotClient(discord.Client):
                     elif has_custom_images:
                         logger.info(f"商品 {product['id']} 配置了自定义图片，准备发送自定义回复")
 
-                # 使用 schedule_reply 统一发送
-                await self.schedule_reply(message, product, custom_reply)
+                for website_config in website_configs:
+                    await self._enqueue_or_dispatch_keyword_reply(
+                        message,
+                        product,
+                        custom_reply,
+                        website_config,
+                    )
                 return
 
             # 多商品合并回复
@@ -2530,23 +2752,31 @@ class DiscordBotClient(discord.Client):
 
             if per_website_content:
                 base_product = reply_entries[0]['product']
-                default_content = next(iter(per_website_content.values()))
-                agg_custom_reply = {
-                    'reply_type': 'custom_only',
-                    'content': default_content,
-                    'product_data': base_product,
-                    'skip_images': True,
-                    'repeat_product_ids': [
-                        entry['product'].get('id')
-                        for entry in reply_entries
-                        if entry['product'].get('id')
-                    ],
-                    'per_website_content': per_website_content
-                }
-
                 max_lines = max(content.count('\n') + 1 for content in per_website_content.values())
                 logger.info(f"发送合并回复，最多包含 {max_lines} 条内容")
-                await self.schedule_reply(message, base_product, agg_custom_reply)
+                repeat_product_ids = [
+                    entry['product'].get('id')
+                    for entry in reply_entries
+                    if entry['product'].get('id')
+                ]
+
+                for website_config in website_configs:
+                    website_content = per_website_content.get(str(website_config.get('id')))
+                    if not website_content:
+                        continue
+                    agg_custom_reply = {
+                        'reply_type': 'custom_only',
+                        'content': website_content,
+                        'product_data': base_product,
+                        'skip_images': True,
+                        'repeat_product_ids': repeat_product_ids,
+                    }
+                    await self._enqueue_or_dispatch_keyword_reply(
+                        message,
+                        base_product,
+                        agg_custom_reply,
+                        website_config,
+                    )
             else:
                 logger.info(f'关键词搜索无可用回复内容: {search_query}')
 

@@ -192,6 +192,7 @@ export function AccountsView() {
   const [channelToRemove, setChannelToRemove] = useState<{webId: number, chanId: string} | null>(null)
   const [rotationEnabled, setRotationEnabled] = useState<{[key: number]: boolean}>({})
   const [rotationInputs, setRotationInputs] = useState<{[key: number]: string}>({})
+  const [keywordBatchInputs, setKeywordBatchInputs] = useState<{[key: number]: string}>({})
 
   const [cooldowns, setCooldowns] = useState<any[]>([])
 
@@ -340,6 +341,10 @@ export function AccountsView() {
         accounts[website.id] = website.accounts || []
         setRotationEnabled(prev => ({ ...prev, [website.id]: website.rotation_enabled !== 0 }))
         setRotationInputs(prev => ({ ...prev, [website.id]: (website.rotation_interval || 180).toString() }))
+        setKeywordBatchInputs(prev => ({
+          ...prev,
+          [website.id]: (website.keyword_reply_batch_size ?? 0).toString()
+        }))
         similarityInputs[website.id] = formatThresholdForInput(website.image_similarity_threshold)
         try {
           if (Array.isArray(website.message_filters)) {
@@ -1192,6 +1197,30 @@ export function AccountsView() {
         ))
         // 同步更新本地输入框状态
         setRotationInputs(prev => ({ ...prev, [websiteId]: rotationInterval.toString() }))
+      } else {
+        toast.error('更新失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
+  const handleUpdateKeywordBatchSize = async (websiteId: number, keywordReplyBatchSize: number) => {
+    try {
+      const res = await fetch(`/api/websites/${websiteId}/rotation`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ keyword_reply_batch_size: keywordReplyBatchSize })
+      })
+      if (res.ok) {
+        toast.success(keywordReplyBatchSize === 0 ? '单轮关键词回复上限已改为不限' : '单轮关键词回复上限已更新')
+        setWebsites(prev => prev.map(website =>
+          website.id === websiteId
+            ? { ...website, keyword_reply_batch_size: keywordReplyBatchSize }
+            : website
+        ))
+        setKeywordBatchInputs(prev => ({ ...prev, [websiteId]: keywordReplyBatchSize.toString() }))
       } else {
         toast.error('更新失败')
       }
@@ -2679,12 +2708,47 @@ export function AccountsView() {
                           </span>
                         </div>
 
+                        <div className="flex items-center gap-2">
+                          <Label className="text-xs">单轮关键词上限:</Label>
+                          <Input
+                            type="number"
+                            min="0"
+                            value={keywordBatchInputs[website.id] ?? (website.keyword_reply_batch_size ?? 0).toString()}
+                            className="w-20 h-7 text-xs"
+                            onChange={(e) => {
+                              const value = e.target.value
+                              setKeywordBatchInputs(prev => ({ ...prev, [website.id]: value }))
+                            }}
+                            onBlur={() => {
+                              const rawValue = keywordBatchInputs[website.id] ?? (website.keyword_reply_batch_size ?? 0).toString()
+                              const value = parseInt(rawValue)
+                              if (Number.isFinite(value) && value >= 0 && value !== (website.keyword_reply_batch_size ?? 0)) {
+                                handleUpdateKeywordBatchSize(website.id, value)
+                              } else if (!Number.isFinite(value) || value < 0) {
+                                toast.error('单轮关键词回复上限不能小于0')
+                                setKeywordBatchInputs(prev => ({
+                                  ...prev,
+                                  [website.id]: (website.keyword_reply_batch_size ?? 0).toString()
+                                }))
+                              }
+                            }}
+                          />
+                          <span className="text-xs text-muted-foreground">
+                            0 = 不限制
+                          </span>
+                        </div>
+
                         {/* 状态说明 */}
-                        <div className="text-xs text-muted-foreground">
-                          {(rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))
-                            ? '轮换已启用，将在账号间自动切换'
-                            : '轮换已禁用，将使用固定账号发送'
-                          }
+                        <div className="text-xs text-muted-foreground space-y-1">
+                          <div>
+                            {(rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))
+                              ? '轮换已启用，将在账号间自动切换'
+                              : '轮换已禁用，将使用固定账号发送'
+                            }
+                          </div>
+                          <div>
+                            同一 Discord 服务器会按当前轮换间隔统计关键词回复次数；超过上限的消息会排到下一轮继续回复。
+                          </div>
                         </div>
                       </div>
                     )}
