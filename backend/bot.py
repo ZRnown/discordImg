@@ -16,9 +16,9 @@ try:
 except ImportError:
     from .config import config
 try:
-    from keyword_reply_window import KeywordReplyWindowManager
+    from keyword_reply_window import KeywordReplyWindowManager, build_batched_reply_content
 except ImportError:
-    from .keyword_reply_window import KeywordReplyWindowManager
+    from .keyword_reply_window import KeywordReplyWindowManager, build_batched_reply_content
 
 # 全局变量用于多账号机器人管理
 bot_clients = []
@@ -46,6 +46,23 @@ def _coerce_int(value, default):
 
 def _normalize_keyword_batch_size(value):
     return max(0, _coerce_int(value, 0))
+
+
+def _coerce_bool(value, default=True):
+    if isinstance(value, str):
+        return value.strip().lower() not in {'0', 'false', 'no', 'off'}
+    if isinstance(value, (int, float, bool)):
+        return bool(value)
+    return default
+
+
+def _coerce_float(value):
+    try:
+        if value is None or value == '':
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _build_keyword_window_key(user_id, website_id, guild_id):
@@ -459,22 +476,140 @@ class DiscordBotClient(discord.Client):
             logger.error(f"获取用户设置失败(user_id={self.user_id}): {e}")
             return {}
 
-    async def _get_keyword_window_settings(self, website_config):
-        website_id = website_config.get('id') if website_config else None
-        rotation_interval = _coerce_int((website_config or {}).get('rotation_interval', 180), 180)
-        batch_size = _normalize_keyword_batch_size((website_config or {}).get('keyword_reply_batch_size', 0))
-
+    async def _get_user_website_settings_safe(self, website_id):
         if not self.user_id or not website_id:
-            return max(1, rotation_interval), batch_size
-
+            return {}
         try:
             try:
                 from database import db
             except ImportError:
                 from .database import db
-            user_settings = await asyncio.get_event_loop().run_in_executor(
+            return await asyncio.get_event_loop().run_in_executor(
                 None, db.get_user_website_settings, self.user_id, website_id
             )
+        except Exception as e:
+            logger.error(f"获取用户网站设置失败(user_id={self.user_id}, website_id={website_id}): {e}")
+            return {}
+
+    def _parse_message_filters(self, raw_filters):
+        if not raw_filters:
+            return []
+        if isinstance(raw_filters, list):
+            return raw_filters
+        if isinstance(raw_filters, str):
+            try:
+                parsed = json.loads(raw_filters)
+            except json.JSONDecodeError:
+                return []
+            return parsed if isinstance(parsed, list) else []
+        return []
+
+    def _filters_block_message(self, message, filters, match_context=None):
+        message_content = (message.content or '').lower()
+        for filter_rule in filters or []:
+            raw_filter_value = filter_rule.get('filter_value') or ''
+            filter_value = raw_filter_value.lower()
+            filter_type = filter_rule.get('filter_type')
+
+            if filter_type == 'contains':
+                if filter_value in message_content:
+                    return True
+            elif filter_type == 'starts_with':
+                if message_content.startswith(filter_value):
+                    return True
+            elif filter_type == 'ends_with':
+                if message_content.endswith(filter_value):
+                    return True
+            elif filter_type == 'regex':
+                try:
+                    if re.search(filter_value, message_content, re.IGNORECASE):
+                        return True
+                except re.error:
+                    continue
+            elif filter_type == 'numeric_range':
+                try:
+                    rule = json.loads(raw_filter_value) if raw_filter_value else {}
+                except json.JSONDecodeError:
+                    rule = {}
+
+                keyword = str(rule.get('keyword') or '').strip()
+                min_value = rule.get('min')
+                max_value = rule.get('max')
+
+                if not keyword:
+                    continue
+
+                try:
+                    min_value = int(min_value)
+                    max_value = int(max_value)
+                except (TypeError, ValueError):
+                    continue
+
+                if min_value >= max_value:
+                    continue
+
+                pattern = rf'(?i){re.escape(keyword)}\s*[:=-]?\s*(\d+)'
+                value_matches = re.findall(pattern, message.content or '')
+                for value_str in value_matches:
+                    try:
+                        value = int(value_str)
+                        if value < min_value or value > max_value:
+                            return True
+                    except ValueError:
+                        continue
+            elif filter_type == 'user_id':
+                filter_user_ids = [uid.strip() for uid in filter_value.split(',') if uid.strip()]
+                sender_id = str(message.author.id)
+                sender_name = str(message.author.name).lower()
+                for blocked_id in filter_user_ids:
+                    blocked_id = blocked_id.strip()
+                    if blocked_id == sender_id or blocked_id.lower() in sender_name:
+                        return True
+            elif filter_type == 'role_id':
+                role_ids = [rid.strip() for rid in filter_value.split(',') if rid.strip()]
+                if role_ids and getattr(message, 'guild', None):
+                    author_roles = getattr(message.author, 'roles', []) or []
+                    author_role_ids = {str(role.id) for role in author_roles if getattr(role, 'id', None) is not None}
+                    if author_role_ids.intersection(set(role_ids)):
+                        return True
+            elif filter_type == 'image':
+                if self._message_has_image(message):
+                    return True
+            elif filter_type == 'image_similarity':
+                if not match_context or match_context.get('type') != 'image':
+                    continue
+                try:
+                    threshold = float(raw_filter_value)
+                except (TypeError, ValueError):
+                    continue
+                similarity = match_context.get('similarity', 0)
+                try:
+                    similarity = float(similarity)
+                except (TypeError, ValueError):
+                    similarity = 0
+                if similarity >= threshold:
+                    return True
+        return False
+
+    def _get_repeat_product_ids(self, product, custom_reply=None):
+        product_id = product.get('id') if isinstance(product, dict) else None
+        repeat_product_ids = []
+        if custom_reply and isinstance(custom_reply, dict):
+            repeat_product_ids = custom_reply.get('repeat_product_ids') or []
+        if not repeat_product_ids and product_id:
+            repeat_product_ids = [product_id]
+        return [pid for pid in repeat_product_ids if pid]
+
+    async def _get_keyword_window_settings(self, website_config):
+        website_id = website_config.get('id') if website_config else None
+        rotation_interval = _coerce_int((website_config or {}).get('rotation_interval', 180), 180)
+        batch_size = _normalize_keyword_batch_size((website_config or {}).get('keyword_reply_batch_size', 0))
+
+        if not website_id:
+            return max(1, rotation_interval), batch_size
+
+        try:
+            user_settings = await self._get_user_website_settings_safe(website_id)
             rotation_interval = _coerce_int(user_settings.get('rotation_interval', rotation_interval), rotation_interval)
             batch_size = _normalize_keyword_batch_size(user_settings.get('keyword_reply_batch_size', batch_size))
         except Exception as e:
@@ -482,36 +617,187 @@ class DiscordBotClient(discord.Client):
 
         return max(1, rotation_interval), batch_size
 
-    async def _dispatch_keyword_reply_job(self, job):
-        listener_client = job.get('client')
+    async def _build_keyword_reply_job(
+        self,
+        message,
+        product,
+        custom_reply,
+        website_config,
+        match_context=None,
+    ):
+        if not website_config or not website_config.get('id'):
+            return None
+
+        reply_content = self._generate_reply_content(
+            product,
+            message.channel.id,
+            custom_reply,
+            website_config=website_config,
+        )
+        if reply_content is None:
+            logger.info(f"商品 {product.get('id')} 回复范围不匹配，跳过网站 {website_config.get('name')}")
+            return None
+
+        website_id = website_config.get('id')
+        user_settings = await self._get_user_website_settings_safe(website_id)
+        website_filters = self._parse_message_filters(user_settings.get('message_filters', '[]') if user_settings else '[]')
+
+        if website_filters and self._filters_block_message(message, website_filters, match_context=match_context):
+            logger.info(f"消息被过滤(网站规则): {website_config.get('name')}")
+            return None
+
+        repeat_product_ids = self._get_repeat_product_ids(product, custom_reply)
+        repeat_window = max(
+            _get_repeat_filter_seconds(),
+            _get_repeat_seconds_from_filters(website_filters),
+        )
+        author_id = getattr(message.author, 'id', None)
+        if repeat_window and author_id and repeat_product_ids:
+            for pid in repeat_product_ids:
+                if await _is_recent_repeat(author_id, pid, message.channel.id, repeat_window):
+                    logger.info(
+                        f"🚫 用户重复发送过滤: user={author_id} 商品={pid} 频道={message.channel.id} "
+                        f"窗口={int(repeat_window)}秒"
+                    )
+                    return None
+
+        if match_context and match_context.get('type') == 'image':
+            try:
+                try:
+                    from database import db
+                except ImportError:
+                    from .database import db
+                global_filters = await asyncio.get_event_loop().run_in_executor(None, db.get_message_filters)
+                global_image_filters = [
+                    f for f in (global_filters or []) if f.get('filter_type') == 'image_similarity'
+                ]
+            except Exception as e:
+                logger.error(f"获取全局过滤规则失败: {e}")
+                global_image_filters = []
+
+            if global_image_filters and self._filters_block_message(
+                message,
+                global_image_filters,
+                match_context=match_context,
+            ):
+                logger.info("消息被过滤(全局图片相似度)")
+                return None
+
+            website_filter_matches = match_context.get('website_filter_matches') or []
+            matched_filter = next(
+                (m for m in website_filter_matches if str(m.get('website_id')) == str(website_id)),
+                None
+            )
+            if matched_filter:
+                try:
+                    sim = float(matched_filter.get('similarity', 0))
+                    threshold_val = float(matched_filter.get('threshold', 0))
+                    if sim >= threshold_val:
+                        logger.info(
+                            f"🚫 网站图片过滤命中: 网站 {website_config.get('name')} "
+                            f"规则 {matched_filter.get('filter_id')} 相似度 {sim:.3f} >= {threshold_val:.3f}"
+                        )
+                        return None
+                except Exception:
+                    return None
+
+            similarity = _coerce_float(match_context.get('similarity')) or 0.0
+            base_threshold = _coerce_float(match_context.get('base_threshold'))
+            if base_threshold is None:
+                base_threshold = config.DISCORD_SIMILARITY_THRESHOLD
+            website_threshold = _coerce_float(website_config.get('image_similarity_threshold'))
+            threshold_to_use = website_threshold if website_threshold is not None else base_threshold
+
+            if similarity < threshold_to_use:
+                logger.info(
+                    f"📷 图片相似度 {similarity:.3f} 低于网站阈值 {threshold_to_use:.3f}，跳过回复"
+                )
+                return None
+
+        rotation_interval = _coerce_int(
+            user_settings.get('rotation_interval', website_config.get('rotation_interval', 180)),
+            _coerce_int(website_config.get('rotation_interval', 180), 180),
+        )
+        batch_size = _normalize_keyword_batch_size(
+            user_settings.get('keyword_reply_batch_size', website_config.get('keyword_reply_batch_size', 0))
+        )
+
+        return {
+            'client': self,
+            'message': message,
+            'product': product,
+            'custom_reply': custom_reply,
+            'website_id': website_id,
+            'website_config': website_config,
+            'match_context': match_context,
+            'reply_content': reply_content,
+            'author_id': author_id,
+            'repeat_product_ids': repeat_product_ids,
+            'rotation_interval': max(1, rotation_interval),
+            'batch_size': batch_size,
+        }
+
+    async def _dispatch_keyword_reply_batch(self, jobs):
+        if not jobs:
+            return False
+
+        listener_client = next(
+            (
+                job.get('client')
+                for job in jobs
+                if job.get('client') is not None and getattr(job.get('client'), 'running', False)
+            ),
+            None,
+        )
         if listener_client is None or not getattr(listener_client, 'running', False):
             logger.warning("⏭️ [关键词排队] 监听账号已离线，跳过队列中的关键词回复")
             return False
 
-        message = job.get('message')
+        message = next((job.get('message') for job in jobs if job.get('message') is not None), None)
         if message is None:
             logger.warning("⏭️ [关键词排队] 消息对象不存在，跳过队列中的关键词回复")
             return False
 
-        website_id = job.get('website_id')
-        website_config = job.get('website_config') or {}
+        website_id = jobs[0].get('website_id')
+        website_config = jobs[0].get('website_config') or {}
         try:
             current_configs = await listener_client.get_website_configs_by_channel_async(message.channel.id)
             matched_config = next((cfg for cfg in current_configs if cfg.get('id') == website_id), None)
             if not matched_config:
                 logger.info(
-                    f"⏭️ [关键词排队] 网站配置 {website_id} 已不再绑定频道 {message.channel.id}，跳过队列消息"
+                    f"⏭️ [关键词排队] 网站配置 {website_id} 已不再绑定频道 {message.channel.id}，跳过批量回复"
                 )
                 return False
             website_config = matched_config
         except Exception as e:
             logger.error(f"刷新关键词队列网站配置失败(website_id={website_id}): {e}")
 
+        combined_content = build_batched_reply_content(jobs)
+        if not combined_content:
+            logger.info("⏭️ [关键词排队] 批量回复内容为空，跳过发送")
+            return False
+
+        repeat_records = []
+        for job in jobs:
+            author_id = job.get('author_id')
+            for product_id in job.get('repeat_product_ids') or []:
+                if author_id and product_id:
+                    repeat_records.append((str(author_id), str(product_id)))
+        repeat_records = list(dict.fromkeys(repeat_records))
+
+        batch_custom_reply = {
+            'reply_type': 'custom_only',
+            'content': combined_content,
+            'skip_images': True,
+            'batched_reply': True,
+            'repeat_records': repeat_records,
+        }
+
         return await listener_client.schedule_reply(
             message,
-            job.get('product'),
-            job.get('custom_reply'),
-            job.get('match_context'),
+            jobs[0].get('product'),
+            batch_custom_reply,
+            None,
             website_configs_override=[website_config],
         )
 
@@ -551,11 +837,11 @@ class DiscordBotClient(discord.Client):
                         _keyword_reply_window_configs.pop(window_key, None)
                         return
 
-                for job in jobs:
+                if jobs:
                     try:
-                        await self._dispatch_keyword_reply_job(job)
+                        await self._dispatch_keyword_reply_batch(jobs)
                     except Exception as e:
-                        logger.error(f"队列中的关键词回复发送失败: {e}")
+                        logger.error(f"队列中的关键词批量回复发送失败: {e}")
 
         finally:
             async with _keyword_reply_window_lock:
@@ -576,16 +862,6 @@ class DiscordBotClient(discord.Client):
         if not website_config or not website_config.get('id'):
             return False
 
-        preview_content = self._generate_reply_content(
-            product,
-            message.channel.id,
-            custom_reply,
-            website_config=website_config,
-        )
-        if preview_content is None:
-            logger.info(f"商品 {product.get('id')} 回复范围不匹配，跳过网站 {website_config.get('name')}")
-            return False
-
         interval_seconds, batch_size = await self._get_keyword_window_settings(website_config)
         if batch_size <= 0:
             return await self.schedule_reply(
@@ -596,21 +872,23 @@ class DiscordBotClient(discord.Client):
                 website_configs_override=[website_config],
             )
 
-        guild_id = getattr(getattr(message, 'guild', None), 'id', None) or getattr(message.channel, 'id', None)
-        window_key = _build_keyword_window_key(self.user_id, website_config.get('id'), guild_id)
-        job = {
-            'client': self,
-            'message': message,
-            'product': product,
-            'custom_reply': custom_reply,
-            'website_id': website_config.get('id'),
-            'website_config': website_config,
-            'match_context': match_context,
-        }
+        job = await self._build_keyword_reply_job(
+            message,
+            product,
+            custom_reply,
+            website_config,
+            match_context=match_context,
+        )
+        if job is None:
+            return False
+
+        channel_id = getattr(message.channel, 'id', None)
+        window_key = _build_keyword_window_key(self.user_id, website_config.get('id'), channel_id)
 
         should_dispatch_now = False
         queue_size = 0
         wait_seconds = 0.0
+        ready_jobs = ()
         async with _keyword_reply_window_lock:
             _keyword_reply_window_configs[window_key] = {
                 'interval_seconds': interval_seconds,
@@ -625,6 +903,7 @@ class DiscordBotClient(discord.Client):
             should_dispatch_now = reservation.dispatch_now
             queue_size = reservation.queue_size
             wait_seconds = reservation.wait_seconds
+            ready_jobs = reservation.ready_payloads
 
             if not should_dispatch_now:
                 flush_task = _keyword_reply_flush_tasks.get(window_key)
@@ -634,10 +913,10 @@ class DiscordBotClient(discord.Client):
                     )
 
         if should_dispatch_now:
-            return await self._dispatch_keyword_reply_job(job)
+            return await self._dispatch_keyword_reply_batch(list(ready_jobs))
 
         logger.info(
-            f"⏳ [关键词排队] 网站:{website_config.get('name')} 服务器:{guild_id} "
+            f"⏳ [关键词排队] 网站:{website_config.get('name')} 频道:{channel_id} "
             f"队列:{queue_size} 等待:{wait_seconds:.1f}秒 批次上限:{batch_size}"
         )
         return False
@@ -1068,14 +1347,24 @@ class DiscordBotClient(discord.Client):
                 logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过回复")
                 return False
 
-            product_id = product.get('id') if isinstance(product, dict) else None
+            prevalidated_batch = bool(
+                isinstance(custom_reply, dict) and custom_reply.get('batched_reply')
+            )
             author_id = getattr(message.author, 'id', None)
-            repeat_product_ids = []
-            if custom_reply and isinstance(custom_reply, dict):
-                repeat_product_ids = custom_reply.get('repeat_product_ids') or []
-            if not repeat_product_ids and product_id:
-                repeat_product_ids = [product_id]
-            repeat_product_ids = [pid for pid in repeat_product_ids if pid]
+            repeat_product_ids = self._get_repeat_product_ids(product, custom_reply)
+            batch_repeat_records = []
+            if prevalidated_batch:
+                raw_repeat_records = custom_reply.get('repeat_records') or []
+                batch_repeat_records = list(
+                    dict.fromkeys(
+                        (
+                            str(item[0]),
+                            str(item[1]),
+                        )
+                        for item in raw_repeat_records
+                        if isinstance(item, (list, tuple)) and len(item) >= 2 and item[0] and item[1]
+                    )
+                )
             global_repeat_window = _get_repeat_filter_seconds()
             user_website_settings_map = {}
             user_website_filters_map = {}
@@ -1092,16 +1381,13 @@ class DiscordBotClient(discord.Client):
                     if not settings:
                         continue
                     user_website_settings_map[website_id] = settings
-                    try:
-                        website_filters = json.loads(settings.get('message_filters', '[]') or '[]')
-                    except json.JSONDecodeError:
-                        website_filters = []
+                    website_filters = self._parse_message_filters(settings.get('message_filters', '[]'))
                     user_website_filters_map[website_id] = website_filters
                     website_repeat_window = _get_repeat_seconds_from_filters(website_filters)
                     if website_repeat_window > channel_repeat_window:
                         channel_repeat_window = website_repeat_window
 
-            if channel_repeat_window and author_id and repeat_product_ids:
+            if not prevalidated_batch and channel_repeat_window and author_id and repeat_product_ids:
                 for pid in repeat_product_ids:
                     if await _is_recent_repeat(author_id, pid, message.channel.id, channel_repeat_window):
                         logger.info(
@@ -1110,116 +1396,8 @@ class DiscordBotClient(discord.Client):
                         )
                         return False
 
-            def _coerce_bool(value, default=True):
-                if isinstance(value, str):
-                    return value.strip().lower() not in {'0', 'false', 'no', 'off'}
-                if isinstance(value, (int, float, bool)):
-                    return bool(value)
-                return default
-
-            def _coerce_int(value, default):
-                try:
-                    return int(value)
-                except (TypeError, ValueError):
-                    return default
-
-            def _coerce_float(value):
-                try:
-                    if value is None or value == '':
-                        return None
-                    return float(value)
-                except (TypeError, ValueError):
-                    return None
-
-            def _filters_block_message(filters, match_context=None):
-                message_content = (message.content or '').lower()
-                for filter_rule in filters:
-                    raw_filter_value = filter_rule.get('filter_value') or ''
-                    filter_value = raw_filter_value.lower()
-                    filter_type = filter_rule.get('filter_type')
-
-                    if filter_type == 'contains':
-                        if filter_value in message_content:
-                            return True
-                    elif filter_type == 'starts_with':
-                        if message_content.startswith(filter_value):
-                            return True
-                    elif filter_type == 'ends_with':
-                        if message_content.endswith(filter_value):
-                            return True
-                    elif filter_type == 'regex':
-                        try:
-                            if re.search(filter_value, message_content, re.IGNORECASE):
-                                return True
-                        except re.error:
-                            continue
-                    elif filter_type == 'numeric_range':
-                        try:
-                            rule = json.loads(raw_filter_value) if raw_filter_value else {}
-                        except json.JSONDecodeError:
-                            rule = {}
-
-                        keyword = str(rule.get('keyword') or '').strip()
-                        min_value = rule.get('min')
-                        max_value = rule.get('max')
-
-                        if not keyword:
-                            continue
-
-                        try:
-                            min_value = int(min_value)
-                            max_value = int(max_value)
-                        except (TypeError, ValueError):
-                            continue
-
-                        if min_value >= max_value:
-                            continue
-
-                        pattern = rf'(?i){re.escape(keyword)}\s*[:=-]?\s*(\d+)'
-                        value_matches = re.findall(pattern, message.content or '')
-                        for value_str in value_matches:
-                            try:
-                                value = int(value_str)
-                                if value < min_value or value > max_value:
-                                    return True
-                            except ValueError:
-                                continue
-                    elif filter_type == 'user_id':
-                        filter_user_ids = [uid.strip() for uid in filter_value.split(',') if uid.strip()]
-                        sender_id = str(message.author.id)
-                        sender_name = str(message.author.name).lower()
-                        for blocked_id in filter_user_ids:
-                            blocked_id = blocked_id.strip()
-                            if blocked_id == sender_id or blocked_id.lower() in sender_name:
-                                return True
-                    elif filter_type == 'role_id':
-                        role_ids = [rid.strip() for rid in filter_value.split(',') if rid.strip()]
-                        if role_ids and getattr(message, 'guild', None):
-                            author_roles = getattr(message.author, 'roles', []) or []
-                            author_role_ids = {str(role.id) for role in author_roles if getattr(role, 'id', None) is not None}
-                            if author_role_ids.intersection(set(role_ids)):
-                                return True
-                    elif filter_type == 'image':
-                        if self._message_has_image(message):
-                            return True
-                    elif filter_type == 'image_similarity':
-                        if not match_context or match_context.get('type') != 'image':
-                            continue
-                        try:
-                            threshold = float(raw_filter_value)
-                        except (TypeError, ValueError):
-                            continue
-                        similarity = match_context.get('similarity', 0)
-                        try:
-                            similarity = float(similarity)
-                        except (TypeError, ValueError):
-                            similarity = 0
-                        if similarity >= threshold:
-                            return True
-                return False
-
             global_image_filters = []
-            if match_context and match_context.get('type') == 'image':
+            if not prevalidated_batch and match_context and match_context.get('type') == 'image':
                 try:
                     global_filters = await asyncio.get_event_loop().run_in_executor(None, db.get_message_filters)
                     global_image_filters = [
@@ -1232,10 +1410,14 @@ class DiscordBotClient(discord.Client):
             online_client_ids = [c.account_id for c in bot_clients if c.is_ready() and not c.is_closed()]
 
             for website_config in website_configs:
-                if global_image_filters and _filters_block_message(global_image_filters, match_context=match_context):
+                if global_image_filters and self._filters_block_message(
+                    message,
+                    global_image_filters,
+                    match_context=match_context,
+                ):
                     logger.info("消息被过滤(全局图片相似度)")
                     return False
-                if match_context and match_context.get('type') == 'image':
+                if not prevalidated_batch and match_context and match_context.get('type') == 'image':
                     website_filter_matches = match_context.get('website_filter_matches') or []
                     matched_filter = next(
                         (m for m in website_filter_matches if str(m.get('website_id')) == str(website_config.get('id'))),
@@ -1253,7 +1435,7 @@ class DiscordBotClient(discord.Client):
                                 continue
                         except Exception:
                             continue
-                if match_context and match_context.get('type') == 'image':
+                if not prevalidated_batch and match_context and match_context.get('type') == 'image':
                     similarity = _coerce_float(match_context.get('similarity')) or 0.0
                     base_threshold = _coerce_float(match_context.get('base_threshold'))
                     if base_threshold is None:
@@ -1324,7 +1506,11 @@ class DiscordBotClient(discord.Client):
                     logger.info(
                         f"📋 使用用户级别设置: rotation_interval={rotation_interval}秒, rotation_enabled={rotation_enabled}"
                     )
-                    if website_filters and _filters_block_message(website_filters, match_context=match_context):
+                    if (
+                        not prevalidated_batch
+                        and website_filters
+                        and self._filters_block_message(message, website_filters, match_context=match_context)
+                    ):
                         logger.info(f"消息被过滤(网站规则): {website_config.get('name')}")
                         continue
 
@@ -1520,15 +1706,28 @@ class DiscordBotClient(discord.Client):
                                 )
                                 continue
 
-                            await target_channel.send(
-                                content=response_content if response_content else None,
-                                files=files if files else None,
-                                reference=message,
-                                mention_author=True
-                            )
+                            send_kwargs = {
+                                'content': response_content if response_content else None,
+                                'files': files if files else None,
+                            }
+                            if prevalidated_batch:
+                                send_kwargs['allowed_mentions'] = discord.AllowedMentions(
+                                    users=True,
+                                    roles=False,
+                                    everyone=False,
+                                    replied_user=False,
+                                )
+                            else:
+                                send_kwargs['reference'] = message
+                                send_kwargs['mention_author'] = True
+
+                            await target_channel.send(**send_kwargs)
                             sent_any = True
 
-                            if author_id and repeat_product_ids:
+                            if prevalidated_batch:
+                                for repeat_user_id, repeat_pid in batch_repeat_records:
+                                    await _record_repeat(repeat_user_id, repeat_pid, message.channel.id)
+                            elif author_id and repeat_product_ids:
                                 for pid in repeat_product_ids:
                                     await _record_repeat(author_id, pid, message.channel.id)
 
@@ -1540,7 +1739,11 @@ class DiscordBotClient(discord.Client):
                                 reply_preview = f"[图片 {len(files)}]"
                             if len(reply_preview) > 120:
                                 reply_preview = f"{reply_preview[:120]}..."
-                            author_label = f"{message.author.name}({message.author.id})"
+                            author_label = (
+                                f"批量{len(batch_repeat_records)}条"
+                                if prevalidated_batch
+                                else f"{message.author.name}({message.author.id})"
+                            )
                             logger.info(
                                 f"✅ [回复成功] {target_client.user.name} -> {author_label} | 频道: {message.channel.name}: "
                                 f"{reply_preview} | 商品ID: {product.get('id')}"
@@ -1565,7 +1768,15 @@ class DiscordBotClient(discord.Client):
                             fallback_sent = False
                             if response_content:
                                 try:
-                                    await target_channel.send(response_content)
+                                    fallback_kwargs = {}
+                                    if prevalidated_batch:
+                                        fallback_kwargs['allowed_mentions'] = discord.AllowedMentions(
+                                            users=True,
+                                            roles=False,
+                                            everyone=False,
+                                            replied_user=False,
+                                        )
+                                    await target_channel.send(response_content, **fallback_kwargs)
                                     fallback_sent = True
                                 except Exception as fallback_error:
                                     logger.error(f"文本兜底发送失败: {fallback_error}")
@@ -1579,7 +1790,10 @@ class DiscordBotClient(discord.Client):
                             if not fallback_sent:
                                 continue
 
-                            if author_id and repeat_product_ids:
+                            if prevalidated_batch:
+                                for repeat_user_id, repeat_pid in batch_repeat_records:
+                                    await _record_repeat(repeat_user_id, repeat_pid, message.channel.id)
+                            elif author_id and repeat_product_ids:
                                 for pid in repeat_product_ids:
                                     await _record_repeat(author_id, pid, message.channel.id)
 
@@ -1590,7 +1804,11 @@ class DiscordBotClient(discord.Client):
                             reply_preview = (response_content or '').replace('\n', ' ').strip()
                             if len(reply_preview) > 120:
                                 reply_preview = f"{reply_preview[:120]}..."
-                            author_label = f"{message.author.name}({message.author.id})"
+                            author_label = (
+                                f"批量{len(batch_repeat_records)}条"
+                                if prevalidated_batch
+                                else f"{message.author.name}({message.author.id})"
+                            )
                             logger.info(
                                 f"✅ [发送成功] {target_client.user.name} -> {author_label} | 频道: {message.channel.name}: "
                                 f"{reply_preview} | 商品ID: {product.get('id')}"
