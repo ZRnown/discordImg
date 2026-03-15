@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Pause, Play, Trash2, RefreshCw } from "lucide-react"
 
@@ -13,6 +12,7 @@ type LogEntry = {
   message: string
   module?: string
   func?: string
+  raw_line?: string
   type?: string // 用于心跳包
 }
 
@@ -22,23 +22,7 @@ export function LogsView() {
   const [isPaused, setIsPaused] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
-  const logLimit = 500
-
-  const isRelevantLog = (log: LogEntry) => {
-    const message = log.message || ''
-    return (
-      message.includes('回复成功') ||
-      message.includes('发送成功') ||
-      message.includes('抓取完成') ||
-      message.includes('抓取失败') ||
-      message.includes('严格模式失败') ||
-      message.includes('处理失败') ||
-      message.includes('启动Discord机器人') ||
-      message.includes('Discord机器人启动成功') ||
-      message.includes('Discord机器人已登录') ||
-      message.includes('正在启动机器人账号')
-    )
-  }
+  const logLimit = 5000
 
   // 加载历史日志
   const loadRecentLogs = async () => {
@@ -46,8 +30,7 @@ export function LogsView() {
       const response = await fetch('/api/logs/recent')
       if (response.ok) {
         const data = await response.json()
-        const filtered = (data.logs || []).filter(isRelevantLog)
-        setLogs(filtered.slice(-logLimit))
+        setLogs((data.logs || []).slice(-logLimit))
       }
     } catch (error) {
       console.error('加载历史日志失败:', error)
@@ -77,9 +60,6 @@ export function LogsView() {
           return
         }
 
-        if (!isRelevantLog(logEntry)) {
-          return
-        }
         setLogs((prev) => [...prev, logEntry].slice(-logLimit))
       } catch (error) {
         console.error('解析日志数据失败:', error, event.data)
@@ -143,36 +123,14 @@ export function LogsView() {
     loadRecentLogs()
   }
 
-  const getLevelColor = (level: string) => {
-    switch (level) {
-      case "INFO":
-        return "bg-blue-600 hover:bg-blue-700"
-      case "WARNING":
-        return "bg-yellow-600 hover:bg-yellow-700"
-      case "ERROR":
-        return "bg-red-600 hover:bg-red-700"
-      case "CRITICAL":
-        return "bg-red-800 hover:bg-red-900"
-      default:
-        return "bg-gray-600 hover:bg-gray-700"
-    }
-  }
-
-  const formatTimestamp = (timestamp: string) => {
-    try {
-      const date = new Date(timestamp)
-      return date.toLocaleTimeString("zh-CN", { hour12: false })
-    } catch {
-      return timestamp
-    }
-  }
+  const getLogLine = (log: LogEntry) => log.raw_line || log.message || ''
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-3xl font-bold tracking-tight">实时日志</h2>
-          <p className="text-muted-foreground">监控系统运行状态和事件流</p>
+          <p className="text-muted-foreground">按 PM2 控制台原始格式展示系统日志</p>
         </div>
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1 text-sm">
@@ -200,27 +158,18 @@ export function LogsView() {
         <CardHeader>
           <CardTitle>系统日志流</CardTitle>
           <CardDescription>
-            共 {logs.length} 条记录（最多保留 {logLimit} 条） • {isPaused ? '已暂停' : '实时监控中'}
+            共 {logs.length} 条记录（最多保留 {logLimit} 条原始日志） • {isPaused ? '已暂停' : '实时监控中'}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <ScrollArea className="h-[600px] w-full rounded-md border bg-black/90 p-4">
-            <div className="space-y-1 font-mono text-[10px] leading-tight">
+            <div className="space-y-1 font-mono text-[11px] leading-relaxed">
               {logs.map((log, index) => (
                 <div
                   key={`${log.timestamp}-${index}`}
-                  className="flex items-start gap-2 text-green-400 hover:bg-white/5 p-1 rounded transition-colors border-b border-white/5 last:border-0"
+                  className="whitespace-pre-wrap break-all text-green-400 hover:bg-white/5 p-1 rounded transition-colors border-b border-white/5 last:border-0"
                 >
-                  <span className="text-gray-500 shrink-0 font-bold">
-                    {formatTimestamp(log.timestamp)}
-                  </span>
-                  <Badge className={`${getLevelColor(log.level)} shrink-0 text-[9px] h-4 px-1`}>
-                    {log.level}
-                  </Badge>
-                  <span className="text-cyan-400 shrink-0 font-semibold">
-                    [{log.module || 'system'}]
-                  </span>
-                  <span className="text-gray-200 break-words">{log.message}</span>
+                  {getLogLine(log)}
                 </div>
               ))}
               <div ref={scrollRef} />

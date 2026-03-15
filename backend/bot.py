@@ -16,6 +16,10 @@ try:
 except ImportError:
     from .config import config
 try:
+    from log_utils import format_record_log_entry
+except ImportError:
+    from .log_utils import format_record_log_entry
+try:
     from keyword_reply_window import KeywordReplyWindowManager, build_batched_reply_content
 except ImportError:
     from .keyword_reply_window import KeywordReplyWindowManager, build_batched_reply_content
@@ -290,13 +294,7 @@ class HTTPLogHandler(logging.Handler):
         try:
             # 只发送我们关心的日志级别
             if record.levelno >= logging.INFO:
-                log_data = {
-                    'timestamp': datetime.now().isoformat(),
-                    'level': record.levelname,
-                    'message': self.format(record),
-                    'module': record.module,
-                    'func': record.funcName
-                }
+                log_data = format_record_log_entry(record, formatter=self.formatter)
 
                 # 添加到待发送队列
                 self.pending_logs.append(log_data)
@@ -370,6 +368,9 @@ logging.basicConfig(level=logging.INFO)
 # 添加HTTP日志处理器
 http_handler = HTTPLogHandler()
 http_handler.setLevel(logging.INFO)
+root_handlers = logging.getLogger().handlers
+if root_handlers and getattr(root_handlers[0], "formatter", None) is not None:
+    http_handler.setFormatter(root_handlers[0].formatter)
 logging.getLogger().addHandler(http_handler)
 
 logger = logging.getLogger(__name__)

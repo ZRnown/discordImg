@@ -64,11 +64,19 @@ import time
 from urllib.parse import quote
 import hashlib
 import uuid
+try:
+    from log_utils import format_record_log_entry, normalize_external_log_entry
+except ModuleNotFoundError as e:
+    if e.name == 'log_utils':
+        from .log_utils import format_record_log_entry, normalize_external_log_entry
+    else:
+        raise
 
 # === 全局状态变量 ===
 ai_model_ready = False  # AI模型是否已就绪
 # 全局 AI 并发控制（跨商品），避免 CPU 被同时推理任务打满
 GLOBAL_AI_SEMAPHORE = threading.Semaphore(4)
+MAX_LOG_HISTORY = 5000
 
 # 在应用启动时从数据库加载系统配置
 def load_system_config():
@@ -295,21 +303,11 @@ class QueueHandler(logging.Handler):
     """自定义日志处理器，将日志发送到队列"""
     def emit(self, record):
         try:
-            # 过滤掉HTTP请求日志和不重要的系统日志
-            if self._should_filter_log(record):
-                return
-
-            log_entry = {
-                'timestamp': datetime.now().isoformat(),
-                'level': record.levelname,
-                'message': self.format(record),
-                'module': record.module,
-                'func': record.funcName
-            }
+            log_entry = format_record_log_entry(record, formatter=self.formatter)
 
             # 添加到日志列表（限制大小）
             all_logs.append(log_entry)
-            if len(all_logs) > 500:  # 最多保存500条日志
+            if len(all_logs) > MAX_LOG_HISTORY:
                 all_logs.pop(0)
 
             try:
@@ -336,43 +334,6 @@ class QueueHandler(logging.Handler):
                         log_clients.remove(client_queue)
         except Exception as e:
             print(f"日志队列错误: {e}")
-
-    def _should_filter_log(self, record):
-        """判断是否应该过滤掉这条日志"""
-        # 过滤Werkzeug的HTTP请求日志
-        if record.module == '_internal':
-            return True
-
-        # 过滤包含HTTP请求模式的日志
-        message = self.format(record)
-        if any(pattern in message for pattern in [
-            '"GET ', '"POST ', '"PUT ', '"DELETE ',
-            'HTTP/1.1"', 'HTTP/1.0"',
-            'werkzeug',
-            '127.0.0.1 - -',  # 过滤访问日志
-        ]):
-            return True
-
-        # 过滤一些不重要的系统日志
-        if record.module in ['urllib3', 'requests', 'aiohttp']:
-            return True
-
-        # 2. 关键修复：允许 weidian_scraper 和 app 的 INFO 日志通过
-        # 只要是这些模块，即使是 INFO 级别也允许通过
-        whitelist_modules = [
-            '__main__', 'app', 'database', 'bot',
-            'weidian_scraper', 'feature_extractor',
-            'vector_engine', 'migrate_data'
-        ]
-
-        if record.module in whitelist_modules:
-            return False
-
-        # 对于其他未知模块，只显示WARNING级别以上
-        if record.levelno < logging.WARNING:
-            return True
-
-        return False
 
 # 【修复】移除全局队列处理器和日志级别设置，防止子进程重复初始化
 # 这些配置现在在 initialize_runtime() 中执行
@@ -509,6 +470,7 @@ def initialize_runtime():
     # 创建并添加队列处理器
     queue_handler = QueueHandler()
     queue_handler.setLevel(logging.INFO)
+    queue_handler.setFormatter(console_formatter)
     root_logger.addHandler(queue_handler)
 
     # 屏蔽噪音日志
@@ -4620,7 +4582,7 @@ def log_stream():
 
         try:
             # 发送最近的日志历史
-            for log_entry in all_logs[-50:]:  # 发送最近50条历史日志
+            for log_entry in all_logs[-MAX_LOG_HISTORY:]:
                 yield f"data: {json.dumps(log_entry)}\n\n"
 
             # 持续监听新日志
@@ -4650,9 +4612,8 @@ def log_stream():
 def get_recent_logs():
     """获取最近的日志记录"""
     try:
-        # 从日志列表中返回最近500条日志
         return jsonify({
-            'logs': all_logs[-500:],
+            'logs': all_logs[-MAX_LOG_HISTORY:],
             'total': len(all_logs)
         })
     except Exception as e:
@@ -4668,17 +4629,11 @@ def add_external_log():
             return jsonify({'error': 'Invalid log data'}), 400
 
         # 创建日志条目
-        log_entry = {
-            'timestamp': data.get('timestamp', datetime.now().isoformat()),
-            'level': data.get('level', 'INFO'),
-            'message': data.get('message', ''),
-            'module': data.get('module', 'external'),
-            'func': data.get('func', '')
-        }
+        log_entry = normalize_external_log_entry(data)
 
         # 添加到日志列表
         all_logs.append(log_entry)
-        if len(all_logs) > 500:
+        if len(all_logs) > MAX_LOG_HISTORY:
             all_logs.pop(0)
 
         # 添加到队列（非阻塞，防止日志洪峰卡住请求线程）
@@ -4690,6 +4645,16 @@ def add_external_log():
                 log_queue.put_nowait(log_entry)
             except Exception:
                 pass
+
+        for client_queue in log_clients[:]:
+            try:
+                client_queue.put_nowait(log_entry)
+            except queue.Full:
+                if client_queue in log_clients:
+                    log_clients.remove(client_queue)
+            except Exception:
+                if client_queue in log_clients:
+                    log_clients.remove(client_queue)
 
         return jsonify({'success': True})
     except Exception as e:
