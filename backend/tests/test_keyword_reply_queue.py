@@ -1,4 +1,7 @@
 import unittest
+import os
+import tempfile
+import uuid
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -10,6 +13,14 @@ from backend.bot import (
     _should_send_plain_keyword_message,
     _should_use_keyword_window_mode,
 )
+from backend.database import Database
+
+
+class TestDatabase(Database):
+    def __init__(self, db_path: str):
+        self.db_path = db_path
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
+        self.init_sqlite_database()
 
 class KeywordReplyQueueTestCase(unittest.TestCase):
     def _import_window_manager_class(self):
@@ -157,6 +168,82 @@ class KeywordReplyQueueTestCase(unittest.TestCase):
             content,
             "<@1001> https://a.example/item-1\n<@1001> https://b.example/item-2\n<@1002> https://c.example/item-3",
         )
+
+
+class WebsiteBindingIntegrityTestCase(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db = TestDatabase(os.path.join(self.temp_dir.name, "metadata.db"))
+        self.user_id = self._create_user()
+        self.website_id = self._create_website()
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def _create_user(self):
+        username = f"user_{uuid.uuid4().hex[:8]}"
+        with self.db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO users (username, password_hash, role, is_active)
+                VALUES (?, ?, 'user', 1)
+                """,
+                (username, "hashed_password"),
+            )
+            conn.commit()
+            return cursor.lastrowid
+
+    def _create_website(self):
+        name = f"site_{uuid.uuid4().hex[:8]}"
+        self.assertTrue(
+            self.db.add_website_config(
+                name=name,
+                display_name="Test Site",
+                url_template="https://example.com/{id}",
+                id_pattern=r"\d+",
+            )
+        )
+        website = next(item for item in self.db.get_website_configs() if item["name"] == name)
+        return website["id"]
+
+    def _create_account(self, username):
+        with self.db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO discord_accounts (username, token, user_id, status)
+                VALUES (?, ?, ?, 'online')
+                """,
+                (username, f"token_{uuid.uuid4().hex}", self.user_id),
+            )
+            conn.commit()
+            return cursor.lastrowid
+
+    def test_sender_and_listener_counts_ignore_orphaned_bindings(self):
+        real_account_id = self._create_account("tip_888666#0")
+        self.assertTrue(
+            self.db.add_website_account_binding(
+                self.website_id,
+                real_account_id,
+                "both",
+                self.user_id,
+            )
+        )
+
+        with self.db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO website_account_bindings (website_id, account_id, user_id, role)
+                VALUES (?, ?, ?, 'both')
+                """,
+                (self.website_id, 99999, self.user_id),
+            )
+            conn.commit()
+
+        self.assertEqual(self.db.get_website_senders(self.website_id, self.user_id), [real_account_id])
+        self.assertEqual(self.db.get_website_listeners(self.website_id, self.user_id), [real_account_id])
 
 
 class ReplyScopeFallbackTestCase(unittest.TestCase):

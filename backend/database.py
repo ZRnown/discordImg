@@ -2323,13 +2323,17 @@ class Database:
                 cursor = conn.cursor()
                 if user_id:
                     cursor.execute('''
-                        SELECT account_id FROM website_account_bindings
-                        WHERE website_id = ? AND user_id = ? AND role IN ('sender', 'both')
+                        SELECT wab.account_id
+                        FROM website_account_bindings wab
+                        JOIN discord_accounts da ON wab.account_id = da.id
+                        WHERE wab.website_id = ? AND wab.user_id = ? AND wab.role IN ('sender', 'both')
                     ''', (website_id, user_id))
                 else:
                     cursor.execute('''
-                        SELECT account_id FROM website_account_bindings
-                        WHERE website_id = ? AND role IN ('sender', 'both')
+                        SELECT wab.account_id
+                        FROM website_account_bindings wab
+                        JOIN discord_accounts da ON wab.account_id = da.id
+                        WHERE wab.website_id = ? AND wab.role IN ('sender', 'both')
                     ''', (website_id,))
                 return [row['account_id'] for row in cursor.fetchall()]
         except Exception as e:
@@ -2343,13 +2347,17 @@ class Database:
                 cursor = conn.cursor()
                 if user_id:
                     cursor.execute('''
-                        SELECT account_id FROM website_account_bindings
-                        WHERE website_id = ? AND user_id = ? AND role IN ('listener', 'both')
+                        SELECT wab.account_id
+                        FROM website_account_bindings wab
+                        JOIN discord_accounts da ON wab.account_id = da.id
+                        WHERE wab.website_id = ? AND wab.user_id = ? AND wab.role IN ('listener', 'both')
                     ''', (website_id, user_id))
                 else:
                     cursor.execute('''
-                        SELECT account_id FROM website_account_bindings
-                        WHERE website_id = ? AND role IN ('listener', 'both')
+                        SELECT wab.account_id
+                        FROM website_account_bindings wab
+                        JOIN discord_accounts da ON wab.account_id = da.id
+                        WHERE wab.website_id = ? AND wab.role IN ('listener', 'both')
                     ''', (website_id,))
                 return [row['account_id'] for row in cursor.fetchall()]
         except Exception as e:
