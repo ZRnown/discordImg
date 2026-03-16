@@ -46,6 +46,20 @@ export function getReplyModeSwitchError(
   return `当前绑定了 ${senderCount} 个发送账号，关键词模式只支持 1 个发送账号`
 }
 
+export function isReplyModeOptionDisabled(
+  senderCount: number,
+  nextReplyMode: string,
+): boolean {
+  return getReplyModeSwitchError(senderCount, nextReplyMode) !== null
+}
+
+export function getDisplayedReplyMode(
+  currentReplyMode: string | undefined | null,
+  pendingReplyMode: string | undefined | null,
+): string {
+  return pendingReplyMode ?? currentReplyMode ?? 'rotation'
+}
+
 export function getReplyModeLabel(replyMode: string): string {
   switch (replyMode) {
     case 'default':

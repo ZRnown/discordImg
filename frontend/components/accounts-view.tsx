@@ -1,8 +1,14 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { startTransition, useEffect, useRef, useState } from "react"
 import { useApiCache } from "@/hooks/use-api-cache"
-import { getReplyModeLabel, getReplyModeSettingsSection, getReplyModeSwitchError } from "@/lib/utils"
+import {
+  getDisplayedReplyMode,
+  getReplyModeLabel,
+  getReplyModeSettingsSection,
+  getReplyModeSwitchError,
+  isReplyModeOptionDisabled,
+} from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -192,6 +198,8 @@ export function AccountsView() {
   const [channelInputs, setChannelInputs] = useState<{[key: number]: string}>({})
   const [channelToRemove, setChannelToRemove] = useState<{webId: number, chanId: string} | null>(null)
   const [replyModes, setReplyModes] = useState<{[key: number]: string}>({})
+  const [pendingReplyModes, setPendingReplyModes] = useState<{[key: number]: string}>({})
+  const [replyModeSaving, setReplyModeSaving] = useState<{[key: number]: boolean}>({})
   const [rotationInputs, setRotationInputs] = useState<{[key: number]: string}>({})
   const [keywordIntervalInputs, setKeywordIntervalInputs] = useState<{[key: number]: string}>({})
   const [keywordBatchInputs, setKeywordBatchInputs] = useState<{[key: number]: string}>({})
@@ -626,7 +634,27 @@ export function AccountsView() {
 
   const getWebsiteReplyMode = (website: any) => {
     if (!website) return 'rotation'
-    return replyModes[website.id] ?? website.reply_mode ?? 'rotation'
+    return getDisplayedReplyMode(
+      replyModes[website.id] ?? website.reply_mode,
+      pendingReplyModes[website.id],
+    )
+  }
+
+  const clearPendingReplyModeState = (websiteId: number) => {
+    startTransition(() => {
+      setPendingReplyModes(prev => {
+        if (!(websiteId in prev)) return prev
+        const next = { ...prev }
+        delete next[websiteId]
+        return next
+      })
+      setReplyModeSaving(prev => {
+        if (!(websiteId in prev)) return prev
+        const next = { ...prev }
+        delete next[websiteId]
+        return next
+      })
+    })
   }
 
   const applyRotationSettingsState = (websiteId: number, nextSettings: any) => {
@@ -1297,6 +1325,10 @@ export function AccountsView() {
   }
 
   const handleUpdateReplyMode = async (websiteId: number, replyMode: string) => {
+    startTransition(() => {
+      setPendingReplyModes(prev => ({ ...prev, [websiteId]: replyMode }))
+      setReplyModeSaving(prev => ({ ...prev, [websiteId]: true }))
+    })
     try {
       await updateWebsiteRotationSettings(
         websiteId,
@@ -1305,6 +1337,8 @@ export function AccountsView() {
       )
     } catch (e: any) {
       toast.error(e?.message || '网络错误')
+    } finally {
+      clearPendingReplyModeState(websiteId)
     }
   }
 
@@ -2738,6 +2772,8 @@ export function AccountsView() {
                         {(() => {
                           const senderCount = getWebsiteSenderCount(website.id)
                           const replyMode = getWebsiteReplyMode(website)
+                          const keywordModeDisabled = isReplyModeOptionDisabled(senderCount, 'keyword')
+                          const isReplyModeSaving = Boolean(replyModeSaving[website.id])
                           const isKeywordMode = replyMode === 'keyword'
                           const settingsSection = getReplyModeSettingsSection(replyMode)
 
@@ -2747,6 +2783,7 @@ export function AccountsView() {
                                 <Label className="text-xs">回复模式:</Label>
                                 <Select
                                   value={replyMode}
+                                  disabled={isReplyModeSaving}
                                   onValueChange={(value) => {
                                     void handleReplyModeChange(website.id, senderCount, value)
                                   }}
@@ -2757,11 +2794,14 @@ export function AccountsView() {
                                   <SelectContent>
                                     <SelectItem value="default">默认模式</SelectItem>
                                     <SelectItem value="rotation">轮换模式</SelectItem>
-                                    <SelectItem value="keyword">
+                                    <SelectItem value="keyword" disabled={keywordModeDisabled}>
                                       关键词模式
                                     </SelectItem>
                                   </SelectContent>
                                 </Select>
+                                {isReplyModeSaving ? (
+                                  <span className="text-[11px] text-muted-foreground">保存中...</span>
+                                ) : null}
                               </div>
 
                               {settingsSection === 'rotation' ? (

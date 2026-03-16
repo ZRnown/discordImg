@@ -3,8 +3,10 @@ import assert from 'node:assert/strict'
 
 import {
   getReplyModeLabel,
+  getDisplayedReplyMode,
   getReplyModeSettingsSection,
   getReplyModeSwitchError,
+  isReplyModeOptionDisabled,
 } from './lib/utils.ts'
 
 test('allows switching to keyword mode when exactly one sender is bound', () => {
@@ -45,4 +47,19 @@ test('default mode hides both rotation and keyword settings', () => {
   assert.equal(getReplyModeSettingsSection('default'), 'none')
   assert.equal(getReplyModeSettingsSection('rotation'), 'rotation')
   assert.equal(getReplyModeSettingsSection('keyword'), 'keyword')
+})
+
+test('keyword option is disabled unless exactly one sender is bound', () => {
+  assert.equal(isReplyModeOptionDisabled(0, 'keyword'), true)
+  assert.equal(isReplyModeOptionDisabled(2, 'keyword'), true)
+  assert.equal(isReplyModeOptionDisabled(1, 'keyword'), false)
+  assert.equal(isReplyModeOptionDisabled(2, 'rotation'), false)
+  assert.equal(isReplyModeOptionDisabled(0, 'default'), false)
+})
+
+test('displayed reply mode prefers pending value for immediate UI feedback', () => {
+  assert.equal(getDisplayedReplyMode('rotation', 'default'), 'default')
+  assert.equal(getDisplayedReplyMode('default', 'keyword'), 'keyword')
+  assert.equal(getDisplayedReplyMode('keyword', undefined), 'keyword')
+  assert.equal(getDisplayedReplyMode(undefined, undefined), 'rotation')
 })
