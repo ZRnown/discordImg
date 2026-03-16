@@ -21,7 +21,6 @@ module.exports = {
       cwd: "./backend",
       // 必须确保 kill_timeout 足够，防止重启时旧进程没杀掉
       kill_timeout: 3000,
-      wait_ready: true,
       env: {
         NODE_ENV: "production",
         PYTHONIOENCODING: "utf-8",

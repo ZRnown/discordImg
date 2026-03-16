@@ -52,6 +52,14 @@ def _normalize_keyword_batch_size(value):
     return max(0, _coerce_int(value, 0))
 
 
+def _should_use_keyword_window_mode(sender_count, interval_seconds, batch_size):
+    return (
+        _coerce_int(sender_count, 0) == 1
+        and _coerce_int(interval_seconds, 0) > 0
+        and _normalize_keyword_batch_size(batch_size) > 0
+    )
+
+
 def _coerce_bool(value, default=True):
     if isinstance(value, str):
         return value.strip().lower() not in {'0', 'false', 'no', 'off'}
@@ -147,6 +155,12 @@ ai_concurrency_limit = asyncio.Semaphore(2)
 
 # 冷却等待保护：避免在高并发下长时间占用消息处理链路
 MAX_COOLDOWN_WAIT_SECONDS = 3.0
+
+# 单条消息各阶段的超时保护，避免某一步卡死拖住后续消息
+MESSAGE_FORWARD_TIMEOUT_SECONDS = 15.0
+MESSAGE_KEYWORD_SEARCH_TIMEOUT_SECONDS = 45.0
+MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS = 90.0
+MESSAGE_STAGE_SLOW_SECONDS = 5.0
 
 # 关键词搜索候选上限（覆盖每页200商品的测试场景）
 KEYWORD_SEARCH_LIMIT = 600
@@ -383,8 +397,6 @@ class DiscordBotClient(discord.Client):
     _bound_channels_cache = set()  # 已绑定的频道ID集合
     _last_cache_update = 0  # 上次缓存更新时间戳
     _cache_ttl = 60  # 缓存有效期（秒）
-    # 全局串行处理锁：保证“上一条处理完成后再处理下一条”
-    _message_processing_lock = asyncio.Lock()
 
     def __init__(self, account_id=None, user_id=None, user_shops=None, role='both'):
         # discord.py-self 可能不需要 intents，或者使用不同的语法
@@ -430,6 +442,31 @@ class DiscordBotClient(discord.Client):
         if not ts:
             return False
         return (time.time() - ts) < window_seconds
+
+    async def _run_message_stage_with_timeout(self, message, stage_name, coro, timeout_seconds):
+        start_time = time.monotonic()
+        try:
+            await asyncio.wait_for(coro, timeout=timeout_seconds)
+        except asyncio.TimeoutError:
+            logger.error(
+                f"⏱️ 消息处理超时: stage={stage_name} | message_id={message.id} "
+                f"| channel_id={message.channel.id} | timeout={timeout_seconds:.1f}s"
+            )
+            return False
+        except Exception as e:
+            logger.error(
+                f"消息处理阶段失败: stage={stage_name} | message_id={message.id} "
+                f"| channel_id={message.channel.id} | error={e}"
+            )
+            return False
+
+        elapsed = time.monotonic() - start_time
+        if elapsed >= MESSAGE_STAGE_SLOW_SECONDS:
+            logger.warning(
+                f"🐢 消息处理耗时较长: stage={stage_name} | message_id={message.id} "
+                f"| channel_id={message.channel.id} | elapsed={elapsed:.2f}s"
+            )
+        return True
 
     async def _refresh_channel_cache(self):
         """【新增】刷新频道白名单缓存（60秒TTL）
@@ -604,19 +641,44 @@ class DiscordBotClient(discord.Client):
     async def _get_keyword_window_settings(self, website_config):
         website_id = website_config.get('id') if website_config else None
         rotation_interval = _coerce_int((website_config or {}).get('rotation_interval', 180), 180)
+        keyword_reply_interval = _coerce_int(
+            (website_config or {}).get('keyword_reply_interval', rotation_interval),
+            rotation_interval,
+        )
         batch_size = _normalize_keyword_batch_size((website_config or {}).get('keyword_reply_batch_size', 0))
 
         if not website_id:
-            return max(1, rotation_interval), batch_size
+            return max(1, keyword_reply_interval), batch_size
 
         try:
             user_settings = await self._get_user_website_settings_safe(website_id)
-            rotation_interval = _coerce_int(user_settings.get('rotation_interval', rotation_interval), rotation_interval)
+            keyword_reply_interval = _coerce_int(
+                user_settings.get('keyword_reply_interval', keyword_reply_interval),
+                keyword_reply_interval,
+            )
             batch_size = _normalize_keyword_batch_size(user_settings.get('keyword_reply_batch_size', batch_size))
         except Exception as e:
             logger.error(f"获取关键词窗口设置失败(user_id={self.user_id}, website_id={website_id}): {e}")
 
-        return max(1, rotation_interval), batch_size
+        return max(1, keyword_reply_interval), batch_size
+
+    def _build_explicit_mention_reply_content(self, author_id, reply_contents):
+        if not author_id:
+            return "\n".join(
+                (content or "").strip()
+                for content in reply_contents or ()
+                if (content or "").strip()
+            )
+
+        entries = [
+            {
+                'author_id': author_id,
+                'reply_content': (content or '').strip(),
+            }
+            for content in reply_contents or ()
+            if (content or '').strip()
+        ]
+        return build_batched_reply_content(entries)
 
     async def _build_keyword_reply_job(
         self,
@@ -719,6 +781,10 @@ class DiscordBotClient(discord.Client):
             user_settings.get('rotation_interval', website_config.get('rotation_interval', 180)),
             _coerce_int(website_config.get('rotation_interval', 180), 180),
         )
+        keyword_reply_interval = _coerce_int(
+            user_settings.get('keyword_reply_interval', website_config.get('keyword_reply_interval', rotation_interval)),
+            rotation_interval,
+        )
         batch_size = _normalize_keyword_batch_size(
             user_settings.get('keyword_reply_batch_size', website_config.get('keyword_reply_batch_size', 0))
         )
@@ -734,7 +800,7 @@ class DiscordBotClient(discord.Client):
             'reply_content': reply_content,
             'author_id': author_id,
             'repeat_product_ids': repeat_product_ids,
-            'rotation_interval': max(1, rotation_interval),
+            'keyword_reply_interval': max(1, keyword_reply_interval),
             'batch_size': batch_size,
         }
 
@@ -791,6 +857,7 @@ class DiscordBotClient(discord.Client):
             'content': combined_content,
             'skip_images': True,
             'batched_reply': True,
+            'skip_sender_cooldown': True,
             'repeat_records': repeat_records,
         }
 
@@ -865,6 +932,32 @@ class DiscordBotClient(discord.Client):
 
         interval_seconds, batch_size = await self._get_keyword_window_settings(website_config)
         if batch_size <= 0:
+            return await self.schedule_reply(
+                message,
+                product,
+                custom_reply,
+                match_context,
+                website_configs_override=[website_config],
+            )
+
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+            sender_ids = await asyncio.get_event_loop().run_in_executor(
+                None, db.get_website_senders, website_config.get('id'), self.user_id
+            )
+        except Exception as e:
+            logger.error(f"获取关键词窗口发送账号失败(website_id={website_config.get('id')}): {e}")
+            sender_ids = []
+
+        if not _should_use_keyword_window_mode(len(sender_ids), interval_seconds, batch_size):
+            if batch_size > 0:
+                logger.info(
+                    f"⏭️ [关键词窗口未启用] 网站:{website_config.get('name')} "
+                    f"发送账号数:{len(sender_ids)} 批次上限:{batch_size}"
+                )
             return await self.schedule_reply(
                 message,
                 product,
@@ -1487,6 +1580,11 @@ class DiscordBotClient(discord.Client):
                     logger.warning("❌ [状态错误] 配置的发送账号均不在线。请检查 Discord 账号连接状态。")
                     continue
 
+                skip_sender_cooldown = bool(
+                    isinstance(active_custom_reply, dict)
+                    and active_custom_reply.get('skip_sender_cooldown')
+                )
+
                 # 3. 冷却逻辑：始终生效，轮换开关仅控制选人策略
                 rotation_enabled = _coerce_bool(website_config.get('rotation_enabled', 1), True)
                 rotation_interval = _coerce_int(website_config.get('rotation_interval', 180), 180)
@@ -1515,12 +1613,15 @@ class DiscordBotClient(discord.Client):
                         logger.info(f"消息被过滤(网站规则): {website_config.get('name')}")
                         continue
 
-                available_senders = [
-                    uid for uid in valid_senders
-                    if not is_account_on_cooldown(uid, message.channel.id, rotation_interval)
-                ]
+                if skip_sender_cooldown:
+                    available_senders = list(valid_senders)
+                else:
+                    available_senders = [
+                        uid for uid in valid_senders
+                        if not is_account_on_cooldown(uid, message.channel.id, rotation_interval)
+                    ]
 
-                if not available_senders:
+                if not available_senders and not skip_sender_cooldown:
                     now_ts = time.time()
                     wait_candidates = []
                     channel_id_str = str(message.channel.id)
@@ -1549,12 +1650,12 @@ class DiscordBotClient(discord.Client):
                             if not is_account_on_cooldown(uid, message.channel.id, rotation_interval)
                         ]
 
-                    if not available_senders:
-                        logger.warning(
-                            f"⏳ [重试后仍冷却] 频道 {message.channel.id} 在线账号 ({len(valid_senders)}个) "
-                            f"均不可用，跳过当前网站配置"
-                        )
-                        continue
+                if not available_senders:
+                    logger.warning(
+                        f"⏳ [重试后仍冷却] 频道 {message.channel.id} 在线账号 ({len(valid_senders)}个) "
+                        f"均不可用，跳过当前网站配置"
+                    )
+                    continue
 
                 if rotation_enabled:
                     selected_id = random.choice(available_senders)
@@ -1707,6 +1808,8 @@ class DiscordBotClient(discord.Client):
                                 )
                                 continue
 
+                            explicit_mentions = bool(active_custom_reply and active_custom_reply.get('explicit_mentions'))
+
                             send_kwargs = {
                                 'content': response_content if response_content else None,
                                 'files': files if files else None,
@@ -1720,7 +1823,14 @@ class DiscordBotClient(discord.Client):
                                 )
                             else:
                                 send_kwargs['reference'] = message
-                                send_kwargs['mention_author'] = True
+                                send_kwargs['mention_author'] = not explicit_mentions
+                                if explicit_mentions:
+                                    send_kwargs['allowed_mentions'] = discord.AllowedMentions(
+                                        users=True,
+                                        roles=False,
+                                        everyone=False,
+                                        replied_user=False,
+                                    )
 
                             await target_channel.send(**send_kwargs)
                             sent_any = True
@@ -1732,7 +1842,11 @@ class DiscordBotClient(discord.Client):
                                 for pid in repeat_product_ids:
                                     await _record_repeat(author_id, pid, message.channel.id)
 
-                            if hasattr(target_client, 'account_id') and target_client.account_id:
+                            if (
+                                not skip_sender_cooldown
+                                and hasattr(target_client, 'account_id')
+                                and target_client.account_id
+                            ):
                                 set_account_cooldown(target_client.account_id, message.channel.id)
 
                             reply_preview = (response_content or '').replace('\n', ' ').strip()
@@ -1771,6 +1885,13 @@ class DiscordBotClient(discord.Client):
                                 try:
                                     fallback_kwargs = {}
                                     if prevalidated_batch:
+                                        fallback_kwargs['allowed_mentions'] = discord.AllowedMentions(
+                                            users=True,
+                                            roles=False,
+                                            everyone=False,
+                                            replied_user=False,
+                                        )
+                                    elif active_custom_reply and active_custom_reply.get('explicit_mentions'):
                                         fallback_kwargs['allowed_mentions'] = discord.AllowedMentions(
                                             users=True,
                                             roles=False,
@@ -1874,6 +1995,7 @@ class DiscordBotClient(discord.Client):
                     channel_scopes = ['weidian']
 
             is_product_custom = bool(custom_reply and custom_reply.get('product_data'))
+            force_link_only = False
             if is_product_custom:
                 product_scope_raw = (product.get('replyScope') or product.get('reply_scope') or 'all')
                 scope_match = False
@@ -1906,7 +2028,11 @@ class DiscordBotClient(discord.Client):
                     scope_match = any(scope in channel_scopes for scope in normalized_scopes) if channel_scopes else False
 
                 if not scope_match:
-                    return None
+                    force_link_only = True
+                    logger.info(
+                        f"商品 {product.get('id')} 回复范围未命中当前网站 "
+                        f"({website_config.get('name') if website_config else channel_id})，回退为链接回复"
+                    )
 
             response_url = get_response_url_for_channel(
                 product,
@@ -1914,6 +2040,9 @@ class DiscordBotClient(discord.Client):
                 self.user_id,
                 website_config=website_config
             )
+
+            if force_link_only:
+                return response_url
 
             def apply_template(template: str, append_link: bool) -> str:
                 if not template:
@@ -2273,56 +2402,67 @@ class DiscordBotClient(discord.Client):
         if message.reference is not None:
             return
 
-        async with DiscordBotClient._message_processing_lock:
-            # =================================================================
-            # 全局串行处理：保证“上一条处理完成后再处理下一条”，降低并发丢消息概率
-            # =================================================================
+        try:
+            if not mark_message_as_processed(message.id, self.user_id):
+                logger.info(f"消息 {message.id} 已被其他(合法的)Bot处理，跳过")
+                return
+        except Exception as e:
+            logger.error(f"消息去重检查失败: {e}")
+            return
+
+        # 6. 触发内容过滤规则
+        if self._should_filter_message(message):
+            return
+
+        logger.info(f'📨 [接收] 账号:{self.user.name} | 频道:{message.channel.name} | 内容: "{message.content[:50]}..."')
+
+        # 获取用户设置
+        keyword_reply_enabled = True
+        image_reply_enabled = True
+        if self.user_id:
             try:
-                if not mark_message_as_processed(message.id, self.user_id):
-                    logger.info(f"消息 {message.id} 已被其他(合法的)Bot处理，跳过")
-                    return
+                user_settings = await self._get_user_settings_safe()
+                keyword_reply_enabled = user_settings.get('keyword_reply_enabled', 1) in (1, True, "1", "true", "True")
+                image_reply_enabled = user_settings.get('image_reply_enabled', 1) in (1, True, "1", "true", "True")
             except Exception as e:
-                logger.error(f"消息去重检查失败: {e}")
-                return
+                logger.error(f'获取用户回复开关设置失败: {e}')
 
-            # 6. 触发内容过滤规则
-            if self._should_filter_message(message):
-                return
+        # 处理关键词消息转发
+        await self._run_message_stage_with_timeout(
+            message,
+            'keyword_forward',
+            self.handle_keyword_forward(message),
+            MESSAGE_FORWARD_TIMEOUT_SECONDS,
+        )
 
-            logger.info(f'📨 [接收] 账号:{self.user.name} | 频道:{message.channel.name} | 内容: "{message.content[:50]}..."')
+        # 处理关键词搜索
+        if keyword_reply_enabled:
+            await self._run_message_stage_with_timeout(
+                message,
+                'keyword_search',
+                self.handle_keyword_search(message),
+                MESSAGE_KEYWORD_SEARCH_TIMEOUT_SECONDS,
+            )
 
-            # 获取用户设置
-            keyword_reply_enabled = True
-            image_reply_enabled = True
-            if self.user_id:
-                try:
-                    user_settings = await self._get_user_settings_safe()
-                    keyword_reply_enabled = user_settings.get('keyword_reply_enabled', 1) in (1, True, "1", "true", "True")
-                    image_reply_enabled = user_settings.get('image_reply_enabled', 1) in (1, True, "1", "true", "True")
-                except Exception as e:
-                    logger.error(f'获取用户回复开关设置失败: {e}')
+        # 处理图片
+        if image_reply_enabled and message.attachments:
+            for attachment in message.attachments:
+                content_type = (getattr(attachment, 'content_type', '') or '').lower()
+                filename = (getattr(attachment, 'filename', '') or '').lower()
+                is_image = False
+                if content_type.startswith('image/'):
+                    is_image = True
+                elif filename.endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.tif', '.heic', '.heif')):
+                    is_image = True
 
-            # 处理关键词消息转发
-            await self.handle_keyword_forward(message)
-
-            # 处理关键词搜索
-            if keyword_reply_enabled:
-                await self.handle_keyword_search(message)
-
-            # 处理图片
-            if image_reply_enabled and message.attachments:
-                for attachment in message.attachments:
-                    content_type = (getattr(attachment, 'content_type', '') or '').lower()
-                    filename = (getattr(attachment, 'filename', '') or '').lower()
-                    is_image = False
-                    if content_type.startswith('image/'):
-                        is_image = True
-                    elif filename.endswith(('.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.tiff', '.tif', '.heic', '.heif')):
-                        is_image = True
-
-                    if is_image:
-                        logger.debug(f"📷 检测到图片，开始处理: {attachment.filename}")
-                        await self.handle_image(message, attachment)
+                if is_image:
+                    logger.debug(f"📷 检测到图片，开始处理: {attachment.filename}")
+                    await self._run_message_stage_with_timeout(
+                        message,
+                        f'image_reply:{attachment.filename}',
+                        self.handle_image(message, attachment),
+                        MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS,
+                    )
 
     async def on_raw_reaction_add(self, payload):
         """监听他人给当前账号消息添加表情（包含点赞）并发送 Bark 通知。"""
@@ -2967,7 +3107,10 @@ class DiscordBotClient(discord.Client):
                     if reply_text:
                         website_lines.append(reply_text)
                 if website_lines:
-                    per_website_content[str(website_config.get('id'))] = "\n".join(website_lines)
+                    per_website_content[str(website_config.get('id'))] = self._build_explicit_mention_reply_content(
+                        getattr(message.author, 'id', None),
+                        website_lines,
+                    )
 
             if per_website_content:
                 base_product = reply_entries[0]['product']
@@ -2988,6 +3131,7 @@ class DiscordBotClient(discord.Client):
                         'content': website_content,
                         'product_data': base_product,
                         'skip_images': True,
+                        'explicit_mentions': True,
                         'repeat_product_ids': repeat_product_ids,
                     }
                     await self._enqueue_or_dispatch_keyword_reply(

@@ -108,17 +108,24 @@ class KeywordReplyWindowManager:
 
     def _get_state(self, key: Hashable, interval_seconds: int) -> _WindowState:
         now = self._time_fn()
+        bucket_started_at = self._get_bucket_start(now, interval_seconds)
         state = self._states.get(key)
         if state is None:
-            state = _WindowState(started_at=now)
+            state = _WindowState(started_at=bucket_started_at)
             self._states[key] = state
             return state
 
-        if interval_seconds <= 0 or (now - state.started_at) >= interval_seconds:
-            state.started_at = now
+        if interval_seconds <= 0 or state.started_at != bucket_started_at:
+            state.started_at = bucket_started_at
             state.used = 0
 
         return state
+
+    @staticmethod
+    def _get_bucket_start(now: float, interval_seconds: int) -> float:
+        if interval_seconds <= 0:
+            return now
+        return now - (now % interval_seconds)
 
     def _release_from_queue(self, key: Hashable, state: _WindowState, release_count: int) -> List[Any]:
         queue = self._queues.get(key)

@@ -192,6 +192,7 @@ export function AccountsView() {
   const [channelToRemove, setChannelToRemove] = useState<{webId: number, chanId: string} | null>(null)
   const [rotationEnabled, setRotationEnabled] = useState<{[key: number]: boolean}>({})
   const [rotationInputs, setRotationInputs] = useState<{[key: number]: string}>({})
+  const [keywordIntervalInputs, setKeywordIntervalInputs] = useState<{[key: number]: string}>({})
   const [keywordBatchInputs, setKeywordBatchInputs] = useState<{[key: number]: string}>({})
 
   const [cooldowns, setCooldowns] = useState<any[]>([])
@@ -341,6 +342,10 @@ export function AccountsView() {
         accounts[website.id] = website.accounts || []
         setRotationEnabled(prev => ({ ...prev, [website.id]: website.rotation_enabled !== 0 }))
         setRotationInputs(prev => ({ ...prev, [website.id]: (website.rotation_interval || 180).toString() }))
+        setKeywordIntervalInputs(prev => ({
+          ...prev,
+          [website.id]: (website.keyword_reply_interval ?? website.rotation_interval ?? 180).toString()
+        }))
         setKeywordBatchInputs(prev => ({
           ...prev,
           [website.id]: (website.keyword_reply_batch_size ?? 0).toString()
@@ -610,6 +615,12 @@ export function AccountsView() {
     }
 
     return maxRemaining > 0 ? maxRemaining : 0
+  }
+
+  const getWebsiteSenderCount = (websiteId: number) => {
+    return (websiteAccounts[websiteId] || []).filter((binding: any) => (
+      binding.role === 'sender' || binding.role === 'both'
+    )).length
   }
 
   useEffect(() => {
@@ -1221,6 +1232,30 @@ export function AccountsView() {
             : website
         ))
         setKeywordBatchInputs(prev => ({ ...prev, [websiteId]: keywordReplyBatchSize.toString() }))
+      } else {
+        toast.error('更新失败')
+      }
+    } catch (e) {
+      toast.error('网络错误')
+    }
+  }
+
+  const handleUpdateKeywordReplyInterval = async (websiteId: number, keywordReplyInterval: number) => {
+    try {
+      const res = await fetch(`/api/websites/${websiteId}/rotation`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ keyword_reply_interval: keywordReplyInterval })
+      })
+      if (res.ok) {
+        toast.success('关键词回复间隔已更新')
+        setWebsites(prev => prev.map(website =>
+          website.id === websiteId
+            ? { ...website, keyword_reply_interval: keywordReplyInterval }
+            : website
+        ))
+        setKeywordIntervalInputs(prev => ({ ...prev, [websiteId]: keywordReplyInterval.toString() }))
       } else {
         toast.error('更新失败')
       }
@@ -2651,7 +2686,10 @@ export function AccountsView() {
                         <div className="flex items-center gap-2">
                           <Label className="text-xs">启用轮换:</Label>
                           <Switch
-                            checked={rotationEnabled[website.id] ?? (website.rotation_enabled !== 0)}
+                            checked={getWebsiteSenderCount(website.id) > 1
+                              ? (rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))
+                              : false}
+                            disabled={getWebsiteSenderCount(website.id) <= 1}
                             onCheckedChange={(checked) => {
                               setRotationEnabled(prev => ({ ...prev, [website.id]: checked }))
                               // 发送API请求更新轮换启用状态
@@ -2679,12 +2717,15 @@ export function AccountsView() {
 
                         {/* 轮换间隔设置 */}
                         <div className="flex items-center gap-2">
-                          <Label className="text-xs">轮换间隔(秒):</Label>
+                          <Label className="text-xs">账号轮换间隔(秒):</Label>
                           <Input
                             type="number"
                             value={rotationInputs[website.id] ?? (website.rotation_interval ?? 180).toString()}
                             className="w-20 h-7 text-xs"
-                            disabled={!(rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))}
+                            disabled={
+                              getWebsiteSenderCount(website.id) <= 1
+                              || !(rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))
+                            }
                             onChange={(e) => {
                               const value = e.target.value
                               setRotationInputs(prev => ({ ...prev, [website.id]: value }))
@@ -2709,12 +2750,53 @@ export function AccountsView() {
                         </div>
 
                         <div className="flex items-center gap-2">
+                          <Label className="text-xs">关键词回复间隔(秒):</Label>
+                          <Input
+                            type="number"
+                            value={keywordIntervalInputs[website.id] ?? (website.keyword_reply_interval ?? website.rotation_interval ?? 180).toString()}
+                            className="w-20 h-7 text-xs"
+                            disabled={getWebsiteSenderCount(website.id) !== 1}
+                            onChange={(e) => {
+                              const value = e.target.value
+                              setKeywordIntervalInputs(prev => ({ ...prev, [website.id]: value }))
+                            }}
+                            onBlur={() => {
+                              const value = parseInt(
+                                keywordIntervalInputs[website.id]
+                                ?? (website.keyword_reply_interval ?? website.rotation_interval ?? 180).toString()
+                              )
+                              const current = website.keyword_reply_interval ?? website.rotation_interval ?? 180
+                              if (value > 0 && value !== current) {
+                                handleUpdateKeywordReplyInterval(website.id, value)
+                              } else if (value <= 0) {
+                                toast.error('关键词回复间隔必须大于0秒')
+                                setKeywordIntervalInputs(prev => ({
+                                  ...prev,
+                                  [website.id]: current.toString()
+                                }))
+                              }
+                            }}
+                          />
+                          <span className="text-xs text-muted-foreground">
+                            ({(() => {
+                              const v = parseInt(
+                                keywordIntervalInputs[website.id]
+                                ?? (website.keyword_reply_interval ?? website.rotation_interval ?? 180).toString()
+                              )
+                              const sec = Number.isFinite(v) ? v : (website.keyword_reply_interval ?? website.rotation_interval ?? 180)
+                              return `${Math.floor(sec / 60)}分${sec % 60}秒`
+                            })()})
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-2">
                           <Label className="text-xs">单轮关键词上限:</Label>
                           <Input
                             type="number"
                             min="0"
                             value={keywordBatchInputs[website.id] ?? (website.keyword_reply_batch_size ?? 0).toString()}
                             className="w-20 h-7 text-xs"
+                            disabled={getWebsiteSenderCount(website.id) !== 1}
                             onChange={(e) => {
                               const value = e.target.value
                               setKeywordBatchInputs(prev => ({ ...prev, [website.id]: value }))
@@ -2741,13 +2823,27 @@ export function AccountsView() {
                         {/* 状态说明 */}
                         <div className="text-xs text-muted-foreground space-y-1">
                           <div>
-                            {(rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))
-                              ? '轮换已启用，将在账号间自动切换'
-                              : '轮换已禁用，将使用固定账号发送'
-                            }
+                            {(() => {
+                              const senderCount = getWebsiteSenderCount(website.id)
+                              if (senderCount === 0) {
+                                return '请先绑定至少一个发送账号'
+                              }
+                              if (senderCount === 1) {
+                                return '当前只绑定了 1 个发送账号，账号轮换已禁用，改用关键词窗口模式'
+                              }
+                              return (rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))
+                                ? '轮换已启用，将在账号间自动切换'
+                                : '轮换已禁用，将使用固定账号发送'
+                            })()}
                           </div>
                           <div>
-                            同一 Discord 频道会按当前轮换间隔累计关键词或图片命中；满批次会合并成一条 @ 回复，剩余命中会在下一轮继续发送。
+                            {(() => {
+                              const senderCount = getWebsiteSenderCount(website.id)
+                              if (senderCount === 1) {
+                                return '同一 Discord 频道会按关键词回复间隔所在的整轮时间窗累计关键词或图片命中；满批次会立即合并成一条 @ 回复，未满批次会在本轮到点后统一发送。'
+                              }
+                              return '关键词合批模式只在绑定 1 个发送账号时启用；绑定多个发送账号时使用账号轮换模式。'
+                            })()}
                           </div>
                         </div>
                       </div>
