@@ -28,6 +28,14 @@ def _normalize_rotation_enabled(value: Any, default: int = 1) -> int:
     return default
 
 
+def _normalize_reply_mode(value: Any, default: str = "rotation") -> str:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"rotation", "keyword"}:
+            return normalized
+    return default
+
+
 def _normalize_batch_size(value: Any, default: int = 0) -> int:
     batch_size = _coerce_int(value, default)
     return max(0, batch_size)
@@ -40,6 +48,7 @@ def resolve_rotation_settings_update(
     rotation_enabled: int = None,
     keyword_reply_interval: int = None,
     keyword_reply_batch_size: int = None,
+    reply_mode: str = None,
 ) -> Dict[str, int]:
     base_rotation_interval = _normalize_interval(
         (current_settings or {}).get("rotation_interval"),
@@ -76,6 +85,13 @@ def resolve_rotation_settings_update(
         rotation_enabled,
         base_rotation_enabled,
     )
+    base_reply_mode = _normalize_reply_mode(
+        (current_settings or {}).get("reply_mode"),
+        "keyword"
+        if base_rotation_enabled == 0 and base_batch_size > 0
+        else "rotation",
+    )
+    requested_reply_mode = _normalize_reply_mode(reply_mode, base_reply_mode)
 
     has_keyword_update = (
         keyword_reply_interval is not None
@@ -84,12 +100,22 @@ def resolve_rotation_settings_update(
     if sender_count != 1 and has_keyword_update:
         raise ValueError("仅绑定1个发送账号时可设置单轮关键词时间和上限")
 
-    if sender_count <= 1:
+    if sender_count != 1 and reply_mode is not None and requested_reply_mode == "keyword":
+        raise ValueError("仅绑定1个发送账号时可切换到关键词模式")
+
+    effective_reply_mode = requested_reply_mode
+    if sender_count != 1 and effective_reply_mode == "keyword":
+        effective_reply_mode = "rotation"
+
+    if effective_reply_mode == "keyword":
         effective_rotation_enabled = 0
+    elif reply_mode is not None:
+        effective_rotation_enabled = 1
 
     return {
         "rotation_interval": effective_rotation_interval,
         "rotation_enabled": effective_rotation_enabled,
         "keyword_reply_interval": effective_keyword_interval,
         "keyword_reply_batch_size": effective_batch_size,
+        "reply_mode": effective_reply_mode,
     }

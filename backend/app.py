@@ -1446,6 +1446,7 @@ def get_website_configs():
             )
             config['rotation_interval'] = effective_settings['rotation_interval']
             config['rotation_enabled'] = effective_settings['rotation_enabled']
+            config['reply_mode'] = effective_settings['reply_mode']
             config['keyword_reply_interval'] = effective_settings['keyword_reply_interval']
             config['keyword_reply_batch_size'] = effective_settings['keyword_reply_batch_size']
             try:
@@ -1788,6 +1789,7 @@ def get_website_rotation(config_id):
         return jsonify({
             'rotation_interval': effective_settings['rotation_interval'],
             'rotation_enabled': effective_settings['rotation_enabled'],
+            'reply_mode': effective_settings['reply_mode'],
             'keyword_reply_interval': effective_settings['keyword_reply_interval'],
             'keyword_reply_batch_size': effective_settings['keyword_reply_batch_size']
         })
@@ -1808,6 +1810,7 @@ def update_website_rotation(config_id):
 
         rotation_interval = data.get('rotation_interval')
         rotation_enabled = data.get('rotation_enabled')
+        reply_mode = data.get('reply_mode')
         keyword_reply_interval = data.get('keyword_reply_interval')
         keyword_reply_batch_size = data.get('keyword_reply_batch_size')
 
@@ -1816,6 +1819,8 @@ def update_website_rotation(config_id):
             return jsonify({'error': '轮换间隔必须大于0秒'}), 400
         if rotation_enabled is not None and rotation_enabled not in [0, 1]:
             return jsonify({'error': '轮换启用状态必须是0或1'}), 400
+        if reply_mode is not None and reply_mode not in ['rotation', 'keyword']:
+            return jsonify({'error': '模式必须是 rotation 或 keyword'}), 400
         if keyword_reply_interval is not None and keyword_reply_interval <= 0:
             return jsonify({'error': '单轮关键词时间必须大于0秒'}), 400
         if keyword_reply_batch_size is not None and keyword_reply_batch_size < 0:
@@ -1823,6 +1828,10 @@ def update_website_rotation(config_id):
 
         current_settings = db.get_user_website_settings(current_user['id'], config_id)
         sender_count = len(db.get_website_senders(config_id, current_user['id']) or [])
+        current_effective_settings = resolve_rotation_settings_update(
+            current_settings=current_settings,
+            sender_count=sender_count,
+        )
 
         try:
             effective_settings = resolve_rotation_settings_update(
@@ -1830,6 +1839,7 @@ def update_website_rotation(config_id):
                 sender_count=sender_count,
                 rotation_interval=rotation_interval,
                 rotation_enabled=rotation_enabled,
+                reply_mode=reply_mode,
                 keyword_reply_interval=keyword_reply_interval,
                 keyword_reply_batch_size=keyword_reply_batch_size,
             )
@@ -1842,17 +1852,21 @@ def update_website_rotation(config_id):
             config_id,
             effective_settings['rotation_interval'],
             effective_settings['rotation_enabled'],
+            effective_settings['reply_mode'],
             effective_settings['keyword_reply_interval'],
             effective_settings['keyword_reply_batch_size'],
         ):
-            if effective_settings['rotation_interval'] != current_settings.get('rotation_interval', 180):
+            if effective_settings['reply_mode'] != current_effective_settings.get('reply_mode', 'rotation'):
+                mode_text = '轮换模式' if effective_settings['reply_mode'] == 'rotation' else '关键词模式'
+                messages.append(f'回复模式已切换为{mode_text}')
+            if effective_settings['rotation_interval'] != current_effective_settings.get('rotation_interval', 180):
                 messages.append(f"轮换间隔已设置为 {effective_settings['rotation_interval']} 秒")
-            if effective_settings['rotation_enabled'] != current_settings.get('rotation_enabled', 1):
+            if effective_settings['rotation_enabled'] != current_effective_settings.get('rotation_enabled', 1):
                 status_text = '启用' if effective_settings['rotation_enabled'] else '禁用'
                 messages.append(f'轮换功能已{status_text}')
-            if effective_settings['keyword_reply_interval'] != current_settings.get('keyword_reply_interval', current_settings.get('rotation_interval', 180)):
+            if effective_settings['keyword_reply_interval'] != current_effective_settings.get('keyword_reply_interval', current_effective_settings.get('rotation_interval', 180)):
                 messages.append(f"单轮关键词时间已设置为 {effective_settings['keyword_reply_interval']} 秒")
-            if effective_settings['keyword_reply_batch_size'] != current_settings.get('keyword_reply_batch_size', 0):
+            if effective_settings['keyword_reply_batch_size'] != current_effective_settings.get('keyword_reply_batch_size', 0):
                 if effective_settings['keyword_reply_batch_size'] == 0:
                     messages.append('单轮关键词上限已设为不限')
                 else:

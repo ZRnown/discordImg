@@ -641,6 +641,7 @@ class Database:
                     website_id INTEGER NOT NULL,
                     rotation_interval INTEGER DEFAULT 180,
                     rotation_enabled INTEGER DEFAULT 1,
+                    reply_mode TEXT DEFAULT 'rotation',
                     keyword_reply_interval INTEGER DEFAULT NULL,
                     keyword_reply_batch_size INTEGER DEFAULT 0,
                     message_filters TEXT DEFAULT '[]',
@@ -652,6 +653,12 @@ class Database:
                     UNIQUE(user_id, website_id)
                 )
             ''')
+            reply_mode_added = False
+            try:
+                cursor.execute("ALTER TABLE user_website_settings ADD COLUMN reply_mode TEXT DEFAULT 'rotation'")
+                reply_mode_added = True
+            except sqlite3.OperationalError:
+                pass
             try:
                 cursor.execute('ALTER TABLE user_website_settings ADD COLUMN keyword_reply_interval INTEGER DEFAULT NULL')
             except sqlite3.OperationalError:
@@ -672,6 +679,18 @@ class Database:
                 ''')
             except sqlite3.OperationalError:
                 pass
+            if reply_mode_added:
+                try:
+                    cursor.execute('''
+                        UPDATE user_website_settings
+                        SET reply_mode = CASE
+                            WHEN COALESCE(keyword_reply_batch_size, 0) > 0
+                                 AND COALESCE(rotation_enabled, 1) = 0 THEN 'keyword'
+                            ELSE 'rotation'
+                        END
+                    ''')
+                except sqlite3.OperationalError:
+                    pass
 
             # 创建抓取状态表（持久化存储抓取状态）
             cursor.execute('''
@@ -2393,7 +2412,7 @@ class Database:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT rotation_interval, rotation_enabled, keyword_reply_interval, keyword_reply_batch_size, message_filters, image_similarity_threshold
+                    SELECT rotation_interval, rotation_enabled, reply_mode, keyword_reply_interval, keyword_reply_batch_size, message_filters, image_similarity_threshold
                     FROM user_website_settings
                     WHERE user_id = ? AND website_id = ?
                 ''', (user_id, website_id))
@@ -2401,9 +2420,13 @@ class Database:
                 if row:
                     rotation_interval = row['rotation_interval'] or 180
                     keyword_reply_interval = row['keyword_reply_interval'] or rotation_interval
+                    reply_mode = row['reply_mode']
+                    if reply_mode not in {'rotation', 'keyword'}:
+                        reply_mode = 'keyword' if (row['rotation_enabled'] == 0 and (row['keyword_reply_batch_size'] or 0) > 0) else 'rotation'
                     return {
                         'rotation_interval': rotation_interval,
                         'rotation_enabled': row['rotation_enabled'],
+                        'reply_mode': reply_mode,
                         'keyword_reply_interval': keyword_reply_interval,
                         'keyword_reply_batch_size': row['keyword_reply_batch_size'] or 0,
                         'message_filters': row['message_filters'],
@@ -2413,6 +2436,7 @@ class Database:
                 return {
                     'rotation_interval': 180,
                     'rotation_enabled': 1,
+                    'reply_mode': 'rotation',
                     'keyword_reply_interval': 180,
                     'keyword_reply_batch_size': 0,
                     'message_filters': '[]',
@@ -2423,6 +2447,7 @@ class Database:
             return {
                 'rotation_interval': 180,
                 'rotation_enabled': 1,
+                'reply_mode': 'rotation',
                 'keyword_reply_interval': 180,
                 'keyword_reply_batch_size': 0,
                 'message_filters': '[]',
@@ -2453,6 +2478,7 @@ class Database:
         website_id: int,
         rotation_interval: int = None,
         rotation_enabled: int = None,
+        reply_mode: str = None,
         keyword_reply_interval: int = None,
         keyword_reply_batch_size: int = None,
     ) -> bool:
@@ -2460,6 +2486,19 @@ class Database:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
+                normalized_reply_mode = reply_mode if reply_mode in {'rotation', 'keyword'} else None
+                if normalized_reply_mode is None:
+                    if rotation_enabled == 0 and (keyword_reply_batch_size or 0) > 0:
+                        normalized_reply_mode = 'keyword'
+                    elif rotation_enabled is not None:
+                        normalized_reply_mode = 'rotation'
+
+                normalized_rotation_enabled = rotation_enabled
+                if normalized_reply_mode == 'keyword':
+                    normalized_rotation_enabled = 0
+                elif normalized_reply_mode == 'rotation' and normalized_rotation_enabled is None:
+                    normalized_rotation_enabled = 1
+
                 # 先检查是否存在记录
                 cursor.execute('''
                     SELECT id FROM user_website_settings WHERE user_id = ? AND website_id = ?
@@ -2473,9 +2512,12 @@ class Database:
                     if rotation_interval is not None:
                         updates.append('rotation_interval = ?')
                         params.append(rotation_interval)
-                    if rotation_enabled is not None:
+                    if normalized_rotation_enabled is not None:
                         updates.append('rotation_enabled = ?')
-                        params.append(rotation_enabled)
+                        params.append(normalized_rotation_enabled)
+                    if normalized_reply_mode is not None:
+                        updates.append('reply_mode = ?')
+                        params.append(normalized_reply_mode)
                     if keyword_reply_interval is not None:
                         updates.append('keyword_reply_interval = ?')
                         params.append(keyword_reply_interval)
@@ -2498,15 +2540,17 @@ class Database:
                             website_id,
                             rotation_interval,
                             rotation_enabled,
+                            reply_mode,
                             keyword_reply_interval,
                             keyword_reply_batch_size
                         )
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         user_id,
                         website_id,
                         rotation_interval or 180,
-                        rotation_enabled if rotation_enabled is not None else 1,
+                        normalized_rotation_enabled if normalized_rotation_enabled is not None else 1,
+                        normalized_reply_mode or 'rotation',
                         keyword_reply_interval if keyword_reply_interval is not None else (rotation_interval or 180),
                         keyword_reply_batch_size if keyword_reply_batch_size is not None else 0,
                     ))

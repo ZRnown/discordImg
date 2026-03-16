@@ -56,12 +56,12 @@ def _normalize_keyword_batch_size(value):
     return max(0, _coerce_int(value, 0))
 
 
-def _should_use_keyword_window_mode(sender_count, interval_seconds, batch_size, rotation_enabled):
+def _should_use_keyword_window_mode(sender_count, interval_seconds, batch_size, reply_mode):
     return (
         _coerce_int(sender_count, 0) == 1
         and _coerce_int(interval_seconds, 0) > 0
         and _normalize_keyword_batch_size(batch_size) > 0
-        and not _coerce_bool(rotation_enabled, True)
+        and str(reply_mode or "rotation").strip().lower() == "keyword"
     )
 
 
@@ -85,6 +85,7 @@ def _resolve_runtime_rotation_settings(website_config, user_settings, sender_cou
         'keyword_reply_batch_size': _normalize_keyword_batch_size(
             user_settings.get('keyword_reply_batch_size', website_config.get('keyword_reply_batch_size', 0))
         ),
+        'reply_mode': user_settings.get('reply_mode', website_config.get('reply_mode', 'rotation')),
     }
     return resolve_rotation_settings_update(
         current_settings=current_settings,
@@ -683,6 +684,7 @@ class DiscordBotClient(discord.Client):
                 max(1, effective_settings['keyword_reply_interval']),
                 effective_settings['keyword_reply_batch_size'],
                 effective_settings['rotation_enabled'],
+                effective_settings['reply_mode'],
             )
 
         try:
@@ -699,6 +701,7 @@ class DiscordBotClient(discord.Client):
             max(1, effective_settings['keyword_reply_interval']),
             effective_settings['keyword_reply_batch_size'],
             effective_settings['rotation_enabled'],
+            effective_settings['reply_mode'],
         )
 
     def _build_explicit_mention_reply_content(self, author_id, reply_contents):
@@ -981,7 +984,7 @@ class DiscordBotClient(discord.Client):
             logger.error(f"获取关键词窗口发送账号失败(website_id={website_config.get('id')}): {e}")
             sender_ids = []
 
-        interval_seconds, batch_size, rotation_enabled = await self._get_keyword_window_settings(
+        interval_seconds, batch_size, rotation_enabled, reply_mode = await self._get_keyword_window_settings(
             website_config,
             sender_count=len(sender_ids),
         )
@@ -998,12 +1001,12 @@ class DiscordBotClient(discord.Client):
             len(sender_ids),
             interval_seconds,
             batch_size,
-            rotation_enabled,
+            reply_mode,
         ):
             if batch_size > 0:
                 logger.info(
                     f"⏭️ [关键词窗口未启用] 网站:{website_config.get('name')} "
-                    f"发送账号数:{len(sender_ids)} 批次上限:{batch_size} 轮换启用:{rotation_enabled}"
+                    f"发送账号数:{len(sender_ids)} 批次上限:{batch_size} 模式:{reply_mode} 轮换启用:{rotation_enabled}"
                 )
             return await self.schedule_reply(
                 message,

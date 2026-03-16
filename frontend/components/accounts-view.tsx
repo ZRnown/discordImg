@@ -190,7 +190,7 @@ export function AccountsView() {
   const [websiteChannels, setWebsiteChannels] = useState<{[key: number]: string[]}>({})
   const [channelInputs, setChannelInputs] = useState<{[key: number]: string}>({})
   const [channelToRemove, setChannelToRemove] = useState<{webId: number, chanId: string} | null>(null)
-  const [rotationEnabled, setRotationEnabled] = useState<{[key: number]: boolean}>({})
+  const [replyModes, setReplyModes] = useState<{[key: number]: string}>({})
   const [rotationInputs, setRotationInputs] = useState<{[key: number]: string}>({})
   const [keywordIntervalInputs, setKeywordIntervalInputs] = useState<{[key: number]: string}>({})
   const [keywordBatchInputs, setKeywordBatchInputs] = useState<{[key: number]: string}>({})
@@ -340,7 +340,7 @@ export function AccountsView() {
       websites.forEach((website: any) => {
         channels[website.id] = website.channels || []
         accounts[website.id] = website.accounts || []
-        setRotationEnabled(prev => ({ ...prev, [website.id]: website.rotation_enabled !== 0 }))
+        setReplyModes(prev => ({ ...prev, [website.id]: website.reply_mode || 'rotation' }))
         setRotationInputs(prev => ({ ...prev, [website.id]: (website.rotation_interval || 180).toString() }))
         setKeywordIntervalInputs(prev => ({
           ...prev,
@@ -623,6 +623,11 @@ export function AccountsView() {
     )).length
   }
 
+  const getWebsiteReplyMode = (website: any) => {
+    if (!website) return 'rotation'
+    return replyModes[website.id] ?? website.reply_mode ?? 'rotation'
+  }
+
   const applyRotationSettingsState = (websiteId: number, nextSettings: any) => {
     if (!nextSettings) return
 
@@ -632,12 +637,13 @@ export function AccountsView() {
             ...website,
             rotation_interval: nextSettings.rotation_interval,
             rotation_enabled: nextSettings.rotation_enabled,
+            reply_mode: nextSettings.reply_mode,
             keyword_reply_interval: nextSettings.keyword_reply_interval,
             keyword_reply_batch_size: nextSettings.keyword_reply_batch_size,
           }
         : website
     )))
-    setRotationEnabled(prev => ({ ...prev, [websiteId]: nextSettings.rotation_enabled !== 0 }))
+    setReplyModes(prev => ({ ...prev, [websiteId]: nextSettings.reply_mode ?? 'rotation' }))
     setRotationInputs(prev => ({ ...prev, [websiteId]: String(nextSettings.rotation_interval ?? 180) }))
     setKeywordIntervalInputs(prev => ({
       ...prev,
@@ -668,6 +674,18 @@ export function AccountsView() {
 
     applyRotationSettingsState(websiteId, data.settings)
     toast.success(data?.message || fallbackSuccessMessage)
+    return data
+  }
+
+  const refreshWebsiteRotationSettings = async (websiteId: number) => {
+    const res = await fetch(`/api/websites/${websiteId}/rotation`, {
+      credentials: 'include',
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(data?.error || '获取设置失败')
+    }
+    applyRotationSettingsState(websiteId, data)
     return data
   }
 
@@ -1206,6 +1224,8 @@ export function AccountsView() {
           }))
         }
 
+        await refreshWebsiteRotationSettings(websiteId)
+
         setNewAccountBinding({ account_id: '', role: 'both' })
       } else {
         const error = await res.json()
@@ -1229,6 +1249,7 @@ export function AccountsView() {
           ...prev,
           [websiteId]: prev[websiteId]?.filter(binding => binding.account_id !== accountId) || []
         }))
+        await refreshWebsiteRotationSettings(websiteId)
       } else {
         toast.error('解绑失败')
       }
@@ -1252,21 +1273,9 @@ export function AccountsView() {
 
   const handleUpdateKeywordBatchSize = async (websiteId: number, keywordReplyBatchSize: number) => {
     try {
-      const website = websites.find(item => item.id === websiteId)
-      const nextInterval = Number(
-        keywordIntervalInputs[websiteId]
-        ?? website?.keyword_reply_interval
-        ?? website?.rotation_interval
-        ?? 180
-      )
-      const payload: Record<string, any> = { keyword_reply_batch_size: keywordReplyBatchSize }
-      if (getWebsiteSenderCount(websiteId) === 1 && nextInterval > 0 && keywordReplyBatchSize > 0) {
-        payload.rotation_enabled = 0
-      }
-
       await updateWebsiteRotationSettings(
         websiteId,
-        payload,
+        { keyword_reply_batch_size: keywordReplyBatchSize },
         keywordReplyBatchSize === 0 ? '单轮关键词上限已改为不限' : '单轮关键词上限已更新'
       )
     } catch (e: any) {
@@ -1276,21 +1285,22 @@ export function AccountsView() {
 
   const handleUpdateKeywordReplyInterval = async (websiteId: number, keywordReplyInterval: number) => {
     try {
-      const website = websites.find(item => item.id === websiteId)
-      const nextBatchSize = Number(
-        keywordBatchInputs[websiteId]
-        ?? website?.keyword_reply_batch_size
-        ?? 0
-      )
-      const payload: Record<string, any> = { keyword_reply_interval: keywordReplyInterval }
-      if (getWebsiteSenderCount(websiteId) === 1 && keywordReplyInterval > 0 && nextBatchSize > 0) {
-        payload.rotation_enabled = 0
-      }
-
       await updateWebsiteRotationSettings(
         websiteId,
-        payload,
+        { keyword_reply_interval: keywordReplyInterval },
         '单轮关键词时间已更新'
+      )
+    } catch (e: any) {
+      toast.error(e?.message || '网络错误')
+    }
+  }
+
+  const handleUpdateReplyMode = async (websiteId: number, replyMode: string) => {
+    try {
+      await updateWebsiteRotationSettings(
+        websiteId,
+        { reply_mode: replyMode },
+        replyMode === 'keyword' ? '已切换到关键词模式' : '已切换到轮换模式'
       )
     } catch (e: any) {
       toast.error(e?.message || '网络错误')
@@ -2714,160 +2724,156 @@ export function AccountsView() {
                           <Settings className="w-4 h-4" />
                           <span className="text-sm font-medium">轮换设置</span>
                         </div>
+                        {(() => {
+                          const senderCount = getWebsiteSenderCount(website.id)
+                          const replyMode = getWebsiteReplyMode(website)
+                          const isKeywordMode = replyMode === 'keyword'
 
-                        {/* 轮换启用开关 */}
-                        <div className="flex items-center gap-2">
-                          <Label className="text-xs">启用轮换:</Label>
-                          <Switch
-                            checked={getWebsiteSenderCount(website.id) > 1
-                              ? (rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))
-                              : false}
-                            disabled={getWebsiteSenderCount(website.id) <= 1}
-                            onCheckedChange={(checked) => {
-                              setRotationEnabled(prev => ({ ...prev, [website.id]: checked }))
-                              updateWebsiteRotationSettings(
-                                website.id,
-                                { rotation_enabled: checked ? 1 : 0 },
-                                `轮换功能已${checked ? '启用' : '禁用'}`
-                              ).catch((error: any) => {
-                                toast.error(error?.message || '网络错误')
-                                setRotationEnabled(prev => ({ ...prev, [website.id]: !checked }))
-                              })
-                            }}
-                          />
-                        </div>
+                          return (
+                            <>
+                              <div className="flex items-center gap-2">
+                                <Label className="text-xs">回复模式:</Label>
+                                <Select
+                                  value={replyMode}
+                                  onValueChange={(value) => {
+                                    void handleUpdateReplyMode(website.id, value)
+                                  }}
+                                >
+                                  <SelectTrigger className="w-[180px] h-8 text-xs">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="rotation">轮换模式</SelectItem>
+                                    <SelectItem value="keyword" disabled={senderCount !== 1}>
+                                      关键词模式
+                                    </SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              </div>
 
-                        {/* 轮换间隔设置 */}
-                        <div className="flex items-center gap-2">
-                          <Label className="text-xs">账号轮换间隔(秒):</Label>
-                          <Input
-                            type="number"
-                            value={rotationInputs[website.id] ?? (website.rotation_interval ?? 180).toString()}
-                            className="w-20 h-7 text-xs"
-                            disabled={
-                              getWebsiteSenderCount(website.id) <= 1
-                              || !(rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))
-                            }
-                            onChange={(e) => {
-                              const value = e.target.value
-                              setRotationInputs(prev => ({ ...prev, [website.id]: value }))
-                            }}
-                            onBlur={(e) => {
-                              const value = parseInt(rotationInputs[website.id] ?? (website.rotation_interval ?? 180).toString())
-                              if (value > 0 && value !== website.rotation_interval) {
-                                handleUpdateRotation(website.id, value)
-                              } else if (value <= 0) {
-                                toast.error('轮换间隔必须大于0秒')
-                                setRotationInputs(prev => ({ ...prev, [website.id]: (website.rotation_interval ?? 180).toString() }))
-                              }
-                            }}
-                          />
-                          <span className="text-xs text-muted-foreground">
-                            ({(() => {
-                              const v = parseInt(rotationInputs[website.id] ?? (website.rotation_interval ?? 180).toString())
-                              const sec = Number.isFinite(v) ? v : (website.rotation_interval ?? 180)
-                              return `${Math.floor(sec / 60)}分${sec % 60}秒`
-                            })()})
-                          </span>
-                        </div>
+                              {replyMode === 'rotation' ? (
+                                <div className="flex items-center gap-2">
+                                  <Label className="text-xs">账号轮换间隔(秒):</Label>
+                                  <Input
+                                    type="number"
+                                    value={rotationInputs[website.id] ?? (website.rotation_interval ?? 180).toString()}
+                                    className="w-20 h-7 text-xs"
+                                    onChange={(e) => {
+                                      const value = e.target.value
+                                      setRotationInputs(prev => ({ ...prev, [website.id]: value }))
+                                    }}
+                                    onBlur={() => {
+                                      const value = parseInt(rotationInputs[website.id] ?? (website.rotation_interval ?? 180).toString())
+                                      if (value > 0 && value !== website.rotation_interval) {
+                                        void handleUpdateRotation(website.id, value)
+                                      } else if (value <= 0) {
+                                        toast.error('轮换间隔必须大于0秒')
+                                        setRotationInputs(prev => ({ ...prev, [website.id]: (website.rotation_interval ?? 180).toString() }))
+                                      }
+                                    }}
+                                  />
+                                  <span className="text-xs text-muted-foreground">
+                                    ({(() => {
+                                      const v = parseInt(rotationInputs[website.id] ?? (website.rotation_interval ?? 180).toString())
+                                      const sec = Number.isFinite(v) ? v : (website.rotation_interval ?? 180)
+                                      return `${Math.floor(sec / 60)}分${sec % 60}秒`
+                                    })()})
+                                  </span>
+                                </div>
+                              ) : (
+                                <>
+                                  <div className="flex items-center gap-2">
+                                    <Label className="text-xs">单轮关键词时间(秒):</Label>
+                                    <Input
+                                      type="number"
+                                      value={keywordIntervalInputs[website.id] ?? (website.keyword_reply_interval ?? website.rotation_interval ?? 180).toString()}
+                                      className="w-20 h-7 text-xs"
+                                      disabled={senderCount !== 1}
+                                      onChange={(e) => {
+                                        const value = e.target.value
+                                        setKeywordIntervalInputs(prev => ({ ...prev, [website.id]: value }))
+                                      }}
+                                      onBlur={() => {
+                                        const value = parseInt(
+                                          keywordIntervalInputs[website.id]
+                                          ?? (website.keyword_reply_interval ?? website.rotation_interval ?? 180).toString()
+                                        )
+                                        const current = website.keyword_reply_interval ?? website.rotation_interval ?? 180
+                                        if (value > 0 && value !== current) {
+                                          void handleUpdateKeywordReplyInterval(website.id, value)
+                                        } else if (value <= 0) {
+                                          toast.error('单轮关键词时间必须大于0秒')
+                                          setKeywordIntervalInputs(prev => ({
+                                            ...prev,
+                                            [website.id]: current.toString()
+                                          }))
+                                        }
+                                      }}
+                                    />
+                                    <span className="text-xs text-muted-foreground">
+                                      ({(() => {
+                                        const v = parseInt(
+                                          keywordIntervalInputs[website.id]
+                                          ?? (website.keyword_reply_interval ?? website.rotation_interval ?? 180).toString()
+                                        )
+                                        const sec = Number.isFinite(v) ? v : (website.keyword_reply_interval ?? website.rotation_interval ?? 180)
+                                        return `${Math.floor(sec / 60)}分${sec % 60}秒`
+                                      })()})
+                                    </span>
+                                  </div>
 
-                        <div className="flex items-center gap-2">
-                          <Label className="text-xs">单轮关键词时间(秒):</Label>
-                          <Input
-                            type="number"
-                            value={keywordIntervalInputs[website.id] ?? (website.keyword_reply_interval ?? website.rotation_interval ?? 180).toString()}
-                            className="w-20 h-7 text-xs"
-                            disabled={getWebsiteSenderCount(website.id) !== 1}
-                            onChange={(e) => {
-                              const value = e.target.value
-                              setKeywordIntervalInputs(prev => ({ ...prev, [website.id]: value }))
-                            }}
-                            onBlur={() => {
-                              const value = parseInt(
-                                keywordIntervalInputs[website.id]
-                                ?? (website.keyword_reply_interval ?? website.rotation_interval ?? 180).toString()
-                              )
-                              const current = website.keyword_reply_interval ?? website.rotation_interval ?? 180
-                              if (value > 0 && value !== current) {
-                                handleUpdateKeywordReplyInterval(website.id, value)
-                              } else if (value <= 0) {
-                                toast.error('单轮关键词时间必须大于0秒')
-                                setKeywordIntervalInputs(prev => ({
-                                  ...prev,
-                                  [website.id]: current.toString()
-                                }))
-                              }
-                            }}
-                          />
-                          <span className="text-xs text-muted-foreground">
-                            ({(() => {
-                              const v = parseInt(
-                                keywordIntervalInputs[website.id]
-                                ?? (website.keyword_reply_interval ?? website.rotation_interval ?? 180).toString()
-                              )
-                              const sec = Number.isFinite(v) ? v : (website.keyword_reply_interval ?? website.rotation_interval ?? 180)
-                              return `${Math.floor(sec / 60)}分${sec % 60}秒`
-                            })()})
-                          </span>
-                        </div>
+                                  <div className="flex items-center gap-2">
+                                    <Label className="text-xs">单轮关键词上限:</Label>
+                                    <Input
+                                      type="number"
+                                      min="0"
+                                      value={keywordBatchInputs[website.id] ?? (website.keyword_reply_batch_size ?? 0).toString()}
+                                      className="w-20 h-7 text-xs"
+                                      disabled={senderCount !== 1}
+                                      onChange={(e) => {
+                                        const value = e.target.value
+                                        setKeywordBatchInputs(prev => ({ ...prev, [website.id]: value }))
+                                      }}
+                                      onBlur={() => {
+                                        const rawValue = keywordBatchInputs[website.id] ?? (website.keyword_reply_batch_size ?? 0).toString()
+                                        const value = parseInt(rawValue)
+                                        if (Number.isFinite(value) && value >= 0 && value !== (website.keyword_reply_batch_size ?? 0)) {
+                                          void handleUpdateKeywordBatchSize(website.id, value)
+                                        } else if (!Number.isFinite(value) || value < 0) {
+                                          toast.error('单轮关键词上限不能小于0')
+                                          setKeywordBatchInputs(prev => ({
+                                            ...prev,
+                                            [website.id]: (website.keyword_reply_batch_size ?? 0).toString()
+                                          }))
+                                        }
+                                      }}
+                                    />
+                                    <span className="text-xs text-muted-foreground">
+                                      0 = 不限制
+                                    </span>
+                                  </div>
+                                </>
+                              )}
 
-                        <div className="flex items-center gap-2">
-                          <Label className="text-xs">单轮关键词上限:</Label>
-                          <Input
-                            type="number"
-                            min="0"
-                            value={keywordBatchInputs[website.id] ?? (website.keyword_reply_batch_size ?? 0).toString()}
-                            className="w-20 h-7 text-xs"
-                            disabled={getWebsiteSenderCount(website.id) !== 1}
-                            onChange={(e) => {
-                              const value = e.target.value
-                              setKeywordBatchInputs(prev => ({ ...prev, [website.id]: value }))
-                            }}
-                            onBlur={() => {
-                              const rawValue = keywordBatchInputs[website.id] ?? (website.keyword_reply_batch_size ?? 0).toString()
-                              const value = parseInt(rawValue)
-                              if (Number.isFinite(value) && value >= 0 && value !== (website.keyword_reply_batch_size ?? 0)) {
-                                handleUpdateKeywordBatchSize(website.id, value)
-                              } else if (!Number.isFinite(value) || value < 0) {
-                                toast.error('单轮关键词上限不能小于0')
-                                setKeywordBatchInputs(prev => ({
-                                  ...prev,
-                                  [website.id]: (website.keyword_reply_batch_size ?? 0).toString()
-                                }))
-                              }
-                            }}
-                          />
-                          <span className="text-xs text-muted-foreground">
-                            0 = 不限制
-                          </span>
-                        </div>
-
-                        {/* 状态说明 */}
-                        <div className="text-xs text-muted-foreground space-y-1">
-                          <div>
-                            {(() => {
-                              const senderCount = getWebsiteSenderCount(website.id)
-                              if (senderCount === 0) {
-                                return '请先绑定至少一个发送账号'
-                              }
-                              if (senderCount === 1) {
-                                return '当前只绑定了 1 个发送账号，账号轮换会自动关闭；设置单轮关键词时间和上限后，将在同一时间窗内合并回复'
-                              }
-                              return (rotationEnabled[website.id] ?? (website.rotation_enabled !== 0))
-                                ? '轮换已启用，将在账号间自动切换'
-                                : '轮换已禁用，将使用固定账号发送'
-                            })()}
-                          </div>
-                          <div>
-                            {(() => {
-                              const senderCount = getWebsiteSenderCount(website.id)
-                              if (senderCount === 1) {
-                                return '同一 Discord 频道会按单轮关键词时间所在的整轮时间窗累计关键词或图片命中；满上限会立即合并成一条 @ 回复，未满上限会在本轮到点后统一发送。'
-                              }
-                              return '单轮关键词时间和上限只在绑定 1 个发送账号时可设置；绑定多个发送账号时使用账号轮换模式。'
-                            })()}
-                          </div>
-                        </div>
+                              <div className="text-xs text-muted-foreground space-y-1">
+                                <div>
+                                  {senderCount === 0
+                                    ? '请先绑定至少一个发送账号。'
+                                    : isKeywordMode
+                                      ? '关键词模式下，同一 Discord 频道会按整轮时间窗累计命中；达到单轮关键词上限会立即发送，未达到会在本轮到点时统一发送。'
+                                      : senderCount === 1
+                                        ? '当前只有 1 个发送账号，轮换模式下会继续使用这个账号发送，轮换间隔会作为发送冷却时间。'
+                                        : '轮换模式下会按轮换间隔在可用发送账号之间切换。'}
+                                </div>
+                                <div>
+                                  {senderCount === 1
+                                    ? '关键词模式只在绑定 1 个发送账号时可用；切回轮换模式后，已填写的关键词时间和上限会保留，下次切回可继续使用。'
+                                    : '当前绑定了多个发送账号，关键词模式不可选；如需使用关键词模式，请先只保留 1 个发送账号。'}
+                                </div>
+                              </div>
+                            </>
+                          )
+                        })()}
                       </div>
                     )}
 
