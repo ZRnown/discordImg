@@ -107,6 +107,35 @@ def _build_keyword_direct_send_payload(
     return payload
 
 
+def _build_multi_reply_content(author_id, reply_contents, reply_mode):
+    cleaned_contents = [
+        (content or "").strip()
+        for content in (reply_contents or ())
+        if (content or "").strip()
+    ]
+    if not cleaned_contents:
+        return ""
+
+    normalized_mode = str(reply_mode or "rotation").strip().lower()
+    if normalized_mode != "keyword" or not author_id:
+        return "\n".join(cleaned_contents)
+
+    entries = [
+        {
+            'author_id': author_id,
+            'reply_content': content,
+        }
+        for content in cleaned_contents
+    ]
+    return build_batched_reply_content(entries)
+
+
+def _should_mention_reply_author(explicit_mentions, reply_mode):
+    if explicit_mentions:
+        return False
+    return str(reply_mode or "rotation").strip().lower() != "default"
+
+
 def _resolve_runtime_rotation_settings(website_config, user_settings, sender_count):
     website_config = website_config or {}
     user_settings = user_settings or {}
@@ -747,22 +776,11 @@ class DiscordBotClient(discord.Client):
         )
 
     def _build_explicit_mention_reply_content(self, author_id, reply_contents):
-        if not author_id:
-            return "\n".join(
-                (content or "").strip()
-                for content in reply_contents or ()
-                if (content or "").strip()
-            )
-
-        entries = [
-            {
-                'author_id': author_id,
-                'reply_content': (content or '').strip(),
-            }
-            for content in reply_contents or ()
-            if (content or '').strip()
-        ]
-        return build_batched_reply_content(entries)
+        return _build_multi_reply_content(
+            author_id=author_id,
+            reply_contents=reply_contents,
+            reply_mode="keyword",
+        )
 
     async def _build_keyword_reply_job(
         self,
@@ -1970,7 +1988,10 @@ class DiscordBotClient(discord.Client):
                                 )
                             else:
                                 send_kwargs['reference'] = message
-                                send_kwargs['mention_author'] = not explicit_mentions
+                                send_kwargs['mention_author'] = _should_mention_reply_author(
+                                    explicit_mentions=explicit_mentions,
+                                    reply_mode=reply_mode,
+                                )
                                 if explicit_mentions:
                                     send_kwargs['allowed_mentions'] = discord.AllowedMentions(
                                         users=True,
@@ -3242,7 +3263,32 @@ class DiscordBotClient(discord.Client):
                 })
 
             per_website_content = {}
+            per_website_reply_modes = {}
+            try:
+                try:
+                    from database import db
+                except ImportError:
+                    from .database import db
+            except Exception as db_import_error:
+                logger.error(f"导入数据库模块失败: {db_import_error}")
+                db = None
             for website_config in website_configs:
+                sender_count = 0
+                if db is not None:
+                    try:
+                        sender_ids = await asyncio.get_event_loop().run_in_executor(
+                            None, db.get_website_senders, website_config.get('id'), self.user_id
+                        )
+                        sender_count = len(sender_ids or [])
+                    except Exception as sender_error:
+                        logger.error(
+                            f"获取合并回复发送账号失败(website_id={website_config.get('id')}): {sender_error}"
+                        )
+                _, _, _, reply_mode = await self._get_keyword_window_settings(
+                    website_config,
+                    sender_count=sender_count,
+                )
+                per_website_reply_modes[str(website_config.get('id'))] = reply_mode
                 website_lines = []
                 for entry in reply_entries:
                     reply_text = self._generate_reply_content(
@@ -3254,9 +3300,10 @@ class DiscordBotClient(discord.Client):
                     if reply_text:
                         website_lines.append(reply_text)
                 if website_lines:
-                    per_website_content[str(website_config.get('id'))] = self._build_explicit_mention_reply_content(
-                        getattr(message.author, 'id', None),
-                        website_lines,
+                    per_website_content[str(website_config.get('id'))] = _build_multi_reply_content(
+                        author_id=getattr(message.author, 'id', None),
+                        reply_contents=website_lines,
+                        reply_mode=reply_mode,
                     )
 
             if per_website_content:
@@ -3270,15 +3317,17 @@ class DiscordBotClient(discord.Client):
                 ]
 
                 for website_config in website_configs:
-                    website_content = per_website_content.get(str(website_config.get('id')))
+                    website_key = str(website_config.get('id'))
+                    website_content = per_website_content.get(website_key)
                     if not website_content:
                         continue
+                    reply_mode = per_website_reply_modes.get(website_key, 'rotation')
                     agg_custom_reply = {
                         'reply_type': 'custom_only',
                         'content': website_content,
                         'product_data': base_product,
                         'skip_images': True,
-                        'explicit_mentions': True,
+                        'explicit_mentions': reply_mode == 'keyword',
                         'repeat_product_ids': repeat_product_ids,
                     }
                     await self._enqueue_or_dispatch_keyword_reply(
