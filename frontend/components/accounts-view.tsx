@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react"
 import { useApiCache } from "@/hooks/use-api-cache"
+import { getReplyModeSwitchError } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -1305,6 +1306,16 @@ export function AccountsView() {
     } catch (e: any) {
       toast.error(e?.message || '网络错误')
     }
+  }
+
+  const handleReplyModeChange = async (websiteId: number, senderCount: number, replyMode: string) => {
+    const switchError = getReplyModeSwitchError(senderCount, replyMode)
+    if (switchError) {
+      toast.error(switchError)
+      return
+    }
+
+    await handleUpdateReplyMode(websiteId, replyMode)
   }
 
   // 网站过滤规则管理
@@ -2736,7 +2747,7 @@ export function AccountsView() {
                                 <Select
                                   value={replyMode}
                                   onValueChange={(value) => {
-                                    void handleUpdateReplyMode(website.id, value)
+                                    void handleReplyModeChange(website.id, senderCount, value)
                                   }}
                                 >
                                   <SelectTrigger className="w-[180px] h-8 text-xs">
@@ -2744,7 +2755,7 @@ export function AccountsView() {
                                   </SelectTrigger>
                                   <SelectContent>
                                     <SelectItem value="rotation">轮换模式</SelectItem>
-                                    <SelectItem value="keyword" disabled={senderCount !== 1}>
+                                    <SelectItem value="keyword">
                                       关键词模式
                                     </SelectItem>
                                   </SelectContent>

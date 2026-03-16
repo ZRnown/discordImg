@@ -26,3 +26,22 @@ export function formatDate(dateString: string | undefined | null): string {
     return '时间格式错误'
   }
 }
+
+export function getReplyModeSwitchError(
+  senderCount: number,
+  nextReplyMode: string,
+): string | null {
+  if (nextReplyMode !== 'keyword') {
+    return null
+  }
+
+  if (senderCount === 1) {
+    return null
+  }
+
+  if (senderCount <= 0) {
+    return '请先绑定 1 个发送账号后再切换到关键词模式'
+  }
+
+  return `当前绑定了 ${senderCount} 个发送账号，关键词模式只支持 1 个发送账号`
+}
