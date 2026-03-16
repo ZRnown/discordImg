@@ -1,7 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { getReplyModeSwitchError } from './lib/utils.ts'
+import {
+  getReplyModeLabel,
+  getReplyModeSettingsSection,
+  getReplyModeSwitchError,
+} from './lib/utils.ts'
 
 test('allows switching to keyword mode when exactly one sender is bound', () => {
   assert.equal(getReplyModeSwitchError(1, 'keyword'), null)
@@ -24,4 +28,21 @@ test('returns a clear error when switching to keyword mode with multiple senders
 test('rotation mode never blocks switching', () => {
   assert.equal(getReplyModeSwitchError(0, 'rotation'), null)
   assert.equal(getReplyModeSwitchError(3, 'rotation'), null)
+})
+
+test('default mode never blocks switching', () => {
+  assert.equal(getReplyModeSwitchError(0, 'default'), null)
+  assert.equal(getReplyModeSwitchError(3, 'default'), null)
+})
+
+test('reply mode labels cover the new default mode', () => {
+  assert.equal(getReplyModeLabel('default'), '默认模式')
+  assert.equal(getReplyModeLabel('rotation'), '轮换模式')
+  assert.equal(getReplyModeLabel('keyword'), '关键词模式')
+})
+
+test('default mode hides both rotation and keyword settings', () => {
+  assert.equal(getReplyModeSettingsSection('default'), 'none')
+  assert.equal(getReplyModeSettingsSection('rotation'), 'rotation')
+  assert.equal(getReplyModeSettingsSection('keyword'), 'keyword')
 })

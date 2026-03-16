@@ -65,6 +65,48 @@ def _should_use_keyword_window_mode(sender_count, interval_seconds, batch_size, 
     )
 
 
+def _should_send_plain_keyword_message(prevalidated_batch, explicit_mentions, reply_mode):
+    if prevalidated_batch:
+        return True
+
+    return str(reply_mode or "rotation").strip().lower() == "keyword"
+
+
+def _build_keyword_direct_send_payload(
+    author_id,
+    reply_content,
+    base_custom_reply=None,
+    repeat_product_ids=None,
+    reply_content_is_final=False,
+):
+    entry = {
+        'reply_content': (reply_content or '').strip(),
+        'reply_content_is_final': bool(reply_content_is_final),
+    }
+    if author_id:
+        entry['author_id'] = author_id
+
+    content = build_batched_reply_content([entry]).strip()
+    payload = {
+        'reply_type': 'custom_only',
+        'content': content,
+        'explicit_mentions': True,
+        'skip_reference': True,
+        'final_direct_content': True,
+    }
+
+    if isinstance(base_custom_reply, dict):
+        if base_custom_reply.get('skip_images'):
+            payload['skip_images'] = True
+        if base_custom_reply.get('product_data') is not None:
+            payload['product_data'] = base_custom_reply.get('product_data')
+
+    if repeat_product_ids:
+        payload['repeat_product_ids'] = list(repeat_product_ids)
+
+    return payload
+
+
 def _resolve_runtime_rotation_settings(website_config, user_settings, sender_count):
     website_config = website_config or {}
     user_settings = user_settings or {}
@@ -751,6 +793,7 @@ class DiscordBotClient(discord.Client):
             logger.info(f"消息被过滤(网站规则): {website_config.get('name')}")
             return None
 
+        reply_content_is_final = bool(custom_reply and custom_reply.get('explicit_mentions'))
         repeat_product_ids = self._get_repeat_product_ids(product, custom_reply)
         repeat_window = max(
             _get_repeat_filter_seconds(),
@@ -831,6 +874,11 @@ class DiscordBotClient(discord.Client):
             user_settings.get('keyword_reply_batch_size', website_config.get('keyword_reply_batch_size', 0))
         )
 
+        if not reply_content_is_final and author_id and reply_content:
+            direct_payload = _build_keyword_direct_send_payload(author_id, reply_content)
+            reply_content = direct_payload['content']
+            reply_content_is_final = bool(direct_payload.get('final_direct_content'))
+
         return {
             'client': self,
             'message': message,
@@ -840,6 +888,7 @@ class DiscordBotClient(discord.Client):
             'website_config': website_config,
             'match_context': match_context,
             'reply_content': reply_content,
+            'reply_content_is_final': reply_content_is_final,
             'author_id': author_id,
             'repeat_product_ids': repeat_product_ids,
             'keyword_reply_interval': max(1, keyword_reply_interval),
@@ -988,6 +1037,39 @@ class DiscordBotClient(discord.Client):
             website_config,
             sender_count=len(sender_ids),
         )
+        use_keyword_window_mode = _should_use_keyword_window_mode(
+            len(sender_ids),
+            interval_seconds,
+            batch_size,
+            reply_mode,
+        )
+
+        if reply_mode == 'keyword' and not use_keyword_window_mode:
+            job = await self._build_keyword_reply_job(
+                message,
+                product,
+                custom_reply,
+                website_config,
+                match_context=match_context,
+            )
+            if job is None:
+                return False
+
+            direct_custom_reply = _build_keyword_direct_send_payload(
+                author_id=job.get('author_id'),
+                reply_content=job.get('reply_content'),
+                base_custom_reply=custom_reply,
+                repeat_product_ids=job.get('repeat_product_ids'),
+                reply_content_is_final=job.get('reply_content_is_final'),
+            )
+            return await self.schedule_reply(
+                message,
+                product,
+                direct_custom_reply,
+                match_context,
+                website_configs_override=[website_config],
+            )
+
         if batch_size <= 0:
             return await self.schedule_reply(
                 message,
@@ -997,12 +1079,7 @@ class DiscordBotClient(discord.Client):
                 website_configs_override=[website_config],
             )
 
-        if not _should_use_keyword_window_mode(
-            len(sender_ids),
-            interval_seconds,
-            batch_size,
-            reply_mode,
-        ):
+        if not use_keyword_window_mode:
             if batch_size > 0:
                 logger.info(
                     f"⏭️ [关键词窗口未启用] 网站:{website_config.get('name')} "
@@ -1644,6 +1721,7 @@ class DiscordBotClient(discord.Client):
                     user_settings=user_website_settings,
                     sender_count=len(db_sender_ids),
                 )
+                reply_mode = str(effective_settings.get('reply_mode', 'rotation')).strip().lower()
                 rotation_enabled = _coerce_bool(effective_settings.get('rotation_enabled', 0), False)
                 rotation_interval = _coerce_int(
                     effective_settings.get('rotation_interval', website_config.get('rotation_interval', 180)),
@@ -1652,7 +1730,8 @@ class DiscordBotClient(discord.Client):
 
                 if user_website_settings:
                     logger.info(
-                        f"📋 使用用户级别设置: rotation_interval={rotation_interval}秒, rotation_enabled={rotation_enabled}"
+                        f"📋 使用用户级别设置: rotation_interval={rotation_interval}秒, "
+                        f"rotation_enabled={rotation_enabled}, reply_mode={reply_mode}"
                     )
                     if (
                         not prevalidated_batch
@@ -1661,6 +1740,9 @@ class DiscordBotClient(discord.Client):
                     ):
                         logger.info(f"消息被过滤(网站规则): {website_config.get('name')}")
                         continue
+
+                if reply_mode == 'default':
+                    skip_sender_cooldown = True
 
                 if skip_sender_cooldown:
                     available_senders = list(valid_senders)
@@ -1858,12 +1940,28 @@ class DiscordBotClient(discord.Client):
                                 continue
 
                             explicit_mentions = bool(active_custom_reply and active_custom_reply.get('explicit_mentions'))
+                            send_plain_message = _should_send_plain_keyword_message(
+                                prevalidated_batch=prevalidated_batch,
+                                explicit_mentions=explicit_mentions,
+                                reply_mode=reply_mode,
+                            )
+                            if (
+                                send_plain_message
+                                and response_content
+                                and not prevalidated_batch
+                                and author_id
+                            ):
+                                direct_payload = _build_keyword_direct_send_payload(
+                                    author_id,
+                                    response_content,
+                                )
+                                response_content = direct_payload['content']
 
                             send_kwargs = {
                                 'content': response_content if response_content else None,
                                 'files': files if files else None,
                             }
-                            if prevalidated_batch:
+                            if send_plain_message:
                                 send_kwargs['allowed_mentions'] = discord.AllowedMentions(
                                     users=True,
                                     roles=False,
@@ -1933,7 +2031,7 @@ class DiscordBotClient(discord.Client):
                             if response_content:
                                 try:
                                     fallback_kwargs = {}
-                                    if prevalidated_batch:
+                                    if send_plain_message:
                                         fallback_kwargs['allowed_mentions'] = discord.AllowedMentions(
                                             users=True,
                                             roles=False,

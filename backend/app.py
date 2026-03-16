@@ -1819,8 +1819,8 @@ def update_website_rotation(config_id):
             return jsonify({'error': '轮换间隔必须大于0秒'}), 400
         if rotation_enabled is not None and rotation_enabled not in [0, 1]:
             return jsonify({'error': '轮换启用状态必须是0或1'}), 400
-        if reply_mode is not None and reply_mode not in ['rotation', 'keyword']:
-            return jsonify({'error': '模式必须是 rotation 或 keyword'}), 400
+        if reply_mode is not None and reply_mode not in ['default', 'rotation', 'keyword']:
+            return jsonify({'error': '模式必须是 default、rotation 或 keyword'}), 400
         if keyword_reply_interval is not None and keyword_reply_interval <= 0:
             return jsonify({'error': '单轮关键词时间必须大于0秒'}), 400
         if keyword_reply_batch_size is not None and keyword_reply_batch_size < 0:
@@ -1857,7 +1857,11 @@ def update_website_rotation(config_id):
             effective_settings['keyword_reply_batch_size'],
         ):
             if effective_settings['reply_mode'] != current_effective_settings.get('reply_mode', 'rotation'):
-                mode_text = '轮换模式' if effective_settings['reply_mode'] == 'rotation' else '关键词模式'
+                mode_text = {
+                    'default': '默认模式',
+                    'rotation': '轮换模式',
+                    'keyword': '关键词模式',
+                }.get(effective_settings['reply_mode'], effective_settings['reply_mode'])
                 messages.append(f'回复模式已切换为{mode_text}')
             if effective_settings['rotation_interval'] != current_effective_settings.get('rotation_interval', 180):
                 messages.append(f"轮换间隔已设置为 {effective_settings['rotation_interval']} 秒")

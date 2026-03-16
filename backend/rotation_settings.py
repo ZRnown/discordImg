@@ -31,7 +31,7 @@ def _normalize_rotation_enabled(value: Any, default: int = 1) -> int:
 def _normalize_reply_mode(value: Any, default: str = "rotation") -> str:
     if isinstance(value, str):
         normalized = value.strip().lower()
-        if normalized in {"rotation", "keyword"}:
+        if normalized in {"default", "rotation", "keyword"}:
             return normalized
     return default
 
@@ -108,6 +108,8 @@ def resolve_rotation_settings_update(
         effective_reply_mode = "rotation"
 
     if effective_reply_mode == "keyword":
+        effective_rotation_enabled = 0
+    elif effective_reply_mode == "default":
         effective_rotation_enabled = 0
     elif reply_mode is not None:
         effective_rotation_enabled = 1

@@ -2421,7 +2421,7 @@ class Database:
                     rotation_interval = row['rotation_interval'] or 180
                     keyword_reply_interval = row['keyword_reply_interval'] or rotation_interval
                     reply_mode = row['reply_mode']
-                    if reply_mode not in {'rotation', 'keyword'}:
+                    if reply_mode not in {'default', 'rotation', 'keyword'}:
                         reply_mode = 'keyword' if (row['rotation_enabled'] == 0 and (row['keyword_reply_batch_size'] or 0) > 0) else 'rotation'
                     return {
                         'rotation_interval': rotation_interval,
@@ -2486,7 +2486,7 @@ class Database:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                normalized_reply_mode = reply_mode if reply_mode in {'rotation', 'keyword'} else None
+                normalized_reply_mode = reply_mode if reply_mode in {'default', 'rotation', 'keyword'} else None
                 if normalized_reply_mode is None:
                     if rotation_enabled == 0 and (keyword_reply_batch_size or 0) > 0:
                         normalized_reply_mode = 'keyword'
@@ -2495,6 +2495,8 @@ class Database:
 
                 normalized_rotation_enabled = rotation_enabled
                 if normalized_reply_mode == 'keyword':
+                    normalized_rotation_enabled = 0
+                elif normalized_reply_mode == 'default':
                     normalized_rotation_enabled = 0
                 elif normalized_reply_mode == 'rotation' and normalized_rotation_enabled is None:
                     normalized_rotation_enabled = 1

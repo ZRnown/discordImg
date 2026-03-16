@@ -156,7 +156,18 @@ def build_batched_reply_content(entries: Iterable[dict]) -> str:
     for entry in entries or ():
         author_id = entry.get("author_id")
         reply_content = (entry.get("reply_content") or "").strip()
-        if not author_id or not reply_content:
+        if not reply_content:
+            continue
+
+        if entry.get("reply_content_is_final"):
+            lines.extend(
+                part.strip()
+                for part in reply_content.splitlines()
+                if part.strip()
+            )
+            continue
+
+        if not author_id:
             continue
 
         mention = f"<@{author_id}>"

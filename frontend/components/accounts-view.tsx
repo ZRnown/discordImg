@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react"
 import { useApiCache } from "@/hooks/use-api-cache"
-import { getReplyModeSwitchError } from "@/lib/utils"
+import { getReplyModeLabel, getReplyModeSettingsSection, getReplyModeSwitchError } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -1301,7 +1301,7 @@ export function AccountsView() {
       await updateWebsiteRotationSettings(
         websiteId,
         { reply_mode: replyMode },
-        replyMode === 'keyword' ? '已切换到关键词模式' : '已切换到轮换模式'
+        `已切换到${getReplyModeLabel(replyMode)}`
       )
     } catch (e: any) {
       toast.error(e?.message || '网络错误')
@@ -2739,6 +2739,7 @@ export function AccountsView() {
                           const senderCount = getWebsiteSenderCount(website.id)
                           const replyMode = getWebsiteReplyMode(website)
                           const isKeywordMode = replyMode === 'keyword'
+                          const settingsSection = getReplyModeSettingsSection(replyMode)
 
                           return (
                             <>
@@ -2754,6 +2755,7 @@ export function AccountsView() {
                                     <SelectValue />
                                   </SelectTrigger>
                                   <SelectContent>
+                                    <SelectItem value="default">默认模式</SelectItem>
                                     <SelectItem value="rotation">轮换模式</SelectItem>
                                     <SelectItem value="keyword">
                                       关键词模式
@@ -2762,7 +2764,7 @@ export function AccountsView() {
                                 </Select>
                               </div>
 
-                              {replyMode === 'rotation' ? (
+                              {settingsSection === 'rotation' ? (
                                 <div className="flex items-center gap-2">
                                   <Label className="text-xs">账号轮换间隔(秒):</Label>
                                   <Input
@@ -2791,7 +2793,7 @@ export function AccountsView() {
                                     })()})
                                   </span>
                                 </div>
-                              ) : (
+                              ) : settingsSection === 'keyword' ? (
                                 <>
                                   <div className="flex items-center gap-2">
                                     <Label className="text-xs">单轮关键词时间(秒):</Label>
@@ -2864,22 +2866,26 @@ export function AccountsView() {
                                     </span>
                                   </div>
                                 </>
-                              )}
+                              ) : null}
 
                               <div className="text-xs text-muted-foreground space-y-1">
                                 <div>
                                   {senderCount === 0
                                     ? '请先绑定至少一个发送账号。'
-                                    : isKeywordMode
-                                      ? '关键词模式下，同一 Discord 频道会按整轮时间窗累计命中；达到单轮关键词上限会立即发送，未达到会在本轮到点时统一发送。'
-                                      : senderCount === 1
-                                        ? '当前只有 1 个发送账号，轮换模式下会继续使用这个账号发送，轮换间隔会作为发送冷却时间。'
-                                        : '轮换模式下会按轮换间隔在可用发送账号之间切换。'}
+                                    : replyMode === 'default'
+                                      ? '默认模式下，命中关键词后会立刻回复原消息，不走轮换冷却，也不使用关键词时间窗。'
+                                      : isKeywordMode
+                                        ? '关键词模式下，同一 Discord 频道会按整轮时间窗累计命中；达到单轮关键词上限会立即发送，未达到会在本轮到点时统一发送。批量 @ 消息会直接发送，不引用原消息。'
+                                        : senderCount === 1
+                                          ? '当前只有 1 个发送账号，轮换模式下会继续使用这个账号发送，轮换间隔会作为发送冷却时间。'
+                                          : '轮换模式下会按轮换间隔在可用发送账号之间切换。'}
                                 </div>
                                 <div>
-                                  {senderCount === 1
-                                    ? '关键词模式只在绑定 1 个发送账号时可用；切回轮换模式后，已填写的关键词时间和上限会保留，下次切回可继续使用。'
-                                    : '当前绑定了多个发送账号，关键词模式不可选；如需使用关键词模式，请先只保留 1 个发送账号。'}
+                                  {replyMode === 'default'
+                                    ? '默认模式不显示轮换和关键词窗口设置，行为等同于立即回复。'
+                                    : senderCount === 1
+                                      ? '关键词模式只在绑定 1 个发送账号时可用；切回其他模式后，已填写的关键词时间和上限会保留，下次切回可继续使用。'
+                                      : '当前绑定了多个发送账号，关键词模式不可选；如需使用关键词模式，请先只保留 1 个发送账号。'}
                                 </div>
                               </div>
                             </>
