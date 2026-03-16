@@ -23,6 +23,10 @@ try:
     from keyword_reply_window import KeywordReplyWindowManager, build_batched_reply_content
 except ImportError:
     from .keyword_reply_window import KeywordReplyWindowManager, build_batched_reply_content
+try:
+    from rotation_settings import resolve_rotation_settings_update
+except ImportError:
+    from .rotation_settings import resolve_rotation_settings_update
 
 # 全局变量用于多账号机器人管理
 bot_clients = []
@@ -52,11 +56,39 @@ def _normalize_keyword_batch_size(value):
     return max(0, _coerce_int(value, 0))
 
 
-def _should_use_keyword_window_mode(sender_count, interval_seconds, batch_size):
+def _should_use_keyword_window_mode(sender_count, interval_seconds, batch_size, rotation_enabled):
     return (
         _coerce_int(sender_count, 0) == 1
         and _coerce_int(interval_seconds, 0) > 0
         and _normalize_keyword_batch_size(batch_size) > 0
+        and not _coerce_bool(rotation_enabled, True)
+    )
+
+
+def _resolve_runtime_rotation_settings(website_config, user_settings, sender_count):
+    website_config = website_config or {}
+    user_settings = user_settings or {}
+    base_rotation_interval = _coerce_int(website_config.get('rotation_interval', 180), 180)
+    current_settings = {
+        'rotation_interval': _coerce_int(
+            user_settings.get('rotation_interval', base_rotation_interval),
+            base_rotation_interval,
+        ),
+        'rotation_enabled': 1 if _coerce_bool(
+            user_settings.get('rotation_enabled', website_config.get('rotation_enabled', 1)),
+            True,
+        ) else 0,
+        'keyword_reply_interval': _coerce_int(
+            user_settings.get('keyword_reply_interval', website_config.get('keyword_reply_interval', base_rotation_interval)),
+            base_rotation_interval,
+        ),
+        'keyword_reply_batch_size': _normalize_keyword_batch_size(
+            user_settings.get('keyword_reply_batch_size', website_config.get('keyword_reply_batch_size', 0))
+        ),
+    }
+    return resolve_rotation_settings_update(
+        current_settings=current_settings,
+        sender_count=sender_count,
     )
 
 
@@ -638,29 +670,36 @@ class DiscordBotClient(discord.Client):
             repeat_product_ids = [product_id]
         return [pid for pid in repeat_product_ids if pid]
 
-    async def _get_keyword_window_settings(self, website_config):
+    async def _get_keyword_window_settings(self, website_config, sender_count):
         website_id = website_config.get('id') if website_config else None
-        rotation_interval = _coerce_int((website_config or {}).get('rotation_interval', 180), 180)
-        keyword_reply_interval = _coerce_int(
-            (website_config or {}).get('keyword_reply_interval', rotation_interval),
-            rotation_interval,
+        effective_settings = _resolve_runtime_rotation_settings(
+            website_config,
+            user_settings={},
+            sender_count=sender_count,
         )
-        batch_size = _normalize_keyword_batch_size((website_config or {}).get('keyword_reply_batch_size', 0))
 
         if not website_id:
-            return max(1, keyword_reply_interval), batch_size
+            return (
+                max(1, effective_settings['keyword_reply_interval']),
+                effective_settings['keyword_reply_batch_size'],
+                effective_settings['rotation_enabled'],
+            )
 
         try:
             user_settings = await self._get_user_website_settings_safe(website_id)
-            keyword_reply_interval = _coerce_int(
-                user_settings.get('keyword_reply_interval', keyword_reply_interval),
-                keyword_reply_interval,
+            effective_settings = _resolve_runtime_rotation_settings(
+                website_config,
+                user_settings=user_settings,
+                sender_count=sender_count,
             )
-            batch_size = _normalize_keyword_batch_size(user_settings.get('keyword_reply_batch_size', batch_size))
         except Exception as e:
             logger.error(f"获取关键词窗口设置失败(user_id={self.user_id}, website_id={website_id}): {e}")
 
-        return max(1, keyword_reply_interval), batch_size
+        return (
+            max(1, effective_settings['keyword_reply_interval']),
+            effective_settings['keyword_reply_batch_size'],
+            effective_settings['rotation_enabled'],
+        )
 
     def _build_explicit_mention_reply_content(self, author_id, reply_contents):
         if not author_id:
@@ -930,16 +969,6 @@ class DiscordBotClient(discord.Client):
         if not website_config or not website_config.get('id'):
             return False
 
-        interval_seconds, batch_size = await self._get_keyword_window_settings(website_config)
-        if batch_size <= 0:
-            return await self.schedule_reply(
-                message,
-                product,
-                custom_reply,
-                match_context,
-                website_configs_override=[website_config],
-            )
-
         try:
             try:
                 from database import db
@@ -952,11 +981,29 @@ class DiscordBotClient(discord.Client):
             logger.error(f"获取关键词窗口发送账号失败(website_id={website_config.get('id')}): {e}")
             sender_ids = []
 
-        if not _should_use_keyword_window_mode(len(sender_ids), interval_seconds, batch_size):
+        interval_seconds, batch_size, rotation_enabled = await self._get_keyword_window_settings(
+            website_config,
+            sender_count=len(sender_ids),
+        )
+        if batch_size <= 0:
+            return await self.schedule_reply(
+                message,
+                product,
+                custom_reply,
+                match_context,
+                website_configs_override=[website_config],
+            )
+
+        if not _should_use_keyword_window_mode(
+            len(sender_ids),
+            interval_seconds,
+            batch_size,
+            rotation_enabled,
+        ):
             if batch_size > 0:
                 logger.info(
                     f"⏭️ [关键词窗口未启用] 网站:{website_config.get('name')} "
-                    f"发送账号数:{len(sender_ids)} 批次上限:{batch_size}"
+                    f"发送账号数:{len(sender_ids)} 批次上限:{batch_size} 轮换启用:{rotation_enabled}"
                 )
             return await self.schedule_reply(
                 message,
@@ -1586,22 +1633,21 @@ class DiscordBotClient(discord.Client):
                 )
 
                 # 3. 冷却逻辑：始终生效，轮换开关仅控制选人策略
-                rotation_enabled = _coerce_bool(website_config.get('rotation_enabled', 1), True)
-                rotation_interval = _coerce_int(website_config.get('rotation_interval', 180), 180)
-
                 website_id = website_config.get('id')
                 user_website_settings = user_website_settings_map.get(website_id)
                 website_filters = user_website_filters_map.get(website_id, [])
+                effective_settings = _resolve_runtime_rotation_settings(
+                    website_config,
+                    user_settings=user_website_settings,
+                    sender_count=len(db_sender_ids),
+                )
+                rotation_enabled = _coerce_bool(effective_settings.get('rotation_enabled', 0), False)
+                rotation_interval = _coerce_int(
+                    effective_settings.get('rotation_interval', website_config.get('rotation_interval', 180)),
+                    _coerce_int(website_config.get('rotation_interval', 180), 180),
+                )
 
                 if user_website_settings:
-                    rotation_enabled = _coerce_bool(
-                        user_website_settings.get('rotation_enabled', rotation_enabled),
-                        rotation_enabled
-                    )
-                    rotation_interval = _coerce_int(
-                        user_website_settings.get('rotation_interval', rotation_interval),
-                        rotation_interval
-                    )
                     logger.info(
                         f"📋 使用用户级别设置: rotation_interval={rotation_interval}秒, rotation_enabled={rotation_enabled}"
                     )
