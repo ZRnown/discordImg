@@ -1449,6 +1449,7 @@ def get_website_configs():
             config['reply_mode'] = effective_settings['reply_mode']
             config['keyword_reply_interval'] = effective_settings['keyword_reply_interval']
             config['keyword_reply_batch_size'] = effective_settings['keyword_reply_batch_size']
+            config['keyword_batch_dispatch_mode'] = effective_settings['keyword_batch_dispatch_mode']
             try:
                 raw_filters = user_settings.get('message_filters', '[]') if user_settings else '[]'
                 config['message_filters'] = json.loads(raw_filters) if isinstance(raw_filters, str) else (raw_filters or [])
@@ -1791,7 +1792,8 @@ def get_website_rotation(config_id):
             'rotation_enabled': effective_settings['rotation_enabled'],
             'reply_mode': effective_settings['reply_mode'],
             'keyword_reply_interval': effective_settings['keyword_reply_interval'],
-            'keyword_reply_batch_size': effective_settings['keyword_reply_batch_size']
+            'keyword_reply_batch_size': effective_settings['keyword_reply_batch_size'],
+            'keyword_batch_dispatch_mode': effective_settings['keyword_batch_dispatch_mode'],
         })
     except Exception as e:
         logger.error(f"获取网站轮换配置失败: {e}")
@@ -1813,6 +1815,7 @@ def update_website_rotation(config_id):
         reply_mode = data.get('reply_mode')
         keyword_reply_interval = data.get('keyword_reply_interval')
         keyword_reply_batch_size = data.get('keyword_reply_batch_size')
+        keyword_batch_dispatch_mode = data.get('keyword_batch_dispatch_mode')
 
         # 验证参数
         if rotation_interval is not None and rotation_interval <= 0:
@@ -1825,6 +1828,8 @@ def update_website_rotation(config_id):
             return jsonify({'error': '单轮关键词时间必须大于0秒'}), 400
         if keyword_reply_batch_size is not None and keyword_reply_batch_size < 0:
             return jsonify({'error': '单轮关键词上限不能小于0'}), 400
+        if keyword_batch_dispatch_mode is not None and keyword_batch_dispatch_mode not in ['immediate', 'window_end']:
+            return jsonify({'error': '关键词发送方式必须是 immediate 或 window_end'}), 400
 
         current_settings = db.get_user_website_settings(current_user['id'], config_id)
         sender_count = len(db.get_website_senders(config_id, current_user['id']) or [])
@@ -1842,6 +1847,7 @@ def update_website_rotation(config_id):
                 reply_mode=reply_mode,
                 keyword_reply_interval=keyword_reply_interval,
                 keyword_reply_batch_size=keyword_reply_batch_size,
+                keyword_batch_dispatch_mode=keyword_batch_dispatch_mode,
             )
         except ValueError as exc:
             return jsonify({'error': str(exc)}), 400
@@ -1855,6 +1861,7 @@ def update_website_rotation(config_id):
             effective_settings['reply_mode'],
             effective_settings['keyword_reply_interval'],
             effective_settings['keyword_reply_batch_size'],
+            effective_settings['keyword_batch_dispatch_mode'],
         ):
             if effective_settings['reply_mode'] != current_effective_settings.get('reply_mode', 'rotation'):
                 mode_text = {
@@ -1875,6 +1882,13 @@ def update_website_rotation(config_id):
                     messages.append('单轮关键词上限已设为不限')
                 else:
                     messages.append(f"单轮关键词上限已设为 {effective_settings['keyword_reply_batch_size']}")
+            if effective_settings['keyword_batch_dispatch_mode'] != current_effective_settings.get('keyword_batch_dispatch_mode', 'immediate'):
+                mode_text = (
+                    '达到上限立即发送'
+                    if effective_settings['keyword_batch_dispatch_mode'] == 'immediate'
+                    else '达到上限后停止识别，窗口结束统一发送'
+                )
+                messages.append(f'关键词发送方式已切换为{mode_text}')
             return jsonify({
                 'success': True,
                 'message': '; '.join(messages) if messages else '设置已更新',

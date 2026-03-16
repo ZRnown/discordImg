@@ -81,3 +81,10 @@ export function getReplyModeSettingsSection(replyMode: string): 'none' | 'rotati
   }
   return 'none'
 }
+
+export function getKeywordBatchDispatchModeLabel(mode: string): string {
+  if (mode === 'window_end') {
+    return '满额后窗口结束发送'
+  }
+  return '满额立即发送'
+}

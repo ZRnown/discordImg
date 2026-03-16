@@ -4,6 +4,7 @@ import { startTransition, useEffect, useRef, useState } from "react"
 import { useApiCache } from "@/hooks/use-api-cache"
 import {
   getDisplayedReplyMode,
+  getKeywordBatchDispatchModeLabel,
   getReplyModeLabel,
   getReplyModeSettingsSection,
   getReplyModeSwitchError,
@@ -203,6 +204,7 @@ export function AccountsView() {
   const [rotationInputs, setRotationInputs] = useState<{[key: number]: string}>({})
   const [keywordIntervalInputs, setKeywordIntervalInputs] = useState<{[key: number]: string}>({})
   const [keywordBatchInputs, setKeywordBatchInputs] = useState<{[key: number]: string}>({})
+  const [keywordDispatchModes, setKeywordDispatchModes] = useState<{[key: number]: string}>({})
 
   const [cooldowns, setCooldowns] = useState<any[]>([])
 
@@ -358,6 +360,10 @@ export function AccountsView() {
         setKeywordBatchInputs(prev => ({
           ...prev,
           [website.id]: (website.keyword_reply_batch_size ?? 0).toString()
+        }))
+        setKeywordDispatchModes(prev => ({
+          ...prev,
+          [website.id]: website.keyword_batch_dispatch_mode ?? 'immediate'
         }))
         similarityInputs[website.id] = formatThresholdForInput(website.image_similarity_threshold)
         try {
@@ -669,6 +675,7 @@ export function AccountsView() {
             reply_mode: nextSettings.reply_mode,
             keyword_reply_interval: nextSettings.keyword_reply_interval,
             keyword_reply_batch_size: nextSettings.keyword_reply_batch_size,
+            keyword_batch_dispatch_mode: nextSettings.keyword_batch_dispatch_mode,
           }
         : website
     )))
@@ -681,6 +688,10 @@ export function AccountsView() {
     setKeywordBatchInputs(prev => ({
       ...prev,
       [websiteId]: String(nextSettings.keyword_reply_batch_size ?? 0)
+    }))
+    setKeywordDispatchModes(prev => ({
+      ...prev,
+      [websiteId]: nextSettings.keyword_batch_dispatch_mode ?? 'immediate'
     }))
   }
 
@@ -1320,6 +1331,23 @@ export function AccountsView() {
         '单轮关键词时间已更新'
       )
     } catch (e: any) {
+      toast.error(e?.message || '网络错误')
+    }
+  }
+
+  const handleUpdateKeywordBatchDispatchMode = async (
+    websiteId: number,
+    keywordBatchDispatchMode: string,
+    fallbackMode: string,
+  ) => {
+    try {
+      await updateWebsiteRotationSettings(
+        websiteId,
+        { keyword_batch_dispatch_mode: keywordBatchDispatchMode },
+        `关键词发送方式已切换为${getKeywordBatchDispatchModeLabel(keywordBatchDispatchMode)}`
+      )
+    } catch (e: any) {
+      setKeywordDispatchModes(prev => ({ ...prev, [websiteId]: fallbackMode }))
       toast.error(e?.message || '网络错误')
     }
   }
@@ -2776,6 +2804,7 @@ export function AccountsView() {
                           const isReplyModeSaving = Boolean(replyModeSaving[website.id])
                           const isKeywordMode = replyMode === 'keyword'
                           const settingsSection = getReplyModeSettingsSection(replyMode)
+                          const keywordBatchDispatchMode = keywordDispatchModes[website.id] ?? (website.keyword_batch_dispatch_mode ?? 'immediate')
 
                           return (
                             <>
@@ -2905,6 +2934,32 @@ export function AccountsView() {
                                       0 = 不限制
                                     </span>
                                   </div>
+
+                                  <div className="flex items-center gap-2">
+                                    <Label className="text-xs">关键词发送方式:</Label>
+                                    <Select
+                                      value={keywordBatchDispatchMode}
+                                      disabled={senderCount !== 1}
+                                      onValueChange={(value) => {
+                                        setKeywordDispatchModes(prev => ({ ...prev, [website.id]: value }))
+                                        if (value !== (website.keyword_batch_dispatch_mode ?? 'immediate')) {
+                                          void handleUpdateKeywordBatchDispatchMode(
+                                            website.id,
+                                            value,
+                                            website.keyword_batch_dispatch_mode ?? 'immediate',
+                                          )
+                                        }
+                                      }}
+                                    >
+                                      <SelectTrigger className="w-[220px] h-8 text-xs">
+                                        <SelectValue />
+                                      </SelectTrigger>
+                                      <SelectContent>
+                                        <SelectItem value="immediate">达到上限立即发送</SelectItem>
+                                        <SelectItem value="window_end">达到上限后停收，窗口结束统一发送</SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                  </div>
                                 </>
                               ) : null}
 
@@ -2915,7 +2970,9 @@ export function AccountsView() {
                                     : replyMode === 'default'
                                       ? '默认模式下，命中关键词后会立刻回复原消息，不走轮换冷却，也不使用关键词时间窗。'
                                       : isKeywordMode
-                                        ? '关键词模式下，同一 Discord 频道会按整轮时间窗累计命中；达到单轮关键词上限会立即发送，未达到会在本轮到点时统一发送。批量 @ 消息会直接发送，不引用原消息。'
+                                        ? keywordBatchDispatchMode === 'window_end'
+                                          ? '关键词模式下，同一 Discord 频道会按整轮时间窗累计命中；达到单轮关键词上限后会停止继续识别本轮新增关键词，等本轮倒计时结束后统一发送。批量 @ 消息会直接发送，不引用原消息。'
+                                          : '关键词模式下，同一 Discord 频道会按整轮时间窗累计命中；达到单轮关键词上限会立即发送，未达到会在本轮到点时统一发送。批量 @ 消息会直接发送，不引用原消息。'
                                         : senderCount === 1
                                           ? '当前只有 1 个发送账号，轮换模式下会继续使用这个账号发送，轮换间隔会作为发送冷却时间。'
                                           : '轮换模式下会按轮换间隔在可用发送账号之间切换。'}

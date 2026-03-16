@@ -10,6 +10,7 @@ class ReservationResult:
     queue_size: int
     wait_seconds: float
     ready_payloads: Tuple[Any, ...] = ()
+    accepted: bool = True
 
 
 @dataclass
@@ -30,6 +31,7 @@ class KeywordReplyWindowManager:
         interval_seconds: int,
         batch_size: int,
         payload: Any,
+        dispatch_mode: str = "immediate",
     ) -> ReservationResult:
         batch_limit = self._normalize_batch_size(batch_size)
         if batch_limit == 0:
@@ -40,8 +42,27 @@ class KeywordReplyWindowManager:
                 ready_payloads=(payload,),
             )
 
+        normalized_dispatch_mode = self._normalize_dispatch_mode(dispatch_mode)
         state = self._get_state(key, interval_seconds)
         queue = self._queues[key]
+
+        if normalized_dispatch_mode == "window_end":
+            captured_count = state.used + len(queue)
+            if captured_count >= batch_limit:
+                return ReservationResult(
+                    dispatch_now=False,
+                    queue_size=len(queue),
+                    wait_seconds=self.seconds_until_next_window(key, interval_seconds),
+                    accepted=False,
+                )
+
+            queue.append(payload)
+            return ReservationResult(
+                dispatch_now=False,
+                queue_size=len(queue),
+                wait_seconds=self.seconds_until_next_window(key, interval_seconds),
+            )
+
         queue.append(payload)
 
         remaining_capacity = batch_limit - state.used
@@ -60,7 +81,13 @@ class KeywordReplyWindowManager:
             wait_seconds=self.seconds_until_next_window(key, interval_seconds),
         )
 
-    def release_due_jobs(self, key: Hashable, interval_seconds: int, batch_size: int) -> List[Any]:
+    def release_due_jobs(
+        self,
+        key: Hashable,
+        interval_seconds: int,
+        batch_size: int,
+        dispatch_mode: str = "immediate",
+    ) -> List[Any]:
         queue = self._queues.get(key)
         if not queue:
             return []
@@ -74,11 +101,30 @@ class KeywordReplyWindowManager:
 
         now = self._time_fn()
         existing_state = self._states.get(key)
+        normalized_dispatch_mode = self._normalize_dispatch_mode(dispatch_mode)
         window_elapsed = bool(
             existing_state and (
                 interval_seconds <= 0 or (now - existing_state.started_at) >= interval_seconds
             )
         )
+
+        if normalized_dispatch_mode == "window_end":
+            if not window_elapsed:
+                return []
+
+            released = list(queue)[:batch_limit]
+            queue.clear()
+            self._queues.pop(key, None)
+
+            next_started_at = self._get_bucket_start(now, interval_seconds)
+            if existing_state is None:
+                self._states[key] = _WindowState(started_at=next_started_at)
+            else:
+                existing_state.started_at = next_started_at
+                existing_state.used = 0
+
+            return released
+
         state = self._get_state(key, interval_seconds)
         remaining_capacity = batch_limit - state.used
         if remaining_capacity <= 0:
@@ -149,6 +195,13 @@ class KeywordReplyWindowManager:
         except (TypeError, ValueError):
             return 0
         return value if value > 0 else 0
+
+    @staticmethod
+    def _normalize_dispatch_mode(dispatch_mode: Any) -> str:
+        normalized = str(dispatch_mode or "immediate").strip().lower()
+        if normalized in {"immediate", "window_end"}:
+            return normalized
+        return "immediate"
 
 
 def build_batched_reply_content(entries: Iterable[dict]) -> str:

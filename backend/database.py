@@ -644,6 +644,7 @@ class Database:
                     reply_mode TEXT DEFAULT 'rotation',
                     keyword_reply_interval INTEGER DEFAULT NULL,
                     keyword_reply_batch_size INTEGER DEFAULT 0,
+                    keyword_batch_dispatch_mode TEXT DEFAULT 'immediate',
                     message_filters TEXT DEFAULT '[]',
                     image_similarity_threshold REAL DEFAULT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -672,10 +673,24 @@ class Database:
             except sqlite3.OperationalError:
                 pass
             try:
+                cursor.execute("ALTER TABLE user_website_settings ADD COLUMN keyword_batch_dispatch_mode TEXT DEFAULT 'immediate'")
+            except sqlite3.OperationalError:
+                pass
+            try:
                 cursor.execute('''
                     UPDATE user_website_settings
                     SET keyword_reply_interval = rotation_interval
                     WHERE keyword_reply_interval IS NULL OR keyword_reply_interval <= 0
+                ''')
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute('''
+                    UPDATE user_website_settings
+                    SET keyword_batch_dispatch_mode = 'immediate'
+                    WHERE keyword_batch_dispatch_mode IS NULL
+                       OR TRIM(keyword_batch_dispatch_mode) = ''
+                       OR LOWER(keyword_batch_dispatch_mode) NOT IN ('immediate', 'window_end')
                 ''')
             except sqlite3.OperationalError:
                 pass
@@ -2420,7 +2435,7 @@ class Database:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT rotation_interval, rotation_enabled, reply_mode, keyword_reply_interval, keyword_reply_batch_size, message_filters, image_similarity_threshold
+                    SELECT rotation_interval, rotation_enabled, reply_mode, keyword_reply_interval, keyword_reply_batch_size, keyword_batch_dispatch_mode, message_filters, image_similarity_threshold
                     FROM user_website_settings
                     WHERE user_id = ? AND website_id = ?
                 ''', (user_id, website_id))
@@ -2431,12 +2446,16 @@ class Database:
                     reply_mode = row['reply_mode']
                     if reply_mode not in {'default', 'rotation', 'keyword'}:
                         reply_mode = 'keyword' if (row['rotation_enabled'] == 0 and (row['keyword_reply_batch_size'] or 0) > 0) else 'rotation'
+                    keyword_batch_dispatch_mode = (row['keyword_batch_dispatch_mode'] or 'immediate').strip().lower()
+                    if keyword_batch_dispatch_mode not in {'immediate', 'window_end'}:
+                        keyword_batch_dispatch_mode = 'immediate'
                     return {
                         'rotation_interval': rotation_interval,
                         'rotation_enabled': row['rotation_enabled'],
                         'reply_mode': reply_mode,
                         'keyword_reply_interval': keyword_reply_interval,
                         'keyword_reply_batch_size': row['keyword_reply_batch_size'] or 0,
+                        'keyword_batch_dispatch_mode': keyword_batch_dispatch_mode,
                         'message_filters': row['message_filters'],
                         'image_similarity_threshold': row['image_similarity_threshold']
                     }
@@ -2447,6 +2466,7 @@ class Database:
                     'reply_mode': 'rotation',
                     'keyword_reply_interval': 180,
                     'keyword_reply_batch_size': 0,
+                    'keyword_batch_dispatch_mode': 'immediate',
                     'message_filters': '[]',
                     'image_similarity_threshold': None
                 }
@@ -2458,6 +2478,7 @@ class Database:
                 'reply_mode': 'rotation',
                 'keyword_reply_interval': 180,
                 'keyword_reply_batch_size': 0,
+                'keyword_batch_dispatch_mode': 'immediate',
                 'message_filters': '[]',
                 'image_similarity_threshold': None
             }
@@ -2489,12 +2510,18 @@ class Database:
         reply_mode: str = None,
         keyword_reply_interval: int = None,
         keyword_reply_batch_size: int = None,
+        keyword_batch_dispatch_mode: str = None,
     ) -> bool:
         """更新用户的网站轮换设置"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 normalized_reply_mode = reply_mode if reply_mode in {'default', 'rotation', 'keyword'} else None
+                normalized_keyword_batch_dispatch_mode = (
+                    keyword_batch_dispatch_mode
+                    if keyword_batch_dispatch_mode in {'immediate', 'window_end'}
+                    else None
+                )
                 if normalized_reply_mode is None:
                     if rotation_enabled == 0 and (keyword_reply_batch_size or 0) > 0:
                         normalized_reply_mode = 'keyword'
@@ -2534,6 +2561,9 @@ class Database:
                     if keyword_reply_batch_size is not None:
                         updates.append('keyword_reply_batch_size = ?')
                         params.append(keyword_reply_batch_size)
+                    if normalized_keyword_batch_dispatch_mode is not None:
+                        updates.append('keyword_batch_dispatch_mode = ?')
+                        params.append(normalized_keyword_batch_dispatch_mode)
                     if updates:
                         updates.append('updated_at = CURRENT_TIMESTAMP')
                         params.extend([user_id, website_id])
@@ -2552,9 +2582,10 @@ class Database:
                             rotation_enabled,
                             reply_mode,
                             keyword_reply_interval,
-                            keyword_reply_batch_size
+                            keyword_reply_batch_size,
+                            keyword_batch_dispatch_mode
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         user_id,
                         website_id,
@@ -2563,6 +2594,7 @@ class Database:
                         normalized_reply_mode or 'rotation',
                         keyword_reply_interval if keyword_reply_interval is not None else (rotation_interval or 180),
                         keyword_reply_batch_size if keyword_reply_batch_size is not None else 0,
+                        normalized_keyword_batch_dispatch_mode or 'immediate',
                     ))
 
                 conn.commit()

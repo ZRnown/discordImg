@@ -2,6 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
+  getKeywordBatchDispatchModeLabel,
   getReplyModeLabel,
   getDisplayedReplyMode,
   getReplyModeSettingsSection,
@@ -62,4 +63,9 @@ test('displayed reply mode prefers pending value for immediate UI feedback', () 
   assert.equal(getDisplayedReplyMode('default', 'keyword'), 'keyword')
   assert.equal(getDisplayedReplyMode('keyword', undefined), 'keyword')
   assert.equal(getDisplayedReplyMode(undefined, undefined), 'rotation')
+})
+
+test('keyword batch dispatch labels cover both policies', () => {
+  assert.equal(getKeywordBatchDispatchModeLabel('immediate'), '满额立即发送')
+  assert.equal(getKeywordBatchDispatchModeLabel('window_end'), '满额后窗口结束发送')
 })

@@ -41,6 +41,14 @@ def _normalize_batch_size(value: Any, default: int = 0) -> int:
     return max(0, batch_size)
 
 
+def _normalize_keyword_batch_dispatch_mode(value: Any, default: str = "immediate") -> str:
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"immediate", "window_end"}:
+            return normalized
+    return default
+
+
 def resolve_rotation_settings_update(
     current_settings: Dict[str, Any],
     sender_count: int,
@@ -49,6 +57,7 @@ def resolve_rotation_settings_update(
     keyword_reply_interval: int = None,
     keyword_reply_batch_size: int = None,
     reply_mode: str = None,
+    keyword_batch_dispatch_mode: str = None,
 ) -> Dict[str, int]:
     base_rotation_interval = _normalize_interval(
         (current_settings or {}).get("rotation_interval"),
@@ -76,6 +85,14 @@ def resolve_rotation_settings_update(
         keyword_reply_batch_size,
         base_batch_size,
     )
+    base_keyword_batch_dispatch_mode = _normalize_keyword_batch_dispatch_mode(
+        (current_settings or {}).get("keyword_batch_dispatch_mode"),
+        "immediate",
+    )
+    effective_keyword_batch_dispatch_mode = _normalize_keyword_batch_dispatch_mode(
+        keyword_batch_dispatch_mode,
+        base_keyword_batch_dispatch_mode,
+    )
 
     base_rotation_enabled = _normalize_rotation_enabled(
         (current_settings or {}).get("rotation_enabled"),
@@ -96,6 +113,7 @@ def resolve_rotation_settings_update(
     has_keyword_update = (
         keyword_reply_interval is not None
         or keyword_reply_batch_size is not None
+        or keyword_batch_dispatch_mode is not None
     )
     if sender_count != 1 and has_keyword_update:
         raise ValueError("仅绑定1个发送账号时可设置单轮关键词时间和上限")
@@ -119,5 +137,6 @@ def resolve_rotation_settings_update(
         "rotation_enabled": effective_rotation_enabled,
         "keyword_reply_interval": effective_keyword_interval,
         "keyword_reply_batch_size": effective_batch_size,
+        "keyword_batch_dispatch_mode": effective_keyword_batch_dispatch_mode,
         "reply_mode": effective_reply_mode,
     }

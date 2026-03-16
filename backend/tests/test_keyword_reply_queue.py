@@ -2,6 +2,7 @@ import unittest
 import os
 import tempfile
 import uuid
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -168,6 +169,87 @@ class KeywordReplyQueueTestCase(unittest.TestCase):
             content,
             "<@1001> https://a.example/item-1\n<@1001> https://b.example/item-2\n<@1002> https://c.example/item-3",
         )
+
+    def test_window_end_mode_keeps_first_batch_until_boundary(self):
+        manager_cls = self._import_window_manager_class()
+        now_holder = {'value': 15.0}
+        manager = manager_cls(time_fn=lambda: now_holder['value'])
+        key = ("user-1", "website-9", "channel-4")
+
+        first = manager.reserve_or_enqueue(
+            key,
+            interval_seconds=30,
+            batch_size=3,
+            payload="msg-1",
+            dispatch_mode="window_end",
+        )
+        now_holder['value'] = 20.0
+        second = manager.reserve_or_enqueue(
+            key,
+            interval_seconds=30,
+            batch_size=3,
+            payload="msg-2",
+            dispatch_mode="window_end",
+        )
+        now_holder['value'] = 25.0
+        third = manager.reserve_or_enqueue(
+            key,
+            interval_seconds=30,
+            batch_size=3,
+            payload="msg-3",
+            dispatch_mode="window_end",
+        )
+        now_holder['value'] = 26.0
+        overflow = manager.reserve_or_enqueue(
+            key,
+            interval_seconds=30,
+            batch_size=3,
+            payload="msg-4",
+            dispatch_mode="window_end",
+        )
+
+        self.assertFalse(first.dispatch_now)
+        self.assertFalse(second.dispatch_now)
+        self.assertFalse(third.dispatch_now)
+        self.assertFalse(overflow.dispatch_now)
+        self.assertTrue(first.accepted)
+        self.assertTrue(second.accepted)
+        self.assertTrue(third.accepted)
+        self.assertFalse(overflow.accepted)
+        self.assertEqual(manager.get_queue_size(key), 3)
+
+        now_holder['value'] = 30.0
+        self.assertEqual(
+            manager.release_due_jobs(key, interval_seconds=30, batch_size=3, dispatch_mode="window_end"),
+            ["msg-1", "msg-2", "msg-3"],
+        )
+        self.assertEqual(manager.get_queue_size(key), 0)
+
+
+class KeywordReplyBackgroundTaskTestCase(unittest.IsolatedAsyncioTestCase):
+    async def test_start_keyword_reply_task_returns_immediately(self):
+        completed = []
+
+        async def slow_job():
+            await asyncio.sleep(0.05)
+            completed.append("done")
+            return True
+
+        task = DiscordBotClient._start_keyword_reply_background_task(
+            SimpleNamespace(),
+            slow_job(),
+            task_name="keyword-task-test",
+        )
+
+        self.assertIsInstance(task, asyncio.Task)
+        self.assertFalse(task.done())
+        self.assertEqual(completed, [])
+
+        await asyncio.sleep(0.08)
+
+        self.assertEqual(completed, ["done"])
+        self.assertTrue(task.done())
+        self.assertTrue(task.result())
 
 
 class WebsiteBindingIntegrityTestCase(unittest.TestCase):

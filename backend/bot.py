@@ -43,6 +43,7 @@ _keyword_reply_window_manager = KeywordReplyWindowManager()
 _keyword_reply_window_lock = asyncio.Lock()
 _keyword_reply_flush_tasks = {}
 _keyword_reply_window_configs = {}
+_keyword_reply_background_tasks = set()
 
 
 def _coerce_int(value, default):
@@ -54,6 +55,13 @@ def _coerce_int(value, default):
 
 def _normalize_keyword_batch_size(value):
     return max(0, _coerce_int(value, 0))
+
+
+def _normalize_keyword_batch_dispatch_mode(value):
+    normalized = str(value or "immediate").strip().lower()
+    if normalized in {"immediate", "window_end"}:
+        return normalized
+    return "immediate"
 
 
 def _should_use_keyword_window_mode(sender_count, interval_seconds, batch_size, reply_mode):
@@ -155,6 +163,12 @@ def _resolve_runtime_rotation_settings(website_config, user_settings, sender_cou
         ),
         'keyword_reply_batch_size': _normalize_keyword_batch_size(
             user_settings.get('keyword_reply_batch_size', website_config.get('keyword_reply_batch_size', 0))
+        ),
+        'keyword_batch_dispatch_mode': _normalize_keyword_batch_dispatch_mode(
+            user_settings.get(
+                'keyword_batch_dispatch_mode',
+                website_config.get('keyword_batch_dispatch_mode', 'immediate'),
+            )
         ),
         'reply_mode': user_settings.get('reply_mode', website_config.get('reply_mode', 'rotation')),
     }
@@ -756,6 +770,7 @@ class DiscordBotClient(discord.Client):
                 effective_settings['keyword_reply_batch_size'],
                 effective_settings['rotation_enabled'],
                 effective_settings['reply_mode'],
+                effective_settings['keyword_batch_dispatch_mode'],
             )
 
         try:
@@ -773,6 +788,7 @@ class DiscordBotClient(discord.Client):
             effective_settings['keyword_reply_batch_size'],
             effective_settings['rotation_enabled'],
             effective_settings['reply_mode'],
+            effective_settings['keyword_batch_dispatch_mode'],
         )
 
     def _build_explicit_mention_reply_content(self, author_id, reply_contents):
@@ -978,6 +994,22 @@ class DiscordBotClient(discord.Client):
             website_configs_override=[website_config],
         )
 
+    def _start_keyword_reply_background_task(self, coro, task_name):
+        task = asyncio.create_task(coro, name=task_name)
+        _keyword_reply_background_tasks.add(task)
+
+        def _on_done(completed_task):
+            _keyword_reply_background_tasks.discard(completed_task)
+            try:
+                completed_task.result()
+            except asyncio.CancelledError:
+                logger.info(f"⏭️ [关键词后台任务已取消] {task_name}")
+            except Exception as e:
+                logger.error(f"关键词后台任务失败({task_name}): {e}")
+
+        task.add_done_callback(_on_done)
+        return task
+
     async def _flush_keyword_reply_queue(self, window_key):
         try:
             while True:
@@ -986,6 +1018,9 @@ class DiscordBotClient(discord.Client):
                     config = _keyword_reply_window_configs.get(window_key, {})
                     interval_seconds = max(1, _coerce_int(config.get('interval_seconds', 180), 180))
                     batch_size = _normalize_keyword_batch_size(config.get('batch_size', 0))
+                    dispatch_mode = _normalize_keyword_batch_dispatch_mode(
+                        config.get('keyword_batch_dispatch_mode', 'immediate')
+                    )
 
                     if queue_size <= 0:
                         _keyword_reply_window_configs.pop(window_key, None)
@@ -1003,10 +1038,14 @@ class DiscordBotClient(discord.Client):
                     config = _keyword_reply_window_configs.get(window_key, config)
                     interval_seconds = max(1, _coerce_int(config.get('interval_seconds', 180), 180))
                     batch_size = _normalize_keyword_batch_size(config.get('batch_size', 0))
+                    dispatch_mode = _normalize_keyword_batch_dispatch_mode(
+                        config.get('keyword_batch_dispatch_mode', 'immediate')
+                    )
                     jobs = _keyword_reply_window_manager.release_due_jobs(
                         window_key,
                         interval_seconds,
                         batch_size,
+                        dispatch_mode=dispatch_mode,
                     )
                     remaining = _keyword_reply_window_manager.get_queue_size(window_key)
 
@@ -1051,7 +1090,7 @@ class DiscordBotClient(discord.Client):
             logger.error(f"获取关键词窗口发送账号失败(website_id={website_config.get('id')}): {e}")
             sender_ids = []
 
-        interval_seconds, batch_size, rotation_enabled, reply_mode = await self._get_keyword_window_settings(
+        interval_seconds, batch_size, rotation_enabled, reply_mode, dispatch_mode = await self._get_keyword_window_settings(
             website_config,
             sender_count=len(sender_ids),
         )
@@ -1132,12 +1171,14 @@ class DiscordBotClient(discord.Client):
             _keyword_reply_window_configs[window_key] = {
                 'interval_seconds': interval_seconds,
                 'batch_size': batch_size,
+                'keyword_batch_dispatch_mode': dispatch_mode,
             }
             reservation = _keyword_reply_window_manager.reserve_or_enqueue(
                 window_key,
                 interval_seconds,
                 batch_size,
                 job,
+                dispatch_mode=dispatch_mode,
             )
             should_dispatch_now = reservation.dispatch_now
             queue_size = reservation.queue_size
@@ -1154,9 +1195,16 @@ class DiscordBotClient(discord.Client):
         if should_dispatch_now:
             return await self._dispatch_keyword_reply_batch(list(ready_jobs))
 
+        if not reservation.accepted:
+            logger.info(
+                f"⏭️ [关键词窗口已满] 网站:{website_config.get('name')} 频道:{channel_id} "
+                f"批次上限:{batch_size} 策略:{dispatch_mode}，本轮忽略新增关键词"
+            )
+            return False
+
         logger.info(
             f"⏳ [关键词排队] 网站:{website_config.get('name')} 频道:{channel_id} "
-            f"队列:{queue_size} 等待:{wait_seconds:.1f}秒 批次上限:{batch_size}"
+            f"队列:{queue_size} 等待:{wait_seconds:.1f}秒 批次上限:{batch_size} 策略:{dispatch_mode}"
         )
         return False
 
@@ -3226,11 +3274,17 @@ class DiscordBotClient(discord.Client):
                         logger.info(f"商品 {product['id']} 配置了自定义图片，准备发送自定义回复")
 
                 for website_config in website_configs:
-                    await self._enqueue_or_dispatch_keyword_reply(
-                        message,
-                        product,
-                        custom_reply,
-                        website_config,
+                    self._start_keyword_reply_background_task(
+                        self._enqueue_or_dispatch_keyword_reply(
+                            message,
+                            product,
+                            custom_reply,
+                            website_config,
+                        ),
+                        task_name=(
+                            f"keyword-single website={website_config.get('id')} "
+                            f"channel={getattr(message.channel, 'id', 'unknown')}"
+                        ),
                     )
                 return
 
@@ -3284,7 +3338,7 @@ class DiscordBotClient(discord.Client):
                         logger.error(
                             f"获取合并回复发送账号失败(website_id={website_config.get('id')}): {sender_error}"
                         )
-                _, _, _, reply_mode = await self._get_keyword_window_settings(
+                _, _, _, reply_mode, _ = await self._get_keyword_window_settings(
                     website_config,
                     sender_count=sender_count,
                 )
@@ -3330,11 +3384,17 @@ class DiscordBotClient(discord.Client):
                         'explicit_mentions': reply_mode == 'keyword',
                         'repeat_product_ids': repeat_product_ids,
                     }
-                    await self._enqueue_or_dispatch_keyword_reply(
-                        message,
-                        base_product,
-                        agg_custom_reply,
-                        website_config,
+                    self._start_keyword_reply_background_task(
+                        self._enqueue_or_dispatch_keyword_reply(
+                            message,
+                            base_product,
+                            agg_custom_reply,
+                            website_config,
+                        ),
+                        task_name=(
+                            f"keyword-aggregate website={website_config.get('id')} "
+                            f"channel={getattr(message.channel, 'id', 'unknown')}"
+                        ),
                     )
             else:
                 logger.info(f'关键词搜索无可用回复内容: {search_query}')
