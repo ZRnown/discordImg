@@ -2269,8 +2269,16 @@ class DiscordBotClient(discord.Client):
                     return f"{template}\n{response_url}".strip()
                 return template.strip()
 
+            force_custom_reply = bool(
+                custom_reply and (
+                    custom_reply.get('explicit_mentions')
+                    or custom_reply.get('batched_reply')
+                    or custom_reply.get('final_direct_content')
+                )
+            )
+
             # 1) 商品级自定义回复（优先级最高）
-            if is_product_custom:
+            if is_product_custom or force_custom_reply:
                 reply_type = custom_reply.get('reply_type')
                 content = custom_reply.get('content', '') or ''
                 if reply_type == 'custom_only' or reply_type == 'text':

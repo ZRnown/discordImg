@@ -378,6 +378,49 @@ class ReplyScopeFallbackTestCase(unittest.TestCase):
         self.assertEqual(reply_content, "自定义 https://fallback.example/item-1")
         mocked_get_url.assert_called_once()
 
+    @patch("backend.bot.get_response_url_for_channel", return_value="https://fallback.example/item-1")
+    def test_keyword_direct_reply_bypasses_website_template(self, mocked_get_url):
+        product = {"id": 103}
+        custom_reply = {
+            "reply_type": "custom_only",
+            "content": "<@1001> https://a.example/item-1",
+            "explicit_mentions": True,
+        }
+
+        reply_content = DiscordBotClient._generate_reply_content(
+            self.client,
+            product,
+            channel_id="123",
+            custom_reply=custom_reply,
+            website_config=self.website_config,
+        )
+
+        self.assertEqual(reply_content, "<@1001> https://a.example/item-1")
+        mocked_get_url.assert_called_once()
+
+    @patch("backend.bot.get_response_url_for_channel", return_value="https://fallback.example/item-1")
+    def test_keyword_batched_reply_bypasses_website_template(self, mocked_get_url):
+        product = {"id": 104}
+        custom_reply = {
+            "reply_type": "custom_only",
+            "content": "<@1001> https://a.example/item-1\n<@1002> https://b.example/item-2",
+            "batched_reply": True,
+        }
+
+        reply_content = DiscordBotClient._generate_reply_content(
+            self.client,
+            product,
+            channel_id="123",
+            custom_reply=custom_reply,
+            website_config=self.website_config,
+        )
+
+        self.assertEqual(
+            reply_content,
+            "<@1001> https://a.example/item-1\n<@1002> https://b.example/item-2",
+        )
+        mocked_get_url.assert_called_once()
+
 
 class MultiProductMentionFormatTestCase(unittest.TestCase):
     def test_multi_product_content_mentions_same_author_on_each_line(self):
