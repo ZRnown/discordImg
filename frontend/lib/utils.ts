@@ -5,6 +5,48 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
 }
 
+export function getApiErrorMessage(error: unknown, fallback: string): string {
+  if (typeof error === 'string') {
+    const normalized = error.trim()
+    return normalized || fallback
+  }
+
+  if (error instanceof Error) {
+    const normalized = error.message?.trim()
+    return normalized || fallback
+  }
+
+  if (error && typeof error === 'object') {
+    const payload = error as Record<string, unknown>
+    const directFields = [payload.error, payload.message, payload.detail]
+
+    for (const field of directFields) {
+      if (typeof field === 'string') {
+        const normalized = field.trim()
+        if (normalized) {
+          return normalized
+        }
+      }
+    }
+
+    if (Array.isArray(payload.errors)) {
+      for (const item of payload.errors) {
+        if (typeof item === 'string' && item.trim()) {
+          return item.trim()
+        }
+        if (item && typeof item === 'object') {
+          const message = (item as Record<string, unknown>).message
+          if (typeof message === 'string' && message.trim()) {
+            return message.trim()
+          }
+        }
+      }
+    }
+  }
+
+  return fallback
+}
+
 export function formatDate(dateString: string | undefined | null): string {
   if (!dateString) return '未知时间'
 

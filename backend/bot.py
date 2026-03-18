@@ -24,6 +24,10 @@ try:
 except ImportError:
     from .keyword_reply_window import KeywordReplyWindowManager, build_batched_reply_content
 try:
+    from keyword_search_filters import _should_ignore_keyword_search_query
+except ImportError:
+    from .keyword_search_filters import _should_ignore_keyword_search_query
+try:
     from rotation_settings import resolve_rotation_settings_update
 except ImportError:
     from .rotation_settings import resolve_rotation_settings_update
@@ -3081,21 +3085,7 @@ class DiscordBotClient(discord.Client):
                 return
             search_query = cleaned_query
 
-            # 过滤太短的消息（至少需要2个字符）
-            if len(search_query) < 2:
-                return
-
-            # 过滤纯数字消息（如 "1", "2", "123"）
-            if search_query.isdigit():
-                return
-
-            # 过滤只包含数字和空格的消息（如 "1 2 3"）
-            if search_query.replace(' ', '').isdigit():
-                return
-
-            # 过滤常见的无意义短消息
-            meaningless_patterns = {'ok', 'no', 'yes', 'hi', 'hey', 'lol', 'lmao', 'wtf', 'omg', 'bruh'}
-            if search_query.lower() in meaningless_patterns:
+            if _should_ignore_keyword_search_query(search_query):
                 return
 
             # 调用搜索API

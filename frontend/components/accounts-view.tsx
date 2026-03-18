@@ -3,6 +3,7 @@
 import { startTransition, useEffect, useRef, useState } from "react"
 import { useApiCache } from "@/hooks/use-api-cache"
 import {
+  getApiErrorMessage,
   getDisplayedReplyMode,
   getKeywordBatchDispatchModeLabel,
   getReplyModeLabel,
@@ -386,6 +387,7 @@ export function AccountsView() {
       setWebsiteSimilarityInputs(similarityInputs)
     } catch (e) {
       console.error('获取网站配置失败:', e)
+      toast.error(getApiErrorMessage(e, '获取网站配置失败'))
     }
   }
 
@@ -398,6 +400,7 @@ export function AccountsView() {
       }
     } catch (e) {
       console.error('获取消息过滤规则失败:', e)
+      toast.error(getApiErrorMessage(e, '获取消息过滤规则失败'))
     }
   }
 
@@ -411,6 +414,7 @@ export function AccountsView() {
       }
     } catch (e) {
       console.error('获取过滤图片失败:', e)
+      toast.error(getApiErrorMessage(e, '获取过滤图片失败'))
     } finally {
       setEditingFilterImagesLoading(false)
     }
@@ -471,6 +475,7 @@ export function AccountsView() {
       }
     } catch (e) {
       console.error('获取网站过滤图片失败:', e)
+      toast.error(getApiErrorMessage(e, '获取网站过滤图片失败'))
     } finally {
       setEditingWebsiteFilterImagesLoading(false)
     }
@@ -487,6 +492,7 @@ export function AccountsView() {
       }
     } catch (e) {
       console.error('获取网站过滤规则失败:', e)
+      toast.error(getApiErrorMessage(e, '获取网站过滤规则失败'))
     }
     return null
   }
@@ -877,9 +883,13 @@ export function AccountsView() {
           barkAutoSaveLastPayloadRef.current = JSON.stringify(pickBarkSettings(merged))
           return merged
         })
+      } else {
+        const errorData = await response.json().catch(() => ({}))
+        toast.error(getApiErrorMessage(errorData, '获取设置失败'))
       }
     } catch (error) {
       console.error('Failed to fetch settings:', error)
+      toast.error(getApiErrorMessage(error, '获取设置失败'))
     }
   }
 
@@ -901,10 +911,11 @@ export function AccountsView() {
         barkAutoSaveLastPayloadRef.current = JSON.stringify(pickBarkSettings(settings))
         toast.success("设置已保存")
       } else {
-        toast.error("保存设置失败")
+        const errorData = await response.json().catch(() => ({}))
+        toast.error(getApiErrorMessage(errorData, "保存设置失败"))
       }
     } catch (error) {
-      toast.error("保存设置失败")
+      toast.error(getApiErrorMessage(error, "保存设置失败"))
     } finally {
       setSettingsLoading(false)
     }
@@ -966,6 +977,7 @@ export function AccountsView() {
             setAccounts(data.accounts || [])
     } catch (error) {
       console.error('获取账号列表出错:', error)
+      toast.error(getApiErrorMessage(error, '获取账号列表失败'))
       setAccounts([])
     } finally {
       setLoading(false)

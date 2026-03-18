@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { getApiErrorMessage } from "@/lib/utils"
 import { Store, Package, ImageIcon, Users, Megaphone, Plus, Edit, Trash2, MessageSquare } from "lucide-react"
 import { toast } from "sonner"
 import {
@@ -70,9 +71,12 @@ export function DashboardView({ currentUser }: { currentUser: any }) {
         setStats(data)
       } else {
         console.error('获取统计信息失败:', res.status, res.statusText)
+        const errorData = await res.json().catch(() => ({}))
+        toast.error(getApiErrorMessage(errorData, '获取统计信息失败'))
       }
     } catch (e) {
       console.error('获取统计信息失败:', e)
+      toast.error(getApiErrorMessage(e, '获取统计信息失败'))
     }
   }
 
@@ -82,9 +86,13 @@ export function DashboardView({ currentUser }: { currentUser: any }) {
       if (res.ok) {
         const data = await res.json()
         setAnnouncements(data.announcements || [])
+      } else {
+        const errorData = await res.json().catch(() => ({}))
+        toast.error(getApiErrorMessage(errorData, '获取公告失败'))
       }
     } catch (e) {
       console.error('获取公告失败:', e)
+      toast.error(getApiErrorMessage(e, '获取公告失败'))
     }
   }
 
@@ -101,10 +109,11 @@ export function DashboardView({ currentUser }: { currentUser: any }) {
         setNewAnnouncement({ title: '', content: '' })
         fetchAnnouncements()
       } else {
-        toast.error('添加失败')
+        const errorData = await res.json().catch(() => ({}))
+        toast.error(getApiErrorMessage(errorData, '添加失败'))
       }
     } catch (e) {
-      toast.error('网络错误')
+      toast.error(getApiErrorMessage(e, '网络错误'))
     }
   }
 
@@ -125,10 +134,11 @@ export function DashboardView({ currentUser }: { currentUser: any }) {
         setEditingAnnouncement(null)
         fetchAnnouncements()
       } else {
-        toast.error('更新失败')
+        const errorData = await res.json().catch(() => ({}))
+        toast.error(getApiErrorMessage(errorData, '更新失败'))
       }
     } catch (e) {
-      toast.error('网络错误')
+      toast.error(getApiErrorMessage(e, '网络错误'))
     }
   }
 
@@ -140,10 +150,11 @@ export function DashboardView({ currentUser }: { currentUser: any }) {
         toast.success('公告删除成功')
         fetchAnnouncements()
       } else {
-        toast.error('删除失败')
+        const errorData = await res.json().catch(() => ({}))
+        toast.error(getApiErrorMessage(errorData, '删除失败'))
       }
     } catch (e) {
-      toast.error('网络错误')
+      toast.error(getApiErrorMessage(e, '网络错误'))
     }
   }
 

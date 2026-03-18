@@ -126,6 +126,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   const [batchProgress, setBatchProgress] = useState(0)
   const [batchFailedItems, setBatchFailedItems] = useState<FailedItem[]>([])
   const [shopFailedItems, setShopFailedItems] = useState<FailedItem[]>([])
+  const [dismissedShopFailedKey, setDismissedShopFailedKey] = useState<string | null>(null)
   const [dialogFailedItems, setDialogFailedItems] = useState<FailedItem[]>([])
   const [failedDialogTitle, setFailedDialogTitle] = useState('失败商品详情')
   const [showFailedDialog, setShowFailedDialog] = useState(false)
@@ -486,7 +487,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
             setShopFailedItems([])
           } else if (status.completed) {
             const rawFailedItems = Array.isArray(status.failed_items) ? status.failed_items : []
-          const formatted = rawFailedItems
+            const formatted = rawFailedItems
               .map((item: any) => ({
                 id: String(item?.id || item?.item_id || ''),
                 reason: item?.reason || item?.message || '未知错误',
@@ -497,7 +498,11 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
                     : []
               }))
               .filter((item: any) => item.id)
-          setShopFailedItems(formatted)
+            const failedKey = `${status.updated_at || ''}:${formatted.map((item: FailedItem) => item.id).join(',')}`
+            if (formatted.length > 0 && failedKey !== dismissedShopFailedKey) {
+              setDismissedShopFailedKey(null)
+            }
+            setShopFailedItems(formatted)
           }
           // 如果抓取完成，刷新商品列表
           if (!status.is_scraping && status.completed) {
@@ -511,6 +516,10 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
       // 静默失败
     }
   }
+
+  const currentShopFailedKey = scrapeStatus?.completed && !scrapeStatus?.is_scraping
+    ? `${scrapeStatus?.updated_at || ''}:${shopFailedItems.map(item => item.id).join(',')}`
+    : ''
 
   const parseReplyScopes = (rawScope: any): string[] => {
     if (!rawScope || rawScope === 'all') return []
@@ -1173,24 +1182,35 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         </div>
       )}
 
-      {shopFailedItems.length > 0 && scrapeStatus?.completed && !scrapeStatus?.is_scraping && (
-        <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex items-center justify-between">
+      {shopFailedItems.length > 0 && scrapeStatus?.completed && !scrapeStatus?.is_scraping && dismissedShopFailedKey !== currentShopFailedKey && (
+        <div className="p-4 bg-red-50 border border-red-200 rounded-lg flex items-center justify-between gap-3">
           <div className="flex items-center text-red-700">
             <AlertCircle className="w-5 h-5 mr-2" />
             <span>店铺抓取失败 {shopFailedItems.length} 个商品</span>
           </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="border-red-200 text-red-700 hover:bg-red-100"
-            onClick={() => {
-              setDialogFailedItems(shopFailedItems)
-              setFailedDialogTitle('店铺抓取失败商品详情')
-              setShowFailedDialog(true)
-            }}
-          >
-            查看详情
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="border-red-200 text-red-700 hover:bg-red-100"
+              onClick={() => {
+                setDialogFailedItems(shopFailedItems)
+                setFailedDialogTitle('店铺抓取失败商品详情')
+                setShowFailedDialog(true)
+              }}
+            >
+              查看详情
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8 text-red-700 hover:bg-red-100 hover:text-red-800"
+              onClick={() => setDismissedShopFailedKey(currentShopFailedKey)}
+              aria-label="关闭店铺抓取失败提示"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
       )}
 

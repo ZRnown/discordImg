@@ -1,4 +1,5 @@
 import { useState, useCallback } from 'react'
+import { getApiErrorMessage } from '@/lib/utils'
 
 interface CacheEntry {
   data: any
@@ -22,10 +23,19 @@ export function useApiCache(cacheDuration: number = 30000) {
     // 发起新请求
     console.log(`发起API请求: ${cacheKey}`)
     const response = await fetch(url, options)
-    if (!response.ok) {
-      throw new Error(`API request failed: ${response.status}`)
+    const text = await response.text()
+    let data: any = {}
+    if (text.trim()) {
+      try {
+        data = JSON.parse(text)
+      } catch {
+        data = { message: text.trim() }
+      }
     }
-    const data = await response.json()
+
+    if (!response.ok) {
+      throw new Error(getApiErrorMessage(data, `API request failed: ${response.status}`))
+    }
 
     // 更新缓存
     setCache(prev => ({

@@ -4,6 +4,7 @@ import type React from "react"
 import { useState, useCallback, useEffect } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { getApiErrorMessage } from "@/lib/utils"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -169,9 +170,13 @@ export function ImageSearchView() {
         if (response.ok) {
           const data = await response.json()
           setAvailableWebsites(data.websites || [])
+        } else {
+          const errorData = await response.json().catch(() => ({}))
+          toast.error(getApiErrorMessage(errorData, '加载网站列表失败'))
         }
       } catch (error) {
         console.error('Failed to fetch websites:', error)
+        toast.error(getApiErrorMessage(error, '加载网站列表失败'))
       }
     }
 
@@ -189,9 +194,13 @@ export function ImageSearchView() {
         setTotalHistory(result.total || 0)
         setHasMoreHistory(result.has_more || false)
         setCurrentPage(page)
+      } else {
+        const errorData = await response.json().catch(() => ({}))
+        toast.error(getApiErrorMessage(errorData, '加载搜索历史失败'))
       }
     } catch (error) {
       console.error('Failed to fetch search history:', error)
+      toast.error(getApiErrorMessage(error, '加载搜索历史失败'))
     }
   }
 
@@ -206,11 +215,12 @@ export function ImageSearchView() {
         setTotalHistory(prev => prev - 1)
         toast.success('搜索记录已删除')
       } else {
-        toast.error('删除失败')
+        const errorData = await response.json().catch(() => ({}))
+        toast.error(getApiErrorMessage(errorData, '删除失败'))
       }
     } catch (error) {
       console.error('Failed to delete history:', error)
-      toast.error('删除失败')
+      toast.error(getApiErrorMessage(error, '删除失败'))
     }
   }
 
@@ -230,11 +240,12 @@ export function ImageSearchView() {
         setTotalHistory(0)
         toast.success('所有搜索记录已清空')
       } else {
-        toast.error('清空失败')
+        const errorData = await response.json().catch(() => ({}))
+        toast.error(getApiErrorMessage(errorData, '清空失败'))
       }
     } catch (error) {
       console.error('Failed to clear history:', error)
-      toast.error('清空失败')
+      toast.error(getApiErrorMessage(error, '清空失败'))
     }
   }
 
