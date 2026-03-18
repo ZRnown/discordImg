@@ -78,6 +78,13 @@ except ModuleNotFoundError as e:
         from .rotation_settings import resolve_rotation_settings_update
     else:
         raise
+try:
+    from shop_scrape_helpers import build_weidian_shop_api_headers, reset_scrape_stop_event
+except ModuleNotFoundError as e:
+    if e.name == 'shop_scrape_helpers':
+        from .shop_scrape_helpers import build_weidian_shop_api_headers, reset_scrape_stop_event
+    else:
+        raise
 
 # === 全局状态变量 ===
 ai_model_ready = False  # AI模型是否已就绪
@@ -5212,6 +5219,9 @@ def scrape_shop():
 
         # 在后台线程中运行抓取任务，避免阻塞其他操作
         import threading
+        if scrape_stop_event.is_set():
+            logger.info('检测到遗留的抓取停止事件，启动前先清理')
+        reset_scrape_stop_event(scrape_stop_event)
 
         def run_scrape_task():
             """后台抓取任务"""
@@ -5648,10 +5658,19 @@ def get_all_category_ids(shop_id, session):
             "from": "h5"
         })
         full_url = f"{url}?param={quote(param)}&wdtoken=8ea9315c&_={int(time.time()*1000)}"
+        request_headers = build_weidian_shop_api_headers(shop_id)
 
         logger.info(f"正在获取店铺分类树: {shop_id}")
-        response = session.get(full_url, timeout=10)
-        data = response.json()
+        response = session.get(full_url, headers=request_headers, timeout=10)
+        try:
+            data = response.json()
+        except ValueError:
+            preview = (response.text or '').strip().replace('\n', ' ')[:240]
+            logger.warning(
+                f"获取分类树返回非JSON(shop_id={shop_id}, status={response.status_code}, "
+                f"content_type={response.headers.get('content-type', '')}): {preview}"
+            )
+            return []
 
         cate_ids = []
 
@@ -5708,9 +5727,18 @@ def fetch_category_items(shop_id, cate_id, cate_name, session, limit=20):
                 "from": "h5"
             })
             full_url = f"{url}?param={quote(param)}&wdtoken=8ea9315c&_={int(time.time()*1000)}"
+            request_headers = build_weidian_shop_api_headers(shop_id)
 
-            response = session.get(full_url, timeout=10)
-            data = response.json()
+            response = session.get(full_url, headers=request_headers, timeout=10)
+            try:
+                data = response.json()
+            except ValueError:
+                preview = (response.text or '').strip().replace('\n', ' ')[:240]
+                logger.warning(
+                    f"分类[{cate_name}] Offset {offset} 返回非JSON(shop_id={shop_id}, "
+                    f"status={response.status_code}, content_type={response.headers.get('content-type', '')}): {preview}"
+                )
+                break
 
             if data.get('status', {}).get('code') != 0:
                 logger.warning(f"分类[{cate_name}] Offset {offset} API错误: {data.get('status')}")
