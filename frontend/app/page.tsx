@@ -188,7 +188,7 @@ export default function Page() {
         <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
           <SidebarTrigger />
           <Separator orientation="vertical" className="h-6" />
-          <h1 className="text-lg font-semibold">Discord 自动营销系统</h1>
+          <h1 className="text-lg font-semibold">LinkRadar 链接雷达</h1>
           <div className="flex-1" />
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">

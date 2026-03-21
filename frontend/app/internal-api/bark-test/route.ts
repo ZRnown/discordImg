@@ -17,7 +17,7 @@ const buildPushUrl = (serverUrl: string, deviceKey: string, title: string, conte
     encodeURIComponent(title),
     encodeURIComponent(content),
   ].join('/')
-  return `${serverUrl}/${pushPath}?group=${encodeURIComponent('Discord营销系统')}&isArchive=1&sound=gotosleep`
+  return `${serverUrl}/${pushPath}?group=${encodeURIComponent('LinkRadar 链接雷达')}&isArchive=1&sound=gotosleep`
 }
 
 const fetchWithTimeout = async (

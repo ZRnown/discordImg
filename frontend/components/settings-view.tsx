@@ -10,6 +10,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { toast } from "sonner"
 import { Settings, Save } from "lucide-react"
+import {
+  getMinimumReplyMaxDelay,
+  normalizeReplyDelayRange,
+  REPLY_DELAY_MAX,
+  REPLY_DELAY_MIN,
+  REPLY_DELAY_STEP,
+} from "@/lib/reply-delay"
 
 interface User {
   id: number
@@ -78,10 +85,14 @@ export function SettingsView() {
       const response = await fetch('/api/user/settings')
       if (response.ok) {
         const data = await response.json()
+        const delayRange = normalizeReplyDelayRange(
+          Number(data.global_reply_min_delay ?? 3.0),
+          Number(data.global_reply_max_delay ?? 8.0),
+        )
         setSettings({
           discord_similarity_threshold: data.discord_similarity_threshold ?? 0.6,
-          global_reply_min_delay: data.global_reply_min_delay ?? 3.0,
-          global_reply_max_delay: data.global_reply_max_delay ?? 8.0,
+          global_reply_min_delay: delayRange.minDelay,
+          global_reply_max_delay: delayRange.maxDelay,
           user_blacklist: data.user_blacklist ?? '',
           keyword_filters: data.keyword_filters ?? '',
           keyword_reply_enabled: data.keyword_reply_enabled === 1 || data.keyword_reply_enabled === true,
@@ -436,14 +447,21 @@ export function SettingsView() {
                     <Input
                       id="min-delay"
                       type="number"
-                      step="0.1"
-                      min="0.1"
-                      max="30"
+                      step={REPLY_DELAY_STEP}
+                      min={REPLY_DELAY_MIN}
+                      max={REPLY_DELAY_MAX - REPLY_DELAY_STEP}
                       value={settings.global_reply_min_delay}
                       onChange={(e) => {
-                        const value = parseFloat(e.target.value);
-                        if (!isNaN(value) && value >= 0.1 && value <= 30) {
-                          setSettings(prev => ({ ...prev, global_reply_min_delay: value }));
+                        const value = parseFloat(e.target.value)
+                        if (!isNaN(value) && value >= REPLY_DELAY_MIN && value <= REPLY_DELAY_MAX - REPLY_DELAY_STEP) {
+                          setSettings(prev => {
+                            const next = normalizeReplyDelayRange(value, prev.global_reply_max_delay)
+                            return {
+                              ...prev,
+                              global_reply_min_delay: next.minDelay,
+                              global_reply_max_delay: next.maxDelay,
+                            }
+                          })
                         }
                       }}
                       className="w-16 h-9 text-center"
@@ -452,14 +470,21 @@ export function SettingsView() {
                     <Input
                       id="max-delay"
                       type="number"
-                      step="0.5"
-                      min="1"
-                      max="60"
+                      step={REPLY_DELAY_STEP}
+                      min={getMinimumReplyMaxDelay(settings.global_reply_min_delay)}
+                      max={REPLY_DELAY_MAX}
                       value={settings.global_reply_max_delay}
                       onChange={(e) => {
-                        const value = parseFloat(e.target.value);
-                        if (!isNaN(value) && value >= 1 && value <= 60) {
-                          setSettings(prev => ({ ...prev, global_reply_max_delay: value }));
+                        const value = parseFloat(e.target.value)
+                        if (!isNaN(value) && value >= getMinimumReplyMaxDelay(settings.global_reply_min_delay) && value <= REPLY_DELAY_MAX) {
+                          setSettings(prev => {
+                            const next = normalizeReplyDelayRange(prev.global_reply_min_delay, value)
+                            return {
+                              ...prev,
+                              global_reply_min_delay: next.minDelay,
+                              global_reply_max_delay: next.maxDelay,
+                            }
+                          })
                         }
                       }}
                       className="w-16 h-9 text-center"

@@ -11,6 +11,22 @@ import {
   getReplyModeSwitchError,
   isReplyModeOptionDisabled,
 } from "@/lib/utils"
+import {
+  getMinimumReplyMaxDelay,
+  normalizeReplyDelayRange,
+  REPLY_DELAY_MAX,
+  REPLY_DELAY_MIN,
+  REPLY_DELAY_STEP,
+} from "@/lib/reply-delay"
+import {
+  BUILTIN_WEBSITE_TEMPLATES,
+  buildWebsiteInternalName,
+  createEmptyWebsiteConfig,
+  createWebsiteConfigFromTemplateKey,
+  CUSTOM_WEBSITE_TEMPLATE_KEY,
+  DEFAULT_WEBSITE_TEMPLATE_KEY,
+  getWebsiteTemplateByKey,
+} from "@/lib/website-templates"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -187,15 +203,9 @@ export function AccountsView() {
   // 网站配置相关状态
   const [websites, setWebsites] = useState<any[]>([])
   const [showAddWebsite, setShowAddWebsite] = useState(false)
+  const [selectedWebsiteTemplateKey, setSelectedWebsiteTemplateKey] = useState(DEFAULT_WEBSITE_TEMPLATE_KEY)
   const [editingWebsite, setEditingWebsite] = useState<any>(null)
-  const [newWebsite, setNewWebsite] = useState({
-    name: '',
-    display_name: '',
-    url_template: '',
-    id_pattern: '',
-    badge_color: 'blue',
-    reply_template: '{url}'
-  })
+  const [newWebsite, setNewWebsite] = useState(createEmptyWebsiteConfig())
   const [websiteChannels, setWebsiteChannels] = useState<{[key: number]: string[]}>({})
   const [channelInputs, setChannelInputs] = useState<{[key: number]: string}>({})
   const [channelToRemove, setChannelToRemove] = useState<{webId: number, chanId: string} | null>(null)
@@ -251,7 +261,6 @@ export function AccountsView() {
   const [editingFilterImagesUploading, setEditingFilterImagesUploading] = useState(false)
   const newFilterImageInputRef = useRef<HTMLInputElement | null>(null)
   const editingFilterImageInputRef = useRef<HTMLInputElement | null>(null)
-
   const formatThresholdForInput = (value: any) => {
     if (value === null || value === undefined || value === '') return ''
     const num = Number(value)
@@ -264,11 +273,15 @@ export function AccountsView() {
   })
 
   const mergeIncomingSettings = (prev: any, data: any) => {
+    const delayRange = normalizeReplyDelayRange(
+      Number(data?.global_reply_min_delay ?? prev.global_reply_min_delay ?? 3.0),
+      Number(data?.global_reply_max_delay ?? prev.global_reply_max_delay ?? 8.0),
+    )
     const next = {
       ...prev,
       discord_similarity_threshold: data?.discord_similarity_threshold ?? prev.discord_similarity_threshold ?? 0.6,
-      global_reply_min_delay: data?.global_reply_min_delay ?? prev.global_reply_min_delay ?? 3.0,
-      global_reply_max_delay: data?.global_reply_max_delay ?? prev.global_reply_max_delay ?? 8.0,
+      global_reply_min_delay: delayRange.minDelay,
+      global_reply_max_delay: delayRange.maxDelay,
     }
 
     if (hasOwn(data, 'bark_enabled')) {
@@ -280,7 +293,6 @@ export function AccountsView() {
     if (hasOwn(data, 'bark_device_key')) {
       next.bark_device_key = data.bark_device_key || ''
     }
-
     return next
   }
 
@@ -898,6 +910,14 @@ export function AccountsView() {
       toast.error("已启用 Bark 通知，请填写 Bark 设备 Key")
       return
     }
+    if (settings.global_reply_min_delay >= settings.global_reply_max_delay) {
+      toast.error("最小延迟必须小于最大延迟")
+      return
+    }
+    if (settings.global_reply_min_delay < REPLY_DELAY_MIN || settings.global_reply_max_delay > REPLY_DELAY_MAX) {
+      toast.error("回复延迟范围无效")
+      return
+    }
     setSettingsLoading(true)
     try {
       const response = await fetch('/api/user/settings', {
@@ -1060,22 +1080,41 @@ export function AccountsView() {
     }
   }
 
+  const resetNewWebsiteForm = () => {
+    setSelectedWebsiteTemplateKey(DEFAULT_WEBSITE_TEMPLATE_KEY)
+    setNewWebsite(createEmptyWebsiteConfig())
+  }
+
+  const handleAddWebsiteDialogOpenChange = (open: boolean) => {
+    setShowAddWebsite(open)
+    if (!open) {
+      resetNewWebsiteForm()
+    }
+  }
+
   // 网站配置处理函数
   const handleAddWebsite = async () => {
     try {
+      const websitePayload = selectedWebsiteTemplateKey === CUSTOM_WEBSITE_TEMPLATE_KEY
+        ? {
+            ...newWebsite,
+            name: buildWebsiteInternalName(newWebsite.display_name),
+          }
+        : createWebsiteConfigFromTemplateKey(selectedWebsiteTemplateKey)
+
       const res = await fetch('/api/websites', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify(newWebsite)
+        body: JSON.stringify(websitePayload)
       })
       if (res.ok) {
         toast.success('网站配置已添加')
-        setShowAddWebsite(false)
-        setNewWebsite({ name: '', display_name: '', url_template: '', id_pattern: '', badge_color: 'blue', reply_template: '{url}' })
+        handleAddWebsiteDialogOpenChange(false)
         fetchWebsites(true)
       } else {
-        toast.error('添加失败')
+        const errorData = await res.json().catch(() => ({}))
+        toast.error(getApiErrorMessage(errorData, '添加失败'))
       }
     } catch (e) {
       toast.error('网络错误')
@@ -2057,22 +2096,46 @@ export function AccountsView() {
                       <Input
                         id="min-delay"
                         type="number"
-                        step="0.1"
-                        min="0.1"
-                        max="30"
+                        step={REPLY_DELAY_STEP}
+                        min={REPLY_DELAY_MIN}
+                        max={REPLY_DELAY_MAX - REPLY_DELAY_STEP}
                         value={settings.global_reply_min_delay}
-                        onChange={(e) => setSettings(prev => ({ ...prev, global_reply_min_delay: parseFloat(e.target.value) }))}
+                        onChange={(e) => {
+                          const value = parseFloat(e.target.value)
+                          if (!isNaN(value) && value >= REPLY_DELAY_MIN && value <= REPLY_DELAY_MAX - REPLY_DELAY_STEP) {
+                            setSettings(prev => {
+                              const next = normalizeReplyDelayRange(value, prev.global_reply_max_delay)
+                              return {
+                                ...prev,
+                                global_reply_min_delay: next.minDelay,
+                                global_reply_max_delay: next.maxDelay,
+                              }
+                            })
+                          }
+                        }}
                         className="w-16 h-9 text-center"
                       />
                       <span className="text-sm text-muted-foreground">-</span>
                       <Input
                         id="max-delay"
                         type="number"
-                        step="0.5"
-                        min="1"
-                        max="60"
+                        step={REPLY_DELAY_STEP}
+                        min={getMinimumReplyMaxDelay(settings.global_reply_min_delay)}
+                        max={REPLY_DELAY_MAX}
                         value={settings.global_reply_max_delay}
-                        onChange={(e) => setSettings(prev => ({ ...prev, global_reply_max_delay: parseFloat(e.target.value) }))}
+                        onChange={(e) => {
+                          const value = parseFloat(e.target.value)
+                          if (!isNaN(value) && value >= getMinimumReplyMaxDelay(settings.global_reply_min_delay) && value <= REPLY_DELAY_MAX) {
+                            setSettings(prev => {
+                              const next = normalizeReplyDelayRange(prev.global_reply_min_delay, value)
+                              return {
+                                ...prev,
+                                global_reply_min_delay: next.minDelay,
+                                global_reply_max_delay: next.maxDelay,
+                              }
+                            })
+                          }
+                        }}
                         className="w-16 h-9 text-center"
                       />
                     </div>
@@ -2172,13 +2235,6 @@ export function AccountsView() {
                 <DialogDescription>修改网站配置信息</DialogDescription>
               </DialogHeader>
               <div className="space-y-4">
-                <div>
-                  <Label>网站标识</Label>
-                  <Input
-                    value={editingWebsite.name}
-                    onChange={e => setEditingWebsite(prev => ({ ...prev, name: e.target.value }))}
-                  />
-                </div>
                 <div>
                   <Label>显示名称</Label>
                   <Input
@@ -2496,7 +2552,7 @@ export function AccountsView() {
               </div>
               {/* 只有管理员可以添加新网站 */}
               {currentUser?.role === 'admin' && (
-                <Dialog open={showAddWebsite} onOpenChange={setShowAddWebsite}>
+                <Dialog open={showAddWebsite} onOpenChange={handleAddWebsiteDialogOpenChange}>
                   <DialogTrigger asChild>
                     <Button size="sm">
                       <Plus className="w-4 h-4 mr-2" />
@@ -2506,72 +2562,111 @@ export function AccountsView() {
                   <DialogContent>
                     <DialogHeader>
                       <DialogTitle>添加网站配置</DialogTitle>
-                      <DialogDescription>配置新的购物网站支持</DialogDescription>
+                      <DialogDescription>优先选择内置模板；需要特殊站点时再用自定义手填</DialogDescription>
                     </DialogHeader>
                     <div className="space-y-4">
                       <div>
-                        <Label>网站标识</Label>
-                        <Input
-                          value={newWebsite.name}
-                          onChange={e => setNewWebsite(prev => ({ ...prev, name: e.target.value }))}
-                          placeholder="例如: kakobuy"
-                        />
-                      </div>
-                      <div>
-                        <Label>显示名称</Label>
-                        <Input
-                          value={newWebsite.display_name}
-                          onChange={e => setNewWebsite(prev => ({ ...prev, display_name: e.target.value }))}
-                          placeholder="例如: Kakobuy"
-                        />
-                      </div>
-                      <div>
-                        <Label>URL模板</Label>
-                        <Input
-                          value={newWebsite.url_template}
-                          onChange={e => setNewWebsite(prev => ({ ...prev, url_template: e.target.value }))}
-                          placeholder="https://www.kakobuy.com/item/details?url=https%3A%2F%2Fweidian.com%2Fitem.html%3FitemID%3D{id}&id={id}&source=WD"
-                        />
-                      </div>
-                      <div>
-                        <Label>回复模板</Label>
-                        <Textarea
-                          value={newWebsite.reply_template}
-                          onChange={e => setNewWebsite(prev => ({ ...prev, reply_template: e.target.value }))}
-                          placeholder="{url}"
-                          rows={3}
-                        />
-                        <p className="text-xs text-muted-foreground mt-1">
-                          使用 <span className="font-mono">{`{url}`}</span> 作为链接占位符。
-                        </p>
-                      </div>
-                      <div>
-                        <Label>ID提取模式</Label>
-                        <Input
-                          value={newWebsite.id_pattern}
-                          onChange={e => setNewWebsite(prev => ({ ...prev, id_pattern: e.target.value }))}
-                          placeholder="{id}"
-                        />
-                      </div>
-                      <div>
-                        <Label>徽章颜色</Label>
-                        <Select value={newWebsite.badge_color} onValueChange={value => setNewWebsite(prev => ({ ...prev, badge_color: value }))}>
+                        <Label>网站模板</Label>
+                        <Select
+                          value={selectedWebsiteTemplateKey}
+                          onValueChange={value => {
+                            setSelectedWebsiteTemplateKey(value)
+                            if (value === CUSTOM_WEBSITE_TEMPLATE_KEY) {
+                              setNewWebsite(createEmptyWebsiteConfig())
+                            }
+                          }}
+                        >
                           <SelectTrigger>
-                            <SelectValue />
+                            <SelectValue placeholder="选择内置网站模板" />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="blue">蓝色</SelectItem>
-                            <SelectItem value="green">绿色</SelectItem>
-                            <SelectItem value="orange">橙色</SelectItem>
-                            <SelectItem value="red">红色</SelectItem>
-                            <SelectItem value="purple">紫色</SelectItem>
-                            <SelectItem value="gray">灰色</SelectItem>
+                            <SelectItem value={CUSTOM_WEBSITE_TEMPLATE_KEY}>自定义</SelectItem>
+                            {BUILTIN_WEBSITE_TEMPLATES.map(template => (
+                              <SelectItem key={template.key} value={template.key}>
+                                {template.display_name}
+                              </SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
                       </div>
+                      {selectedWebsiteTemplateKey === CUSTOM_WEBSITE_TEMPLATE_KEY ? (
+                        <>
+                          <div>
+                            <Label>显示名称</Label>
+                            <Input
+                              value={newWebsite.display_name}
+                              onChange={e => setNewWebsite(prev => ({ ...prev, display_name: e.target.value }))}
+                              placeholder="例如: Kakobuy"
+                            />
+                            <p className="text-xs text-muted-foreground mt-1">
+                              系统内部标识会自动生成，无需手动填写。
+                            </p>
+                          </div>
+                          <div>
+                            <Label>URL模板</Label>
+                            <Input
+                              value={newWebsite.url_template}
+                              onChange={e => setNewWebsite(prev => ({ ...prev, url_template: e.target.value }))}
+                              placeholder="https://www.kakobuy.com/item/details?url=https%3A%2F%2Fweidian.com%2Fitem.html%3FitemID%3D{id}"
+                            />
+                          </div>
+                          <div>
+                            <Label>回复模板</Label>
+                            <Textarea
+                              value={newWebsite.reply_template}
+                              onChange={e => setNewWebsite(prev => ({ ...prev, reply_template: e.target.value }))}
+                              placeholder="{url}"
+                              rows={3}
+                            />
+                            <p className="text-xs text-muted-foreground mt-1">
+                              使用 <span className="font-mono">{`{url}`}</span> 作为链接占位符。
+                            </p>
+                          </div>
+                          <div>
+                            <Label>ID提取模式</Label>
+                            <Input
+                              value={newWebsite.id_pattern}
+                              onChange={e => setNewWebsite(prev => ({ ...prev, id_pattern: e.target.value }))}
+                              placeholder="{id}"
+                            />
+                          </div>
+                          <div>
+                            <Label>徽章颜色</Label>
+                            <Select value={newWebsite.badge_color} onValueChange={value => setNewWebsite(prev => ({ ...prev, badge_color: value }))}>
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="blue">蓝色</SelectItem>
+                                <SelectItem value="green">绿色</SelectItem>
+                                <SelectItem value="orange">橙色</SelectItem>
+                                <SelectItem value="red">红色</SelectItem>
+                                <SelectItem value="purple">紫色</SelectItem>
+                                <SelectItem value="gray">灰色</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="rounded-lg border bg-muted/30 p-3 text-sm space-y-2">
+                          <div className="font-medium">{getWebsiteTemplateByKey(selectedWebsiteTemplateKey)?.display_name}</div>
+                          <div className="text-muted-foreground">
+                            {getWebsiteTemplateByKey(selectedWebsiteTemplateKey)?.description}
+                          </div>
+                          <div className="text-xs text-muted-foreground break-all">
+                            URL 模板: {getWebsiteTemplateByKey(selectedWebsiteTemplateKey)?.url_template}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            ID 模式: {getWebsiteTemplateByKey(selectedWebsiteTemplateKey)?.id_pattern}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            回复模板: {getWebsiteTemplateByKey(selectedWebsiteTemplateKey)?.reply_template}
+                          </div>
+                        </div>
+                      )}
                     </div>
                     <DialogFooter>
-                      <Button variant="outline" onClick={() => setShowAddWebsite(false)}>取消</Button>
+                      <Button variant="outline" onClick={() => handleAddWebsiteDialogOpenChange(false)}>取消</Button>
                       <Button onClick={handleAddWebsite}>添加</Button>
                     </DialogFooter>
                   </DialogContent>
@@ -2582,11 +2677,11 @@ export function AccountsView() {
             <CardContent>
               <div className="space-y-4">
                 {websites.map((website: any) => (
-                  <div key={website.id} className="border rounded-lg p-4">
-                    <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3 mb-3">
-                      <div className="space-y-2">
+                  <div key={website.id} className="border rounded-lg p-4 space-y-4">
+                    <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
+                      <div className="space-y-2 min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className={`inline-flex items-center rounded-md border font-medium w-fit whitespace-nowrap text-[9px] px-1 py-0 h-4 border-none shrink-0 text-white ${
+                          <span className={`inline-flex items-center rounded-md border font-semibold w-fit whitespace-nowrap text-xs px-2.5 py-0.5 h-6 border-none shrink-0 text-white ${
                             website.badge_color === 'blue' ? 'bg-blue-600' :
                             website.badge_color === 'green' ? 'bg-green-600' :
                             website.badge_color === 'orange' ? 'bg-orange-600' :
@@ -2596,7 +2691,6 @@ export function AccountsView() {
                           }`}>
                             {website.display_name}
                           </span>
-                          <span className="text-sm font-medium">{website.name}</span>
                         </div>
                         <div className="text-xs text-muted-foreground">
                           <div>URL模板: {website.url_template}</div>
@@ -2604,7 +2698,7 @@ export function AccountsView() {
                         </div>
                       </div>
 
-                      <div className="flex flex-col items-start lg:items-end gap-2">
+                      <div className="flex items-center gap-2 self-start lg:self-auto">
                         {/* 只有管理员可以编辑/删除网站定义 */}
                         {currentUser?.role === 'admin' && (
                           <div className="flex gap-2">
@@ -2624,33 +2718,33 @@ export function AccountsView() {
                             </Button>
                           </div>
                         )}
+                      </div>
+                    </div>
 
-                        <div className="grid grid-cols-3 gap-2 text-center">
-                          <div className="bg-muted/40 px-2 py-1 rounded">
-                            <div className="text-[10px] text-muted-foreground">总回复</div>
-                            <div className="text-sm font-semibold">{website.stat_replies_total || 0}</div>
-                          </div>
-                          <div className="bg-muted/40 px-2 py-1 rounded">
-                            <div className="text-[10px] text-muted-foreground">文本回复</div>
-                            <div className="text-sm font-semibold">{website.stat_replies_text || 0}</div>
-                          </div>
-                          <div className="bg-muted/40 px-2 py-1 rounded">
-                            <div className="text-[10px] text-muted-foreground">图片回复</div>
-                            <div className="text-sm font-semibold">{website.stat_replies_image || 0}</div>
-                          </div>
-                          <div className="bg-muted/40 px-2 py-1 rounded">
-                            <div className="text-[10px] text-muted-foreground">今日总</div>
-                            <div className="text-sm font-semibold">{website.stat_replies_daily_total || 0}</div>
-                          </div>
-                          <div className="bg-muted/40 px-2 py-1 rounded">
-                            <div className="text-[10px] text-muted-foreground">今日文本</div>
-                            <div className="text-sm font-semibold">{website.stat_replies_daily_text || 0}</div>
-                          </div>
-                          <div className="bg-muted/40 px-2 py-1 rounded">
-                            <div className="text-[10px] text-muted-foreground">今日图片</div>
-                            <div className="text-sm font-semibold">{website.stat_replies_daily_image || 0}</div>
-                          </div>
-                        </div>
+                    <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2 text-center">
+                      <div className="rounded-lg border bg-muted/30 px-3 py-2">
+                        <div className="text-[11px] text-muted-foreground">总回复</div>
+                        <div className="text-base font-semibold leading-none mt-1">{website.stat_replies_total || 0}</div>
+                      </div>
+                      <div className="rounded-lg border bg-muted/30 px-3 py-2">
+                        <div className="text-[11px] text-muted-foreground">文本回复</div>
+                        <div className="text-base font-semibold leading-none mt-1">{website.stat_replies_text || 0}</div>
+                      </div>
+                      <div className="rounded-lg border bg-muted/30 px-3 py-2">
+                        <div className="text-[11px] text-muted-foreground">图片回复</div>
+                        <div className="text-base font-semibold leading-none mt-1">{website.stat_replies_image || 0}</div>
+                      </div>
+                      <div className="rounded-lg border bg-muted/30 px-3 py-2">
+                        <div className="text-[11px] text-muted-foreground">今日总</div>
+                        <div className="text-base font-semibold leading-none mt-1">{website.stat_replies_daily_total || 0}</div>
+                      </div>
+                      <div className="rounded-lg border bg-muted/30 px-3 py-2">
+                        <div className="text-[11px] text-muted-foreground">今日文本</div>
+                        <div className="text-base font-semibold leading-none mt-1">{website.stat_replies_daily_text || 0}</div>
+                      </div>
+                      <div className="rounded-lg border bg-muted/30 px-3 py-2">
+                        <div className="text-[11px] text-muted-foreground">今日图片</div>
+                        <div className="text-base font-semibold leading-none mt-1">{website.stat_replies_daily_image || 0}</div>
                       </div>
                     </div>
 
@@ -3237,31 +3331,39 @@ export function AccountsView() {
                       <div className="text-xs text-muted-foreground">
                         网站特定的过滤规则 (独立于全局规则)
                       </div>
-                      <div className="flex flex-wrap items-center gap-2 rounded-md border border-emerald-100 bg-emerald-50/40 px-2 py-1 text-[11px] text-muted-foreground">
-                        <span className="font-medium text-emerald-700">图片相似度</span>
-                        <Input
-                          type="number"
-                          step="0.01"
-                          value={websiteSimilarityInputs[website.id] ?? ''}
-                          onChange={e => setWebsiteSimilarityInputs(prev => ({ ...prev, [website.id]: e.target.value }))}
-                          placeholder="空=全局"
-                          className="h-6 w-20 bg-white/80 text-[11px]"
-                        />
-                        <span className="text-[11px] text-muted-foreground">仅此网站生效</span>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-6 px-2 text-[11px] border-emerald-200 text-emerald-700 hover:bg-emerald-50"
-                          onClick={() => {
-                            if (currentUser?.role === 'admin') {
-                              handleUpdateWebsiteExtras(website.id)
-                            } else {
-                              handleUpdateWebsiteSimilarity(website.id)
-                            }
-                          }}
-                        >
-                          保存
-                        </Button>
+                      <div className="rounded-lg border bg-muted/30 px-3 py-2">
+                        <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+                          <div className="space-y-1">
+                            <div className="text-xs font-medium">本网站图片阈值覆盖</div>
+                            <div className="text-[11px] text-muted-foreground">
+                              留空时使用全局图片相似度阈值；填写后只覆盖当前网站的图搜判定。
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <Input
+                              type="number"
+                              step="0.01"
+                              value={websiteSimilarityInputs[website.id] ?? ''}
+                              onChange={e => setWebsiteSimilarityInputs(prev => ({ ...prev, [website.id]: e.target.value }))}
+                              placeholder="空=全局"
+                              className="h-8 w-24 text-xs"
+                            />
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-8 px-3 text-xs"
+                              onClick={() => {
+                                if (currentUser?.role === 'admin') {
+                                  handleUpdateWebsiteExtras(website.id)
+                                } else {
+                                  handleUpdateWebsiteSimilarity(website.id)
+                                }
+                              }}
+                            >
+                              保存
+                            </Button>
+                          </div>
+                        </div>
                       </div>
                     </div>
 

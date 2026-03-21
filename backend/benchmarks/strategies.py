@@ -495,6 +495,7 @@ class GroundingSiglip2Strategy:
 
 class Siglip2RerankStrategy:
     name = "siglip2_rerank"
+    cache_version = "siglip2_rerank_v1"
 
     def __init__(self):
         self.encoder = _Siglip2Encoder()
@@ -523,17 +524,43 @@ class Siglip2RerankStrategy:
         return tokens
 
     @staticmethod
+    def _deserialize_cached_hist(raw_hist) -> Optional[np.ndarray]:
+        if raw_hist is None:
+            return None
+        hist = np.array(raw_hist, dtype=np.float32).flatten()
+        if hist.size == 0:
+            return None
+        if hist.size == 72:
+            hist = hist.reshape((18, 4))
+        return hist
+
+    def build_catalog_cache_payload(self, record) -> Dict[str, Any]:
+        embedding = self.encoder.encode_image(record.image_path, crop_mode="raw")
+        hist = self._build_color_hist(record.image_path)
+        tokens = sorted(self._tokenize(record.title, " ".join(record.queries)))
+        return {
+            "embedding": embedding.tolist() if embedding is not None else None,
+            "color_hist": hist.flatten().astype(np.float32).tolist() if hist is not None else None,
+            "tokens": tokens,
+            "cache_version": self.cache_version,
+        }
+
+    @staticmethod
     def _text_overlap(query_tokens, catalog_tokens) -> float:
         if not query_tokens or not catalog_tokens:
             return 0.0
         return len(query_tokens & catalog_tokens) / float(len(query_tokens))
 
     def prepare_catalog_image(self, record) -> Dict[str, Any]:
+        cached_embedding = _normalize_embedding(getattr(record, "cache_embedding", None))
+        cached_hist = self._deserialize_cached_hist(getattr(record, "cache_color_hist", None))
+        cached_tokens = set(getattr(record, "cache_tokens", []) or [])
+
         return {
             "image_path": record.image_path,
-            "embedding": self.encoder.encode_image(record.image_path, crop_mode="raw"),
-            "hist": self._build_color_hist(record.image_path),
-            "tokens": self._tokenize(record.title, " ".join(record.queries)),
+            "embedding": cached_embedding if cached_embedding is not None else self.encoder.encode_image(record.image_path, crop_mode="raw"),
+            "hist": cached_hist if cached_hist is not None else self._build_color_hist(record.image_path),
+            "tokens": cached_tokens if cached_tokens else self._tokenize(record.title, " ".join(record.queries)),
         }
 
     def prepare_query_image(self, record) -> Dict[str, Any]:
@@ -551,17 +578,23 @@ class Siglip2RerankStrategy:
             return 0.0
 
         image_score = float(np.dot(query_embedding, catalog_embedding))
-
-        color_score = 0.0
+        weighted_scores = [(0.74, image_score)]
         query_hist = query_context.get("hist")
         catalog_hist = catalog_context.get("hist")
         if query_hist is not None and catalog_hist is not None:
             color_score = max(0.0, float(cv2.compareHist(query_hist, catalog_hist, cv2.HISTCMP_CORREL)))
+            weighted_scores.append((0.11, color_score))
 
         text_score = self._text_overlap(query_context.get("tokens"), catalog_context.get("tokens"))
+        if query_context.get("tokens") and catalog_context.get("tokens"):
+            weighted_scores.append((0.15, text_score))
 
-        final_score = image_score * 0.74 + color_score * 0.11 + text_score * 0.15
-        if text_score > 0.5 and image_score > 0.5:
+        total_weight = sum(weight for weight, _score in weighted_scores)
+        if total_weight <= 0:
+            return 0.0
+
+        final_score = sum(weight * score for weight, score in weighted_scores) / total_weight
+        if len(weighted_scores) >= 3 and text_score > 0.5 and image_score > 0.5:
             final_score += 0.05
         return float(min(final_score, 1.0))
 

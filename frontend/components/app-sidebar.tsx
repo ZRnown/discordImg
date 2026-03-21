@@ -50,8 +50,8 @@ export function AppSidebar({
         <div className="flex items-center gap-2">
           <Bot className="size-6 text-primary" />
           <div>
-            <h2 className="text-lg font-bold">Discord 营销</h2>
-            <p className="text-xs text-muted-foreground">智能自动回复系统</p>
+            <h2 className="text-lg font-bold">LinkRadar</h2>
+            <p className="text-xs text-muted-foreground">链接雷达</p>
           </div>
         </div>
       </SidebarHeader>

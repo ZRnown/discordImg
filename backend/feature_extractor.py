@@ -404,7 +404,7 @@ class DINOv2FeatureExtractor:
             if norm > 0:
                 embedding = embedding / norm
 
-            # 6. 确保数据类型为float32 (FAISS要求)
+            # 6. 确保数据类型为float32，便于后续相似度计算与序列化
             return embedding.astype('float32')
 
         except Exception as e:

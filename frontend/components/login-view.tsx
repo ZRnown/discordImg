@@ -64,8 +64,8 @@ export function LoginView({ onLogin }: { onLogin: (user: User) => void }) {
               <Bot className="h-8 w-8 text-primary-foreground" />
             </div>
           </div>
-          <CardTitle className="text-2xl font-bold">Discord 营销系统</CardTitle>
-          <CardDescription>智能 Discord 账号营销管理平台</CardDescription>
+          <CardTitle className="text-2xl font-bold">LinkRadar 链接雷达</CardTitle>
+          <CardDescription>智能商品识别、定位与链接回复平台</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
           <div className="space-y-4">

@@ -23,7 +23,6 @@ import numpy as np
 import logging
 import sys
 from datetime import datetime
-from threading import Lock
 
 # 自动加载.env文件
 try:
@@ -64,6 +63,13 @@ import time
 from urllib.parse import quote
 import hashlib
 import uuid
+try:
+    from settings_validation import validate_reply_delay_range
+except ModuleNotFoundError as e:
+    if e.name == 'settings_validation':
+        from .settings_validation import validate_reply_delay_range
+    else:
+        raise
 try:
     from log_utils import format_record_log_entry, normalize_external_log_entry
 except ModuleNotFoundError as e:
@@ -173,15 +179,14 @@ def check_duplicate_image(new_features, existing_features_list, threshold=0.99):
 
     return False, 0.0
 
-def process_and_save_image_core(product_id, image_url_or_file, index, existing_features=None, save_faiss_immediately=True):
+def process_and_save_image_core(product_id, image_url_or_file, index, existing_features=None):
     """
-    核心图片处理单元：保存 -> 特征提取 -> 查重 -> 数据库 -> FAISS
+    核心图片处理单元：保存 -> SigLIP2缓存生成 -> 查重 -> 数据库 -> 检索缓存
 
     :param product_id: 商品ID
     :param image_url_or_file: 或者是 URL 字符串，或者是 Flask 的 FileStorage 对象
     :param index: 图片索引
-    :param existing_features: 现有特征向量列表，用于查重
-    :param save_faiss_immediately: 是否立即保存FAISS索引（单张上传时为True，批量处理时为False）
+    :param existing_features: 现有检索向量列表，用于查重
     :return: 处理结果字典
     """
     import os
@@ -214,16 +219,31 @@ def process_and_save_image_core(product_id, image_url_or_file, index, existing_f
             os.remove(save_path)
             return {'success': False, 'error': 'Empty file'}
 
-        # 3. 特征提取 (DINOv2 + YOLO)
-        extractor = get_global_feature_extractor()
-        if extractor is None:
+        strategy_name = getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank')
+        product_row = db._get_product_info_by_id(product_id)
+        if not product_row:
             os.remove(save_path)
-            return {'success': False, 'error': 'Feature extractor not initialized'}
+            return {'success': False, 'error': 'Product not found'}
 
-        features = extractor.extract_feature(save_path)
-        if features is None:
+        try:
+            from live_retrieval import build_product_image_retrieval_cache_payload
+        except ModuleNotFoundError as e:
+            if e.name == 'live_retrieval':
+                from .live_retrieval import build_product_image_retrieval_cache_payload
+            else:
+                raise
+
+        cache_payload = build_product_image_retrieval_cache_payload(
+            strategy_name=strategy_name,
+            product_row=product_row,
+            image_path=save_path,
+            image_index=index,
+        )
+        embedding_values = cache_payload.get('embedding') or []
+        features = np.array(embedding_values, dtype='float32').flatten()
+        if features.size == 0:
             os.remove(save_path)
-            return {'success': False, 'error': 'Feature extraction failed'}
+            return {'success': False, 'error': 'Retrieval cache generation failed'}
 
         # 4. 查重逻辑 (99.5%相似度)
         if existing_features:
@@ -234,39 +254,37 @@ def process_and_save_image_core(product_id, image_url_or_file, index, existing_f
                 return {'success': True, 'skipped': True}  # 标记为成功但跳过，以免报错
 
         # 5. 入库 (SQLite)
-        img_db_id = db.insert_image_record(product_id, save_path, index, features)
+        img_db_id = db.insert_image_record(product_id, save_path, index)
 
-        # 6. 入库 (FAISS)
-        try:
-            from vector_engine import get_vector_engine
-            engine = get_vector_engine()
-
-            # === FAISS 线程安全锁 ===
-            with faiss_lock:  # 加锁，确保同一时间只有一个线程写入 FAISS
-                engine.add_vector(img_db_id, features)
-                # 性能优化：单张上传时立即保存，批量处理时延迟保存
-                if save_faiss_immediately:
-                    engine.save()
-        except Exception as faiss_err:
-            logger.error(f"FAISS 入库失败: {faiss_err}")
-            # FAISS失败时删除数据库记录和文件，回滚操作
+        # 6. 写入检索缓存
+        cache_saved = db.upsert_product_image_retrieval_cache(
+            image_db_id=img_db_id,
+            strategy_name=strategy_name,
+            cache_version=str(cache_payload.get('cache_version') or ''),
+            embedding=cache_payload.get('embedding'),
+            color_hist=cache_payload.get('color_hist'),
+            tokens=cache_payload.get('tokens'),
+        )
+        if not cache_saved:
             try:
                 db.delete_image_record(img_db_id)
             except:
                 pass
             if os.path.exists(save_path):
                 os.remove(save_path)
-            return {'success': False, 'error': f'FAISS error: {faiss_err}'}
+            return {'success': False, 'error': 'Retrieval cache persistence failed'}
 
         # 7. 更新对比列表，确保下一张图能跟这张比
         if existing_features is not None:
             existing_features.append(features)  # 关键：实时加入列表
 
+        invalidate_product_retrieval_runtime(strategy_name)
+
         # 8. 完成
         return {
             'success': True,
             'image_path': save_path,
-            'features': features,
+            'retrieval_cache': cache_payload,
             'index': index,
             'filename': filename,
             'db_id': img_db_id
@@ -297,9 +315,6 @@ def process_and_save_image_core(product_id, image_url_or_file, index, existing_f
 current_scrape_thread = None
 scrape_thread_lock = threading.Lock()
 scrape_stop_event = threading.Event()  # 抓取停止事件，用于线程间通信
-
-# FAISS 线程安全锁：防止多线程同时写入向量索引导致崩溃
-faiss_lock = Lock()
 
 # 全局关闭事件，用于优雅关闭
 shutdown_event = None
@@ -356,7 +371,13 @@ logger = logging.getLogger(__name__)
 
 # 机器人相关变量
 # [修改] 从 bot 模块导入列表，确保 app.py 和 bot.py 操作同一个列表对象
-from bot import bot_clients, bot_tasks, get_all_cooldowns
+try:
+    from bot import bot_clients, bot_tasks, get_all_cooldowns
+except ModuleNotFoundError as import_error:
+    if import_error.name == 'bot':
+        from .bot import bot_clients, bot_tasks, get_all_cooldowns
+    else:
+        raise
 bot_running = False  # 标记机器人是否正在运行
 bot_loop = None  # 机器人事件循环
 bot_thread = None  # 机器人事件循环线程
@@ -517,6 +538,31 @@ def initialize_runtime():
             print("🤖 [后台] 正在预热AI模型...")
             get_global_feature_extractor()
             ai_model_ready = True
+            try:
+                strategy_name = getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank')
+                try:
+                    from live_retrieval import (
+                        backfill_product_image_retrieval_cache,
+                        strategy_requires_persisted_catalog_cache,
+                    )
+                except ModuleNotFoundError as import_error:
+                    if import_error.name == 'live_retrieval':
+                        from .live_retrieval import (
+                            backfill_product_image_retrieval_cache,
+                            strategy_requires_persisted_catalog_cache,
+                        )
+                    else:
+                        raise
+
+                if strategy_requires_persisted_catalog_cache(strategy_name):
+                    print(f"🧠 [后台] 正在预热 {strategy_name} 商品缓存...")
+                    summary = backfill_product_image_retrieval_cache(db, strategy_name)
+                    print(
+                        f"✅ [后台] {strategy_name} 商品缓存预热完成: "
+                        f"processed={summary['processed']} skipped={summary['skipped']} failed={summary['failed']}"
+                    )
+            except Exception as cache_error:
+                logger.warning("商品检索缓存预热失败: %s", cache_error)
             print("✅ [后台] AI模型预热完成，系统已就绪")
         except Exception as e:
             print(f"⚠️ [后台] AI预热失败: {e}")
@@ -552,6 +598,18 @@ def extract_features(image_path):
         logger.error(f"特征提取异常: {e}")
         return None
 
+
+def invalidate_product_retrieval_runtime(strategy_name=None):
+    try:
+        from live_retrieval import invalidate_live_image_retriever
+    except ModuleNotFoundError as import_error:
+        if import_error.name == 'live_retrieval':
+            from .live_retrieval import invalidate_live_image_retriever
+        else:
+            raise
+
+    invalidate_live_image_retriever(strategy_name)
+
 @app.route('/search_similar', methods=['POST'])
 def search_similar():
     """搜索相似图像并按商品级别返回排序结果"""
@@ -559,7 +617,8 @@ def search_similar():
         image_url = request.form.get('image_url')
         threshold = float(request.form.get('threshold', 0.6))
         limit = int(request.form.get('limit', 5))
-        query_text = str(request.form.get('query_text', '') or '').strip()
+        query_text_ignored = bool(str(request.form.get('query_text', '') or '').strip())
+        query_text = ""
         debug_enabled = bool(getattr(config, 'DEBUG', False))
 
         user_id = request.form.get('user_id')
@@ -817,11 +876,12 @@ def search_similar():
 
             if debug_enabled:
                 logger.debug(
-                    "Live retrieval strategy=%s threshold=%.3f results=%s query_text=%s",
+                    "Live retrieval strategy=%s threshold=%.3f results=%s query_text_used=%s query_text_ignored=%s",
                     retrieval_result.get('strategy'),
                     threshold,
                     len(results),
                     bool(query_text),
+                    query_text_ignored,
                 )
 
             # 严格执行阈值：如果没有满足阈值的结果，则返回空结果
@@ -966,7 +1026,7 @@ def search_similar():
 
 @app.route('/scrape', methods=['POST'])
 def scrape_product():
-    """抓取商品并建立索引"""
+    """抓取商品并建立检索缓存"""
     try:
         logger.info("收到商品抓取请求")
         data = request.get_json(silent=True) or {}
@@ -1051,119 +1111,21 @@ def scrape_product():
             'ruleEnabled': True  # 默认启用自动回复规则
         })
 
-        # 下载图片并建立向量索引
+        # 下载图片并建立检索缓存
         if product_info['images']:
-            logger.info(f"下载 {len(product_info['images'])} 张图片并建立索引")
-
-            # 创建图片保存目录
-            import os
-            images_dir = os.path.join(os.path.dirname(__file__), 'data', 'scraped_images', product_info['id'])
-            os.makedirs(images_dir, exist_ok=True)
-
-            # 下载图片
-            saved_image_paths = scraper.download_images(
-                product_info['images'],
-                images_dir,
-                product_info['id']
-            )
-            # 为每张图片建立向量索引
-            # 注意：YOLO裁剪已集成在DINOv2特征提取过程中，无需额外步骤
-            # 使用全局特征提取器
-            extractor = get_global_feature_extractor()
-            if extractor is None:
-                logger.error("特征提取器未初始化")
-                return
-
-            # 串行建立向量索引 (SQLite不支持多线程写入)
-            # 但先使用多线程进行特征提取，然后串行插入数据库
-            import concurrent.futures
-            try:
-                from vector_engine import get_vector_engine
-            except ImportError:
-                from .vector_engine import get_vector_engine
-            engine = get_vector_engine()
-
-            def extract_features_only(img_path):
-                """只提取特征，不插入数据库"""
-                try:
-                    features = extractor.extract_feature(img_path)
-                    return features
-                except Exception as e:
-                    logger.error(f"特征提取失败 {img_path}: {e}")
-                    return None
-
-            # 第一步：多线程特征提取
-            logger.info("开始多线程特征提取...")
-            features_list = []
-            max_workers = min(config.FEATURE_EXTRACT_THREADS, len(saved_image_paths))
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                # 提交特征提取任务
-                future_to_image = {
-                    executor.submit(extract_features_only, img_path): (i, img_path)
-                    for i, img_path in enumerate(saved_image_paths)
-                }
-
-                # 收集特征提取结果
-                for future in concurrent.futures.as_completed(future_to_image):
-                    i, img_path = future_to_image[future]
-                    try:
-                        features = future.result()
-                        features_list.append((i, img_path, features))
-                    except Exception as e:
-                        logger.error(f"特征提取异常 {img_path}: {e}")
-                        features_list.append((i, img_path, None))
-
-            # 按索引排序结果
-            features_list.sort(key=lambda x: x[0])
-
-            # 第二步：串行插入数据库和FAISS索引
-            logger.info("开始串行数据库插入和索引建立...")
-            indexed_images = []
-
-            for i, img_path, features in features_list:
-                try:
-                    if features is None:
-                        logger.error(f"跳过图片 {i}: 特征提取失败")
-                        continue
-
-                    # 插入数据库记录
-                    image_db_id = db.insert_image_record(product_id, img_path, i)
-                    if not image_db_id:
-                        logger.error(f"图片 {i} 元数据插入失败")
-                        continue
-
-                    # 插入FAISS向量索引
-                    with faiss_lock:  # FAISS 线程安全锁
-                        success = engine.add_vector(image_db_id, features)
-                    if success:
-                        indexed_images.append(f"{i}.jpg")
-                        logger.info(f"图片 {i} 索引建立成功")
-                    else:
-                        logger.error(f"图片 {i} 索引建立失败")
-
-                except Exception as e:
-                    logger.error(f"处理图片 {i} 时出错: {e}")
-                    continue
-
-            # 检查是否有图片处理失败
-            if len(indexed_images) != len(saved_image_paths):
-                failed_count = len(saved_image_paths) - len(indexed_images)
-                logger.warning(f"有 {failed_count} 张图片处理失败，但继续执行")
-
-            # 如果一张图片都没成功，认为是错误
-            if not indexed_images:
+            logger.info(f"下载 {len(product_info['images'])} 张图片并建立检索缓存")
+            processed_count, image_stats = save_product_images_unified(product_id, product_info['images'])
+            if processed_count == 0:
                 logger.error("所有图片处理都失败了")
                 try:
                     db.delete_product_images(product_id)
                 except Exception as del_e:
                     logger.error(f"回滚删除失败: {del_e}")
                 return jsonify({'error': 'All image processing failed'}), 500
-
-            # 实时保存FAISS索引
-            engine.save()
-
-            logger.info(f"共建立 {len(indexed_images)} 张图片的索引")
+            failed_count = len(product_info['images']) - processed_count
+            if failed_count > 0:
+                logger.warning(f"有 {failed_count} 张图片处理失败，但继续执行")
+            logger.info(f"共建立 {processed_count} 张图片的检索缓存")
         else:
             logger.warning("未找到商品图片")
 
@@ -2850,7 +2812,7 @@ def update_product():
                 return jsonify({'error': '无权限更新此商品'}), 403
 
             # 1. 处理上传的自定义回复图片
-            # 注意：这些图片只用于自定义回复，不添加到商品图集和FAISS索引
+            # 注意：这些图片只用于自定义回复，不添加到商品图集和检索缓存
 
             # 1.1 获取要保留的已有图片文件名列表（从前端传来）
             existing_filenames_to_keep = []
@@ -2883,7 +2845,7 @@ def update_product():
                         filename = f"{uuid.uuid4()}_{file.filename}"
                         file_path = os.path.join(custom_reply_dir, filename)
 
-                        # 保存文件（不添加到商品图集，不提取特征，不加入FAISS）
+                        # 保存文件（不添加到商品图集，不提取检索特征）
                         file.save(file_path)
                         new_uploaded_filenames.append(filename)
 
@@ -2931,6 +2893,7 @@ def update_product():
             # 4. 执行更新
             if updates:
                 db.update_product(pid_int, updates)
+                invalidate_product_retrieval_runtime(getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank'))
 
             # 5. 返回完整数据 (解决闪烁问题)
             full_product = get_full_product_data(pid_int)
@@ -2975,6 +2938,7 @@ def update_product():
 
             if updates:
                 db.update_product(product_id, updates)
+                invalidate_product_retrieval_runtime(getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank'))
 
             # 返回完整数据
             full_product = get_full_product_data(product_id)
@@ -3030,118 +2994,37 @@ def backfill_products():
 
 @app.route('/api/rebuild_index', methods=['POST'])
 def rebuild_index():
-    """重建FAISS索引，清理被删除的向量"""
+    """重建当前商品检索缓存"""
     try:
+        strategy_name = getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank')
         try:
-            from vector_engine import get_vector_engine
-        except ImportError:
-            from .vector_engine import get_vector_engine
-        from feature_extractor import get_feature_extractor
-
-        logger.info("开始重建FAISS索引...")
-
-        # 获取所有有效的图片记录（确保图片文件存在）
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT pi.id, pi.product_id, pi.image_path, pi.image_index
-                FROM product_images pi
-                JOIN products p ON pi.product_id = p.id
-                ORDER BY pi.id
-            """)
-            all_records = cursor.fetchall()
-
-        # 过滤出文件存在的记录
-        image_records = []
-        for record in all_records:
-            if os.path.exists(record['image_path']):
-                image_records.append(record)
+            from live_retrieval import backfill_product_image_retrieval_cache
+        except ModuleNotFoundError as import_error:
+            if import_error.name == 'live_retrieval':
+                from .live_retrieval import backfill_product_image_retrieval_cache
             else:
-                logger.warning(f"图片文件不存在，跳过: {record['image_path']}")
+                raise
 
-        if not image_records:
-            return jsonify({'error': '没有找到图片记录'}), 400
-
-        logger.info(f"找到 {len(image_records)} 张图片记录")
-
-        # 重新提取特征并重建索引
-        extractor = get_feature_extractor()
-        engine = get_vector_engine()
-
-        # 创建新索引
-        vectors_data = []
-        for record in image_records:
-            try:
-                image_path = record['image_path']
-                if not os.path.exists(image_path):
-                    logger.warning(f"图片文件不存在: {image_path}")
-                    continue
-
-                # 提取特征
-                features = extractor.extract_feature(image_path)
-                if features is not None:
-                    vectors_data.append((record['id'], features))
-                    logger.info(f"重新提取特征: {record['id']}")
-                else:
-                    logger.warning(f"特征提取失败: {image_path}")
-
-            except Exception as e:
-                logger.error(f"处理图片 {record['id']} 失败: {e}")
-                continue
-
-        # 重建索引
-        success = engine.rebuild_index(vectors_data)
-        if success:
-            logger.info(f"索引重建完成，包含 {len(vectors_data)} 个向量")
-            return jsonify({
-                'success': True,
-                'message': f'索引重建完成，包含 {len(vectors_data)} 个有效向量',
-                'total_vectors': len(vectors_data)
-            })
-        else:
-            return jsonify({'error': '索引重建失败'}), 500
-
+        summary = backfill_product_image_retrieval_cache(db, strategy_name)
+        invalidate_product_retrieval_runtime(strategy_name)
+        logger.info("商品检索缓存重建完成: %s", summary)
+        return jsonify({
+            'success': True,
+            'strategy': strategy_name,
+            'message': '商品检索缓存重建完成',
+            **summary,
+        })
     except Exception as e:
-        logger.error(f"重建索引失败: {e}")
+        logger.error(f"重建商品检索缓存失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/rebuild_vectors', methods=['POST'])
 def rebuild_vectors():
-    """为已有商品（或缺失向量的图片）重建特征并插入 FAISS"""
+    """兼容旧路径：为已有商品回填当前检索缓存"""
     try:
-        extractor = get_feature_extractor()
-        rebuilt = []
-        failed = []
-
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            # 查找所有 product_images 中 milvus_id 为空或 NULL 的记录
-            cursor.execute("SELECT id, product_id, image_path, image_index FROM product_images WHERE milvus_id IS NULL OR milvus_id = ''")
-            rows = cursor.fetchall()
-
-        for row in rows:
-            pid = row['product_id']
-            img_path = row['image_path']
-            idx = row['image_index']
-            try:
-                features = extractor.extract_feature(img_path)
-                if features is None:
-                    logger.error(f"重建特征失败: {img_path}")
-                    failed.append({'product_id': pid, 'image_index': idx})
-                    continue
-
-                success = db.insert_image_vector(product_id=pid, image_path=img_path, image_index=idx, vector=features)
-                if success:
-                    rebuilt.append({'product_id': pid, 'image_index': idx})
-                else:
-                    failed.append({'product_id': pid, 'image_index': idx})
-            except Exception as e:
-                logger.error(f"重建向量出错: {e}")
-                failed.append({'product_id': pid, 'image_index': idx})
-
-        return jsonify({'rebuilt': rebuilt, 'failed': failed, 'count': len(rebuilt)})
+        return rebuild_index()
     except Exception as e:
-        logger.error(f"重建向量失败: {e}")
+        logger.error(f"回填商品检索缓存失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 
@@ -3572,6 +3455,19 @@ def update_user_settings():
         max_delay = data.get('global_reply_max_delay')
         logger.info(f"用户设置延迟 - 最小: {min_delay}, 最大: {max_delay}")
 
+        if min_delay is not None:
+            min_delay = float(min_delay)
+        if max_delay is not None:
+            max_delay = float(max_delay)
+
+        if min_delay is not None or max_delay is not None:
+            current_settings = db.get_user_settings(user['id']) or {}
+            effective_min_delay = min_delay if min_delay is not None else float(current_settings.get('global_reply_min_delay', 3.0))
+            effective_max_delay = max_delay if max_delay is not None else float(current_settings.get('global_reply_max_delay', 8.0))
+            delay_error = validate_reply_delay_range(effective_min_delay, effective_max_delay)
+            if delay_error:
+                return jsonify({'error': delay_error}), 400
+
         # 处理开关设置（boolean 转 integer）
         keyword_reply = data.get('keyword_reply_enabled')
         image_reply = data.get('image_reply_enabled')
@@ -3662,7 +3558,7 @@ def send_bark_test_notification():
         )
 
         params = {
-            'group': 'Discord营销系统',
+            'group': 'LinkRadar 链接雷达',
             'isArchive': '1',
             'sound': 'gotosleep',
         }
@@ -3725,12 +3621,12 @@ def update_rotation_config():
 
 @app.route('/api/get_indexed_ids', methods=['GET'])
 def get_indexed_ids():
-    """获取已建立索引的商品URL列表"""
+    """获取已建立检索缓存的商品URL列表"""
     try:
         indexed_urls = db.get_indexed_product_urls()
         return jsonify({'indexedIds': indexed_urls})
     except Exception as e:
-        logger.error(f"获取已索引ID失败: {e}")
+        logger.error(f"获取已建立检索缓存的商品URL失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 # === 修复：批量删除 API ===
@@ -3751,6 +3647,8 @@ def batch_delete_products():
         file_failed_count = result.get('file_failed_count', 0)
 
         logger.info(f"批量删除完成: {deleted_count}/{len(ids)} 个商品成功删除")
+        if deleted_count > 0:
+            invalidate_product_retrieval_runtime(getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank'))
 
         response = {'success': True, 'count': deleted_count, 'total': len(ids)}
         warnings = []
@@ -3797,23 +3695,6 @@ def batch_delete_all_products():
             )
 
         if not all_ids:
-            try:
-                with db.get_connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT COUNT(*) FROM product_images")
-                    remaining_images = cursor.fetchone()[0] or 0
-
-                if remaining_images == 0:
-                    try:
-                        from vector_engine import get_vector_engine
-                    except ImportError:
-                        from .vector_engine import get_vector_engine
-                    engine = get_vector_engine()
-                    if engine.count() > 0:
-                        engine.rebuild_index([])
-            except Exception as e:
-                logger.warning(f"清理空索引失败: {e}")
-
             return jsonify({'success': True, 'count': 0, 'message': '没有商品需要删除'})
 
         logger.info(f"开始删除所有 {len(all_ids)} 个商品")
@@ -3824,6 +3705,8 @@ def batch_delete_all_products():
         file_failed_count = result.get('file_failed_count', 0)
 
         logger.info(f"全选删除完成: {deleted_count}/{len(all_ids)} 个商品成功删除")
+        if deleted_count > 0:
+            invalidate_product_retrieval_runtime(getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank'))
 
         response = {
             'success': True,
@@ -3870,8 +3753,9 @@ def get_product(product_id):
 def delete_product(product_id):
     """删除商品及其所有相关数据"""
     try:
-        # 删除商品及其向量数据
+        # 删除商品及其检索缓存与图片数据
         if db.delete_product_images(product_id):
+            invalidate_product_retrieval_runtime(getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank'))
             return jsonify({'success': True, 'message': f'商品 {product_id} 已删除'})
         else:
             return jsonify({'error': '删除失败'}), 500
@@ -3891,9 +3775,8 @@ def upload_product_image(product_id):
         return jsonify({'error': '无文件'}), 400
 
     try:
-        # 获取现有特征用于查重
-        existing_images = db.get_product_images(product_id)
-        existing_feats = [img['features'] for img in existing_images if img.get('features') is not None]
+        strategy_name = getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank')
+        existing_feats = db.get_product_image_retrieval_embeddings(product_id, strategy_name)
 
         # 获取下一个 index
         with db.get_connection() as conn:
@@ -3902,7 +3785,7 @@ def upload_product_image(product_id):
             row = cursor.fetchone()
             next_index = (row[0] + 1) if row and row[0] is not None else 0
 
-        # 调用核心处理函数（现在包含完整的数据库和FAISS操作）
+        # 调用核心处理函数（现在包含完整的数据库和检索缓存写入）
         result = process_and_save_image_core(product_id, file, next_index, existing_feats)
 
         if not result['success']:
@@ -3951,11 +3834,13 @@ def delete_product_image(product_id, image_index):
             return jsonify({'error': '参数格式错误'}), 400
 
         # 调用数据库删除逻辑
-        success = db.delete_image_vector(product_id, image_index)
+        success = db.delete_product_image_record(product_id, image_index)
 
         if not success:
             logger.warning(f"删除图片失败: product_id={product_id}, image_index={image_index}")
             return jsonify({'error': '删除失败，图片可能不存在'}), 404
+
+        invalidate_product_retrieval_runtime(getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank'))
 
         # 获取最新商品信息
         product = db._get_product_info_by_id(product_id)
@@ -4032,35 +3917,42 @@ def get_ai_status():
         if extractor is None:
             return {'error': '特征提取器未初始化'}
         ai_status = extractor.get_status()
-
-        # 获取FAISS状态
+        strategy_name = getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank')
+        total_images = 0
         try:
-            from vector_engine import get_vector_engine
-        except ImportError:
-            from .vector_engine import get_vector_engine
-        faiss_engine = get_vector_engine()
-        faiss_status = faiss_engine.get_stats()
+            with db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM product_images")
+                total_images = cursor.fetchone()[0] or 0
+        except Exception:
+            total_images = 0
+        cached_images = db.count_product_image_retrieval_cache(strategy_name)
+        cache_status = {
+            'strategy': strategy_name,
+            'cached_images': cached_images,
+            'pending_images': max(total_images - cached_images, 0),
+            'total_images': total_images,
+        }
 
         # 综合状态
         overall_status = {
             'ai_model_status': ai_status,
-            'vector_engine_status': faiss_status,
-            'system_health': '良好' if ai_status['yolo_available'] and faiss_status['total_vectors'] >= 0 else '需要优化',
+            'retrieval_cache_status': cache_status,
+            'system_health': '良好' if ai_status['yolo_available'] and cached_images >= 0 else '需要优化',
             'recommendations': []
         }
 
         # 生成建议
         recommendations = []
         recommendations.extend(ai_status.get('performance_tips', []))
-        recommendations.extend(faiss_status.get('performance_tips', []))
 
         # 额外的系统级建议
         if not ai_status['yolo_available']:
             recommendations.append("YOLO裁剪功能已禁用，图像识别准确率会降低")
-        if faiss_status['total_vectors'] == 0:
-            recommendations.append("向量数据库为空，建议添加商品数据")
-        if faiss_status['ef_construction'] == '不支持' or faiss_status['ef_search'] == '不支持':
-            recommendations.append("FAISS版本较旧，建议升级以获得最佳搜索性能")
+        if cached_images == 0:
+            recommendations.append("商品检索缓存为空，建议先执行商品抓取或缓存回填")
+        if cached_images < total_images:
+            recommendations.append("仍有商品图片未完成检索缓存预热，首轮结果会覆盖不全")
 
         overall_status['recommendations'] = recommendations[:5]  # 最多显示5条建议
 
@@ -4070,53 +3962,36 @@ def get_ai_status():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/system/rebuild-index', methods=['POST'])
-def rebuild_faiss_index():
-    """重建FAISS索引，清理已删除的向量"""
+def rebuild_product_retrieval_cache_route():
+    """兼容旧路径：重建当前商品检索缓存"""
     if not require_login():
         return jsonify({'error': '需要登录'}), 401
 
     try:
         current_user = get_current_user()
         if current_user['role'] != 'admin':
-            return jsonify({'error': '只有管理员可以重建索引'}), 403
+            return jsonify({'error': '只有管理员可以重建商品检索缓存'}), 403
 
+        strategy_name = getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank')
         try:
-            from vector_engine import get_vector_engine
-        except ImportError:
-            from .vector_engine import get_vector_engine
-        engine = get_vector_engine()
+            from live_retrieval import backfill_product_image_retrieval_cache
+        except ModuleNotFoundError as import_error:
+            if import_error.name == 'live_retrieval':
+                from .live_retrieval import backfill_product_image_retrieval_cache
+            else:
+                raise
 
-        # 获取所有有效的图片数据
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT id, image_path FROM product_images WHERE id IS NOT NULL")
-            all_images = cursor.fetchall()
-
-        # 重新提取所有特征
-        valid_vectors = []
-        for row in all_images:
-            try:
-                extractor = get_global_feature_extractor()
-                if extractor is None:
-                    logger.error("特征提取器未初始化")
-                    continue
-                features = extractor.extract_feature(row['image_path'])
-                if features is not None:
-                    valid_vectors.append((row['id'], features))
-            except Exception as e:
-                logger.warning(f"重新提取特征失败 {row['image_path']}: {e}")
-
-        # 重建索引
-        engine.rebuild_index(valid_vectors)
-
+        summary = backfill_product_image_retrieval_cache(db, strategy_name)
+        invalidate_product_retrieval_runtime(strategy_name)
         return jsonify({
             'success': True,
-            'message': f'索引重建完成，包含 {len(valid_vectors)} 个向量',
-            'total_vectors': len(valid_vectors)
+            'strategy': strategy_name,
+            'message': '商品检索缓存重建完成',
+            **summary,
         })
 
     except Exception as e:
-        logger.error(f"重建索引失败: {e}")
+        logger.error(f"重建商品检索缓存失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/config', methods=['GET'])
@@ -4238,33 +4113,32 @@ def get_global_reply_delay():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/debug/faiss_status', methods=['GET'])
-def get_faiss_status():
-    """获取FAISS向量数据库状态"""
+def get_retrieval_cache_status_compat():
+    """兼容旧路径：获取当前商品检索缓存状态"""
     try:
-        try:
-            from vector_engine import get_vector_engine
-        except ImportError:
-            from .vector_engine import get_vector_engine
-        engine = get_vector_engine()
-        stats = engine.get_stats()
-
-        # 尝试搜索一个测试向量
-        test_vector = np.zeros(config.VECTOR_DIMENSION, dtype='float32')
-        test_results = engine.search(test_vector, top_k=1)
+        strategy_name = getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank')
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM product_images")
+            total_images = cursor.fetchone()[0] or 0
+        cached_images = db.count_product_image_retrieval_cache(strategy_name)
 
         return jsonify({
-            'index_exists': True,
-            'entity_count': stats['total_vectors'],
-            'test_search_works': len(test_results) > 0,
-            'vector_dimension': config.VECTOR_DIMENSION,
-            'index_type': stats['index_type'],
-            'metric_type': stats['metric_type'],
-            'memory_usage_mb': stats['memory_usage_mb'],
-            'ef_construction': stats['ef_construction'],
-            'ef_search': stats['ef_search']
+            'index_exists': cached_images > 0,
+            'entity_count': cached_images,
+            'test_search_works': cached_images > 0,
+            'vector_dimension': 768,
+            'index_type': 'sqlite_retrieval_cache',
+            'metric_type': 'siglip2_rerank',
+            'memory_usage_mb': None,
+            'ef_construction': 'N/A',
+            'ef_search': 'N/A',
+            'total_images': total_images,
+            'pending_images': max(total_images - cached_images, 0),
+            'strategy': strategy_name,
         })
     except Exception as e:
-        logger.error(f"获取FAISS状态失败: {e}")
+        logger.error(f"获取商品检索缓存状态失败: {e}")
         return jsonify({
             'error': str(e),
             'index_exists': False,
@@ -4283,12 +4157,9 @@ def update_global_reply_delay():
         max_delay = float(data.get('max_delay', 8))
 
         # 验证范围
-        if min_delay < 0 or max_delay < 0:
-            return jsonify({'error': '延迟时间不能为负数'}), 400
-        if min_delay > max_delay:
-            return jsonify({'error': '最小延迟不能大于最大延迟'}), 400
-        if max_delay > 300:
-            return jsonify({'error': '最大延迟不能超过300秒'}), 400
+        delay_error = validate_reply_delay_range(min_delay, max_delay)
+        if delay_error:
+            return jsonify({'error': delay_error}), 400
 
         # 保存到数据库
         if db.update_global_reply_config(min_delay, max_delay):
@@ -4718,7 +4589,13 @@ def start_discord_bot(user_id=None):
 
     try:
         import asyncio
-        from bot import DiscordBotClient
+        try:
+            from bot import DiscordBotClient
+        except ModuleNotFoundError as import_error:
+            if import_error.name == 'bot':
+                from .bot import DiscordBotClient
+            else:
+                raise
 
         logger.info(f"正在启动Discord机器人... (用户ID: {user_id})")
 
@@ -6068,7 +5945,6 @@ def process_and_save_single_product_sync(product_info):
             }
 
         # 1. 抓取详情
-        from app import process_single_product  # 引用 app.py 中的逻辑
         product_data = process_single_product(product_info)
 
         if not product_data:
@@ -6132,12 +6008,10 @@ def process_and_save_single_product_sync(product_info):
             'total_urls': 0,
             'download_failed': 0,
             'processed': 0,
-            'faiss_failed': False,
             'failed_details': []
         }
         processed_count = 0
         if product_data.get('images'):
-            from app import save_product_images_unified
             processed_count, image_stats = save_product_images_unified(
                 product_id,
                 product_data['images'],
@@ -6451,19 +6325,20 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
         'retry_failed': 0,
         'failed_details': [],
         'download_failed': 0,
-        'faiss_failed': False
     }
 
     if not image_urls:
         return 0, stats
 
     try:
+        strategy_name = getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank')
         existing_images = db.get_product_images(product_id)
         existing_indices = {img['image_index'] for img in existing_images}
-        existing_feats = [img['features'] for img in existing_images if img.get('features') is not None]
+        existing_feats = db.get_product_image_retrieval_embeddings(product_id, strategy_name)
     except Exception:
         existing_indices = set()
         existing_feats = []
+        strategy_name = getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank')
 
     pending_items = []
     for idx, url in enumerate(image_urls):
@@ -6561,18 +6436,25 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
         if not current_downloaded:
             return [], retry_list, fatal_list
 
-        extractor = get_global_feature_extractor()
-        if extractor is None:
+        product_row = db._get_product_info_by_id(product_id)
+        if not product_row:
             for _, path in current_downloaded:
                 try:
                     os.remove(path)
                 except Exception:
                     pass
-            retry_list.extend([(idx, image_urls[idx]) for idx, _ in current_downloaded])
+            fatal_list.extend([((idx, image_urls[idx]), "商品不存在，无法建立检索缓存") for idx, _ in current_downloaded])
             return [], retry_list, fatal_list
 
+        try:
+            from live_retrieval import build_product_image_retrieval_cache_payload
+        except ModuleNotFoundError as e:
+            if e.name == 'live_retrieval':
+                from .live_retrieval import build_product_image_retrieval_cache_payload
+            else:
+                raise
+
         processed_indices = []
-        vectors_to_add = []
 
         for index, save_path in current_downloaded:
             if shutdown_event and shutdown_event.is_set():
@@ -6580,20 +6462,20 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
                 continue
 
             try:
-                features = None
-                with GLOBAL_AI_SEMAPHORE:
-                    try:
-                        features = extractor.extract_feature(save_path)
-                    except Exception as e:
-                        logger.error(f"特征提取底层错误: {e}")
-                        features = None
+                cache_payload = build_product_image_retrieval_cache_payload(
+                    strategy_name=strategy_name,
+                    product_row=product_row,
+                    image_path=save_path,
+                    image_index=index,
+                )
+                features = np.array(cache_payload.get('embedding') or [], dtype='float32').flatten()
 
-                if features is None:
+                if features.size == 0:
                     try:
                         os.remove(save_path)
                     except Exception:
                         pass
-                    fatal_list.append(((index, image_urls[index]), "AI无法提取特征(图片可能损坏)"))
+                    fatal_list.append(((index, image_urls[index]), "SigLIP2缓存生成失败(图片可能损坏)"))
                     continue
 
                 is_dup, score = check_duplicate_image(features, existing_feats, threshold=0.995)
@@ -6607,30 +6489,36 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
                     continue
 
                 existing_feats.append(features)
-                img_db_id = db.insert_image_record(product_id, save_path, index, features)
+                img_db_id = db.insert_image_record(product_id, save_path, index)
 
                 if img_db_id:
-                    vectors_to_add.append((img_db_id, features))
-                    processed_indices.append(index)
-                    stats['stored'] += 1
+                    cache_saved = db.upsert_product_image_retrieval_cache(
+                        image_db_id=img_db_id,
+                        strategy_name=strategy_name,
+                        cache_version=str(cache_payload.get('cache_version') or ''),
+                        embedding=cache_payload.get('embedding'),
+                        color_hist=cache_payload.get('color_hist'),
+                        tokens=cache_payload.get('tokens'),
+                    )
+                    if cache_saved:
+                        processed_indices.append(index)
+                        stats['stored'] += 1
+                    else:
+                        try:
+                            db.delete_image_record(img_db_id)
+                        except Exception:
+                            pass
+                        try:
+                            os.remove(save_path)
+                        except Exception:
+                            pass
+                        fatal_list.append(((index, image_urls[index]), "检索缓存写入失败"))
                 else:
                     retry_list.append((index, image_urls[index]))
 
             except Exception as e:
                 logger.error(f"处理图片 {index} 异常: {e}")
                 retry_list.append((index, image_urls[index]))
-
-        if vectors_to_add:
-            try:
-                from vector_engine import get_vector_engine
-                engine = get_vector_engine()
-                with faiss_lock:
-                    for img_id, feats in vectors_to_add:
-                        engine.add_vector(img_id, feats)
-                    engine.save()
-            except Exception as e:
-                logger.error(f"FAISS 写入失败: {e}")
-                stats['faiss_failed'] = True
 
         return processed_indices, retry_list, fatal_list
 
@@ -6694,6 +6582,9 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
         f"retry_failed={stats['retry_failed']}"
     )
 
+    if stats['stored'] > 0:
+        invalidate_product_retrieval_runtime(strategy_name)
+
     return stats['processed'], stats
 
 def run_cleanup_task():
@@ -6710,7 +6601,13 @@ def run_cleanup_task():
 
             # 2. 清理内存中的冷却记录
             try:
-                from bot import cleanup_expired_cooldowns
+                try:
+                    from bot import cleanup_expired_cooldowns
+                except ModuleNotFoundError as import_error:
+                    if import_error.name == 'bot':
+                        from .bot import cleanup_expired_cooldowns
+                    else:
+                        raise
                 cleanup_expired_cooldowns()
                 logger.info("✅ 已清理内存中过期的冷却状态")
             except ImportError:

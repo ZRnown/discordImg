@@ -48,7 +48,6 @@ class Config:
 
     # === AI 模型 ===
     DINO_MODEL_NAME = 'facebook/dinov2-small'
-    VECTOR_DIMENSION = 384
     YOLO_MODEL_PATH = 'yolov8s-world.pt'
     USE_YOLO_CROP = True
 
@@ -71,11 +70,6 @@ class Config:
     # 新的 save_product_images_unified 已不依赖该参数做图片特征线程池，保留字段主要用于兼容旧逻辑。
     FEATURE_EXTRACT_THREADS = int(os.getenv('FEATURE_EXTRACT_THREADS', '4'))
 
-    # === FAISS ===
-    FAISS_HNSW_M = 64
-    FAISS_EF_CONSTRUCTION = 128
-    FAISS_EF_SEARCH = 128
-
     # === 路径 ===
     BASE_DIR = os.path.dirname(os.path.dirname(__file__))
     DATA_DIR = os.path.join(BASE_DIR, 'backend', 'data')
@@ -85,9 +79,6 @@ class Config:
     WEBSITE_FILTER_IMAGE_DIR = os.path.join(DATA_DIR, 'website_filter_images')
     LOG_DIR = os.path.join(DATA_DIR, 'logs')
     DATABASE_PATH = os.path.join(DATA_DIR, 'metadata.db')
-
-    FAISS_INDEX_FILE = os.path.join(DATA_DIR, 'faiss_index.bin')
-    FAISS_ID_MAP_FILE = os.path.join(DATA_DIR, 'faiss_id_map.pkl')
 
     # === 网络 ===
     REQUEST_TIMEOUT = 30

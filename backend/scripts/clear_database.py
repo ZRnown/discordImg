@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 数据库清理脚本
-清空所有数据库数据、图片文件和向量索引
+清空所有数据库数据、图片文件和检索缓存遗留文件
 
 使用方法:
 cd backend
@@ -21,7 +21,7 @@ def clear_all_data(confirm=False):
     """清空所有数据"""
     if not confirm:
         print("⚠️ 警告: 此操作将清空所有数据！")
-        print("包括: 用户账户、商品数据、图片文件、向量索引等")
+        print("包括: 用户账户、商品数据、图片文件、检索缓存和旧索引遗留文件等")
         print("")
         response = input("确认要清空所有数据吗？输入 'YES' 确认: ")
         if response != 'YES':
@@ -84,7 +84,7 @@ def clear_all_data(confirm=False):
     else:
         print('⚠️ 图片目录不存在')
 
-    # 3. 删除向量数据目录
+    # 3. 删除旧向量数据目录（兼容历史版本）
     VECTOR_DIR = DATA_DIR / 'vectors'
     if VECTOR_DIR.exists():
         print(f'🔍 删除向量数据目录: {VECTOR_DIR}')
@@ -96,14 +96,14 @@ def clear_all_data(confirm=False):
     else:
         print('⚠️ 向量数据目录不存在')
 
-    # 4. 删除向量索引文件
+    # 4. 删除旧索引遗留文件
     vector_extensions = ['*.faiss', '*.index', '*.pkl', '*.npy', '*.bin']
     vector_files = []
     for ext in vector_extensions:
         vector_files.extend(list(DATA_DIR.glob(ext)))
 
     if vector_files:
-        print('🔍 删除向量索引文件:')
+        print('🔍 删除旧索引遗留文件:')
         for vf in vector_files:
             try:
                 vf.unlink()
@@ -127,10 +127,10 @@ def clear_all_data(confirm=False):
     print('  - 所有SQLite数据库 (app.db, metadata.db, milvus.db) 已清空')
     print('  - 自增ID计数器已重置')
     print('  - 图片文件目录已删除')
-    print('  - 向量数据目录已删除')
-    print('  - 向量索引文件 (*.faiss, *.index, *.pkl, *.npy, *.bin) 已删除')
+    print('  - 旧向量数据目录已删除')
+    print('  - 旧索引遗留文件 (*.faiss, *.index, *.pkl, *.npy, *.bin) 已删除')
     print('  - 临时文件已删除')
-    print('\n⚠️ 注意: 所有用户账户、商品数据、系统配置、向量索引都已被清空')
+    print('\n⚠️ 注意: 所有用户账户、商品数据、系统配置、检索缓存与旧索引遗留文件都已被清空')
     print('   这是一个不可逆的操作，如需恢复请从备份恢复')
 
 if __name__ == '__main__':

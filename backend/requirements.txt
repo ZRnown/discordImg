@@ -12,9 +12,7 @@ torchvision>=0.15.0
 transformers>=4.25.0,<5
 ultralytics>=8.0.0
 open-clip-torch>=2.24.0
-
-# Vector Database - FAISS (CPU version)
-faiss-cpu>=1.7.0
+pi-heif>=0.20.0
 
 # Web Scraping Dependencies
 requests>=2.31.0

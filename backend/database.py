@@ -9,19 +9,56 @@ try:
     from config import config
 except ImportError:
     from .config import config
+try:
+    from settings_validation import normalize_reply_delay_range
+except ImportError:
+    from .settings_validation import normalize_reply_delay_range
 
 logger = logging.getLogger(__name__)
 
 class Database:
-    def __init__(self):
+    def __init__(self, db_path: Optional[str] = None):
         # SQLite 数据库路径 (用于存储商品元数据和Discord账号信息)
-        self.db_path = os.path.join(os.path.dirname(__file__), 'data', 'metadata.db')
+        self.db_path = db_path or os.path.join(os.path.dirname(__file__), 'data', 'metadata.db')
 
         # 确保数据目录存在
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
 
         # 初始化 SQLite 数据库
         self.init_sqlite_database()
+
+    @staticmethod
+    def _get_table_columns(cursor, table_name: str) -> List[str]:
+        cursor.execute(f"PRAGMA table_info({table_name})")
+        return [str(row[1]) for row in cursor.fetchall()]
+
+    def _migrate_legacy_product_images_schema(self, conn, cursor):
+        columns = self._get_table_columns(cursor, 'product_images')
+        legacy_columns = {'features', 'milvus_id'}
+        if not columns or not legacy_columns.intersection(columns):
+            return
+
+        logger.info("迁移 product_images 旧检索字段到纯图片元数据结构")
+        cursor.execute("PRAGMA foreign_keys = OFF")
+        cursor.execute('''
+            CREATE TABLE product_images_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id INTEGER NOT NULL,
+                image_path TEXT NOT NULL,
+                image_index INTEGER NOT NULL,
+                FOREIGN KEY (product_id) REFERENCES products (id) ON DELETE CASCADE,
+                UNIQUE(product_id, image_index)
+            )
+        ''')
+        cursor.execute('''
+            INSERT INTO product_images_new (id, product_id, image_path, image_index)
+            SELECT id, product_id, image_path, image_index
+            FROM product_images
+        ''')
+        cursor.execute('DROP TABLE product_images')
+        cursor.execute('ALTER TABLE product_images_new RENAME TO product_images')
+        cursor.execute("PRAGMA foreign_keys = ON")
+        conn.commit()
 
     def init_sqlite_database(self):
         """初始化 SQLite 数据库 (用于元数据存储)"""
@@ -50,8 +87,6 @@ class Database:
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_products_created_at ON products(created_at)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_products_shop_name ON products(shop_name)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_products_rule_enabled ON products(ruleEnabled)')
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_product_images_product_id ON product_images(product_id)')
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_product_images_image_index ON product_images(image_index)')
             except sqlite3.OperationalError:
                 pass
 
@@ -155,19 +190,44 @@ class Database:
             except sqlite3.OperationalError:
                 pass
 
-            # 创建图片表 (milvus_id 替代 faiss_id)
+            # 创建商品图片表，仅保存图片元数据；检索特征统一落到 product_image_retrieval_cache
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS product_images (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     product_id INTEGER NOT NULL,
                     image_path TEXT NOT NULL,
                     image_index INTEGER NOT NULL,
-                    features TEXT,  -- 存储序列化的特征向量
-                    milvus_id INTEGER UNIQUE,
                     FOREIGN KEY (product_id) REFERENCES products (id) ON DELETE CASCADE,
                     UNIQUE(product_id, image_index)
                 )
             ''')
+            self._migrate_legacy_product_images_schema(conn, cursor)
+            try:
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_product_images_product_id ON product_images(product_id)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_product_images_image_index ON product_images(image_index)')
+            except sqlite3.OperationalError:
+                pass
+
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS product_image_retrieval_cache (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    image_db_id INTEGER NOT NULL,
+                    strategy_name TEXT NOT NULL,
+                    cache_version TEXT,
+                    embedding_json TEXT,
+                    color_hist_json TEXT,
+                    tokens_json TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (image_db_id) REFERENCES product_images (id) ON DELETE CASCADE,
+                    UNIQUE(image_db_id, strategy_name)
+                )
+            ''')
+            try:
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_retrieval_cache_strategy ON product_image_retrieval_cache(strategy_name)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_retrieval_cache_image_db_id ON product_image_retrieval_cache(image_db_id)')
+            except sqlite3.OperationalError:
+                pass
 
             # 创建用户表
             cursor.execute('''
@@ -787,6 +847,7 @@ class Database:
             conn.row_factory = sqlite3.Row
 
             # 关键优化：开启 WAL 模式
+            conn.execute('PRAGMA foreign_keys=ON;')
             conn.execute('PRAGMA journal_mode=WAL;')
             conn.execute('PRAGMA synchronous=NORMAL;') # 稍微降低安全性以换取性能
             conn.execute('PRAGMA cache_size=-64000;') # 64MB cache
@@ -818,41 +879,66 @@ class Database:
         """插入商品信息"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute('''
-                INSERT OR REPLACE INTO products
-                (product_url, title, description, english_title, cnfans_url, acbuy_url, shop_name, ruleEnabled)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ''', (
-                product_data['product_url'],
-                product_data.get('title', ''),
-                product_data.get('description', ''),
-                product_data.get('english_title', ''),
-                product_data.get('cnfans_url', ''),
-                product_data.get('acbuy_url', ''),
-                product_data.get('shop_name', ''),
-                product_data.get('ruleEnabled', True)
-            ))
-            product_id = cursor.lastrowid
+            product_url = product_data['product_url']
+            cursor.execute("SELECT id FROM products WHERE product_url = ?", (product_url,))
+            existing = cursor.fetchone()
+
+            if existing:
+                product_id = int(existing['id'])
+                cursor.execute('''
+                    UPDATE products
+                    SET title = ?,
+                        description = ?,
+                        english_title = ?,
+                        cnfans_url = ?,
+                        acbuy_url = ?,
+                        shop_name = ?,
+                        ruleEnabled = ?,
+                        item_id = ?,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                ''', (
+                    product_data.get('title', ''),
+                    product_data.get('description', ''),
+                    product_data.get('english_title', ''),
+                    product_data.get('cnfans_url', ''),
+                    product_data.get('acbuy_url', ''),
+                    product_data.get('shop_name', ''),
+                    product_data.get('ruleEnabled', True),
+                    product_data.get('item_id'),
+                    product_id,
+                ))
+            else:
+                cursor.execute('''
+                    INSERT INTO products
+                    (product_url, title, description, english_title, cnfans_url, acbuy_url, shop_name, ruleEnabled, item_id, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ''', (
+                    product_url,
+                    product_data.get('title', ''),
+                    product_data.get('description', ''),
+                    product_data.get('english_title', ''),
+                    product_data.get('cnfans_url', ''),
+                    product_data.get('acbuy_url', ''),
+                    product_data.get('shop_name', ''),
+                    product_data.get('ruleEnabled', True),
+                    product_data.get('item_id'),
+                ))
+                product_id = cursor.lastrowid
             conn.commit()
             return product_id
 
-    def insert_image_record(self, product_id: int, image_path: str, image_index: int, features: np.ndarray = None) -> int:
-        """插入图像记录到数据库，返回记录ID供FAISS使用"""
+    def insert_image_record(self, product_id: int, image_path: str, image_index: int) -> int:
+        """插入图像记录到数据库，返回记录ID供检索缓存关联使用"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
 
-                # 将特征向量序列化为字符串存储
-                features_str = None
-                if features is not None:
-                    import json
-                    features_str = json.dumps(features.tolist())
-
                 cursor.execute('''
                     INSERT INTO product_images
-                    (product_id, image_path, image_index, features)
-                    VALUES (?, ?, ?, ?)
-                ''', (product_id, image_path, image_index, features_str))
+                    (product_id, image_path, image_index)
+                    VALUES (?, ?, ?)
+                ''', (product_id, image_path, image_index))
                 conn.commit()
                 record_id = cursor.lastrowid
                 logger.debug(f"图像记录插入成功: product_id={product_id}, image_index={image_index}, record_id={record_id}")
@@ -887,7 +973,7 @@ class Database:
             return dict(row) if row else None
 
     def get_indexed_product_ids(self) -> List[str]:
-        """获取已建立索引的商品URL列表"""
+        """获取已有图片记录的商品URL列表"""
         with self.get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
@@ -898,75 +984,274 @@ class Database:
             return [row['product_url'] for row in cursor.fetchall()]
 
     def get_product_images(self, product_id: int) -> List[Dict]:
-        """获取商品的所有图片及其特征向量"""
+        """获取商品的所有图片元数据"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT id, image_path, image_index, features
+                    SELECT id, image_path, image_index
                     FROM product_images
                     WHERE product_id = ?
                     ORDER BY image_index
                 ''', (product_id,))
-
-                images = []
-                for row in cursor.fetchall():
-                    image_data = dict(row)
-                    # 反序列化特征向量
-                    if image_data.get('features'):
-                        import json
-                        try:
-                            features_list = json.loads(image_data['features'])
-                            image_data['features'] = np.array(features_list, dtype='float32')
-                        except Exception as e:
-                            logger.warning(f"反序列化特征向量失败: {e}")
-                            image_data['features'] = None
-                    else:
-                        image_data['features'] = None
-                    images.append(image_data)
-
-                return images
+                return [dict(row) for row in cursor.fetchall()]
 
         except Exception as e:
             logger.error(f"获取商品图片失败: {e}")
             return []
 
-    def get_searchable_product_image_records(self) -> List[Dict]:
-        """获取实时图片检索需要的商品图片与商品元数据"""
+    def upsert_product_image_retrieval_cache(
+        self,
+        image_db_id: int,
+        strategy_name: str,
+        cache_version: str,
+        embedding: Optional[List[float]] = None,
+        color_hist: Optional[List[float]] = None,
+        tokens: Optional[List[str]] = None,
+    ) -> bool:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     '''
-                    SELECT
-                        p.id AS product_id,
-                        p.item_id,
-                        p.title,
-                        p.english_title,
-                        p.description,
-                        p.product_url,
-                        p.cnfans_url,
-                        p.acbuy_url,
-                        p.shop_name,
-                        p.ruleEnabled,
-                        p.reply_scope,
-                        p.image_source,
-                        p.custom_reply_text,
-                        p.custom_reply_images,
-                        p.custom_image_urls,
-                        p.uploaded_reply_images,
-                        pi.id AS image_db_id,
-                        pi.image_path,
-                        pi.image_index
-                    FROM products p
-                    JOIN product_images pi ON pi.product_id = p.id
-                    ORDER BY p.id ASC, pi.image_index ASC
-                    '''
+                    INSERT INTO product_image_retrieval_cache
+                    (image_db_id, strategy_name, cache_version, embedding_json, color_hist_json, tokens_json, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(image_db_id, strategy_name)
+                    DO UPDATE SET
+                        cache_version = excluded.cache_version,
+                        embedding_json = excluded.embedding_json,
+                        color_hist_json = excluded.color_hist_json,
+                        tokens_json = excluded.tokens_json,
+                        updated_at = CURRENT_TIMESTAMP
+                    ''',
+                    (
+                        image_db_id,
+                        strategy_name,
+                        cache_version,
+                        json.dumps(embedding) if embedding is not None else None,
+                        json.dumps(color_hist) if color_hist is not None else None,
+                        json.dumps(tokens or []),
+                    ),
                 )
+                conn.commit()
+                return True
+        except sqlite3.IntegrityError as e:
+            if 'FOREIGN KEY constraint failed' in str(e):
+                logger.warning(
+                    "跳过商品检索缓存写入，图片记录不存在: image_db_id=%s strategy=%s",
+                    image_db_id,
+                    strategy_name,
+                )
+                return False
+            logger.error(f"写入商品检索缓存失败: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"写入商品检索缓存失败: {e}")
+            return False
+
+    def get_searchable_product_image_records(
+        self,
+        strategy_name: Optional[str] = None,
+        require_cache: bool = False,
+    ) -> List[Dict]:
+        """获取实时图片检索需要的商品图片与商品元数据"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                if strategy_name:
+                    cache_filter = "WHERE rc.image_db_id IS NOT NULL" if require_cache else ""
+                    cursor.execute(
+                        f'''
+                        SELECT
+                            p.id AS product_id,
+                            p.item_id,
+                            p.title,
+                            p.english_title,
+                            p.description,
+                            p.product_url,
+                            p.cnfans_url,
+                            p.acbuy_url,
+                            p.shop_name,
+                            p.ruleEnabled,
+                            p.reply_scope,
+                            p.image_source,
+                            p.custom_reply_text,
+                            p.custom_reply_images,
+                            p.custom_image_urls,
+                            p.uploaded_reply_images,
+                            pi.id AS image_db_id,
+                            pi.image_path,
+                            pi.image_index,
+                            rc.strategy_name AS retrieval_cache_strategy,
+                            rc.cache_version AS retrieval_cache_version,
+                            rc.embedding_json AS retrieval_embedding,
+                            rc.color_hist_json AS retrieval_color_hist,
+                            rc.tokens_json AS retrieval_tokens
+                        FROM products p
+                        JOIN product_images pi ON pi.product_id = p.id
+                        LEFT JOIN product_image_retrieval_cache rc
+                            ON rc.image_db_id = pi.id
+                           AND rc.strategy_name = ?
+                        {cache_filter}
+                        ORDER BY p.id ASC, pi.image_index ASC
+                        ''',
+                        (strategy_name,),
+                    )
+                else:
+                    cursor.execute(
+                        '''
+                        SELECT
+                            p.id AS product_id,
+                            p.item_id,
+                            p.title,
+                            p.english_title,
+                            p.description,
+                            p.product_url,
+                            p.cnfans_url,
+                            p.acbuy_url,
+                            p.shop_name,
+                            p.ruleEnabled,
+                            p.reply_scope,
+                            p.image_source,
+                            p.custom_reply_text,
+                            p.custom_reply_images,
+                            p.custom_image_urls,
+                            p.uploaded_reply_images,
+                            pi.id AS image_db_id,
+                            pi.image_path,
+                            pi.image_index
+                        FROM products p
+                        JOIN product_images pi ON pi.product_id = p.id
+                        ORDER BY p.id ASC, pi.image_index ASC
+                        '''
+                    )
                 return [dict(row) for row in cursor.fetchall()]
         except Exception as e:
             logger.error(f"获取实时检索商品目录失败: {e}")
             return []
+
+    def get_product_image_search_record(
+        self,
+        image_db_id: int,
+        strategy_name: Optional[str] = None,
+    ) -> Optional[Dict]:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                if strategy_name:
+                    cursor.execute(
+                        '''
+                        SELECT
+                            p.id AS product_id,
+                            p.item_id,
+                            p.title,
+                            p.english_title,
+                            p.description,
+                            p.product_url,
+                            p.cnfans_url,
+                            p.acbuy_url,
+                            p.shop_name,
+                            p.ruleEnabled,
+                            p.reply_scope,
+                            p.image_source,
+                            p.custom_reply_text,
+                            p.custom_reply_images,
+                            p.custom_image_urls,
+                            p.uploaded_reply_images,
+                            pi.id AS image_db_id,
+                            pi.image_path,
+                            pi.image_index,
+                            rc.strategy_name AS retrieval_cache_strategy,
+                            rc.cache_version AS retrieval_cache_version,
+                            rc.embedding_json AS retrieval_embedding,
+                            rc.color_hist_json AS retrieval_color_hist,
+                            rc.tokens_json AS retrieval_tokens
+                        FROM product_images pi
+                        JOIN products p ON p.id = pi.product_id
+                        LEFT JOIN product_image_retrieval_cache rc
+                            ON rc.image_db_id = pi.id
+                           AND rc.strategy_name = ?
+                        WHERE pi.id = ?
+                        ''',
+                        (strategy_name, image_db_id),
+                    )
+                else:
+                    cursor.execute(
+                        '''
+                        SELECT
+                            p.id AS product_id,
+                            p.item_id,
+                            p.title,
+                            p.english_title,
+                            p.description,
+                            p.product_url,
+                            p.cnfans_url,
+                            p.acbuy_url,
+                            p.shop_name,
+                            p.ruleEnabled,
+                            p.reply_scope,
+                            p.image_source,
+                            p.custom_reply_text,
+                            p.custom_reply_images,
+                            p.custom_image_urls,
+                            p.uploaded_reply_images,
+                            pi.id AS image_db_id,
+                            pi.image_path,
+                            pi.image_index
+                        FROM product_images pi
+                        JOIN products p ON p.id = pi.product_id
+                        WHERE pi.id = ?
+                        ''',
+                        (image_db_id,),
+                    )
+                row = cursor.fetchone()
+                return dict(row) if row else None
+        except Exception as e:
+            logger.error(f"获取单张商品图片检索记录失败: {e}")
+            return None
+
+    def get_product_image_retrieval_embeddings(self, product_id: int, strategy_name: str) -> List[np.ndarray]:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    SELECT rc.embedding_json
+                    FROM product_image_retrieval_cache rc
+                    JOIN product_images pi ON pi.id = rc.image_db_id
+                    WHERE pi.product_id = ? AND rc.strategy_name = ? AND rc.embedding_json IS NOT NULL
+                    ORDER BY pi.image_index ASC
+                    ''',
+                    (product_id, strategy_name),
+                )
+                embeddings = []
+                for row in cursor.fetchall():
+                    try:
+                        embeddings.append(np.array(json.loads(row['embedding_json']), dtype='float32'))
+                    except Exception:
+                        continue
+                return embeddings
+        except Exception as e:
+            logger.error(f"获取商品检索缓存向量失败: {e}")
+            return []
+
+    def count_product_image_retrieval_cache(self, strategy_name: str) -> int:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    SELECT COUNT(*)
+                    FROM product_image_retrieval_cache
+                    WHERE strategy_name = ?
+                    ''',
+                    (strategy_name,),
+                )
+                return cursor.fetchone()[0] or 0
+        except Exception as e:
+            logger.error(f"统计商品检索缓存数量失败: {e}")
+            return 0
 
     def delete_product_images(self, product_id: int) -> bool:
         """删除商品的所有图像和物理文件"""
@@ -977,32 +1262,6 @@ class Database:
                 cursor = conn.cursor()
                 cursor.execute("SELECT id, image_path FROM product_images WHERE product_id = ?", (product_id,))
                 image_records = [{'id': row['id'], 'path': row['image_path']} for row in cursor.fetchall()]
-
-            if image_records:
-                # 从FAISS中删除向量
-                try:
-                    # 优先尝试绝对导入
-                    from vector_engine import get_vector_engine
-                except ImportError:
-                    try:
-                        # 尝试相对导入
-                        from .vector_engine import get_vector_engine
-                    except ImportError:
-                        # 如果都失败，跳过FAISS操作
-                        logger.warning("无法导入vector_engine，跳过FAISS向量删除")
-                        engine = None
-                    else:
-                        engine = get_vector_engine()
-                else:
-                    engine = get_vector_engine()
-
-                # 如果成功获取到引擎，删除向量
-                if engine:
-                    for record in image_records:
-                        try:
-                            engine.remove_vector_by_db_id(record['id'])
-                        except Exception as e:
-                            logger.warning(f"删除FAISS向量失败 {record['id']}: {e}")
 
             # 删除物理文件
             for record in image_records:
@@ -1020,21 +1279,13 @@ class Database:
                 cursor.execute("DELETE FROM products WHERE id = ?", (product_id,))
                 conn.commit()
 
-            # 保存FAISS索引
-            if image_records and engine:
-                try:
-                    engine.save()
-                    logger.info("FAISS索引已保存")
-                except Exception as e:
-                    logger.warning(f"保存FAISS索引失败: {e}")
-
             return True
         except Exception as e:
             logger.error(f"删除商品图像失败: {e}")
             return False
 
     def delete_products_bulk(self, product_ids: List[int], max_workers: int = 8) -> Dict[str, Any]:
-        """批量删除商品、图片文件与向量索引（优化版）"""
+        """批量删除商品及其图片与检索缓存关联数据"""
         try:
             normalized_ids = []
             for pid in product_ids or []:
@@ -1073,25 +1324,6 @@ class Database:
                     )
                     image_records.extend([{'id': row['id'], 'path': row['image_path']} for row in cursor.fetchall()])
 
-            engine = None
-            try:
-                from vector_engine import get_vector_engine
-                engine = get_vector_engine()
-            except ImportError:
-                try:
-                    from .vector_engine import get_vector_engine
-                    engine = get_vector_engine()
-                except ImportError:
-                    logger.warning("无法导入vector_engine，跳过FAISS向量删除")
-
-            if engine and image_records:
-                image_ids = {record['id'] for record in image_records if record.get('id') is not None}
-                if image_ids:
-                    try:
-                        engine.remove_vectors_by_db_ids(image_ids)
-                    except Exception as e:
-                        logger.warning(f"批量删除FAISS向量失败: {e}")
-
             file_failed = {'count': 0}
             if image_records:
                 import concurrent.futures
@@ -1126,26 +1358,6 @@ class Database:
                     cursor.execute(f"DELETE FROM products WHERE id IN ({placeholders})", chunk)
                 conn.commit()
 
-            remaining_images = 0
-            try:
-                with self.get_connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT COUNT(*) FROM product_images")
-                    remaining_images = cursor.fetchone()[0] or 0
-            except Exception as e:
-                logger.warning(f"统计剩余图片数量失败: {e}")
-
-            if engine and remaining_images == 0:
-                try:
-                    engine.rebuild_index([])
-                except Exception as e:
-                    logger.warning(f"清空FAISS索引失败: {e}")
-            elif engine and image_records:
-                try:
-                    engine.save()
-                except Exception as e:
-                    logger.warning(f"保存FAISS索引失败: {e}")
-
             missing_ids = [pid for pid in unique_ids if pid not in existing_ids]
 
             return {
@@ -1171,8 +1383,8 @@ class Database:
             logger.error(f"删除图片记录失败: {e}")
             return False
 
-    def delete_image_vector(self, product_id: int, image_index: int) -> bool:
-        """删除特定的图像向量和物理文件"""
+    def delete_product_image_record(self, product_id: int, image_index: int) -> bool:
+        """删除特定商品图片记录及其物理文件"""
         try:
             # 获取该图像的记录ID和文件路径
             image_path = None
@@ -1190,17 +1402,6 @@ class Database:
                 logger.warning(f"图片不存在: product_id={product_id}, image_index={image_index}")
                 return False
 
-            # 从FAISS中删除向量并重建索引
-            try:
-                from vector_engine import get_vector_engine
-            except ImportError:
-                from .vector_engine import get_vector_engine
-            engine = get_vector_engine()
-            success = engine.remove_vector_by_db_id(image_id)
-            if not success:
-                logger.error(f"FAISS删除向量失败: db_id={image_id}")
-                return False
-
             # 删除物理文件
             if image_path and os.path.exists(image_path):
                 try:
@@ -1214,14 +1415,12 @@ class Database:
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM product_images WHERE product_id = ? AND image_index = ?",
                              (product_id, image_index))
-
-               
                 conn.commit()
 
             logger.info(f"图片删除成功: product_id={product_id}, image_index={image_index}")
             return True
         except Exception as e:
-            logger.error(f"删除图像向量失败: {e}")
+            logger.error(f"删除商品图片记录失败: {e}")
             return False
 
     def get_product_by_url(self, product_url: str) -> Optional[Dict]:
@@ -1315,31 +1514,30 @@ class Database:
             return row['id'] if row else None
 
     def get_total_indexed_images(self) -> int:
-        """获取已索引的总图片数量"""
+        """获取已建立当前检索缓存的总图片数量"""
         try:
-            try:
-                from vector_engine import get_vector_engine
-            except ImportError:
-                from .vector_engine import get_vector_engine
-            engine = get_vector_engine()
-            return engine.count()
+            strategy_name = getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank')
+            return self.count_product_image_retrieval_cache(strategy_name)
         except Exception as e:
-            logger.error(f"获取索引图片数量失败: {e}")
+            logger.error(f"获取检索缓存图片数量失败: {e}")
             return 0
 
     def get_indexed_product_urls(self) -> List[str]:
-        """获取已建立索引的商品URL列表"""
+        """获取已建立当前检索缓存的商品URL列表"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
+                strategy_name = getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank')
                 cursor.execute('''
                     SELECT DISTINCT p.product_url
                     FROM products p
                     JOIN product_images pi ON p.id = pi.product_id
-                ''')
+                    JOIN product_image_retrieval_cache rc ON rc.image_db_id = pi.id
+                    WHERE rc.strategy_name = ?
+                ''', (strategy_name,))
                 return [row['product_url'] for row in cursor.fetchall()]
         except Exception as e:
-            logger.error(f"获取已索引商品URL失败: {e}")
+            logger.error(f"获取已建立检索缓存的商品URL失败: {e}")
             return []
 
     def add_search_history(self, query_image_path: str, matched_product_id: int,
@@ -3301,7 +3499,8 @@ class Database:
                 cursor.execute('SELECT min_delay, max_delay FROM global_reply_config WHERE id = 1')
                 row = cursor.fetchone()
                 if row:
-                    return {'min_delay': row[0], 'max_delay': row[1]}
+                    min_delay, max_delay = normalize_reply_delay_range(row[0] or 3.0, row[1] or 8.0)
+                    return {'min_delay': min_delay, 'max_delay': max_delay}
                 return {'min_delay': 3.0, 'max_delay': 8.0}  # 默认值
         except Exception as e:
             logger.error(f"获取全局回复配置失败: {e}")
@@ -3382,12 +3581,13 @@ class Database:
                 ''', (user_id,))
                 row = cursor.fetchone()
                 if row:
+                    min_delay, max_delay = normalize_reply_delay_range(row[3] or 3.0, row[4] or 8.0)
                     return {
                         'download_threads': row[0] or 4,
                         'feature_extract_threads': row[1] or 4,
                         'discord_similarity_threshold': row[2] or 0.6,
-                        'global_reply_min_delay': row[3] or 3.0,
-                        'global_reply_max_delay': row[4] or 8.0,
+                        'global_reply_min_delay': min_delay,
+                        'global_reply_max_delay': max_delay,
                         'user_blacklist': row[5] or '',
                         'keyword_filters': row[6] or '',
                         'keyword_reply_enabled': row[7] if row[7] is not None else 1,
@@ -3558,7 +3758,7 @@ class Database:
                         filter_size_max if filter_size_max is not None else 46,
                         bark_enabled if bark_enabled is not None else 0,
                         bark_server_url if bark_server_url is not None else 'https://api.day.app',
-                        bark_device_key or ''
+                        bark_device_key or '',
                     ))
 
                 conn.commit()
