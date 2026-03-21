@@ -9,7 +9,7 @@ python-dotenv>=1.0.0
 # AI Core Dependencies (DINOv2 + YOLOv8)
 torch>=2.0.0
 torchvision>=0.15.0
-transformers>=4.25.0
+transformers>=4.25.0,<5
 ultralytics>=8.0.0
 open-clip-torch>=2.24.0
 
