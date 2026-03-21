@@ -11,6 +11,7 @@ torch>=2.0.0
 torchvision>=0.15.0
 transformers>=4.25.0
 ultralytics>=8.0.0
+open-clip-torch>=2.24.0
 
 # Vector Database - FAISS (CPU version)
 faiss-cpu>=1.7.0

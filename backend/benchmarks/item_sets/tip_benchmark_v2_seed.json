@@ -1,0 +1,555 @@
+{
+  "dataset_name": "tip-benchmark-v2-seed",
+  "items": [
+    {
+      "item_id": "7683240673",
+      "title": "DR卡夹",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Dior cardholder"],
+        "discord_noise": ["thumb DR卡夹"]
+      }
+    },
+    {
+      "item_id": "7686244082",
+      "title": "EM-巴西夹风衣",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Corteiz Brazil jacket"],
+        "discord_noise": ["Brazil x Corteiz tracksuit"]
+      }
+    },
+    {
+      "item_id": "7686229844",
+      "title": "BL毛衣",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Balenciaga sweater"],
+        "discord_noise": ["thumb BL毛衣"]
+      }
+    },
+    {
+      "item_id": "7686166564",
+      "title": "KC眼镜",
+      "source_shop": "TIP",
+      "notes": ["source query looked mislabeled as COACH bag"],
+      "query_groups": {
+        "clean_web": ["Coach glasses"],
+        "discord_noise": ["COACH bag"]
+      }
+    },
+    {
+      "item_id": "7686144898",
+      "title": "KE眼镜",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Cartier glasses"],
+        "discord_noise": ["carteir glasses"]
+      }
+    },
+    {
+      "item_id": "7686166530",
+      "title": "MM毛衣",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Maison Margiela sweater"],
+        "discord_noise": ["margiele knit"]
+      }
+    },
+    {
+      "item_id": "7686166402",
+      "title": "CP毛线帽",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["CP Company beanie"],
+        "discord_noise": ["Cp company cap"]
+      }
+    },
+    {
+      "item_id": "7686061296",
+      "title": "LY纯棉短袖",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Louis Vuitton t-shirt"],
+        "discord_noise": ["Louie vuitton tshirt"]
+      }
+    },
+    {
+      "item_id": "7683117497",
+      "title": "BL连帽衫",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Balenciaga hoodie"],
+        "discord_noise": ["thumb BL连帽衫"]
+      }
+    },
+    {
+      "item_id": "7683089851",
+      "title": "蒙短裤",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Moncler shorts"],
+        "discord_noise": ["thumb 蒙短裤"]
+      }
+    },
+    {
+      "item_id": "7683144367",
+      "title": "LY旅行袋",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Louis Vuitton duffel bag"],
+        "discord_noise": ["LV duffel bag"]
+      }
+    },
+    {
+      "item_id": "7683037391",
+      "title": "EM风衣",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Corteiz windbreaker"],
+        "discord_noise": ["cortiez windbreaker"]
+      }
+    },
+    {
+      "item_id": "7682756609",
+      "title": "LE休闲鞋",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Loewe Flow Runner"],
+        "discord_noise": ["thumb LE休闲鞋"]
+      }
+    },
+    {
+      "item_id": "7682699001",
+      "title": "N-K5",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Kobe 5"],
+        "discord_noise": ["kobe5"]
+      }
+    },
+    {
+      "item_id": "7685699382",
+      "title": "N-K4",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Kobe 4"],
+        "discord_noise": ["kobe4"]
+      }
+    },
+    {
+      "item_id": "7682778283",
+      "title": "N-K8",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Kobe 8"],
+        "discord_noise": ["kobe8"]
+      }
+    },
+    {
+      "item_id": "7682772113",
+      "title": "N-K9",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Kobe 9"],
+        "discord_noise": ["kobe9"]
+      }
+    },
+    {
+      "item_id": "7682768087",
+      "title": "F板鞋",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Fendi shoes"],
+        "discord_noise": ["FENDI sjoes"]
+      }
+    },
+    {
+      "item_id": "7682787803",
+      "title": "飞37",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Air Zoom Pegasus 37"],
+        "discord_noise": ["thumb 飞37"]
+      }
+    },
+    {
+      "item_id": "7685732188",
+      "title": "飞41",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Air Zoom Pegasus 41"],
+        "discord_noise": ["thumb 飞41"]
+      }
+    },
+    {
+      "item_id": "7685771794",
+      "title": "飞39（2）",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Air Zoom Pegasus 39"],
+        "discord_noise": ["thumb 飞39（2）"]
+      }
+    },
+    {
+      "item_id": "7685763918",
+      "title": "飞38（1）",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Air Zoom Pegasus 38"],
+        "discord_noise": ["thumb 飞38（1）"]
+      }
+    },
+    {
+      "item_id": "7682778019",
+      "title": "飞38（2）",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Air Zoom Pegasus 38"],
+        "discord_noise": ["thumb 飞38（2）"]
+      }
+    },
+    {
+      "item_id": "7685718700",
+      "title": "飞40",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Air Zoom Pegasus 40"],
+        "discord_noise": ["thumb 飞40"]
+      }
+    },
+    {
+      "item_id": "7682688811",
+      "title": "飞39（1）",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Air Zoom Pegasus 39"],
+        "discord_noise": ["thumb 飞39（1）"]
+      }
+    },
+    {
+      "item_id": "7682732601",
+      "title": "MK休闲鞋",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Michael Kors casual shoes"],
+        "discord_noise": ["MK Casual Shoes"]
+      }
+    },
+    {
+      "item_id": "7682771805",
+      "title": "MK厚底（2）",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Michael Kors platform shoes"],
+        "discord_noise": ["MK Thick Sole 2"]
+      }
+    },
+    {
+      "item_id": "7682713029",
+      "title": "MK厚底（1）",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Michael Kors platform shoes"],
+        "discord_noise": ["MK Thick Sole 1"]
+      }
+    },
+    {
+      "item_id": "7682668081",
+      "title": "ME软壳防水反光夹克连帽冲锋衣",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Mertra waterproof jacket"],
+        "discord_noise": ["ME Soft Case Waterproof Reflective Jacket Hooded Jacket"]
+      }
+    },
+    {
+      "item_id": "7685569938",
+      "title": "DT牛仔夹克",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Denim Tears denim jacket"],
+        "discord_noise": ["Denim tear jeans"]
+      }
+    },
+    {
+      "item_id": "7685415432",
+      "title": "PL帽",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Prada cap"],
+        "discord_noise": ["Prada hat"]
+      }
+    },
+    {
+      "item_id": "7685274312",
+      "title": "OW四箭",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Off White ODSY 1000"],
+        "discord_noise": ["OW Four Arrows"]
+      }
+    },
+    {
+      "item_id": "7685405518",
+      "title": "N-NI02",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Nike Mind 002"],
+        "discord_noise": ["Nike mind"]
+      }
+    },
+    {
+      "item_id": "7682505819",
+      "title": "N-D",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Nike Air Max DN"],
+        "discord_noise": ["nike dns"]
+      }
+    },
+    {
+      "item_id": "7682446873",
+      "title": "阿达唐装外套",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Adatang jacket"],
+        "discord_noise": ["thumb 阿达唐装外套"]
+      }
+    },
+    {
+      "item_id": "7682492205",
+      "title": "PA羽绒服",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Patagonia puffer"],
+        "discord_noise": ["thumb PA羽绒服"]
+      }
+    },
+    {
+      "item_id": "7685448490",
+      "title": "大鹅开衫",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Canada Goose cardigan"],
+        "discord_noise": ["canad goose cardigan"]
+      }
+    },
+    {
+      "item_id": "7682334819",
+      "title": "TBL",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Timberland boots"],
+        "discord_noise": ["timbs"]
+      }
+    },
+    {
+      "item_id": "7682243507",
+      "title": "SUP面罩",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Supreme heat ski mask"],
+        "discord_noise": ["thumb SUP面罩"]
+      }
+    },
+    {
+      "item_id": "7682312449",
+      "title": "AMN牛仔裤",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Armani jeans"],
+        "discord_noise": ["thumb AMN牛仔裤"]
+      }
+    },
+    {
+      "item_id": "7684163116",
+      "title": "NB-92",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["New Balance 992"],
+        "discord_noise": ["thumb NB-92"]
+      }
+    },
+    {
+      "item_id": "7684218398",
+      "title": "NB-91",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["New Balance 991"],
+        "discord_noise": ["thumb NB-91"]
+      }
+    },
+    {
+      "item_id": "7681216533",
+      "title": "NB-55（1）",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["New Balance 550"],
+        "discord_noise": ["thumb NB-55（1）"]
+      }
+    },
+    {
+      "item_id": "7681218463",
+      "title": "NB-55（2）",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["New Balance 550"],
+        "discord_noise": ["thumb NB-55（2）"]
+      }
+    },
+    {
+      "item_id": "7681171339",
+      "title": "NB-53-MI",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["New Balance 530 x Miu Miu"],
+        "discord_noise": ["thumb NB-53-MI"]
+      }
+    },
+    {
+      "item_id": "7684234048",
+      "title": "NB-53(2)",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["New Balance 530"],
+        "discord_noise": ["thumb NB-53(2)"]
+      }
+    },
+    {
+      "item_id": "7684208516",
+      "title": "NB-53",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["New Balance 530"],
+        "discord_noise": ["thumb NB-53"]
+      }
+    },
+    {
+      "item_id": "7684232100",
+      "title": "DR-CH",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Dior Chrono"],
+        "discord_noise": ["thumb DR-CH"]
+      }
+    },
+    {
+      "item_id": "7681062393",
+      "title": "DR-80",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Dior B80"],
+        "discord_noise": ["dior b 80"]
+      }
+    },
+    {
+      "item_id": "7681250043",
+      "title": "DR-01",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Dior B01"],
+        "discord_noise": ["dior b 01"]
+      }
+    },
+    {
+      "item_id": "7684216458",
+      "title": "DR-57",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Dior B57"],
+        "discord_noise": ["dior b 57"]
+      }
+    },
+    {
+      "item_id": "7681183355",
+      "title": "DR-35",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Dior B35"],
+        "discord_noise": ["dior b 35"]
+      }
+    },
+    {
+      "item_id": "7684204592",
+      "title": "DR-33",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Dior B33"],
+        "discord_noise": ["dior b 33"]
+      }
+    },
+    {
+      "item_id": "7684226244",
+      "title": "DR-27",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Dior B27"],
+        "discord_noise": ["dior b 27"]
+      }
+    },
+    {
+      "item_id": "7681212523",
+      "title": "LY拖鞋",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Louis Vuitton slippers"],
+        "discord_noise": ["LV slippers"]
+      }
+    },
+    {
+      "item_id": "7681283695",
+      "title": "LY-RU",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Louis Vuitton Run Away"],
+        "discord_noise": ["Lv runaway"]
+      }
+    },
+    {
+      "item_id": "7681185049",
+      "title": "EY半拉毛衣",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Lacoste quarter zip"],
+        "discord_noise": ["thumb EY半拉毛衣"]
+      }
+    },
+    {
+      "item_id": "7681265859",
+      "title": "AF高",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Air Force 1 High"],
+        "discord_noise": ["thumb AF高"]
+      }
+    },
+    {
+      "item_id": "7684149486",
+      "title": "AF 中",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Air Force 1 Mid"],
+        "discord_noise": ["thumb AF 中"]
+      }
+    },
+    {
+      "item_id": "7684155326",
+      "title": "K-OW",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Dunk Off-White"],
+        "discord_noise": ["thumb K-OW"]
+      }
+    },
+    {
+      "item_id": "7681200695",
+      "title": "K-OW",
+      "source_shop": "TIP",
+      "query_groups": {
+        "clean_web": ["Off-White x Nike Rubber Dunk"],
+        "discord_noise": ["off white dunks"]
+      }
+    }
+  ]
+}

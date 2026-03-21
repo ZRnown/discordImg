@@ -27,6 +27,7 @@ class Config:
     # === Discord 配置 ===
     DISCORD_CHANNEL_ID = int(os.getenv('DISCORD_CHANNEL_ID', 0)) if os.getenv('DISCORD_CHANNEL_ID') else 0
     DISCORD_SIMILARITY_THRESHOLD = 0.6
+    LIVE_IMAGE_SEARCH_STRATEGY = os.getenv('LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank')
 
     # === 延迟配置 ===
     GLOBAL_REPLY_MIN_DELAY = 3.0

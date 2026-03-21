@@ -554,11 +554,12 @@ def extract_features(image_path):
 
 @app.route('/search_similar', methods=['POST'])
 def search_similar():
-    """搜索相似图像 - 使用 FAISS HNSW"""
+    """搜索相似图像并按商品级别返回排序结果"""
     try:
         image_url = request.form.get('image_url')
-        threshold = float(request.form.get('threshold', 0.6))  # DINOv2需要更高的阈值
-        limit = int(request.form.get('limit', 5))  # 返回结果数量，默认5个
+        threshold = float(request.form.get('threshold', 0.6))
+        limit = int(request.form.get('limit', 5))
+        query_text = str(request.form.get('query_text', '') or '').strip()
         debug_enabled = bool(getattr(config, 'DEBUG', False))
 
         user_id = request.form.get('user_id')
@@ -668,7 +669,7 @@ def search_similar():
             return jsonify({'error': 'No image provided (url or file)'}), 400
 
         try:
-            # 提取特征 (使用 DINOv2 + YOLOv8)
+            # 仅用于图片过滤规则匹配，实时商品检索改由 live_retrieval 负责。
             query_features = extract_features(image_path)
 
             if query_features is None:
@@ -795,80 +796,33 @@ def search_similar():
             except Exception as e:
                 logger.error(f"记录用户搜索次数失败: {e}")
 
-            # 【优化】使用 FAISS HNSW 向量搜索 + 综合评分重排序
-            if debug_enabled:
-                logger.debug(f"Searching with threshold: {threshold}, vector length: {len(query_features)}")
+            # 实时图片检索改走 benchmark 验证过的策略，实现图片到商品的直接匹配。
+            try:
+                from live_retrieval import get_live_image_retriever
+            except ModuleNotFoundError as e:
+                if e.name == 'live_retrieval':
+                    from .live_retrieval import get_live_image_retriever
+                else:
+                    raise
 
-            # 1. 扩大召回范围：FAISS 先找前 50 个候选 (Primary Search)
-            # 使用较低的阈值召回，防止漏掉可能的匹配
-            candidates_limit = 50
-            raw_results = db.search_similar_images(query_features, limit=candidates_limit, threshold=0.05)
-            if debug_enabled:
-                logger.debug(f"FAISS recalled {len(raw_results) if raw_results else 0} candidates")
-
-            # 2. 重排序 (Re-ranking) - 综合评分
-            refined_results = []
-
-            if raw_results:
-                # 获取全局特征提取器实例用来计算颜色/结构
-                extractor = get_global_feature_extractor()
-                query_signature = extractor.prepare_hybrid_query(image_path) if extractor else None
-
-                for res in raw_results:
-                    # 获取候选图片的本地路径
-                    candidate_img_path = res.get('image_path')
-
-                    # 如果文件不存在，只能用原始 DINO 分数
-                    if not candidate_img_path or not os.path.exists(candidate_img_path):
-                        final_score = res['similarity']
-                        breakdown = {}
-                        if debug_enabled:
-                            logger.debug(f"Candidate image not found, using DINO score: {final_score:.3f}")
-                    else:
-                        # 计算综合评分
-                        hybrid_data = extractor.calculate_hybrid_similarity(
-                            image_path,  # 上传的查询图 (临时文件)
-                            candidate_img_path,  # 数据库里的图
-                            res['similarity'],  # 原始 DINO 分数
-                            query_signature
-                        )
-                        final_score = hybrid_data['score']
-                        breakdown = hybrid_data.get('details', {})
-
-                    # 更新分数
-                    res['original_similarity'] = res['similarity']  # 保留原分用于调试
-                    res['similarity'] = final_score  # 更新为综合分
-                    res['score_breakdown'] = breakdown
-
-                    refined_results.append(res)
-
-                # 3. 按新的综合分数重新排序
-                refined_results.sort(key=lambda x: x['similarity'], reverse=True)
-                if debug_enabled:
-                    logger.debug(f"Re-ranking completed, best score: {refined_results[0]['similarity']:.3f}")
-
-            # 4. 应用用户阈值和店铺过滤
-            results = []
-            for result in refined_results:
-                similarity = result.get('similarity', 0)
-                # 应用用户相似度阈值
-                if similarity >= threshold:
-                    # 检查店铺权限
-                    if user_shops and result.get('shop_name') not in user_shops:
-                        if debug_enabled:
-                            logger.debug(f"Skipping result from shop {result.get('shop_name')} - not in user shops {user_shops}")
-                        continue
-                    results.append(result)
-                    if len(results) >= limit:
-                        break
+            retriever = get_live_image_retriever(db, getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank'))
+            retrieval_result = retriever.search(
+                image_path=image_path,
+                query_text=query_text,
+                top_k=limit,
+                threshold=threshold,
+                user_shops=user_shops,
+            )
+            results = retrieval_result.get('ranked_products', [])
 
             if debug_enabled:
-                logger.debug(f"Filtered results count (threshold {threshold}): {len(results)}")
-                if results:
-                    logger.debug(
-                        f"Best match similarity: {results[0]['similarity']:.3f} (original DINO: {results[0].get('original_similarity', 0):.3f})"
-                    )
-                logger.debug(f"Total indexed images: {db.get_total_indexed_images()}")
+                logger.debug(
+                    "Live retrieval strategy=%s threshold=%.3f results=%s query_text=%s",
+                    retrieval_result.get('strategy'),
+                    threshold,
+                    len(results),
+                    bool(query_text),
+                )
 
             # 严格执行阈值：如果没有满足阈值的结果，则返回空结果
             # 不再使用任何硬编码阈值兜底（例如 >0.8）
@@ -882,9 +836,12 @@ def search_similar():
                 'blocked_filter_match': blocked_filter_match,
                 'blocked_website_filter_matches': blocked_website_filter_matches,
                 'debugInfo': {
-                    'totalIndexedImages': db.get_total_indexed_images(),
+                    'totalIndexedImages': retrieval_result.get('catalog_size', db.get_total_indexed_images()),
                     'threshold': threshold,
-                    'searchedVectors': len(results) if results else 0
+                    'strategy': retrieval_result.get('strategy'),
+                    'queryTextUsed': bool(query_text),
+                    'top1Margin': retrieval_result.get('top1_margin', 0.0),
+                    'searchedVectors': retrieval_result.get('catalog_size', 0)
                 }
             }
 
@@ -897,15 +854,16 @@ def search_similar():
 
                 for i, result in enumerate(results):
                     # 获取完整产品信息
-                    product_info = db._get_product_info_by_id(result['id'])
+                    product_id = result['product_id']
+                    product_info = db._get_product_info_by_id(product_id)
 
                     # 获取实际的图片URL列表
                     actual_images = []
                     if product_info:
                         with db.get_connection() as conn:
                             cursor = conn.cursor()
-                            cursor.execute("SELECT image_index FROM product_images WHERE product_id = ? ORDER BY image_index", (result['id'],))
-                            actual_images = [f"/api/image/{result['id']}/{row[0]}" for row in cursor.fetchall()]
+                            cursor.execute("SELECT image_index FROM product_images WHERE product_id = ? ORDER BY image_index", (product_id,))
+                            actual_images = [f"/api/image/{product_id}/{row[0]}" for row in cursor.fetchall()]
 
                     # 生成所有网站的链接
                     weidian_id = None
@@ -936,18 +894,22 @@ def search_similar():
 
                     result_data = {
                         'rank': i + 1,
-                        'similarity': float(result['similarity']),
-                        'originalSimilarity': float(result.get('original_similarity', result['similarity'])),  # 原始DINO分数
-                        'scoreBreakdown': result.get('score_breakdown', {}),  # 评分详情
+                        'similarity': float(result['score']),
+                        'originalSimilarity': float(result['score']),
+                        'scoreBreakdown': {
+                            'strategy': retrieval_result.get('strategy'),
+                            'top1Margin': retrieval_result.get('top1_margin', 0.0),
+                            'queryTextUsed': bool(query_text),
+                        },
                         'imageIndex': result['image_index'],
-                        'matchedImage': f"/api/image/{result['id']}/{result['image_index']}",
+                        'matchedImage': f"/api/image/{product_id}/{result['image_index']}",
                         'product': {
-                            'id': result['id'],
+                            'id': product_id,
                             'title': product_info['title'] if product_info else result.get('title', ''),
-                            'englishTitle': product_info.get('english_title', ''),
+                            'englishTitle': product_info.get('english_title', '') if product_info else result.get('english_title', ''),
                             'weidianUrl': product_info['product_url'] if product_info else result.get('product_url', ''),
-                            'cnfansUrl': product_info.get('cnfans_url', ''),
-                            'acbuyUrl': product_info.get('acbuy_url', ''),
+                            'cnfansUrl': product_info.get('cnfans_url', '') if product_info else result.get('cnfans_url', ''),
+                            'acbuyUrl': product_info.get('acbuy_url', '') if product_info else result.get('acbuy_url', ''),
                             'ruleEnabled': product_info.get('ruleEnabled', True) if product_info else True,
                             # 修复：机器人需要 imageSource 和 uploaded_reply_images 才能发送本地图片
                             'imageSource': product_info.get('image_source', 'product') if product_info else 'product',
@@ -956,7 +918,7 @@ def search_similar():
                             'uploaded_reply_images': uploaded_reply_images,
                             'selectedImageIndexes': selected_indexes,
                             'customImageUrls': custom_urls,
-                            'images': actual_images if actual_images else [f"/api/image/{result['id']}/{result['image_index']}"],  # 使用实际图片列表
+                            'images': actual_images if actual_images else [f"/api/image/{product_id}/{result['image_index']}"],
                             'websiteUrls': website_urls  # 添加所有网站的链接
                         }
                     }
@@ -981,10 +943,13 @@ def search_similar():
                     'blocked_filter_match': blocked_filter_match,
                     'blocked_website_filter_matches': blocked_website_filter_matches,
                     'debugInfo': {
-                        'totalIndexedImages': db.get_total_indexed_images(),
+                        'totalIndexedImages': retrieval_result.get('catalog_size', db.get_total_indexed_images()),
                         'threshold': threshold,
                         'limit': limit,
-                        'searchedVectors': len(results) if results else 0
+                        'strategy': retrieval_result.get('strategy'),
+                        'queryTextUsed': bool(query_text),
+                        'top1Margin': retrieval_result.get('top1_margin', 0.0),
+                        'searchedVectors': retrieval_result.get('catalog_size', 0)
                     }
                 }
 

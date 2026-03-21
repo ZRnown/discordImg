@@ -862,117 +862,6 @@ class Database:
             logger.error(f"插入图像记录失败: {e}")
             raise e
 
-    def search_similar_images(self, query_vector: np.ndarray, limit: int = 1,
-                             threshold: float = 0.6, user_shops: Optional[List[str]] = None) -> List[Dict]:
-        """使用FAISS搜索相似图像"""
-        import time
-        start_time = time.time()
-        debug_enabled = bool(getattr(config, 'DEBUG', False))
-
-        try:
-            try:
-                from vector_engine import get_vector_engine
-            except ImportError:
-                from .vector_engine import get_vector_engine
-
-            if debug_enabled:
-                logger.debug("开始获取FAISS引擎...")
-            engine_start = time.time()
-            engine = get_vector_engine()
-            if debug_enabled:
-                logger.debug(f"获取FAISS引擎耗时: {time.time() - engine_start:.3f}秒")
-
-            if debug_enabled:
-                logger.debug(f"Starting FAISS search, threshold: {threshold}, limit: {limit}")
-                logger.debug(
-                    f"Query vector length: {len(query_vector) if hasattr(query_vector, '__len__') else 'unknown'}"
-                )
-
-            # 执行FAISS搜索
-            faiss_start = time.time()
-            faiss_results = engine.search(query_vector, top_k=min(limit * 3, 50))
-            if debug_enabled:
-                logger.debug(f"FAISS搜索耗时: {time.time() - faiss_start:.3f}秒")
-            if debug_enabled:
-                logger.debug(f"FAISS search returned {len(faiss_results)} results")
-
-            matched_results = []
-
-            for result in faiss_results:
-                score = result['score']
-                db_id = result['db_id']
-
-                if debug_enabled:
-                    logger.debug(f"Processing result - db_id: {db_id}, score: {score}, threshold: {threshold}")
-
-                # 通过image_db_id获取产品信息
-                image_info = self.get_image_info_by_id(db_id)
-                if image_info:
-                    if debug_enabled:
-                        logger.debug(f"Found image info for db_id {db_id}: product_id={image_info['product_id']}")
-                    product_info = self._get_product_info_by_id(image_info['product_id'])
-
-                    if product_info:
-                        # 如果指定了用户店铺权限，进行过滤
-                        if user_shops and product_info.get('shop_name') not in user_shops:
-                            if debug_enabled:
-                                logger.debug(
-                                    f"Skipping product from shop {product_info.get('shop_name')} - not in user shops {user_shops}"
-                                )
-                            continue
-
-                        if debug_enabled:
-                            logger.debug(
-                                f"Found product info for product_id {image_info['product_id']}: ruleEnabled={product_info.get('ruleEnabled', True)}"
-                            )
-                        result_dict = {
-                            **product_info,
-                            'similarity': score,
-                            'image_index': image_info['image_index'],
-                            'image_path': image_info['image_path']
-                        }
-                        matched_results.append(result_dict)
-                        if debug_enabled:
-                            logger.debug(f"Added result with similarity {score}")
-
-                        # 如果找到了足够的结果，就停止
-                        if len(matched_results) >= limit:
-                            break
-                    else:
-                        if debug_enabled:
-                            logger.debug(f"Product info not found for product_id {image_info['product_id']}")
-                else:
-                    if debug_enabled:
-                        logger.debug(f"Image info not found for db_id {db_id}")
-
-            # 如果没有找到任何结果，返回最佳匹配（即使低于阈值）
-            if not matched_results and faiss_results:
-                if debug_enabled:
-                    logger.debug(f"No results above threshold {threshold}, returning best match")
-                best_result = faiss_results[0]
-                db_id = best_result['db_id']
-                image_info = self.get_image_info_by_id(db_id)
-                if image_info:
-                    product_info = self._get_product_info_by_id(image_info['product_id'])
-                    if product_info:
-                        result_dict = {
-                            **product_info,
-                            'similarity': best_result['score'],
-                            'image_index': image_info['image_index'],
-                            'image_path': image_info['image_path']
-                        }
-                        matched_results.append(result_dict)
-                        if debug_enabled:
-                            logger.debug(f"Added best match with similarity {best_result['score']}")
-
-            return matched_results
-
-        except Exception as e:
-            logger.error(f"FAISS搜索失败: {e}")
-            import traceback
-            traceback.print_exc()
-            return []
-
     def _get_product_url_by_id(self, product_id: int) -> Optional[str]:
         """根据产品ID获取产品URL"""
         with self.get_connection() as conn:
@@ -1040,6 +929,43 @@ class Database:
 
         except Exception as e:
             logger.error(f"获取商品图片失败: {e}")
+            return []
+
+    def get_searchable_product_image_records(self) -> List[Dict]:
+        """获取实时图片检索需要的商品图片与商品元数据"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    SELECT
+                        p.id AS product_id,
+                        p.item_id,
+                        p.title,
+                        p.english_title,
+                        p.description,
+                        p.product_url,
+                        p.cnfans_url,
+                        p.acbuy_url,
+                        p.shop_name,
+                        p.ruleEnabled,
+                        p.reply_scope,
+                        p.image_source,
+                        p.custom_reply_text,
+                        p.custom_reply_images,
+                        p.custom_image_urls,
+                        p.uploaded_reply_images,
+                        pi.id AS image_db_id,
+                        pi.image_path,
+                        pi.image_index
+                    FROM products p
+                    JOIN product_images pi ON pi.product_id = p.id
+                    ORDER BY p.id ASC, pi.image_index ASC
+                    '''
+                )
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"获取实时检索商品目录失败: {e}")
             return []
 
     def delete_product_images(self, product_id: int) -> bool:

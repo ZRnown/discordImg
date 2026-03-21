@@ -31,6 +31,10 @@ try:
     from rotation_settings import resolve_rotation_settings_update
 except ImportError:
     from .rotation_settings import resolve_rotation_settings_update
+try:
+    from image_query_text import build_image_query_text
+except ImportError:
+    from .image_query_text import build_image_query_text
 
 # 全局变量用于多账号机器人管理
 bot_clients = []
@@ -2885,7 +2889,12 @@ class DiscordBotClient(discord.Client):
 
                 # 传入用户店铺权限，避免 A 店铺命中结果串到 B 店铺
                 scoped_user_shops = self.user_shops if self.user_shops else None
-                result = await self.recognize_image(image_data, user_shops=scoped_user_shops)
+                query_text = build_image_query_text(message)
+                result = await self.recognize_image(
+                    image_data,
+                    user_shops=scoped_user_shops,
+                    query_text=query_text,
+                )
 
                 logger.debug(f"🔓 释放AI并发锁")
 
@@ -3431,7 +3440,7 @@ class DiscordBotClient(discord.Client):
             logger.error(f'Error searching products by keyword: {e}')
             return None
 
-    async def recognize_image(self, image_data, user_shops=None):
+    async def recognize_image(self, image_data, user_shops=None, query_text=None):
         try:
             # 增加超时时间，FAISS搜索可能需要更长时间
             timeout = aiohttp.ClientTimeout(total=30)  # 30秒超时
@@ -3463,8 +3472,10 @@ class DiscordBotClient(discord.Client):
                 # 如果指定了用户店铺权限，添加到请求中
                 if user_shops:
                     form_data.add_field('user_shops', json.dumps(user_shops))
+                if query_text:
+                    form_data.add_field('query_text', str(query_text))
 
-                # 调用 DINOv2 + FAISS 服务（本地）
+                # 调用后端实时图片检索服务。
                 async with session.post(f'{config.BACKEND_API_URL.replace("/api", "")}/search_similar', data=form_data) as resp:
                     if resp.status == 200:
                         result = await resp.json()
