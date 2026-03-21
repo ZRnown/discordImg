@@ -4,7 +4,10 @@ from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from .benchmarks.common import aggregate_product_rankings
+try:
+    from .benchmarks.common import aggregate_product_rankings
+except ImportError:
+    from benchmarks.common import aggregate_product_rankings
 
 
 @dataclass(frozen=True)
@@ -190,7 +193,10 @@ class LiveImageRetriever:
             self._strategy = None
 
     def _ensure_prepared_catalog(self):
-        from .benchmarks.strategies import create_strategy
+        try:
+            from .benchmarks.strategies import create_strategy
+        except ImportError:
+            from benchmarks.strategies import create_strategy
 
         rows = self._load_catalog_rows()
         signature = self._build_signature(rows)
