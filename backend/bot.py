@@ -3288,6 +3288,14 @@ class DiscordBotClient(discord.Client):
                 if str(reason.get('canonical_keyword') or '').strip()
             }
 
+            user_settings = {}
+            if self.user_id:
+                try:
+                    user_settings = await self._get_user_settings_safe()
+                except Exception as settings_error:
+                    logger.error(f'获取全局关键词命中上限失败: {settings_error}')
+                    user_settings = {}
+
             global_keyword_match_limit = max(0, _coerce_int((user_settings or {}).get('keyword_match_limit', 0), 0))
 
             logger.info(f'关键词搜索成功: "{search_query}" -> 匹配 {len(matched_products)} 个商品')
