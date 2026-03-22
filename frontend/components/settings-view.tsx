@@ -48,8 +48,8 @@ interface SystemSettings {
 export function SettingsView() {
   const [settings, setSettings] = useState<UserSettings>({
     discord_similarity_threshold: 0.6,
-    global_reply_min_delay: 3.0,
-    global_reply_max_delay: 8.0,
+    global_reply_min_delay: 1.0,
+    global_reply_max_delay: 3.0,
     user_blacklist: '',
     keyword_filters: '',
     keyword_reply_enabled: true,
@@ -86,8 +86,8 @@ export function SettingsView() {
       if (response.ok) {
         const data = await response.json()
         const delayRange = normalizeReplyDelayRange(
-          Number(data.global_reply_min_delay ?? 3.0),
-          Number(data.global_reply_max_delay ?? 8.0),
+          Number(data.global_reply_min_delay ?? 1.0),
+          Number(data.global_reply_max_delay ?? 3.0),
         )
         setSettings({
           discord_similarity_threshold: data.discord_similarity_threshold ?? 0.6,
@@ -436,10 +436,8 @@ export function SettingsView() {
                 </p>
               </div>
             </div>
-          </div>
-
-            {/* 回复延迟设置 */}
             <div className="flex-1 space-y-2">
+              {/* 回复延迟设置 */}
               <Label className="text-sm font-medium">回复延迟</Label>
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
@@ -609,6 +607,5 @@ export function SettingsView() {
           </CardContent>
         </Card>
       </div>
-    </div>
   )
 }

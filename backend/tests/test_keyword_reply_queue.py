@@ -3,7 +3,7 @@ import os
 import tempfile
 import uuid
 import asyncio
-from types import SimpleNamespace
+from types import MethodType, SimpleNamespace
 from unittest.mock import patch
 
 from backend.bot import (
@@ -14,6 +14,7 @@ from backend.bot import (
     _should_send_plain_keyword_message,
     _should_use_keyword_window_mode,
 )
+from backend import database as database_module
 from backend.database import Database
 
 
@@ -597,6 +598,147 @@ class KeywordSendStyleTestCase(unittest.TestCase):
                 reply_mode="rotation",
             )
         )
+
+
+class KeywordSearchMatchingTestCase(unittest.IsolatedAsyncioTestCase):
+    class _Author:
+        def __init__(self, author_id):
+            self.id = author_id
+
+    class _Channel:
+        def __init__(self, channel_id):
+            self.id = channel_id
+
+    class _Message:
+        def __init__(self, content, channel_id=1001, author_id=2002):
+            self.content = content
+            self.attachments = []
+            self.channel = KeywordSearchMatchingTestCase._Channel(channel_id)
+            self.author = KeywordSearchMatchingTestCase._Author(author_id)
+
+    async def test_keyword_match_limit_blocks_when_distinct_keyword_count_exceeds_limit(self):
+        scheduled = []
+
+        async def search_products_by_keyword(_query):
+            return {
+                "success": True,
+                "products": [
+                    {"id": 1, "english_title": "B30", "weidianUrl": "https://weidian.com/item.html?itemID=111"},
+                    {"id": 2, "english_title": "B22", "weidianUrl": "https://weidian.com/item.html?itemID=222"},
+                    {"id": 3, "english_title": "B44", "weidianUrl": "https://weidian.com/item.html?itemID=333"},
+                ],
+            }
+
+        async def get_website_configs_by_channel_async(_channel_id):
+            return [{"id": 11, "name": "acbuy", "url_template": "https://www.acbuy.com/product/?id={id}"}]
+
+        async def enqueue_or_dispatch_keyword_reply(*_args, **_kwargs):
+            scheduled.append("unexpected")
+            return True
+
+        def start_keyword_reply_background_task(coro, task_name):
+            coro.close()
+            scheduled.append(task_name)
+            return None
+
+        client = SimpleNamespace(
+            user_id=123,
+            user_shops=[],
+            search_products_by_keyword=search_products_by_keyword,
+            get_website_configs_by_channel_async=get_website_configs_by_channel_async,
+            _enqueue_or_dispatch_keyword_reply=enqueue_or_dispatch_keyword_reply,
+            _start_keyword_reply_background_task=start_keyword_reply_background_task,
+        )
+
+        fake_db = SimpleNamespace(
+            get_user_settings=lambda _user_id: {"keyword_match_limit": 2},
+        )
+
+        with patch.object(database_module, "db", fake_db):
+            await DiscordBotClient.handle_keyword_search(client, self._Message("B30 B22 B44"))
+
+        self.assertEqual(scheduled, [])
+
+    async def test_multi_product_reply_keeps_two_links_for_unselected_platform(self):
+        scheduled_jobs = []
+        background_tasks = []
+
+        async def search_products_by_keyword(_query):
+            return {
+                "success": True,
+                "products": [
+                    {
+                        "id": 1,
+                        "english_title": "B22",
+                        "weidianUrl": "https://weidian.com/item.html?itemID=111",
+                        "autoReplyEnabled": True,
+                    },
+                    {
+                        "id": 2,
+                        "english_title": "B 22",
+                        "weidianUrl": "https://weidian.com/item.html?itemID=222",
+                        "autoReplyEnabled": False,
+                        "custom_reply_text": "仅 OOPBUY 自定义内容",
+                        "replyScope": '["oopbuy"]',
+                    },
+                ],
+            }
+
+        async def get_website_configs_by_channel_async(_channel_id):
+            return [
+                {
+                    "id": 21,
+                    "name": "acbuy",
+                    "display_name": "ACBUY",
+                    "reply_template": "{url}",
+                    "url_template": "https://www.acbuy.com/product/?id={id}",
+                }
+            ]
+
+        async def get_keyword_window_settings(_website_config, sender_count=0):
+            self.assertEqual(sender_count, 1)
+            return (180, 0, 0, "rotation", "immediate")
+
+        async def enqueue_or_dispatch_keyword_reply(_message, _product, custom_reply, website_config):
+            scheduled_jobs.append(
+                {
+                    "website_id": website_config["id"],
+                    "content": custom_reply.get("content", ""),
+                }
+            )
+            return True
+
+        def start_keyword_reply_background_task(coro, task_name):
+            task = asyncio.create_task(coro, name=task_name)
+            background_tasks.append(task)
+            return task
+
+        client = SimpleNamespace(
+            user_id=456,
+            user_shops=[],
+            search_products_by_keyword=search_products_by_keyword,
+            get_website_configs_by_channel_async=get_website_configs_by_channel_async,
+            _get_keyword_window_settings=get_keyword_window_settings,
+            _enqueue_or_dispatch_keyword_reply=enqueue_or_dispatch_keyword_reply,
+            _start_keyword_reply_background_task=start_keyword_reply_background_task,
+        )
+        client._generate_reply_content = MethodType(DiscordBotClient._generate_reply_content, client)
+
+        fake_db = SimpleNamespace(
+            get_user_settings=lambda _user_id: {"keyword_match_limit": 0},
+            get_website_senders=lambda _website_id, _user_id: [999],
+        )
+
+        with patch.object(database_module, "db", fake_db):
+            await DiscordBotClient.handle_keyword_search(client, self._Message("b22"))
+            if background_tasks:
+                await asyncio.gather(*background_tasks)
+
+        self.assertEqual(len(scheduled_jobs), 1)
+        content = scheduled_jobs[0]["content"]
+        self.assertIn("https://www.acbuy.com/product/?id=111", content)
+        self.assertIn("https://www.acbuy.com/product/?id=222", content)
+        self.assertNotIn("仅 OOPBUY 自定义内容", content)
 
 
 if __name__ == "__main__":

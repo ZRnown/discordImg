@@ -30,8 +30,8 @@ class Config:
     LIVE_IMAGE_SEARCH_STRATEGY = os.getenv('LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank')
 
     # === 延迟配置 ===
-    GLOBAL_REPLY_MIN_DELAY = 3.0
-    GLOBAL_REPLY_MAX_DELAY = 8.0
+    GLOBAL_REPLY_MIN_DELAY = 1.0
+    GLOBAL_REPLY_MAX_DELAY = 3.0
 
     # === 频道配置 ===
     CNFANS_CHANNEL_ID = 0

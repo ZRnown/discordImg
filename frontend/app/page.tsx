@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { DashboardView } from "@/components/dashboard-view"
 import { AccountsView } from "@/components/accounts-view"
 import { ScraperView } from "@/components/scraper-view"
@@ -11,11 +11,13 @@ import { RulesView } from "@/components/rules-view"
 import { LogsView } from "@/components/logs-view"
 import { LoginView } from "@/components/login-view"
 import { AppSidebar } from "@/components/app-sidebar"
+import { TutorialTour } from "@/components/tutorial-tour"
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
 import { Separator } from "@/components/ui/separator"
 import { Button } from "@/components/ui/button"
 import { LogOut, User, Play, Square } from "lucide-react"
 import { toast } from "sonner"
+import { buildTutorialSteps } from "@/lib/tutorial-steps"
 
 interface User {
   id: number
@@ -29,9 +31,13 @@ export default function Page() {
   const [currentUser, setCurrentUser] = useState<User | null>(null)
   const [loading, setLoading] = useState(true)
   const [botStatus, setBotStatus] = useState<'stopped' | 'starting' | 'running' | 'stopping'>('stopped')
+  const [tutorialOpen, setTutorialOpen] = useState(false)
+  const [tutorialStepIndex, setTutorialStepIndex] = useState(0)
 
   // 使用useRef防止重复请求
   const hasFetchedUser = useRef(false)
+
+  const tutorialSteps = useMemo(() => buildTutorialSteps(currentUser?.role === 'admin'), [currentUser?.role])
 
   useEffect(() => {
     // 检查锁，防止重复请求
@@ -97,6 +103,8 @@ export default function Page() {
       setCurrentUser(null)
       setCurrentView("accounts")
       setBotStatus('stopped')
+      setTutorialOpen(false)
+      setTutorialStepIndex(0)
       toast.success("已登出")
     } catch (error) {
       toast.error("登出失败")
@@ -165,6 +173,20 @@ export default function Page() {
     }
   }
 
+  const startTutorial = () => {
+    if (!currentUser) {
+      toast.error("请先登录")
+      return
+    }
+    setCurrentView("dashboard")
+    setTutorialStepIndex(0)
+    setTutorialOpen(true)
+  }
+
+  const closeTutorial = () => {
+    setTutorialOpen(false)
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -183,6 +205,7 @@ export default function Page() {
         currentView={currentView}
         setCurrentView={setCurrentView}
         currentUser={currentUser}
+        onStartTutorial={startTutorial}
       />
       <SidebarInset>
         <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
@@ -256,11 +279,11 @@ export default function Page() {
 
           */}
           <div style={{ display: currentView === "dashboard" ? 'block' : 'none', height: '100%' }}>
-            <DashboardView currentUser={currentUser} />
+            <DashboardView currentUser={currentUser} isActive={currentView === "dashboard"} />
           </div>
 
           <div style={{ display: currentView === "accounts" ? 'block' : 'none', height: '100%' }}>
-            <AccountsView />
+            <AccountsView isActive={currentView === "accounts"} />
           </div>
 
           {(currentUser.role === 'admin' || (currentUser.shops && currentUser.shops.length > 0)) && (
@@ -271,7 +294,7 @@ export default function Page() {
 
           <div style={{ display: currentView === "scraper" ? 'block' : 'none', height: '100%' }}>
             {/* ScraperView 内部建议实现轮询机制来获取最新抓取结果 */}
-            <ScraperView currentUser={currentUser} />
+            <ScraperView currentUser={currentUser} isActive={currentView === "scraper"} />
           </div>
 
           <div style={{ display: currentView === "image-search" ? 'block' : 'none', height: '100%' }}>
@@ -284,12 +307,21 @@ export default function Page() {
                 <UsersView />
               </div>
               <div style={{ display: currentView === "logs" ? 'block' : 'none', height: '100%' }}>
-                <LogsView />
+                <LogsView isActive={currentView === "logs"} />
               </div>
             </>
           )}
         </main>
       </SidebarInset>
+      <TutorialTour
+        open={tutorialOpen}
+        steps={tutorialSteps}
+        stepIndex={tutorialStepIndex}
+        currentView={currentView}
+        onClose={closeTutorial}
+        onStepIndexChange={setTutorialStepIndex}
+        onCurrentViewChange={setCurrentView}
+      />
     </SidebarProvider>
   )
 }

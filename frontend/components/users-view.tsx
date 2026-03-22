@@ -186,7 +186,7 @@ export function UsersView() {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8" data-tutorial="users-root">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-4xl font-extrabold tracking-tight">用户权限管理</h2>

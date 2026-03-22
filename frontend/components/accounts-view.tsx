@@ -20,7 +20,7 @@ import {
 } from "@/lib/reply-delay"
 import {
   BUILTIN_WEBSITE_TEMPLATES,
-  buildWebsiteInternalName,
+  buildUniqueWebsiteInternalName,
   createEmptyWebsiteConfig,
   createWebsiteConfigFromTemplateKey,
   CUSTOM_WEBSITE_TEMPLATE_KEY,
@@ -168,7 +168,7 @@ function CooldownTimer({ remaining }: { remaining: number }) {
   )
 }
 
-export function AccountsView() {
+export function AccountsView({ isActive = true }: { isActive?: boolean }) {
   const [accounts, setAccounts] = useState<any[]>([])
   const [accountPage, setAccountPage] = useState(1)
   const accountsPerPage = 5
@@ -180,8 +180,9 @@ export function AccountsView() {
   })
   const [settings, setSettings] = useState({
     discord_similarity_threshold: 0.6,
-    global_reply_min_delay: 3.0,
-    global_reply_max_delay: 8.0,
+    global_reply_min_delay: 1.0,
+    global_reply_max_delay: 3.0,
+    keyword_match_limit: 0,
     bark_enabled: false,
     bark_server_url: 'https://api.day.app',
     bark_device_key: '',
@@ -205,7 +206,7 @@ export function AccountsView() {
   const [showAddWebsite, setShowAddWebsite] = useState(false)
   const [selectedWebsiteTemplateKey, setSelectedWebsiteTemplateKey] = useState(DEFAULT_WEBSITE_TEMPLATE_KEY)
   const [editingWebsite, setEditingWebsite] = useState<any>(null)
-  const [newWebsite, setNewWebsite] = useState(createEmptyWebsiteConfig())
+  const [newWebsite, setNewWebsite] = useState(createWebsiteConfigFromTemplateKey(DEFAULT_WEBSITE_TEMPLATE_KEY))
   const [websiteChannels, setWebsiteChannels] = useState<{[key: number]: string[]}>({})
   const [channelInputs, setChannelInputs] = useState<{[key: number]: string}>({})
   const [channelToRemove, setChannelToRemove] = useState<{webId: number, chanId: string} | null>(null)
@@ -231,6 +232,8 @@ export function AccountsView() {
   const [websiteFilters, setWebsiteFilters] = useState<{[key: number]: any[]}>({})
   const [showAddWebsiteFilter, setShowAddWebsiteFilter] = useState<number | null>(null)
   const [websiteSimilarityInputs, setWebsiteSimilarityInputs] = useState<{[key: number]: string}>({})
+  const [websiteReplyDelayInputs, setWebsiteReplyDelayInputs] = useState<{[key: number]: { min: string, max: string }}>({})
+  const [websiteKeywordMatchInputs, setWebsiteKeywordMatchInputs] = useState<{[key: number]: string}>({})
   const [websiteNewFilter, setWebsiteNewFilter] = useState({
     filter_type: 'contains',
     filter_value: ''
@@ -261,7 +264,16 @@ export function AccountsView() {
   const [editingFilterImagesUploading, setEditingFilterImagesUploading] = useState(false)
   const newFilterImageInputRef = useRef<HTMLInputElement | null>(null)
   const editingFilterImageInputRef = useRef<HTMLInputElement | null>(null)
+  const websiteSimilaritySaveTimersRef = useRef<{[key: number]: ReturnType<typeof setTimeout> | undefined}>({})
+  const websiteReplyDelaySaveTimersRef = useRef<{[key: number]: ReturnType<typeof setTimeout> | undefined}>({})
+  const websiteKeywordMatchSaveTimersRef = useRef<{[key: number]: ReturnType<typeof setTimeout> | undefined}>({})
   const formatThresholdForInput = (value: any) => {
+    if (value === null || value === undefined || value === '') return ''
+    const num = Number(value)
+    return Number.isFinite(num) ? String(num) : ''
+  }
+
+  const formatReplyDelayForInput = (value: any) => {
     if (value === null || value === undefined || value === '') return ''
     const num = Number(value)
     return Number.isFinite(num) ? String(num) : ''
@@ -272,16 +284,48 @@ export function AccountsView() {
     image_similarity_threshold: formatThresholdForInput(website?.image_similarity_threshold)
   })
 
+  const applyWebsiteSimilarityState = (websiteId: number, threshold: string) => {
+    setWebsites(prev => prev.map(website => (
+      website.id === websiteId
+        ? { ...website, image_similarity_threshold: threshold === '' ? null : Number(threshold) }
+        : website
+    )))
+    setWebsiteSimilarityInputs(prev => ({ ...prev, [websiteId]: threshold }))
+  }
+
+  const applyWebsiteReplyDelayState = (websiteId: number, minDelay: string, maxDelay: string) => {
+    setWebsites(prev => prev.map(website => (
+      website.id === websiteId
+        ? {
+            ...website,
+            reply_min_delay: minDelay === '' ? null : Number(minDelay),
+            reply_max_delay: maxDelay === '' ? null : Number(maxDelay),
+          }
+        : website
+    )))
+    setWebsiteReplyDelayInputs(prev => ({ ...prev, [websiteId]: { min: minDelay, max: maxDelay } }))
+  }
+
+  const applyWebsiteKeywordMatchState = (websiteId: number, value: string) => {
+    setWebsites(prev => prev.map(website => (
+      website.id === websiteId
+        ? { ...website, keyword_match_limit: value === '' ? null : Number(value) }
+        : website
+    )))
+    setWebsiteKeywordMatchInputs(prev => ({ ...prev, [websiteId]: value }))
+  }
+
   const mergeIncomingSettings = (prev: any, data: any) => {
     const delayRange = normalizeReplyDelayRange(
-      Number(data?.global_reply_min_delay ?? prev.global_reply_min_delay ?? 3.0),
-      Number(data?.global_reply_max_delay ?? prev.global_reply_max_delay ?? 8.0),
+      Number(data?.global_reply_min_delay ?? prev.global_reply_min_delay ?? 1.0),
+      Number(data?.global_reply_max_delay ?? prev.global_reply_max_delay ?? 3.0),
     )
     const next = {
       ...prev,
       discord_similarity_threshold: data?.discord_similarity_threshold ?? prev.discord_similarity_threshold ?? 0.6,
       global_reply_min_delay: delayRange.minDelay,
       global_reply_max_delay: delayRange.maxDelay,
+      keyword_match_limit: Number(data?.keyword_match_limit ?? prev.keyword_match_limit ?? 0),
     }
 
     if (hasOwn(data, 'bark_enabled')) {
@@ -347,19 +391,31 @@ export function AccountsView() {
   const fetchWebsites = async (forceRefresh = false) => {
     try {
       const cacheKey = '/api/websites'
+      let data: any
       if (forceRefresh) {
         // 强制刷新：清除缓存
         sessionStorage.removeItem(`cache_${cacheKey}`)
         invalidateCache('/api/websites')
+        const response = await fetch('/api/websites', {
+          credentials: 'include',
+          cache: 'no-store'
+        })
+        data = await response.json().catch(() => ({}))
+        if (!response.ok) {
+          throw new Error(getApiErrorMessage(data, '获取网站配置失败'))
+        }
+      } else {
+        data = await cachedFetch('/api/websites', { credentials: 'include' })
       }
-      const data = await cachedFetch('/api/websites', { credentials: 'include' })
       const websites = data.websites || []
 
       // 后端已包含channels和accounts信息
-        const channels: {[key: number]: string[]} = {}
+      const channels: {[key: number]: string[]} = {}
       const accounts: {[key: number]: any[]} = {}
       const filters: {[key: number]: any[]} = {}
       const similarityInputs: {[key: number]: string} = {}
+      const replyDelayInputs: {[key: number]: { min: string, max: string }} = {}
+      const keywordMatchInputs: {[key: number]: string} = {}
 
       websites.forEach((website: any) => {
         channels[website.id] = website.channels || []
@@ -379,6 +435,11 @@ export function AccountsView() {
           [website.id]: website.keyword_batch_dispatch_mode ?? 'immediate'
         }))
         similarityInputs[website.id] = formatThresholdForInput(website.image_similarity_threshold)
+        replyDelayInputs[website.id] = {
+          min: formatReplyDelayForInput(website.reply_min_delay),
+          max: formatReplyDelayForInput(website.reply_max_delay),
+        }
+        keywordMatchInputs[website.id] = formatThresholdForInput(website.keyword_match_limit)
         try {
           if (Array.isArray(website.message_filters)) {
             filters[website.id] = website.message_filters
@@ -393,10 +454,12 @@ export function AccountsView() {
       })
 
       setWebsites(websites)
-        setWebsiteChannels(channels)
+      setWebsiteChannels(channels)
       setWebsiteAccounts(accounts)
       setWebsiteFilters(filters)
       setWebsiteSimilarityInputs(similarityInputs)
+      setWebsiteReplyDelayInputs(replyDelayInputs)
+      setWebsiteKeywordMatchInputs(keywordMatchInputs)
     } catch (e) {
       console.error('获取网站配置失败:', e)
       toast.error(getApiErrorMessage(e, '获取网站配置失败'))
@@ -446,13 +509,13 @@ export function AccountsView() {
         })
         if (!res.ok) {
           const data = await res.json().catch(() => ({}))
-          toast.error(data.error || '上传失败')
+          toast.error(getApiErrorMessage(data, '上传失败'))
           return false
         }
       }
       return true
     } catch (e) {
-      toast.error('上传失败')
+      toast.error(getApiErrorMessage(e, '上传失败'))
       return false
     } finally {
       setEditingFilterImagesUploading(false)
@@ -470,10 +533,10 @@ export function AccountsView() {
         toast.success('已移除')
       } else {
         const data = await res.json().catch(() => ({}))
-        toast.error(data.error || '删除失败')
+        toast.error(getApiErrorMessage(data, '删除失败'))
       }
     } catch (e) {
-      toast.error('删除失败')
+      toast.error(getApiErrorMessage(e, '删除失败'))
     }
   }
 
@@ -523,13 +586,13 @@ export function AccountsView() {
         })
         if (!res.ok) {
           const data = await res.json().catch(() => ({}))
-          toast.error(data.error || '上传失败')
+          toast.error(getApiErrorMessage(data, '上传失败'))
           return false
         }
       }
       return true
     } catch (e) {
-      toast.error('上传失败')
+      toast.error(getApiErrorMessage(e, '上传失败'))
       return false
     } finally {
       setEditingWebsiteFilterImagesUploading(false)
@@ -608,10 +671,10 @@ export function AccountsView() {
         toast.success('已移除')
       } else {
         const data = await res.json().catch(() => ({}))
-        toast.error(data.error || '删除失败')
+        toast.error(getApiErrorMessage(data, '删除失败'))
       }
     } catch (e) {
-      toast.error('删除失败')
+      toast.error(getApiErrorMessage(e, '删除失败'))
     }
   }
 
@@ -685,7 +748,7 @@ export function AccountsView() {
     if (!nextSettings) return
 
     setWebsites(prev => prev.map(website => (
-      website.id === websiteId
+            website.id === websiteId
         ? {
             ...website,
             rotation_interval: nextSettings.rotation_interval,
@@ -694,6 +757,9 @@ export function AccountsView() {
             keyword_reply_interval: nextSettings.keyword_reply_interval,
             keyword_reply_batch_size: nextSettings.keyword_reply_batch_size,
             keyword_batch_dispatch_mode: nextSettings.keyword_batch_dispatch_mode,
+            keyword_match_limit: nextSettings.keyword_match_limit,
+            reply_min_delay: nextSettings.reply_min_delay,
+            reply_max_delay: nextSettings.reply_max_delay,
           }
         : website
     )))
@@ -711,6 +777,21 @@ export function AccountsView() {
       ...prev,
       [websiteId]: nextSettings.keyword_batch_dispatch_mode ?? 'immediate'
     }))
+    if (nextSettings.keyword_match_limit !== undefined) {
+      setWebsiteKeywordMatchInputs(prev => ({
+        ...prev,
+        [websiteId]: formatThresholdForInput(nextSettings.keyword_match_limit),
+      }))
+    }
+    if (nextSettings.reply_min_delay !== undefined || nextSettings.reply_max_delay !== undefined) {
+      setWebsiteReplyDelayInputs(prev => ({
+        ...prev,
+        [websiteId]: {
+          min: formatReplyDelayForInput(nextSettings.reply_min_delay),
+          max: formatReplyDelayForInput(nextSettings.reply_max_delay),
+        }
+      }))
+    }
   }
 
   const updateWebsiteRotationSettings = async (
@@ -748,6 +829,7 @@ export function AccountsView() {
   }
 
   useEffect(() => {
+    if (!isActive) return
     // 先恢复本地 Bark 配置缓存，避免后端响应缺字段时把输入框清空
     const cached = readBarkSettingsCache()
     if (Object.keys(cached).length > 0) {
@@ -801,7 +883,7 @@ export function AccountsView() {
       clearInterval(cooldownInterval);
       window.removeEventListener('bot-status-changed', handleStatusChange)
     }
-  }, [])
+  }, [isActive])
 
   useEffect(() => {
     if (!editingFilter) return
@@ -841,6 +923,20 @@ export function AccountsView() {
       if (barkAutoSaveTimerRef.current) {
         clearTimeout(barkAutoSaveTimerRef.current)
       }
+    }
+  }, [])
+
+  useEffect(() => {
+    return () => {
+      Object.values(websiteSimilaritySaveTimersRef.current).forEach(timer => {
+        if (timer) clearTimeout(timer)
+      })
+      Object.values(websiteReplyDelaySaveTimersRef.current).forEach(timer => {
+        if (timer) clearTimeout(timer)
+      })
+      Object.values(websiteKeywordMatchSaveTimersRef.current).forEach(timer => {
+        if (timer) clearTimeout(timer)
+      })
     }
   }, [])
 
@@ -912,6 +1008,10 @@ export function AccountsView() {
     }
     if (settings.global_reply_min_delay >= settings.global_reply_max_delay) {
       toast.error("最小延迟必须小于最大延迟")
+      return
+    }
+    if (settings.keyword_match_limit < 0) {
+      toast.error("关键词命中上限不能小于 0")
       return
     }
     if (settings.global_reply_min_delay < REPLY_DELAY_MIN || settings.global_reply_max_delay > REPLY_DELAY_MAX) {
@@ -1082,7 +1182,7 @@ export function AccountsView() {
 
   const resetNewWebsiteForm = () => {
     setSelectedWebsiteTemplateKey(DEFAULT_WEBSITE_TEMPLATE_KEY)
-    setNewWebsite(createEmptyWebsiteConfig())
+    setNewWebsite(createWebsiteConfigFromTemplateKey(DEFAULT_WEBSITE_TEMPLATE_KEY))
   }
 
   const handleAddWebsiteDialogOpenChange = (open: boolean) => {
@@ -1095,12 +1195,28 @@ export function AccountsView() {
   // 网站配置处理函数
   const handleAddWebsite = async () => {
     try {
-      const websitePayload = selectedWebsiteTemplateKey === CUSTOM_WEBSITE_TEMPLATE_KEY
-        ? {
-            ...newWebsite,
-            name: buildWebsiteInternalName(newWebsite.display_name),
-          }
-        : createWebsiteConfigFromTemplateKey(selectedWebsiteTemplateKey)
+      const template = getWebsiteTemplateByKey(selectedWebsiteTemplateKey)
+      const displayName = (newWebsite.display_name || template?.display_name || '').trim()
+      if (!displayName) {
+        toast.error('请填写网站显示名称')
+        return
+      }
+
+      const existingNames = websites.map(website => String(website.name || '').trim()).filter(Boolean)
+      const baseConfig = selectedWebsiteTemplateKey === CUSTOM_WEBSITE_TEMPLATE_KEY
+        ? { ...createEmptyWebsiteConfig(), ...newWebsite }
+        : createWebsiteConfigFromTemplateKey(selectedWebsiteTemplateKey, displayName)
+      const internalName = buildUniqueWebsiteInternalName(
+        selectedWebsiteTemplateKey === CUSTOM_WEBSITE_TEMPLATE_KEY
+          ? displayName
+          : `${selectedWebsiteTemplateKey}-${displayName}`,
+        existingNames
+      )
+      const websitePayload = {
+        ...baseConfig,
+        name: internalName || baseConfig.name,
+        display_name: displayName,
+      }
 
       const res = await fetch('/api/websites', {
         method: 'POST',
@@ -1108,16 +1224,16 @@ export function AccountsView() {
         credentials: 'include',
         body: JSON.stringify(websitePayload)
       })
+      const data = await res.json().catch(() => ({}))
       if (res.ok) {
         toast.success('网站配置已添加')
         handleAddWebsiteDialogOpenChange(false)
-        fetchWebsites(true)
+        await fetchWebsites(true)
       } else {
-        const errorData = await res.json().catch(() => ({}))
-        toast.error(getApiErrorMessage(errorData, '添加失败'))
+        toast.error(getApiErrorMessage(data, '添加失败'))
       }
     } catch (e) {
-      toast.error('网络错误')
+      toast.error(getApiErrorMessage(e, '网络错误'))
     }
   }
 
@@ -1130,15 +1246,16 @@ export function AccountsView() {
         credentials: 'include',
         body: JSON.stringify(editingWebsite)
       })
+      const data = await res.json().catch(() => ({}))
       if (res.ok) {
         toast.success('网站配置已更新')
         setEditingWebsite(null)
-        fetchWebsites(true)
+        await fetchWebsites(true)
       } else {
-        toast.error('更新失败')
+        toast.error(getApiErrorMessage(data, '更新失败'))
       }
     } catch (e) {
-      toast.error('网络错误')
+      toast.error(getApiErrorMessage(e, '网络错误'))
     }
   }
 
@@ -1149,76 +1266,159 @@ export function AccountsView() {
         method: 'DELETE',
         credentials: 'include'
       })
+      const data = await res.json().catch(() => ({}))
       if (res.ok) {
         toast.success('网站配置已删除')
-        fetchWebsites(true)
+        await fetchWebsites(true)
       } else {
-        toast.error('删除失败')
+        toast.error(getApiErrorMessage(data, '删除失败'))
       }
     } catch (e) {
-      toast.error('网络错误')
+      toast.error(getApiErrorMessage(e, '网络错误'))
     }
   }
 
-  const handleUpdateWebsiteExtras = async (websiteId: number) => {
-    const website = websites.find(w => w.id === websiteId)
-    if (!website) return
-
-    if (currentUser?.role !== 'admin') {
-      toast.error('需要管理员权限')
-      return
-    }
-
-    try {
-      const res = await fetch(`/api/websites/${websiteId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          name: website.name,
-          display_name: website.display_name,
-          url_template: website.url_template,
-          id_pattern: website.id_pattern,
-          badge_color: website.badge_color,
-          reply_template: website.reply_template || '{url}',
-          image_similarity_threshold: websiteSimilarityInputs[websiteId] ?? '',
-          blocked_role_ids: website.blocked_role_ids ?? ''
-        })
-      })
-      if (res.ok) {
-        toast.success('过滤设置已更新')
-        fetchWebsites(true)
-      } else {
-        const data = await res.json().catch(() => ({}))
-        toast.error(data.error || '更新失败')
-      }
-    } catch (e) {
-      toast.error('网络错误')
-    }
-  }
-
-  const handleUpdateWebsiteSimilarity = async (websiteId: number) => {
-    const rawValue = websiteSimilarityInputs[websiteId] ?? ''
-    const payload = {
-      image_similarity_threshold: rawValue === '' ? '' : rawValue
-    }
+  const saveWebsiteSimilarity = async (websiteId: number, rawValue: string, options?: { silent?: boolean }) => {
     try {
       const res = await fetch(`/api/websites/${websiteId}/similarity`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify(payload)
+        body: JSON.stringify({
+          image_similarity_threshold: rawValue === '' ? '' : rawValue
+        })
       })
+      const data = await res.json().catch(() => ({}))
       if (res.ok) {
-        toast.success('图片相似度已更新')
-        fetchWebsites(true)
+        applyWebsiteSimilarityState(websiteId, rawValue)
+        if (!options?.silent) {
+          toast.success('图片相似度已更新')
+        }
       } else {
-        const data = await res.json().catch(() => ({}))
-        toast.error(data.error || '更新失败')
+        toast.error(getApiErrorMessage(data, '更新失败'))
       }
     } catch (e) {
-      toast.error('网络错误')
+      toast.error(getApiErrorMessage(e, '网络错误'))
     }
+  }
+
+  const scheduleWebsiteSimilaritySave = (websiteId: number, rawValue: string) => {
+    if (websiteSimilaritySaveTimersRef.current[websiteId]) {
+      clearTimeout(websiteSimilaritySaveTimersRef.current[websiteId])
+    }
+    websiteSimilaritySaveTimersRef.current[websiteId] = setTimeout(() => {
+      void saveWebsiteSimilarity(websiteId, rawValue, { silent: true })
+    }, 450)
+  }
+
+  const saveWebsiteReplyDelay = async (
+    websiteId: number,
+    minValue: string,
+    maxValue: string,
+    options?: { silent?: boolean }
+  ) => {
+    if (minValue === '' && maxValue === '') {
+      try {
+        const res = await fetch(`/api/websites/${websiteId}/rotation`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({
+            reply_min_delay: '',
+            reply_max_delay: '',
+          })
+        })
+        const data = await res.json().catch(() => ({}))
+        if (res.ok) {
+          applyWebsiteReplyDelayState(websiteId, '', '')
+          if (!options?.silent) {
+            toast.success('站点回复延迟已清空')
+          }
+        } else {
+          toast.error(getApiErrorMessage(data, '更新失败'))
+        }
+      } catch (e) {
+        toast.error(getApiErrorMessage(e, '网络错误'))
+      }
+      return
+    }
+
+    if (minValue === '' || maxValue === '') {
+      return
+    }
+
+    const min = Number(minValue)
+    const max = Number(maxValue)
+    if (!Number.isFinite(min) || !Number.isFinite(max)) {
+      return
+    }
+    const [normalizedMin, normalizedMax] = normalizeReplyDelayRange(min, max)
+
+    try {
+      const res = await fetch(`/api/websites/${websiteId}/rotation`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          reply_min_delay: normalizedMin,
+          reply_max_delay: normalizedMax,
+        })
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok) {
+        applyWebsiteReplyDelayState(websiteId, String(normalizedMin), String(normalizedMax))
+        if (!options?.silent) {
+          toast.success('站点回复延迟已更新')
+        }
+      } else {
+        toast.error(getApiErrorMessage(data, '更新失败'))
+      }
+    } catch (e) {
+      toast.error(getApiErrorMessage(e, '网络错误'))
+    }
+  }
+
+  const scheduleWebsiteReplyDelaySave = (websiteId: number, minValue: string, maxValue: string) => {
+    if (websiteReplyDelaySaveTimersRef.current[websiteId]) {
+      clearTimeout(websiteReplyDelaySaveTimersRef.current[websiteId])
+    }
+    websiteReplyDelaySaveTimersRef.current[websiteId] = setTimeout(() => {
+      void saveWebsiteReplyDelay(websiteId, minValue, maxValue, { silent: true })
+    }, 450)
+  }
+
+  const saveWebsiteKeywordMatchLimit = async (websiteId: number, rawValue: string, options?: { silent?: boolean }) => {
+    const payload = {
+      keyword_match_limit: rawValue === '' ? '' : rawValue,
+    }
+    try {
+      const res = await fetch(`/api/websites/${websiteId}/rotation`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok) {
+        applyWebsiteKeywordMatchState(websiteId, rawValue)
+        if (!options?.silent) {
+          toast.success('关键词命中上限已更新')
+        }
+      } else {
+        toast.error(getApiErrorMessage(data, '更新失败'))
+      }
+    } catch (e) {
+      toast.error(getApiErrorMessage(e, '网络错误'))
+    }
+  }
+
+  const scheduleWebsiteKeywordMatchLimitSave = (websiteId: number, rawValue: string) => {
+    if (websiteKeywordMatchSaveTimersRef.current[websiteId]) {
+      clearTimeout(websiteKeywordMatchSaveTimersRef.current[websiteId])
+    }
+    websiteKeywordMatchSaveTimersRef.current[websiteId] = setTimeout(() => {
+      void saveWebsiteKeywordMatchLimit(websiteId, rawValue, { silent: true })
+    }, 450)
   }
 
   const handleAddChannel = async (websiteId: number, channelId: string) => {
@@ -1243,10 +1443,10 @@ export function AccountsView() {
         }))
         setChannelInputs(prev => ({ ...prev, [websiteId]: '' }))
       } else {
-        toast.error(`添加失败: ${data.error || '未知错误'}`)
+        toast.error(getApiErrorMessage(data, '添加失败'))
       }
     } catch (e) {
-      toast.error('网络连接错误，请稍后再试')
+      toast.error(getApiErrorMessage(e, '网络连接错误，请稍后再试'))
     }
   }
 
@@ -1269,6 +1469,7 @@ export function AccountsView() {
         method: 'DELETE',
         credentials: 'include'
       })
+      const data = await res.json().catch(() => ({}))
       if (res.ok) {
         toast.success('频道绑定已移除')
         // 立即更新前端状态，而不是重新获取所有数据
@@ -1277,11 +1478,10 @@ export function AccountsView() {
           [webId]: prev[webId]?.filter(id => id !== chanId) || []
         }))
       } else {
-        const data = await res.json().catch(() => ({}))
-        toast.error(`移除失败: ${data.error || '未知错误'}`)
+        toast.error(getApiErrorMessage(data, '移除失败'))
       }
     } catch (e) {
-      toast.error('网络错误')
+      toast.error(getApiErrorMessage(e, '网络错误'))
     } finally {
       setChannelToRemove(null)
     }
@@ -1296,6 +1496,7 @@ export function AccountsView() {
         credentials: 'include',
         body: JSON.stringify(newAccountBinding)
       })
+      const data = await res.json().catch(() => ({}))
       if (res.ok) {
         toast.success('账号绑定成功')
         setShowBindAccount(null)
@@ -1319,11 +1520,10 @@ export function AccountsView() {
 
         setNewAccountBinding({ account_id: '', role: 'both' })
       } else {
-        const error = await res.json()
-        toast.error(error.error || '绑定失败')
+        toast.error(getApiErrorMessage(data, '绑定失败'))
       }
     } catch (e) {
-      toast.error('网络错误')
+      toast.error(getApiErrorMessage(e, '网络错误'))
     }
   }
 
@@ -1333,6 +1533,7 @@ export function AccountsView() {
         method: 'DELETE',
         credentials: 'include'
       })
+      const data = await res.json().catch(() => ({}))
       if (res.ok) {
         toast.success('账号解绑成功')
         // 立即更新前端状态，而不是重新获取所有数据
@@ -1342,10 +1543,10 @@ export function AccountsView() {
         }))
         await refreshWebsiteRotationSettings(websiteId)
       } else {
-        toast.error('解绑失败')
+        toast.error(getApiErrorMessage(data, '解绑失败'))
       }
     } catch (e) {
-      toast.error('网络错误')
+      toast.error(getApiErrorMessage(e, '网络错误'))
     }
   }
 
@@ -1494,6 +1695,7 @@ export function AccountsView() {
         credentials: 'include',
         body: JSON.stringify({ filters: newFilters })
       })
+      const updateData = await updateRes.json().catch(() => ({}))
 
       if (updateRes.ok) {
         const currentIds = new Set(currentFilters.map((item: any) => String(item.id)))
@@ -1534,10 +1736,10 @@ export function AccountsView() {
           websiteNewFilterImageInputRef.current.value = ''
         }
       } else {
-        toast.error('添加过滤规则失败')
+        toast.error(getApiErrorMessage(updateData, '添加过滤规则失败'))
       }
     } catch (e) {
-      toast.error('网络错误')
+      toast.error(getApiErrorMessage(e, '网络错误'))
     }
   }
 
@@ -1593,6 +1795,7 @@ export function AccountsView() {
         credentials: 'include',
         body: JSON.stringify({ filters: updatedFilters })
       })
+      const updateData = await updateRes.json().catch(() => ({}))
 
       if (updateRes.ok) {
         let finalFilters = updatedFilters
@@ -1634,10 +1837,10 @@ export function AccountsView() {
         }
         setEditingWebsiteFilter(null)
       } else {
-        toast.error('更新失败')
+        toast.error(getApiErrorMessage(updateData, '更新失败'))
       }
     } catch (e) {
-      toast.error('网络错误')
+      toast.error(getApiErrorMessage(e, '网络错误'))
     }
   }
 
@@ -1652,6 +1855,7 @@ export function AccountsView() {
         credentials: 'include',
         body: JSON.stringify({ filters: newFilters })
       })
+      const updateData = await updateRes.json().catch(() => ({}))
 
       if (updateRes.ok) {
         toast.success('过滤规则已删除')
@@ -1660,10 +1864,10 @@ export function AccountsView() {
           [websiteId]: newFilters
         }))
       } else {
-        toast.error('删除过滤规则失败')
+        toast.error(getApiErrorMessage(updateData, '删除过滤规则失败'))
       }
     } catch (e) {
-      toast.error('网络错误')
+      toast.error(getApiErrorMessage(e, '网络错误'))
     }
   }
 
@@ -1802,12 +2006,12 @@ export function AccountsView() {
         }
         setShowAddFilter(false)
         setNewFilter({ filter_type: 'contains', filter_value: '' })
-        fetchMessageFilters()
+        await fetchMessageFilters()
       } else {
-        toast.error(data.error || '添加失败')
+        toast.error(getApiErrorMessage(data, '添加失败'))
       }
     } catch (e) {
-      toast.error('网络错误')
+      toast.error(getApiErrorMessage(e, '网络错误'))
     }
   }
 
@@ -1861,15 +2065,16 @@ export function AccountsView() {
         credentials: 'include',
         body: JSON.stringify(payload)
       })
+      const data = await res.json().catch(() => ({}))
       if (res.ok) {
         toast.success('过滤规则更新成功')
         setEditingFilter(null)
-        fetchMessageFilters()
+        await fetchMessageFilters()
       } else {
-        toast.error('更新失败')
+        toast.error(getApiErrorMessage(data, '更新失败'))
       }
     } catch (e) {
-      toast.error('网络错误')
+      toast.error(getApiErrorMessage(e, '网络错误'))
     }
   }
 
@@ -1880,14 +2085,15 @@ export function AccountsView() {
         method: 'DELETE',
         credentials: 'include'
       })
+      const data = await res.json().catch(() => ({}))
       if (res.ok) {
         toast.success('过滤规则删除成功')
-        fetchMessageFilters()
+        await fetchMessageFilters()
       } else {
-        toast.error('删除失败')
+        toast.error(getApiErrorMessage(data, '删除失败'))
       }
     } catch (e) {
-      toast.error('网络错误')
+      toast.error(getApiErrorMessage(e, '网络错误'))
     }
   }
 
@@ -1926,7 +2132,7 @@ export function AccountsView() {
 
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8" data-tutorial="accounts-root">
       <div>
         <h2 className="text-4xl font-extrabold tracking-tight">账号管理</h2>
         <p className="text-sm text-muted-foreground mt-1">管理 Discord 账号</p>
@@ -2060,10 +2266,9 @@ export function AccountsView() {
             <CardDescription>配置图片匹配和回复延迟参数</CardDescription>
           </CardHeader>
           <CardContent className="space-y-6">
-            {/* 相似度和延迟设置 - 紧凑布局 */}
-            <div className="flex flex-col sm:flex-row gap-6">
-              {/* 相似度设置 */}
-              <div className="flex-1 space-y-2">
+            {/* 相似度和延迟设置 */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4" data-tutorial="accounts-global-settings">
+              <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <Label htmlFor="similarity-threshold" className="text-sm font-medium">相似度阈值</Label>
                   <span className="text-sm font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded">
@@ -2087,9 +2292,13 @@ export function AccountsView() {
                 </div>
               </div>
 
-              {/* 回复延迟设置 */}
-              <div className="flex-1 space-y-2">
-                <Label className="text-sm font-medium">回复延迟</Label>
+              <div className="space-y-2" data-tutorial="accounts-delay-settings">
+                <div className="flex items-center justify-between">
+                  <Label className="text-sm font-medium" htmlFor="min-delay">回复延迟</Label>
+                  <span className="text-sm font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                    {settings.global_reply_min_delay}-{settings.global_reply_max_delay}s
+                  </span>
+                </div>
                 <div className="space-y-1">
                   <div className="flex items-center gap-2">
                     <div className="flex items-center gap-1">
@@ -2113,7 +2322,7 @@ export function AccountsView() {
                             })
                           }
                         }}
-                        className="w-16 h-9 text-center"
+                        className="w-24 h-9 text-center"
                       />
                       <span className="text-sm text-muted-foreground">-</span>
                       <Input
@@ -2136,13 +2345,42 @@ export function AccountsView() {
                             })
                           }
                         }}
-                        className="w-16 h-9 text-center"
+                        className="w-24 h-9 text-center"
                       />
                     </div>
                     <span className="text-xs text-muted-foreground">秒</span>
                   </div>
                   <p className="text-xs text-muted-foreground">
                     每次回复随机延迟 {settings.global_reply_min_delay}-{settings.global_reply_max_delay} 秒
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-2" data-tutorial="accounts-keyword-limit">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="keyword-match-limit" className="text-sm font-medium">关键词命中上限</Label>
+                  <span className="text-sm font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                    {settings.keyword_match_limit <= 0 ? '不限' : settings.keyword_match_limit}
+                  </span>
+                </div>
+                <div className="space-y-1">
+                  <Input
+                    id="keyword-match-limit"
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={settings.keyword_match_limit}
+                    onChange={(e) => {
+                      const value = Number.parseInt(e.target.value, 10)
+                      setSettings(prev => ({
+                        ...prev,
+                        keyword_match_limit: Number.isFinite(value) && value >= 0 ? value : 0,
+                      }))
+                    }}
+                    className="h-9"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    单条消息命中的不同关键词超过这个数量时不回复，`0` 表示不限制。
                   </p>
                 </div>
               </div>
@@ -2294,7 +2532,7 @@ export function AccountsView() {
 
         {/* 消息过滤设置 - 每个用户独立配置 */}
         {currentUser && (
-          <Card className="mt-6">
+          <Card className="mt-6" data-tutorial="accounts-message-filters">
             <CardHeader>
               <div className="flex justify-between items-center">
                 <div>
@@ -2540,7 +2778,7 @@ export function AccountsView() {
 
         {/* 网站配置区域 - 所有登录用户可见 */}
         {currentUser && (
-        <Card className="mt-6">
+        <Card className="mt-6" data-tutorial="accounts-websites-list">
           <CardHeader>
             <div className="flex justify-between items-center">
               <div>
@@ -2552,9 +2790,9 @@ export function AccountsView() {
               </div>
               {/* 只有管理员可以添加新网站 */}
               {currentUser?.role === 'admin' && (
-                <Dialog open={showAddWebsite} onOpenChange={handleAddWebsiteDialogOpenChange}>
+                  <Dialog open={showAddWebsite} onOpenChange={handleAddWebsiteDialogOpenChange}>
                   <DialogTrigger asChild>
-                    <Button size="sm">
+                    <Button size="sm" data-tutorial="accounts-add-website">
                       <Plus className="w-4 h-4 mr-2" />
                       添加网站
                     </Button>
@@ -2564,7 +2802,7 @@ export function AccountsView() {
                       <DialogTitle>添加网站配置</DialogTitle>
                       <DialogDescription>优先选择内置模板；需要特殊站点时再用自定义手填</DialogDescription>
                     </DialogHeader>
-                    <div className="space-y-4">
+                    <div className="space-y-4" data-tutorial="accounts-template-dialog">
                       <div>
                         <Label>网站模板</Label>
                         <Select
@@ -2573,10 +2811,12 @@ export function AccountsView() {
                             setSelectedWebsiteTemplateKey(value)
                             if (value === CUSTOM_WEBSITE_TEMPLATE_KEY) {
                               setNewWebsite(createEmptyWebsiteConfig())
+                            } else {
+                              setNewWebsite(createWebsiteConfigFromTemplateKey(value))
                             }
                           }}
                         >
-                          <SelectTrigger>
+                          <SelectTrigger data-tutorial="accounts-template-select">
                             <SelectValue placeholder="选择内置网站模板" />
                           </SelectTrigger>
                           <SelectContent>
@@ -2589,19 +2829,20 @@ export function AccountsView() {
                           </SelectContent>
                         </Select>
                       </div>
+                      <div>
+                        <Label>显示名称</Label>
+                        <Input
+                          data-tutorial="accounts-template-name"
+                          value={newWebsite.display_name}
+                          onChange={e => setNewWebsite(prev => ({ ...prev, display_name: e.target.value }))}
+                          placeholder={getWebsiteTemplateByKey(selectedWebsiteTemplateKey)?.display_name || '例如: Kakobuy 2'}
+                        />
+                        <p className="text-xs text-muted-foreground mt-1">
+                          这个名字只影响页面展示。系统内部标识会自动生成并去重。
+                        </p>
+                      </div>
                       {selectedWebsiteTemplateKey === CUSTOM_WEBSITE_TEMPLATE_KEY ? (
-                        <>
-                          <div>
-                            <Label>显示名称</Label>
-                            <Input
-                              value={newWebsite.display_name}
-                              onChange={e => setNewWebsite(prev => ({ ...prev, display_name: e.target.value }))}
-                              placeholder="例如: Kakobuy"
-                            />
-                            <p className="text-xs text-muted-foreground mt-1">
-                              系统内部标识会自动生成，无需手动填写。
-                            </p>
-                          </div>
+                        <div className="space-y-4" data-tutorial="accounts-template-custom-fields">
                           <div>
                             <Label>URL模板</Label>
                             <Input
@@ -2646,7 +2887,7 @@ export function AccountsView() {
                               </SelectContent>
                             </Select>
                           </div>
-                        </>
+                        </div>
                       ) : (
                         <div className="rounded-lg border bg-muted/30 p-3 text-sm space-y-2">
                           <div className="font-medium">{getWebsiteTemplateByKey(selectedWebsiteTemplateKey)?.display_name}</div>
@@ -2661,6 +2902,12 @@ export function AccountsView() {
                           </div>
                           <div className="text-xs text-muted-foreground">
                             回复模板: {getWebsiteTemplateByKey(selectedWebsiteTemplateKey)?.reply_template}
+                          </div>
+                          <div className="text-xs text-muted-foreground break-all">
+                            内部标识预览: {buildUniqueWebsiteInternalName(
+                              `${selectedWebsiteTemplateKey}-${newWebsite.display_name || getWebsiteTemplateByKey(selectedWebsiteTemplateKey)?.display_name || ''}`,
+                              websites.map(website => String(website.name || '').trim()).filter(Boolean)
+                            ) || '自动生成'}
                           </div>
                         </div>
                       )}
@@ -2745,6 +2992,125 @@ export function AccountsView() {
                       <div className="rounded-lg border bg-muted/30 px-3 py-2">
                         <div className="text-[11px] text-muted-foreground">今日图片</div>
                         <div className="text-base font-semibold leading-none mt-1">{website.stat_replies_daily_image || 0}</div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4" data-tutorial="accounts-website-overrides">
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="text-sm font-medium truncate">相似度阈值</div>
+                            <span className="text-xs font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded shrink-0">
+                              {websiteSimilarityInputs[website.id] === '' || websiteSimilarityInputs[website.id] === undefined
+                                ? '继承全局'
+                                : Number(websiteSimilarityInputs[website.id]).toFixed(2)}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <Input
+                            type="number"
+                            step="0.01"
+                            placeholder="继承全局"
+                            value={websiteSimilarityInputs[website.id] ?? ''}
+                            onChange={e => {
+                              const value = e.target.value
+                              setWebsiteSimilarityInputs(prev => ({ ...prev, [website.id]: value }))
+                              scheduleWebsiteSimilaritySave(website.id, value)
+                            }}
+                            className="h-9 text-xs"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-2" data-tutorial="accounts-website-delay">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="text-sm font-medium truncate">回复延迟</div>
+                            <span className="text-xs font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded shrink-0">
+                              {(() => {
+                                const current = websiteReplyDelayInputs[website.id]
+                                const minDelay = current?.min ?? ''
+                                const maxDelay = current?.max ?? ''
+                                if (!minDelay && !maxDelay) return '继承全局'
+                                if (!minDelay || !maxDelay) return '未完成'
+                                return `${minDelay}-${maxDelay}s`
+                              })()}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-1">
+                              <Input
+                                type="number"
+                                step={REPLY_DELAY_STEP}
+                                min={REPLY_DELAY_MIN}
+                                max={REPLY_DELAY_MAX - REPLY_DELAY_STEP}
+                                placeholder="继承全局"
+                                value={websiteReplyDelayInputs[website.id]?.min ?? ''}
+                                onChange={e => {
+                                  const min = e.target.value
+                                  const current = websiteReplyDelayInputs[website.id] ?? { min: '', max: '' }
+                                  const next = { ...current, min }
+                                  setWebsiteReplyDelayInputs(prev => ({ ...prev, [website.id]: next }))
+                                  scheduleWebsiteReplyDelaySave(website.id, next.min, next.max)
+                                }}
+                                className="w-24 h-9 text-center"
+                              />
+                              <span className="text-sm text-muted-foreground">-</span>
+                              <Input
+                                type="number"
+                                step={REPLY_DELAY_STEP}
+                                min={REPLY_DELAY_MIN}
+                                max={REPLY_DELAY_MAX}
+                                placeholder="继承全局"
+                                value={websiteReplyDelayInputs[website.id]?.max ?? ''}
+                                onChange={e => {
+                                  const max = e.target.value
+                                  const current = websiteReplyDelayInputs[website.id] ?? { min: '', max: '' }
+                                  const next = { ...current, max }
+                                  setWebsiteReplyDelayInputs(prev => ({ ...prev, [website.id]: next }))
+                                  scheduleWebsiteReplyDelaySave(website.id, next.min, next.max)
+                                }}
+                                className="w-24 h-9 text-center"
+                              />
+                            </div>
+                            <span className="text-xs text-muted-foreground">秒</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2" data-tutorial="accounts-website-keyword-limit">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="text-sm font-medium truncate">关键词命中上限</div>
+                            <span className="text-xs font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded shrink-0">
+                              {(() => {
+                                const value = websiteKeywordMatchInputs[website.id]
+                                if (value === '' || value === undefined) return '继承全局'
+                                const num = Number(value)
+                                if (!Number.isFinite(num)) return '未完成'
+                                return num <= 0 ? '不限' : String(num)
+                              })()}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <Input
+                            type="number"
+                            min="0"
+                            step="1"
+                            placeholder="继承全局"
+                            value={websiteKeywordMatchInputs[website.id] ?? ''}
+                            onChange={e => {
+                              const value = e.target.value
+                              setWebsiteKeywordMatchInputs(prev => ({ ...prev, [website.id]: value }))
+                              scheduleWebsiteKeywordMatchLimitSave(website.id, value)
+                            }}
+                            className="h-9 text-xs"
+                          />
+                        </div>
                       </div>
                     </div>
 
@@ -3327,43 +3693,6 @@ export function AccountsView() {
                             </Button>
                           </div>
                         ))}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        网站特定的过滤规则 (独立于全局规则)
-                      </div>
-                      <div className="rounded-lg border bg-muted/30 px-3 py-2">
-                        <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-                          <div className="space-y-1">
-                            <div className="text-xs font-medium">本网站图片阈值覆盖</div>
-                            <div className="text-[11px] text-muted-foreground">
-                              留空时使用全局图片相似度阈值；填写后只覆盖当前网站的图搜判定。
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <Input
-                              type="number"
-                              step="0.01"
-                              value={websiteSimilarityInputs[website.id] ?? ''}
-                              onChange={e => setWebsiteSimilarityInputs(prev => ({ ...prev, [website.id]: e.target.value }))}
-                              placeholder="空=全局"
-                              className="h-8 w-24 text-xs"
-                            />
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-8 px-3 text-xs"
-                              onClick={() => {
-                                if (currentUser?.role === 'admin') {
-                                  handleUpdateWebsiteExtras(website.id)
-                                } else {
-                                  handleUpdateWebsiteSimilarity(website.id)
-                                }
-                              }}
-                            >
-                              保存
-                            </Button>
-                          </div>
-                        </div>
                       </div>
                     </div>
 

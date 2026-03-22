@@ -347,14 +347,14 @@ export function ImageSearchView() {
 
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-tutorial="image-search-root">
       <div>
         <h2 className="text-3xl font-bold tracking-tight">以图搜图</h2>
         <p className="text-muted-foreground">上传图片，测试向量搜索功能并获取 CNFans 链接</p>
       </div>
 
       <div className="grid gap-6 lg:grid-cols-1">
-        <Card>
+        <Card data-tutorial="image-search-upload">
           <CardHeader>
             <CardTitle>上传图片或输入链接进行搜索</CardTitle>
             <CardDescription>支持 JPG、PNG、WebP 格式，可上传图片文件或输入图片链接进行向量搜索</CardDescription>

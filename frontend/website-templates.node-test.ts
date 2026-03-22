@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 import {
   BUILTIN_WEBSITE_TEMPLATES,
   buildWebsiteInternalName,
+  buildUniqueWebsiteInternalName,
   CUSTOM_WEBSITE_TEMPLATE_KEY,
   DEFAULT_WEBSITE_TEMPLATE_KEY,
   createEmptyWebsiteConfig,
@@ -71,6 +72,10 @@ test('creating config from built-in template returns save-ready payload', () => 
   })
 })
 
+test('creating config from template can override display name', () => {
+  assert.equal(createWebsiteConfigFromTemplateKey('weidian', '微店2').display_name, '微店2')
+})
+
 test('fishgoo template uses double-encoded weidian product links', () => {
   const template = getWebsiteTemplateByKey('fishgoo')
 
@@ -88,4 +93,11 @@ test('buildWebsiteInternalName derives stable internal keys from display names',
   assert.equal(buildWebsiteInternalName('My CN Box'), 'my-cn-box')
   assert.equal(buildWebsiteInternalName('  链接雷达  '), '链接雷达')
   assert.equal(buildWebsiteInternalName(''), '')
+})
+
+test('buildUniqueWebsiteInternalName avoids duplicate internal names', () => {
+  assert.equal(
+    buildUniqueWebsiteInternalName('weidian-微店2', ['weidian-微店2', 'weidian-微店2-2']),
+    'weidian-微店2-3'
+  )
 })

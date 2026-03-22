@@ -32,6 +32,10 @@ try:
     from rotation_settings import resolve_rotation_settings_update
 except ImportError:
     from .rotation_settings import resolve_rotation_settings_update
+try:
+    from settings_validation import normalize_reply_delay_range
+except ImportError:
+    from .settings_validation import normalize_reply_delay_range
 # 全局变量用于多账号机器人管理
 bot_clients = []
 bot_tasks = []
@@ -205,6 +209,85 @@ def _build_keyword_window_key(user_id, website_id, guild_id):
         _coerce_int(website_id, 0),
         _coerce_int(guild_id, 0),
     )
+
+
+def _normalize_keyword_search_text(value: str) -> str:
+    if not value:
+        return ''
+    value = re.sub(r'[\u200b-\u200d\uFEFF]', '', str(value))
+    value = value.lower()
+    value = re.sub(r'[^a-z0-9\u4e00-\u9fff]+', ' ', value)
+    return re.sub(r'\s+', ' ', value).strip()
+
+
+def _tokenize_keyword_search_text(normalized_text: str):
+    if not normalized_text:
+        return []
+    return re.findall(r'[a-z0-9\u4e00-\u9fff]+', normalized_text)
+
+
+def _build_query_keyword_candidates(normalized_text: str):
+    candidates = {}
+    tokens = _tokenize_keyword_search_text(normalized_text)
+
+    def add(raw_value: str, display_value: str = None):
+        normalized = _normalize_keyword_search_text(raw_value)
+        canonical = re.sub(r'\s+', '', normalized)
+        if len(canonical) < 2:
+            return
+        candidates.setdefault(canonical, (display_value or normalized or canonical).strip())
+
+    if normalized_text and len(tokens) <= 3:
+        add(normalized_text, normalized_text)
+
+    for token in tokens:
+        if len(token) >= 2 or token.isdigit():
+            add(token, token)
+
+    for size in (2, 3):
+        if len(tokens) < size:
+            continue
+        for idx in range(len(tokens) - size + 1):
+            part_tokens = tokens[idx: idx + size]
+            compact = ''.join(part_tokens)
+            if len(compact) < 2:
+                continue
+            if size == 1 or any(ch.isdigit() for ch in compact):
+                add(compact, compact)
+
+    return candidates
+
+
+def _build_product_keyword_variants(raw_value: str):
+    normalized_text = _normalize_keyword_search_text(raw_value)
+    variants = set()
+    tokens = _tokenize_keyword_search_text(normalized_text)
+
+    def add(raw_text: str):
+        normalized = _normalize_keyword_search_text(raw_text)
+        canonical = re.sub(r'\s+', '', normalized)
+        if len(canonical) < 2:
+            return
+        variants.add(canonical)
+
+    if normalized_text:
+        add(normalized_text)
+
+    for token in tokens:
+        if len(token) >= 2 or token.isdigit():
+            add(token)
+
+    for size in (2, 3):
+        if len(tokens) < size:
+            continue
+        for idx in range(len(tokens) - size + 1):
+            compact = ''.join(tokens[idx: idx + size])
+            if len(compact) < 2:
+                continue
+            if any(ch.isdigit() for ch in compact):
+                add(compact)
+
+    return variants
 
 def _get_repeat_seconds_from_filters(filters):
     max_seconds = 0.0
@@ -1628,10 +1711,10 @@ class DiscordBotClient(discord.Client):
             except ImportError:
                 from .database import db
 
-            # 获取用户设置以确定延迟时间
+            # 获取用户设置以确定全局延迟时间
             user_settings = await asyncio.get_event_loop().run_in_executor(None, db.get_user_settings, self.user_id)
-            min_delay = user_settings.get('global_reply_min_delay', 3.0)
-            max_delay = user_settings.get('global_reply_max_delay', 8.0)
+            global_min_delay = user_settings.get('global_reply_min_delay', 1.0)
+            global_max_delay = user_settings.get('global_reply_max_delay', 3.0)
 
             website_configs = website_configs_override or await self.get_website_configs_by_channel_async(message.channel.id)
             if not website_configs:
@@ -1813,6 +1896,14 @@ class DiscordBotClient(discord.Client):
 
                 if reply_mode == 'default':
                     skip_sender_cooldown = True
+
+                website_min_delay = _coerce_float(user_website_settings.get('reply_min_delay')) if user_website_settings else None
+                website_max_delay = _coerce_float(user_website_settings.get('reply_max_delay')) if user_website_settings else None
+                if website_min_delay is not None and website_max_delay is not None:
+                    min_delay, max_delay = normalize_reply_delay_range(website_min_delay, website_max_delay)
+                else:
+                    min_delay = global_min_delay
+                    max_delay = global_max_delay
 
                 if skip_sender_cooldown:
                     available_senders = list(valid_senders)
@@ -3102,20 +3193,11 @@ class DiscordBotClient(discord.Client):
                 logger.info(f'关键词搜索无结果: {search_query}')
                 return
 
-            def _normalize_text(value: str) -> str:
-                if not value:
-                    return ''
-                value = re.sub(r'[\u200b-\u200d\uFEFF]', '', str(value))
-                value = value.lower()
-                value = re.sub(r'[^a-z0-9\u4e00-\u9fff]+', ' ', value)
-                value = re.sub(r'\s+', ' ', value).strip()
-                return value
-
             if self.user_shops:
-                allowed_shops = {_normalize_text(s) for s in self.user_shops if s}
+                allowed_shops = {_normalize_keyword_search_text(s) for s in self.user_shops if s}
 
                 def _shop_matches(shop_value: str) -> bool:
-                    normalized = _normalize_text(shop_value)
+                    normalized = _normalize_keyword_search_text(shop_value)
                     if not normalized:
                         return False
                     # 店铺权限必须严格命中，避免 A 店铺商品误落到 B 店铺
@@ -3133,7 +3215,9 @@ class DiscordBotClient(discord.Client):
                         logger.info(f'关键词搜索结果被店铺权限过滤: {search_query}')
                         return
 
-            query_normalized = _normalize_text(search_query)
+            query_normalized = _normalize_keyword_search_text(search_query)
+            query_keyword_candidates = _build_query_keyword_candidates(query_normalized)
+            query_keyword_keys = set(query_keyword_candidates.keys())
 
             def _split_keywords(raw_value):
                 if not raw_value:
@@ -3146,8 +3230,8 @@ class DiscordBotClient(discord.Client):
                     parts = re.split(r'[,\uFF0C]', str(raw_value))
                 keywords = []
                 for part in parts:
-                    normalized = _normalize_text(part)
-                    if len(normalized) >= 2:
+                    normalized = _normalize_keyword_search_text(part)
+                    if re.sub(r'\s+', '', normalized) and len(re.sub(r'\s+', '', normalized)) >= 2:
                         keywords.append(normalized)
                 return keywords
 
@@ -3160,7 +3244,7 @@ class DiscordBotClient(discord.Client):
 
                 # 只有在没有英文关键词时才回退到中文标题匹配
                 if not english_phrases:
-                    title = _normalize_text(product.get('title') or '')
+                    title = _normalize_keyword_search_text(product.get('title') or '')
                     if title:
                         phrases.append((title, 'title'))
                 if not phrases:
@@ -3170,11 +3254,18 @@ class DiscordBotClient(discord.Client):
                     if phrase in seen:
                         continue
                     seen.add(phrase)
-                    if phrase and phrase in query_normalized:
+                    product_variants = _build_product_keyword_variants(phrase)
+                    matched_keywords = sorted(
+                        query_keyword_keys.intersection(product_variants),
+                        key=lambda value: (-len(value), value),
+                    )
+                    if matched_keywords:
+                        matched_keyword = matched_keywords[0]
                         return True, {
-                            'phrase': phrase,
+                            'phrase': query_keyword_candidates.get(matched_keyword, matched_keyword),
                             'source': source,
-                            'rule': 'phrase_in_query'
+                            'rule': 'canonical_keyword_match',
+                            'canonical_keyword': matched_keyword,
                         }
                 return False, None
 
@@ -3190,6 +3281,14 @@ class DiscordBotClient(discord.Client):
             if not matched_products:
                 logger.info(f'关键词搜索无精确匹配: {search_query}')
                 return
+
+            matched_keyword_set = {
+                str(reason.get('canonical_keyword')).strip()
+                for reason in match_reasons.values()
+                if str(reason.get('canonical_keyword') or '').strip()
+            }
+
+            global_keyword_match_limit = max(0, _coerce_int((user_settings or {}).get('keyword_match_limit', 0), 0))
 
             logger.info(f'关键词搜索成功: "{search_query}" -> 匹配 {len(matched_products)} 个商品')
             for product in matched_products:
@@ -3208,6 +3307,25 @@ class DiscordBotClient(discord.Client):
             if not website_configs:
                 logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过关键词回复")
                 return
+
+            user_website_settings_map = {}
+            if self.user_id:
+                try:
+                    try:
+                        from database import db
+                    except ImportError:
+                        from .database import db
+                    for website_config in website_configs:
+                        website_id = website_config.get('id')
+                        if not website_id:
+                            continue
+                        settings = await asyncio.get_event_loop().run_in_executor(
+                            None, db.get_user_website_settings, self.user_id, website_id
+                        )
+                        if settings:
+                            user_website_settings_map[website_id] = settings
+                except Exception as settings_error:
+                    logger.error(f'获取网站关键词命中上限失败: {settings_error}')
 
             # 单个商品时保留原有发送逻辑（支持自定义图片）
             if len(matched_products) == 1:
@@ -3275,6 +3393,17 @@ class DiscordBotClient(discord.Client):
                         logger.info(f"商品 {product['id']} 配置了自定义图片，准备发送自定义回复")
 
                 for website_config in website_configs:
+                    website_settings = user_website_settings_map.get(website_config.get('id')) or {}
+                    website_keyword_match_limit = max(
+                        0,
+                        _coerce_int(website_settings.get('keyword_match_limit', global_keyword_match_limit), global_keyword_match_limit),
+                    )
+                    if website_keyword_match_limit > 0 and len(matched_keyword_set) > website_keyword_match_limit:
+                        logger.info(
+                            f'关键词搜索命中过多，跳过网站 {website_config.get("id")}: query="{search_query}" | '
+                            f'命中关键词 {len(matched_keyword_set)} 个 | 上限 {website_keyword_match_limit}'
+                        )
+                        continue
                     self._start_keyword_reply_background_task(
                         self._enqueue_or_dispatch_keyword_reply(
                             message,
@@ -3328,6 +3457,17 @@ class DiscordBotClient(discord.Client):
                 logger.error(f"导入数据库模块失败: {db_import_error}")
                 db = None
             for website_config in website_configs:
+                website_settings = user_website_settings_map.get(website_config.get('id')) or {}
+                website_keyword_match_limit = max(
+                    0,
+                    _coerce_int(website_settings.get('keyword_match_limit', global_keyword_match_limit), global_keyword_match_limit),
+                )
+                if website_keyword_match_limit > 0 and len(matched_keyword_set) > website_keyword_match_limit:
+                    logger.info(
+                        f'关键词搜索命中过多，跳过网站 {website_config.get("id")}: query="{search_query}" | '
+                        f'命中关键词 {len(matched_keyword_set)} 个 | 上限 {website_keyword_match_limit}'
+                    )
+                    continue
                 sender_count = 0
                 if db is not None:
                     try:

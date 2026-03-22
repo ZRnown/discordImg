@@ -1384,6 +1384,9 @@ def get_website_configs():
             config['keyword_reply_interval'] = effective_settings['keyword_reply_interval']
             config['keyword_reply_batch_size'] = effective_settings['keyword_reply_batch_size']
             config['keyword_batch_dispatch_mode'] = effective_settings['keyword_batch_dispatch_mode']
+            config['keyword_match_limit'] = user_settings.get('keyword_match_limit')
+            config['reply_min_delay'] = user_settings.get('reply_min_delay')
+            config['reply_max_delay'] = user_settings.get('reply_max_delay')
             try:
                 raw_filters = user_settings.get('message_filters', '[]') if user_settings else '[]'
                 config['message_filters'] = json.loads(raw_filters) if isinstance(raw_filters, str) else (raw_filters or [])
@@ -1452,7 +1455,7 @@ def add_website_config():
         except ValueError as e:
             return jsonify({'error': str(e)}), 400
 
-        if db.add_website_config(
+        success, error_message = db.add_website_config(
             name,
             display_name,
             url_template,
@@ -1461,10 +1464,11 @@ def add_website_config():
             reply_template,
             image_similarity_threshold,
             blocked_role_ids
-        ):
+        )
+        if success:
             return jsonify({'success': True, 'message': '网站配置已添加'})
         else:
-            return jsonify({'error': '添加失败'}), 500
+            return jsonify({'error': error_message or '添加失败'}), 500
     except Exception as e:
         logger.error(f"添加网站配置失败: {e}")
         return jsonify({'error': str(e)}), 500
@@ -1523,7 +1527,7 @@ def update_website_config(config_id):
         except ValueError as e:
             return jsonify({'error': str(e)}), 400
 
-        if db.update_website_config(
+        success, error_message = db.update_website_config(
             config_id,
             name,
             display_name,
@@ -1533,10 +1537,11 @@ def update_website_config(config_id):
             reply_template,
             image_similarity_threshold,
             blocked_role_ids
-        ):
+        )
+        if success:
             return jsonify({'success': True, 'message': '网站配置已更新'})
         else:
-            return jsonify({'error': '更新失败'}), 500
+            return jsonify({'error': error_message or '更新失败'}), 500
     except Exception as e:
         logger.error(f"更新网站配置失败: {e}")
         return jsonify({'error': str(e)}), 500
@@ -1548,10 +1553,11 @@ def delete_website_config(config_id):
         return jsonify({'error': '需要管理员权限'}), 403
 
     try:
-        if db.delete_website_config(config_id):
+        success, error_message = db.delete_website_config(config_id)
+        if success:
             return jsonify({'success': True, 'message': '网站配置已删除'})
         else:
-            return jsonify({'error': '删除失败'}), 500
+            return jsonify({'error': error_message or '删除失败'}), 500
     except Exception as e:
         logger.error(f"删除网站配置失败: {e}")
         return jsonify({'error': str(e)}), 500
@@ -1728,6 +1734,9 @@ def get_website_rotation(config_id):
             'keyword_reply_interval': effective_settings['keyword_reply_interval'],
             'keyword_reply_batch_size': effective_settings['keyword_reply_batch_size'],
             'keyword_batch_dispatch_mode': effective_settings['keyword_batch_dispatch_mode'],
+            'keyword_match_limit': settings.get('keyword_match_limit'),
+            'reply_min_delay': settings.get('reply_min_delay'),
+            'reply_max_delay': settings.get('reply_max_delay'),
         })
     except Exception as e:
         logger.error(f"获取网站轮换配置失败: {e}")
@@ -1750,6 +1759,13 @@ def update_website_rotation(config_id):
         keyword_reply_interval = data.get('keyword_reply_interval')
         keyword_reply_batch_size = data.get('keyword_reply_batch_size')
         keyword_batch_dispatch_mode = data.get('keyword_batch_dispatch_mode')
+        keyword_match_limit = data.get('keyword_match_limit')
+        reply_min_delay = data.get('reply_min_delay')
+        reply_max_delay = data.get('reply_max_delay')
+        reply_delay_requested = 'reply_min_delay' in data or 'reply_max_delay' in data
+        reply_delay_cleared = reply_delay_requested and reply_min_delay in {'', None} and reply_max_delay in {'', None}
+        keyword_match_limit_requested = 'keyword_match_limit' in data
+        keyword_match_limit_cleared = keyword_match_limit_requested and keyword_match_limit in {'', None}
 
         # 验证参数
         if rotation_interval is not None and rotation_interval <= 0:
@@ -1764,6 +1780,30 @@ def update_website_rotation(config_id):
             return jsonify({'error': '单轮关键词上限不能小于0'}), 400
         if keyword_batch_dispatch_mode is not None and keyword_batch_dispatch_mode not in ['immediate', 'window_end']:
             return jsonify({'error': '关键词发送方式必须是 immediate 或 window_end'}), 400
+        if keyword_match_limit in {'', None}:
+            keyword_match_limit = None
+        if keyword_match_limit is not None:
+            try:
+                keyword_match_limit = int(keyword_match_limit)
+            except (TypeError, ValueError):
+                return jsonify({'error': '关键词命中上限必须是整数'}), 400
+            if keyword_match_limit < 0:
+                return jsonify({'error': '关键词命中上限不能小于 0'}), 400
+        if reply_min_delay in {'', None}:
+            reply_min_delay = None
+        if reply_max_delay in {'', None}:
+            reply_max_delay = None
+        if reply_delay_requested and not reply_delay_cleared:
+            if reply_min_delay is None or reply_max_delay is None:
+                return jsonify({'error': '站点回复延迟需要同时填写最小值和最大值'}), 400
+            try:
+                reply_min_delay = float(reply_min_delay)
+                reply_max_delay = float(reply_max_delay)
+            except (TypeError, ValueError):
+                return jsonify({'error': '站点回复延迟必须是数字'}), 400
+            delay_error = validate_reply_delay_range(reply_min_delay, reply_max_delay)
+            if delay_error:
+                return jsonify({'error': delay_error}), 400
 
         current_settings = db.get_user_website_settings(current_user['id'], config_id)
         sender_count = len(db.get_website_senders(config_id, current_user['id']) or [])
@@ -1782,6 +1822,7 @@ def update_website_rotation(config_id):
                 keyword_reply_interval=keyword_reply_interval,
                 keyword_reply_batch_size=keyword_reply_batch_size,
                 keyword_batch_dispatch_mode=keyword_batch_dispatch_mode,
+                keyword_match_limit=keyword_match_limit,
             )
         except ValueError as exc:
             return jsonify({'error': str(exc)}), 400
@@ -1796,7 +1837,23 @@ def update_website_rotation(config_id):
             effective_settings['keyword_reply_interval'],
             effective_settings['keyword_reply_batch_size'],
             effective_settings['keyword_batch_dispatch_mode'],
+            keyword_match_limit=None if keyword_match_limit_cleared else keyword_match_limit,
         ):
+            if keyword_match_limit_cleared:
+                if not db.update_user_website_keyword_match_limit(
+                    current_user['id'],
+                    config_id,
+                    None,
+                ):
+                    return jsonify({'error': '更新站点关键词命中上限失败'}), 500
+            if reply_delay_requested:
+                if not db.update_user_website_reply_delay(
+                    current_user['id'],
+                    config_id,
+                    None if reply_delay_cleared else reply_min_delay,
+                    None if reply_delay_cleared else reply_max_delay,
+                ):
+                    return jsonify({'error': '更新站点回复延迟失败'}), 500
             if effective_settings['reply_mode'] != current_effective_settings.get('reply_mode', 'rotation'):
                 mode_text = {
                     'default': '默认模式',
@@ -1823,10 +1880,20 @@ def update_website_rotation(config_id):
                     else '达到上限后停止识别，窗口结束统一发送'
                 )
                 messages.append(f'关键词发送方式已切换为{mode_text}')
+            if reply_delay_requested:
+                messages.append('站点回复延迟已清空' if reply_delay_cleared else f'站点回复延迟已设置为 {reply_min_delay}-{reply_max_delay} 秒')
+            if keyword_match_limit_requested:
+                messages.append('站点关键词命中上限已清空' if keyword_match_limit_cleared else f'站点关键词命中上限已设置为 {keyword_match_limit}')
+            current_settings = db.get_user_website_settings(current_user['id'], config_id)
             return jsonify({
                 'success': True,
                 'message': '; '.join(messages) if messages else '设置已更新',
-                'settings': effective_settings,
+                'settings': {
+                    **effective_settings,
+                    'keyword_match_limit': current_settings.get('keyword_match_limit'),
+                    'reply_min_delay': current_settings.get('reply_min_delay'),
+                    'reply_max_delay': current_settings.get('reply_max_delay'),
+                },
             })
         else:
             return jsonify({'error': '更新失败'}), 500
@@ -3462,11 +3529,17 @@ def update_user_settings():
 
         if min_delay is not None or max_delay is not None:
             current_settings = db.get_user_settings(user['id']) or {}
-            effective_min_delay = min_delay if min_delay is not None else float(current_settings.get('global_reply_min_delay', 3.0))
-            effective_max_delay = max_delay if max_delay is not None else float(current_settings.get('global_reply_max_delay', 8.0))
+            effective_min_delay = min_delay if min_delay is not None else float(current_settings.get('global_reply_min_delay', 1.0))
+            effective_max_delay = max_delay if max_delay is not None else float(current_settings.get('global_reply_max_delay', 3.0))
             delay_error = validate_reply_delay_range(effective_min_delay, effective_max_delay)
             if delay_error:
                 return jsonify({'error': delay_error}), 400
+
+        keyword_match_limit = data.get('keyword_match_limit')
+        if keyword_match_limit is not None:
+            keyword_match_limit = int(keyword_match_limit)
+            if keyword_match_limit < 0:
+                return jsonify({'error': '关键词命中上限不能小于 0'}), 400
 
         # 处理开关设置（boolean 转 integer）
         keyword_reply = data.get('keyword_reply_enabled')
@@ -3490,6 +3563,7 @@ def update_user_settings():
             keyword_filters=data.get('keyword_filters'),
             keyword_reply_enabled=keyword_reply,
             image_reply_enabled=image_reply,
+            keyword_match_limit=keyword_match_limit,
             global_reply_template=data.get('global_reply_template'),
             numeric_filter_keyword=data.get('numeric_filter_keyword'),
             filter_size_min=data.get('filter_size_min'),
@@ -4153,8 +4227,8 @@ def update_global_reply_delay():
         data = request.get_json()
         if data is None:
             return jsonify({'error': 'Invalid request body'}), 400
-        min_delay = float(data.get('min_delay', 3))
-        max_delay = float(data.get('max_delay', 8))
+        min_delay = float(data.get('min_delay', 1))
+        max_delay = float(data.get('max_delay', 3))
 
         # 验证范围
         delay_error = validate_reply_delay_range(min_delay, max_delay)

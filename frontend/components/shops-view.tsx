@@ -193,7 +193,7 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
   )
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" data-tutorial="shops-root">
       <div>
         <h2 className="text-3xl font-bold tracking-tight">店铺管理</h2>
         <p className="text-muted-foreground">管理微店店铺，添加新店铺并进行全量抓取</p>
@@ -212,7 +212,7 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
 
       {/* 添加新店铺 - 仅管理员可见 */}
       {currentUser?.role === 'admin' && (
-      <Card>
+      <Card data-tutorial="shops-add-shop">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Plus className="h-5 w-5" />

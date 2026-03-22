@@ -36,7 +36,7 @@ interface Announcement {
   updated_at: string
 }
 
-export function DashboardView({ currentUser }: { currentUser: any }) {
+export function DashboardView({ currentUser, isActive = true }: { currentUser: any; isActive?: boolean }) {
   const [stats, setStats] = useState<SystemStats | null>(null)
   const [announcements, setAnnouncements] = useState<Announcement[]>([])
   const [showAddAnnouncement, setShowAddAnnouncement] = useState(false)
@@ -47,6 +47,7 @@ export function DashboardView({ currentUser }: { currentUser: any }) {
   })
 
   useEffect(() => {
+    if (!isActive) return
     fetchStats()
     fetchAnnouncements()
 
@@ -60,7 +61,7 @@ export function DashboardView({ currentUser }: { currentUser: any }) {
     return () => {
       clearInterval(statsInterval)
     }
-  }, [currentUser])
+  }, [currentUser, isActive])
 
   const fetchStats = async () => {
     try {
@@ -159,7 +160,7 @@ export function DashboardView({ currentUser }: { currentUser: any }) {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8" data-tutorial="dashboard-root">
       <div>
         <h2 className="text-4xl font-bold tracking-tight">仪表盘</h2>
         <p className="text-muted-foreground mt-2">系统概览和公告管理</p>
@@ -248,7 +249,7 @@ export function DashboardView({ currentUser }: { currentUser: any }) {
             {currentUser?.role === 'admin' && (
               <Dialog open={showAddAnnouncement} onOpenChange={setShowAddAnnouncement}>
                 <DialogTrigger asChild>
-                  <Button size="sm" className="shrink-0">
+                  <Button size="sm" className="shrink-0" data-tutorial="dashboard-add-announcement">
                     <Plus className="w-4 h-4 mr-2" />
                     添加公告
                   </Button>

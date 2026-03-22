@@ -120,7 +120,7 @@ function ImageLightbox({
   )
 }
 
-export function ScraperView({ currentUser }: { currentUser: any }) {
+export function ScraperView({ currentUser, isActive = true }: { currentUser: any; isActive?: boolean }) {
   const [batchIds, setBatchIds] = useState('')
   const [isBatchScraping, setIsBatchScraping] = useState(false)
   const [batchProgress, setBatchProgress] = useState(0)
@@ -302,15 +302,17 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
   // 优化：分离不同类型的加载逻辑
   useEffect(() => {
+    if (!isActive) return
     fetchIndexedIds()
     fetchAvailableShops()
     fetchWebsites()
     fetchProductsCount()
     fetchScrapeStatus() // 初始化时检查抓取状态，恢复进度显示
-  }, []) // 静态数据只加载一次
+  }, [isActive]) // 静态数据只在当前页激活时加载
 
   // 监听店铺更新事件，实时刷新店铺列表
   useEffect(() => {
+    if (!isActive) return
     const handleShopsUpdated = () => {
       // 清除店铺缓存并重新获取
       invalidateCache('/api/shops')
@@ -318,11 +320,12 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
     }
     window.addEventListener('shops-updated', handleShopsUpdated)
     return () => window.removeEventListener('shops-updated', handleShopsUpdated)
-  }, [invalidateCache])
+  }, [invalidateCache, isActive])
 
   useEffect(() => {
+    if (!isActive) return
     fetchProducts(currentPage)
-  }, [currentPage, itemsPerPage, keywordSearch, shopFilter, searchType]) // 只在相关参数改变时重新加载商品
+  }, [currentPage, itemsPerPage, keywordSearch, shopFilter, searchType, isActive]) // 只在相关参数改变时重新加载商品
 
   useEffect(() => {
     // 当搜索条件改变时，重置到第一页
@@ -343,6 +346,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
 
   // 优化轮询机制：使用智能轮询，避免重复请求
   useEffect(() => {
+    if (!isActive) return
     let statusInterval: NodeJS.Timeout | null = null
 
     // 如果没有抓取任务，减少轮询频率到60秒一次
@@ -385,7 +389,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
         clearInterval(statusInterval)
       }
     }
-  }, [isShopScraping, isBatchScraping, isStopping, currentPage, itemsPerPage, keywordSearch, shopFilter, searchType])
+  }, [isShopScraping, isBatchScraping, isStopping, currentPage, itemsPerPage, keywordSearch, shopFilter, searchType, isActive])
 
   const fetchProducts = async (page: number = currentPage) => {
     const fetchSeq = ++productsFetchSeqRef.current
@@ -1033,7 +1037,7 @@ export function ScraperView({ currentUser }: { currentUser: any }) {
   const hasNextPage = totalProducts > 0 ? currentPage < totalPages : currentProducts.length === itemsPerPage
 
   return (
-    <div className="space-y-8 overflow-x-hidden">
+    <div className="space-y-8 overflow-x-hidden" data-tutorial="scraper-main">
       {lightboxOpen && (
         <ImageLightbox
           images={lightboxImages}

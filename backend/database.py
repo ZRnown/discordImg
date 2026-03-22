@@ -325,8 +325,8 @@ class Database:
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS global_reply_config (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
-                    min_delay REAL DEFAULT 3.0,
-                    max_delay REAL DEFAULT 8.0,
+                    min_delay REAL DEFAULT 1.0,
+                    max_delay REAL DEFAULT 3.0,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
@@ -627,12 +627,13 @@ class Database:
                     download_threads INTEGER DEFAULT 4,
                     feature_extract_threads INTEGER DEFAULT 4,
                     discord_similarity_threshold REAL DEFAULT 0.6,
-                    global_reply_min_delay REAL DEFAULT 3.0,
-                    global_reply_max_delay REAL DEFAULT 8.0,
+                    global_reply_min_delay REAL DEFAULT 1.0,
+                    global_reply_max_delay REAL DEFAULT 3.0,
                     user_blacklist TEXT DEFAULT '',  -- 用户黑名单，逗号分隔
                     keyword_filters TEXT DEFAULT '',  -- 关键词过滤，逗号分隔
                     keyword_reply_enabled INTEGER DEFAULT 1,  -- 是否启用关键词回复
                     image_reply_enabled INTEGER DEFAULT 1,  -- 是否启用图片回复
+                    keyword_match_limit INTEGER DEFAULT 0,  -- 单条消息最多允许命中的关键词数，0 表示不限制
                     global_reply_template TEXT DEFAULT '',
                     numeric_filter_keyword TEXT DEFAULT '',
                     filter_size_min INTEGER DEFAULT 35,
@@ -655,6 +656,11 @@ class Database:
 
             try:
                 cursor.execute('ALTER TABLE user_settings ADD COLUMN image_reply_enabled INTEGER DEFAULT 1')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN keyword_match_limit INTEGER DEFAULT 0')
             except sqlite3.OperationalError:
                 pass
 
@@ -705,6 +711,7 @@ class Database:
                     keyword_reply_interval INTEGER DEFAULT NULL,
                     keyword_reply_batch_size INTEGER DEFAULT 0,
                     keyword_batch_dispatch_mode TEXT DEFAULT 'immediate',
+                    keyword_match_limit INTEGER DEFAULT NULL,
                     message_filters TEXT DEFAULT '[]',
                     image_similarity_threshold REAL DEFAULT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -729,11 +736,23 @@ class Database:
             except sqlite3.OperationalError:
                 pass
             try:
+                cursor.execute('ALTER TABLE user_website_settings ADD COLUMN reply_min_delay REAL DEFAULT NULL')
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute('ALTER TABLE user_website_settings ADD COLUMN reply_max_delay REAL DEFAULT NULL')
+            except sqlite3.OperationalError:
+                pass
+            try:
                 cursor.execute('ALTER TABLE user_website_settings ADD COLUMN keyword_reply_batch_size INTEGER DEFAULT 0')
             except sqlite3.OperationalError:
                 pass
             try:
                 cursor.execute("ALTER TABLE user_website_settings ADD COLUMN keyword_batch_dispatch_mode TEXT DEFAULT 'immediate'")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute('ALTER TABLE user_website_settings ADD COLUMN keyword_match_limit INTEGER DEFAULT NULL')
             except sqlite3.OperationalError:
                 pass
             try:
@@ -823,7 +842,17 @@ class Database:
             # 插入默认全局延迟配置
             cursor.execute('''
                 INSERT OR IGNORE INTO global_reply_config (id, min_delay, max_delay)
-                VALUES (1, 3.0, 8.0)
+                VALUES (1, 1.0, 3.0)
+            ''')
+            cursor.execute('''
+                UPDATE global_reply_config
+                SET min_delay = 1.0, max_delay = 3.0
+                WHERE id = 1 AND min_delay = 3.0 AND max_delay = 8.0
+            ''')
+            cursor.execute('''
+                UPDATE user_settings
+                SET global_reply_min_delay = 1.0, global_reply_max_delay = 3.0
+                WHERE global_reply_min_delay = 3.0 AND global_reply_max_delay = 8.0
             ''')
 
             conn.commit()
@@ -2140,22 +2169,35 @@ class Database:
                 'daily_replies_total': 0
             }
 
-    def add_website_config(self, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str = 'blue', reply_template: str = '{url}', image_similarity_threshold: float = None, blocked_role_ids: str = '[]', rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> bool:
+    def add_website_config(self, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str = 'blue', reply_template: str = '{url}', image_similarity_threshold: float = None, blocked_role_ids: str = '[]', rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> Tuple[bool, Optional[str]]:
         """添加网站配置"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO website_configs (name, display_name, url_template, id_pattern, badge_color, reply_template, image_similarity_threshold, blocked_role_ids, rotation_interval, rotation_enabled, message_filters)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (name, display_name, url_template, id_pattern, badge_color, reply_template, image_similarity_threshold, blocked_role_ids, rotation_interval, rotation_enabled, message_filters))
-                conn.commit()
-                return True
+                base_name = str(name or '').strip() or str(display_name or '').strip() or 'website'
+                candidate_name = base_name
+                suffix = 2
+
+                while True:
+                    try:
+                        cursor.execute('''
+                            INSERT INTO website_configs (name, display_name, url_template, id_pattern, badge_color, reply_template, image_similarity_threshold, blocked_role_ids, rotation_interval, rotation_enabled, message_filters)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ''', (candidate_name, display_name, url_template, id_pattern, badge_color, reply_template, image_similarity_threshold, blocked_role_ids, rotation_interval, rotation_enabled, message_filters))
+                        conn.commit()
+                        return True, None
+                    except sqlite3.IntegrityError as e:
+                        error_text = str(e)
+                        if 'website_configs.name' not in error_text and 'UNIQUE constraint failed' not in error_text:
+                            raise
+                        candidate_name = f"{base_name}-{suffix}"
+                        suffix += 1
+                        continue
         except Exception as e:
             logger.error(f"添加网站配置失败: {e}")
-            return False
+            return False, f"添加网站配置失败: {e}"
 
-    def update_website_config(self, config_id: int, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str, reply_template: str, image_similarity_threshold: float = None, blocked_role_ids: str = '[]', rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> bool:
+    def update_website_config(self, config_id: int, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str, reply_template: str, image_similarity_threshold: float = None, blocked_role_ids: str = '[]', rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> Tuple[bool, Optional[str]]:
         """更新网站配置"""
         try:
             with self.get_connection() as conn:
@@ -2166,22 +2208,32 @@ class Database:
                     WHERE id = ?
                 ''', (name, display_name, url_template, id_pattern, badge_color, reply_template, image_similarity_threshold, blocked_role_ids, rotation_interval, rotation_enabled, message_filters, config_id))
                 conn.commit()
-                return cursor.rowcount > 0
+                if cursor.rowcount > 0:
+                    return True, None
+                return False, f'网站配置 {config_id} 不存在'
+        except sqlite3.IntegrityError as e:
+            error_text = str(e)
+            if 'website_configs.name' in error_text or 'UNIQUE constraint failed' in error_text:
+                return False, '网站内部标识已存在，请修改显示名称后重试'
+            logger.error(f"更新网站配置失败: {e}")
+            return False, f"更新网站配置失败: {e}"
         except Exception as e:
             logger.error(f"更新网站配置失败: {e}")
-            return False
+            return False, f"更新网站配置失败: {e}"
 
-    def delete_website_config(self, config_id: int) -> bool:
+    def delete_website_config(self, config_id: int) -> Tuple[bool, Optional[str]]:
         """删除网站配置"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('DELETE FROM website_configs WHERE id = ?', (config_id,))
                 conn.commit()
-                return cursor.rowcount > 0
+                if cursor.rowcount > 0:
+                    return True, None
+                return False, f'网站配置 {config_id} 不存在'
         except Exception as e:
             logger.error(f"删除网站配置失败: {e}")
-            return False
+            return False, f"删除网站配置失败: {e}"
 
     def get_website_channel_bindings(self, website_id: int, user_id: int = None) -> List[str]:
         """获取网站绑定的频道列表（可选按用户过滤）"""
@@ -2277,6 +2329,7 @@ class Database:
                         SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern,
                                wc.badge_color, wc.reply_template,
                                COALESCE(uws.image_similarity_threshold, wc.image_similarity_threshold) as image_similarity_threshold,
+                               COALESCE(uws.keyword_match_limit, NULL) as keyword_match_limit,
                                wc.blocked_role_ids, wc.rotation_interval, wc.rotation_enabled, wc.message_filters
                         FROM website_configs wc
                         JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
@@ -2559,7 +2612,9 @@ class Database:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT rotation_interval, rotation_enabled, reply_mode, keyword_reply_interval, keyword_reply_batch_size, keyword_batch_dispatch_mode, message_filters, image_similarity_threshold
+                    SELECT rotation_interval, rotation_enabled, reply_mode, keyword_reply_interval, keyword_reply_batch_size,
+                           keyword_batch_dispatch_mode, keyword_match_limit, message_filters, image_similarity_threshold,
+                           reply_min_delay, reply_max_delay
                     FROM user_website_settings
                     WHERE user_id = ? AND website_id = ?
                 ''', (user_id, website_id))
@@ -2580,8 +2635,11 @@ class Database:
                         'keyword_reply_interval': keyword_reply_interval,
                         'keyword_reply_batch_size': row['keyword_reply_batch_size'] or 0,
                         'keyword_batch_dispatch_mode': keyword_batch_dispatch_mode,
+                        'keyword_match_limit': row['keyword_match_limit'],
                         'message_filters': row['message_filters'],
-                        'image_similarity_threshold': row['image_similarity_threshold']
+                        'image_similarity_threshold': row['image_similarity_threshold'],
+                        'reply_min_delay': row['reply_min_delay'],
+                        'reply_max_delay': row['reply_max_delay'],
                     }
                 # 返回默认值
                 return {
@@ -2591,8 +2649,11 @@ class Database:
                     'keyword_reply_interval': 180,
                     'keyword_reply_batch_size': 0,
                     'keyword_batch_dispatch_mode': 'immediate',
+                    'keyword_match_limit': None,
                     'message_filters': '[]',
-                    'image_similarity_threshold': None
+                    'image_similarity_threshold': None,
+                    'reply_min_delay': None,
+                    'reply_max_delay': None,
                 }
         except Exception as e:
             logger.error(f"获取用户网站设置失败: {e}")
@@ -2603,8 +2664,11 @@ class Database:
                 'keyword_reply_interval': 180,
                 'keyword_reply_batch_size': 0,
                 'keyword_batch_dispatch_mode': 'immediate',
+                'keyword_match_limit': None,
                 'message_filters': '[]',
-                'image_similarity_threshold': None
+                'image_similarity_threshold': None,
+                'reply_min_delay': None,
+                'reply_max_delay': None,
             }
 
     def update_user_website_similarity(self, user_id: int, website_id: int, threshold: float = None) -> bool:
@@ -2625,6 +2689,43 @@ class Database:
             logger.error(f"更新用户网站相似度阈值失败: {e}")
             return False
 
+    def update_user_website_reply_delay(self, user_id: int, website_id: int, min_delay: float = None, max_delay: float = None) -> bool:
+        """更新用户的网站回复延迟覆盖"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO user_website_settings (user_id, website_id, reply_min_delay, reply_max_delay)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(user_id, website_id) DO UPDATE SET
+                        reply_min_delay = excluded.reply_min_delay,
+                        reply_max_delay = excluded.reply_max_delay,
+                        updated_at = CURRENT_TIMESTAMP
+                ''', (user_id, website_id, min_delay, max_delay))
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"更新用户网站回复延迟失败: {e}")
+            return False
+
+    def update_user_website_keyword_match_limit(self, user_id: int, website_id: int, keyword_match_limit: int = None) -> bool:
+        """更新用户的网站关键词命中上限覆盖"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO user_website_settings (user_id, website_id, keyword_match_limit)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(user_id, website_id) DO UPDATE SET
+                        keyword_match_limit = excluded.keyword_match_limit,
+                        updated_at = CURRENT_TIMESTAMP
+                ''', (user_id, website_id, keyword_match_limit))
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"更新用户网站关键词命中上限失败: {e}")
+            return False
+
     def update_user_website_rotation(
         self,
         user_id: int,
@@ -2635,6 +2736,7 @@ class Database:
         keyword_reply_interval: int = None,
         keyword_reply_batch_size: int = None,
         keyword_batch_dispatch_mode: str = None,
+        keyword_match_limit: int = None,
     ) -> bool:
         """更新用户的网站轮换设置"""
         try:
@@ -2688,6 +2790,9 @@ class Database:
                     if normalized_keyword_batch_dispatch_mode is not None:
                         updates.append('keyword_batch_dispatch_mode = ?')
                         params.append(normalized_keyword_batch_dispatch_mode)
+                    if keyword_match_limit is not None:
+                        updates.append('keyword_match_limit = ?')
+                        params.append(keyword_match_limit)
                     if updates:
                         updates.append('updated_at = CURRENT_TIMESTAMP')
                         params.extend([user_id, website_id])
@@ -2707,9 +2812,10 @@ class Database:
                             reply_mode,
                             keyword_reply_interval,
                             keyword_reply_batch_size,
-                            keyword_batch_dispatch_mode
+                            keyword_batch_dispatch_mode,
+                            keyword_match_limit
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         user_id,
                         website_id,
@@ -2719,6 +2825,7 @@ class Database:
                         keyword_reply_interval if keyword_reply_interval is not None else (rotation_interval or 180),
                         keyword_reply_batch_size if keyword_reply_batch_size is not None else 0,
                         normalized_keyword_batch_dispatch_mode or 'immediate',
+                        keyword_match_limit,
                     ))
 
                 conn.commit()
@@ -3499,12 +3606,12 @@ class Database:
                 cursor.execute('SELECT min_delay, max_delay FROM global_reply_config WHERE id = 1')
                 row = cursor.fetchone()
                 if row:
-                    min_delay, max_delay = normalize_reply_delay_range(row[0] or 3.0, row[1] or 8.0)
+                    min_delay, max_delay = normalize_reply_delay_range(row[0] or 1.0, row[1] or 3.0)
                     return {'min_delay': min_delay, 'max_delay': max_delay}
-                return {'min_delay': 3.0, 'max_delay': 8.0}  # 默认值
+                return {'min_delay': 1.0, 'max_delay': 3.0}  # 默认值
         except Exception as e:
             logger.error(f"获取全局回复配置失败: {e}")
-            return {'min_delay': 3.0, 'max_delay': 8.0}
+            return {'min_delay': 1.0, 'max_delay': 3.0}
 
     def update_global_reply_config(self, min_delay: float, max_delay: float) -> bool:
         """更新全局回复延迟配置"""
@@ -3574,14 +3681,14 @@ class Database:
                 cursor.execute('''
                     SELECT download_threads, feature_extract_threads, discord_similarity_threshold,
                            global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
-                           keyword_reply_enabled, image_reply_enabled, global_reply_template,
-                           numeric_filter_keyword, filter_size_min, filter_size_max,
+                           keyword_reply_enabled, image_reply_enabled, keyword_match_limit,
+                           global_reply_template, numeric_filter_keyword, filter_size_min, filter_size_max,
                            bark_enabled, bark_server_url, bark_device_key
                     FROM user_settings WHERE user_id = ?
                 ''', (user_id,))
                 row = cursor.fetchone()
                 if row:
-                    min_delay, max_delay = normalize_reply_delay_range(row[3] or 3.0, row[4] or 8.0)
+                    min_delay, max_delay = normalize_reply_delay_range(row[3] or 1.0, row[4] or 3.0)
                     return {
                         'download_threads': row[0] or 4,
                         'feature_extract_threads': row[1] or 4,
@@ -3592,25 +3699,27 @@ class Database:
                         'keyword_filters': row[6] or '',
                         'keyword_reply_enabled': row[7] if row[7] is not None else 1,
                         'image_reply_enabled': row[8] if row[8] is not None else 1,
-                        'global_reply_template': row[9] or '',
-                        'numeric_filter_keyword': row[10] if row[10] is not None else '',
-                        'filter_size_min': row[11] if row[11] is not None else 35,
-                        'filter_size_max': row[12] if row[12] is not None else 46,
-                        'bark_enabled': row[13] if row[13] is not None else 0,
-                        'bark_server_url': row[14] or 'https://api.day.app',
-                        'bark_device_key': row[15] or '',
+                        'keyword_match_limit': row[9] if row[9] is not None else 0,
+                        'global_reply_template': row[10] or '',
+                        'numeric_filter_keyword': row[11] if row[11] is not None else '',
+                        'filter_size_min': row[12] if row[12] is not None else 35,
+                        'filter_size_max': row[13] if row[13] is not None else 46,
+                        'bark_enabled': row[14] if row[14] is not None else 0,
+                        'bark_server_url': row[15] or 'https://api.day.app',
+                        'bark_device_key': row[16] or '',
                     }
                 # 如果用户没有设置，返回默认值
                 return {
                     'download_threads': 4,
                     'feature_extract_threads': 4,
                     'discord_similarity_threshold': 0.6,
-                    'global_reply_min_delay': 3.0,
-                    'global_reply_max_delay': 8.0,
+                    'global_reply_min_delay': 1.0,
+                    'global_reply_max_delay': 3.0,
                     'user_blacklist': '',
                     'keyword_filters': '',
                     'keyword_reply_enabled': 1,
                     'image_reply_enabled': 1,
+                    'keyword_match_limit': 0,
                     'global_reply_template': '',
                     'numeric_filter_keyword': '',
                     'filter_size_min': 35,
@@ -3625,12 +3734,13 @@ class Database:
                 'download_threads': 4,
                 'feature_extract_threads': 4,
                 'discord_similarity_threshold': 0.6,
-                'global_reply_min_delay': 3.0,
-                'global_reply_max_delay': 8.0,
+                'global_reply_min_delay': 1.0,
+                'global_reply_max_delay': 3.0,
                 'user_blacklist': '',
                 'keyword_filters': '',
                 'keyword_reply_enabled': 1,
                 'image_reply_enabled': 1,
+                'keyword_match_limit': 0,
                 'global_reply_template': '',
                 'numeric_filter_keyword': '',
                 'filter_size_min': 35,
@@ -3645,6 +3755,7 @@ class Database:
                            global_reply_min_delay: float = None, global_reply_max_delay: float = None,
                            user_blacklist: str = None, keyword_filters: str = None,
                            keyword_reply_enabled: int = None, image_reply_enabled: int = None,
+                           keyword_match_limit: int = None,
                            global_reply_template: str = None, numeric_filter_keyword: str = None,
                            filter_size_min: int = None, filter_size_max: int = None,
                            bark_enabled: int = None, bark_server_url: str = None,
@@ -3699,6 +3810,10 @@ class Database:
                         update_fields.append('image_reply_enabled = ?')
                         params.append(image_reply_enabled)
 
+                    if keyword_match_limit is not None:
+                        update_fields.append('keyword_match_limit = ?')
+                        params.append(keyword_match_limit)
+
                     if global_reply_template is not None:
                         update_fields.append('global_reply_template = ?')
                         params.append(global_reply_template)
@@ -3738,20 +3853,21 @@ class Database:
                         INSERT INTO user_settings
                         (user_id, download_threads, feature_extract_threads, discord_similarity_threshold,
                          global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
-                         keyword_reply_enabled, image_reply_enabled, global_reply_template, numeric_filter_keyword,
-                         filter_size_min, filter_size_max, bark_enabled, bark_server_url, bark_device_key)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         keyword_reply_enabled, image_reply_enabled, keyword_match_limit, global_reply_template,
+                         numeric_filter_keyword, filter_size_min, filter_size_max, bark_enabled, bark_server_url, bark_device_key)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         user_id,
                         download_threads or 4,
                         feature_extract_threads or 4,
                         discord_similarity_threshold or 0.6,
-                        global_reply_min_delay or 3.0,
-                        global_reply_max_delay or 8.0,
+                        global_reply_min_delay or 1.0,
+                        global_reply_max_delay or 3.0,
                         user_blacklist or '',
                         keyword_filters or '',
                         keyword_reply_enabled if keyword_reply_enabled is not None else 1,
                         image_reply_enabled if image_reply_enabled is not None else 1,
+                        keyword_match_limit if keyword_match_limit is not None else 0,
                         global_reply_template or '',
                         numeric_filter_keyword or '',
                         filter_size_min if filter_size_min is not None else 35,

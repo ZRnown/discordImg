@@ -16,7 +16,7 @@ type LogEntry = {
   type?: string // 用于心跳包
 }
 
-export function LogsView() {
+export function LogsView({ isActive = true }: { isActive?: boolean }) {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [isConnected, setIsConnected] = useState(false)
   const [isPaused, setIsPaused] = useState(false)
@@ -80,6 +80,15 @@ export function LogsView() {
   }
 
   useEffect(() => {
+    if (!isActive) {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close()
+        eventSourceRef.current = null
+      }
+      setIsConnected(false)
+      return
+    }
+
     // 加载历史日志
     loadRecentLogs()
 
@@ -91,9 +100,10 @@ export function LogsView() {
     return () => {
       if (eventSourceRef.current) {
         eventSourceRef.current.close()
+        eventSourceRef.current = null
       }
     }
-  }, [isPaused])
+  }, [isPaused, isActive])
 
   useEffect(() => {
     if (scrollRef.current && !isPaused) {
@@ -126,8 +136,8 @@ export function LogsView() {
   const getLogLine = (log: LogEntry) => log.raw_line || log.message || ''
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-6" data-tutorial="logs-root">
+        <div className="flex items-center justify-between" data-tutorial="logs-controls">
         <div>
           <h2 className="text-3xl font-bold tracking-tight">实时日志</h2>
           <p className="text-muted-foreground">按 PM2 控制台原始格式展示系统日志</p>

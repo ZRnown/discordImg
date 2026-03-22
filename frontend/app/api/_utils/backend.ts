@@ -58,6 +58,7 @@ export async function fetchFromBackend(
   timeoutMs?: number
 ): Promise<BackendFetchResult> {
   let lastError: Error | null = null
+  const attemptErrors: string[] = []
   const normalizedPath = path.startsWith('/') ? path : `/${path}`
   ensureNoProxyForLocal()
   const hostCandidate = buildHostCandidate(hostHeader)
@@ -78,13 +79,21 @@ export async function fetchFromBackend(
       const trimmed = rawText.trim().toLowerCase()
       if (response.status === 404 && (trimmed.startsWith('<!doctype') || trimmed.startsWith('<html'))) {
         lastError = new Error(`Backend ${baseUrl} returned HTML 404`)
+        attemptErrors.push(`${baseUrl} -> HTML 404`)
         continue
       }
       return { response, rawText, baseUrl }
     } catch (error) {
       lastError = error as Error
+      const message = lastError?.message || String(error)
+      attemptErrors.push(`${baseUrl} -> ${message}`)
     }
   }
 
-  throw lastError || new Error(`Backend unreachable. Tried: ${candidates.join(', ')}`)
+  const detail = attemptErrors.length > 0
+    ? ` Attempts: ${attemptErrors.join(' | ')}`
+    : ` Tried: ${candidates.join(', ')}`
+  throw new Error(`Backend unreachable for ${normalizedPath}.${detail}`, {
+    cause: lastError || undefined
+  })
 }
