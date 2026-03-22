@@ -77,6 +77,7 @@ def build_product_keyword_variants(raw_value: str) -> set[str]:
     normalized_text = normalize_keyword_search_text(raw_value)
     variants: set[str] = set()
     tokens = tokenize_keyword_search_text(normalized_text)
+    allow_alpha_token_variants = len(tokens) == 1
 
     def add(raw_text: str):
         normalized = normalize_keyword_search_text(raw_text)
@@ -89,7 +90,10 @@ def build_product_keyword_variants(raw_value: str) -> set[str]:
         add(normalized_text)
 
     for token in tokens:
-        if len(token) >= 2 or token.isdigit():
+        if any(ch.isdigit() for ch in token):
+            add(token)
+            continue
+        if allow_alpha_token_variants and len(token) >= 2:
             add(token)
 
     for size in (2, 3):

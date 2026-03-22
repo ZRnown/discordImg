@@ -22,15 +22,13 @@ class KeywordModelMatchingTestCase(unittest.TestCase):
 
         self.assertFalse(query_keywords.intersection(jersey_product))
 
-    def test_exact_match_helper_matches_full_token(self):
+    def test_single_word_does_not_match_multi_word_phrase(self):
         reason = find_query_keyword_match(
-            build_query_keyword_candidates("jacket"),
-            "Down Jacket, Winter Coat",
+            build_query_keyword_candidates("hoodie"),
+            "Palace hoodie",
         )
 
-        self.assertIsNotNone(reason)
-        self.assertEqual(reason["canonical_keyword"], "jacket")
-        self.assertEqual(reason["source"], "english_title")
+        self.assertIsNone(reason)
 
     def test_exact_match_helper_rejects_substring_only_match(self):
         reason = find_query_keyword_match(
@@ -50,6 +48,26 @@ class KeywordModelMatchingTestCase(unittest.TestCase):
         self.assertIsNotNone(reason)
         self.assertEqual(reason["canonical_keyword"], "b30")
         self.assertEqual(reason["source"], "title")
+
+    def test_multi_word_phrase_matches_same_phrase(self):
+        reason = find_query_keyword_match(
+            build_query_keyword_candidates("Palace Hoodie"),
+            "Palace hoodie",
+        )
+
+        self.assertIsNotNone(reason)
+        self.assertEqual(reason["canonical_keyword"], "palacehoodie")
+        self.assertEqual(reason["source"], "english_title")
+
+    def test_compact_phrase_matches_spaced_phrase(self):
+        reason = find_query_keyword_match(
+            build_query_keyword_candidates("Palacehoodie"),
+            "Palace hoodie",
+        )
+
+        self.assertIsNotNone(reason)
+        self.assertEqual(reason["canonical_keyword"], "palacehoodie")
+        self.assertEqual(reason["source"], "english_title")
 
 
 if __name__ == "__main__":
