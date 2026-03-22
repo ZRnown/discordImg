@@ -1,0 +1,266 @@
+import type { Placement } from "react-joyride"
+
+export type TutorialStep = {
+  id: string
+  view: string
+  title: string
+  description: string
+  selector: string
+  note?: string
+  label?: string
+  alert?: string
+  shape?: "pill" | "card" | "ring" | "diamond" | "arc"
+  tone?: "cyan" | "emerald" | "amber" | "violet" | "rose" | "slate"
+  placement?: Placement
+  spotlightPadding?: number
+}
+
+const adminTutorialSteps: TutorialStep[] = [
+  {
+    id: 'sidebar',
+    view: 'dashboard',
+    title: '教程入口就在这里',
+    description: '你点击左侧“新手教程”后，会从这里开始。后面每一步都会自动带你切换到对应页面。',
+    selector: "[data-tutorial='sidebar-tutorial']",
+    label: '导航',
+    alert: '从侧边栏开始，系统会自动带你跑完整条上手路径。',
+    shape: 'pill',
+    tone: 'cyan',
+    placement: 'right',
+    spotlightPadding: 12,
+  },
+  {
+    id: 'dashboard',
+    view: 'dashboard',
+    title: '先看仪表盘',
+    description: '这里是系统总览。你可以先看店铺、商品、图片、用户和回复统计，再决定下一步要去哪里。',
+    selector: "[data-tutorial='dashboard-root']",
+    label: '总览',
+    alert: '先看系统状态，再开始操作会更稳。',
+    shape: 'card',
+    tone: 'emerald',
+    placement: 'bottom',
+  },
+  {
+    id: 'dashboard-announcement',
+    view: 'dashboard',
+    title: '公告在这里发',
+    description: '仪表盘里可以新增、编辑和删除公告。需要给所有人同步消息时，先在这里发出来。',
+    selector: "[data-tutorial='dashboard-add-announcement']",
+    label: '公告',
+    alert: '公告区就是系统内的统一通知入口。',
+    shape: 'ring',
+    tone: 'amber',
+    placement: 'bottom',
+    spotlightPadding: 16,
+  },
+  {
+    id: 'accounts-global',
+    view: 'accounts',
+    title: '全局规则先定好',
+    description: '这里集中放相似度阈值、回复延迟和关键词命中上限。它们会影响后面所有网站的判定。',
+    selector: "[data-tutorial='accounts-global-settings']",
+    label: '全局设置',
+    alert: '先把全局默认值定住，网站级规则再按需覆盖。',
+    shape: 'card',
+    tone: 'violet',
+    placement: 'top',
+  },
+  {
+    id: 'accounts-delay',
+    view: 'accounts',
+    title: '回复延迟默认是 1 到 3 秒',
+    description: '默认回复延迟已经改成 1-3 秒，你也可以改成更慢或者更快。这个值决定机器人每次回复前随机等待多久。',
+    selector: "[data-tutorial='accounts-delay-settings']",
+    label: '回复节奏',
+    alert: '默认延迟更短，适合更快的响应节奏；你仍然可以手动改。',
+    shape: 'pill',
+    tone: 'cyan',
+    placement: 'top',
+  },
+  {
+    id: 'accounts-keyword-limit',
+    view: 'accounts',
+    title: '关键词命中上限',
+    description: '这里决定一条消息里命中多少个不同关键词后就不回复。比如上限设成 2，消息里同时出现 B30、B22、B44，就会被拦掉。',
+    selector: "[data-tutorial='accounts-keyword-limit']",
+    label: '过滤强度',
+    alert: '如果你想更保守，就把这个值调低；想放宽，就调高或设为 0。',
+    shape: 'ring',
+    tone: 'amber',
+    placement: 'top',
+  },
+  {
+    id: 'accounts-add',
+    view: 'accounts',
+    title: '网站配置从这里开始',
+    description: '先点“添加网站”，然后选内置模板。显示名称可以改成“微店2”这种名字，系统内部标识会自动生成。',
+    selector: "[data-tutorial='accounts-add-website']",
+    label: '网站模板',
+    alert: '同一个模板可以重复添加，只要显示名称不同就行。',
+    shape: 'card',
+    tone: 'amber',
+    placement: 'bottom',
+  },
+  {
+    id: 'accounts-template-select',
+    view: 'accounts',
+    title: '先选模板，再填名称',
+    description: '优先选内置模板，省得手填 URL 和正则。只有要接新网站时，才切到“自定义”。',
+    selector: "[data-tutorial='accounts-template-select']",
+    label: '模板选择',
+    alert: '内置模板已经预置了网址格式和回复格式，直接改显示名就能用。',
+    shape: 'pill',
+    tone: 'cyan',
+    placement: 'right',
+  },
+  {
+    id: 'accounts-template-name',
+    view: 'accounts',
+    title: '显示名称只管页面展示',
+    description: '你可以把显示名称改成“微店2”“Kakobuy-备用”这种名字。系统内部识别名会单独生成，不会跟展示名混在一起。',
+    selector: "[data-tutorial='accounts-template-name']",
+    label: '命名',
+    alert: '展示名建议带上序号或用途，后面找起来更快。',
+    shape: 'arc',
+    tone: 'violet',
+    placement: 'right',
+  },
+  {
+    id: 'accounts-template-custom',
+    view: 'accounts',
+    title: '自定义模板只在需要时用',
+    description: '如果内置模板不够用，再切到自定义。这里需要手动填 URL 模板、回复模板、ID 提取模式和徽章颜色。',
+    selector: "[data-tutorial='accounts-template-custom-fields']",
+    label: '自定义',
+    alert: '能用内置就先用内置，只有新站点或特殊链接格式才需要自定义。',
+    shape: 'diamond',
+    tone: 'rose',
+    placement: 'left',
+  },
+  {
+    id: 'accounts-rules',
+    view: 'accounts',
+    title: '这里管网站规则',
+    description: '网站列表里可以绑定频道、绑定发送账号、调整回复模式、相似度阈值和过滤规则。新增或删除后列表会自动刷新。',
+    selector: "[data-tutorial='accounts-websites-list']",
+    label: '网站列表',
+    alert: '每个网站都可以单独配置，别把它们当成一套全局规则。',
+    shape: 'card',
+    tone: 'slate',
+    placement: 'left',
+  },
+  {
+    id: 'accounts-website-threshold',
+    view: 'accounts',
+    title: '网站级阈值覆盖',
+    description: '如果某个网站需要独立的图搜阈值，就在这一块直接覆盖。留空时还是用全局阈值。',
+    selector: "[data-tutorial='accounts-website-threshold']",
+    label: '单站覆盖',
+    alert: '这个字段只覆盖当前网站，不会改全局默认值。',
+    shape: 'arc',
+    tone: 'rose',
+    placement: 'top',
+    spotlightPadding: 16,
+  },
+  {
+    id: 'accounts-message-filters',
+    view: 'accounts',
+    title: '消息过滤在这里',
+    description: '如果你想只识别图片、只识别带 HTTP 的信息，或者过滤重复消息，都在这一块设置。这里更像“先拦掉什么，再去识别什么”。',
+    selector: "[data-tutorial='accounts-message-filters']",
+    label: '过滤规则',
+    alert: '先过滤掉不需要的消息，后面的识别会更干净。想做“只标记带 HTTP 的消息”或“不要标记带 HTTP 的消息”，都在这里配。',
+    shape: 'pill',
+    tone: 'emerald',
+    placement: 'right',
+  },
+  {
+    id: 'scraper',
+    view: 'scraper',
+    title: '抓取商品页面',
+    description: '这里用来抓店铺、批量抓商品、编辑商品和查看抓取失败原因。你能在这里把商品源持续补进系统。',
+    selector: "[data-tutorial='scraper-main']",
+    label: '抓取',
+    alert: '抓取页负责把新商品源源不断拉进系统。',
+    shape: 'diamond',
+    tone: 'cyan',
+    placement: 'left',
+  },
+  {
+    id: 'image-search',
+    view: 'image-search',
+    title: '以图搜图',
+    description: '用户发图后，系统会在这里用图片向量搜索商品。阈值越高越保守，越低越容易返回结果。',
+    selector: "[data-tutorial='image-search-upload']",
+    label: '检索',
+    alert: '这一步就是你要的图搜图主链路。',
+    shape: 'ring',
+    tone: 'violet',
+    placement: 'left',
+  },
+]
+
+const adminOnlyTutorialSteps: TutorialStep[] = [
+  {
+    id: 'shops',
+    view: 'shops',
+    title: '店铺管理',
+    description: '这里维护店铺 ID、批量抓取和店铺列表。系统抓取商品前，通常先在这里确认店铺是否已经收录。',
+    selector: "[data-tutorial='shops-add-shop']",
+    label: '店铺',
+    alert: '店铺先建好，抓取和商品归档才会更顺。',
+    shape: 'card',
+    tone: 'emerald',
+    placement: 'right',
+    note: '只有管理员能看到这一页。',
+  },
+  {
+    id: 'users',
+    view: 'users',
+    title: '用户管理',
+    description: '这里创建用户、分配店铺和管理权限。多人使用时，先在这里把权限和店铺范围定好。',
+    selector: "[data-tutorial='users-root']",
+    label: '权限',
+    alert: '用户权限和店铺范围都在这里配置。',
+    shape: 'pill',
+    tone: 'amber',
+    placement: 'right',
+    note: '只有管理员能看到这一页。',
+  },
+  {
+    id: 'logs',
+    view: 'logs',
+    title: '实时日志',
+    description: '这里能看系统正在做什么。卡住、失败、重试时，先来这里看日志最直接。',
+    selector: "[data-tutorial='logs-controls']",
+    label: '日志',
+    alert: '日志页最适合查为什么没回复、为什么失败。',
+    shape: 'arc',
+    tone: 'slate',
+    placement: 'top',
+    note: '只有管理员能看到这一页。',
+  },
+]
+
+export function buildTutorialSteps(isAdmin: boolean): TutorialStep[] {
+  const steps = [...adminTutorialSteps]
+  if (isAdmin) {
+    steps.push(...adminOnlyTutorialSteps)
+  }
+
+  steps.push({
+    id: 'finish',
+    view: 'dashboard',
+    title: '教程结束',
+    description: '你可以随时再点一次“新手教程”重新开始。真正操作时，按“抓取商品 -> 绑定网站和频道 -> 设置阈值 -> 观察日志”这条线走就行。',
+    selector: "[data-tutorial='sidebar-tutorial']",
+    label: '完成',
+    alert: '完成后你就可以自己按页面操作了。',
+    shape: 'pill',
+    tone: 'cyan',
+    placement: 'right',
+  })
+
+  return steps
+}

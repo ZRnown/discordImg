@@ -24,6 +24,10 @@ wheels/
 *.egg
 MANIFEST
 
+# Frontend source files under frontend/lib must stay versioned.
+!frontend/lib/
+!frontend/lib/*.ts
+
 # Virtual environments
 .env
 .venv
