@@ -92,10 +92,64 @@ const formatMessageFilterLabel = (filter: any) => {
   if (filter.filter_type === 'user_repeat') {
     return `用户重复发送 ≤ ${filter.filter_value || '5'} 秒`
   }
+  if (filter.filter_type === 'keyword_match_limit') {
+    return `关键词命中上限 ≤ ${filter.filter_value || '0'}`
+  }
   if (filter.filter_type === 'role_id') {
     return `身份组ID: ${filter.filter_value}`
   }
   return `${filter.filter_type} "${filter.filter_value}"`
+}
+
+const getDefaultFilterValueForType = (filterType: string) => {
+  if (filterType === 'numeric_range') {
+    return buildNumericRangeFilterValue({ keyword: '', min: '', max: '' })
+  }
+  if (filterType === 'image_filter') {
+    return '0.95'
+  }
+  if (filterType === 'user_repeat') {
+    return '5'
+  }
+  if (filterType === 'keyword_match_limit') {
+    return '2'
+  }
+  return ''
+}
+
+const getFilterValuePlaceholder = (filterType: string) => {
+  if (filterType === 'user_id') {
+    return '输入用户ID，多个用逗号分隔'
+  }
+  if (filterType === 'role_id') {
+    return '输入身份组ID，多个用逗号分隔'
+  }
+  if (filterType === 'keyword_match_limit') {
+    return '输入上限，例如 2'
+  }
+  return '输入过滤条件'
+}
+
+const normalizeMultiValueFilterInput = (value: string) =>
+  value
+    .split(/[,\n，]+/)
+    .map(item => item.trim())
+    .filter(Boolean)
+    .join(',')
+
+const normalizeKeywordMatchLimitFilter = (rawValue: string) => {
+  const trimmed = rawValue.trim()
+  if (!trimmed) {
+    return { ok: false, error: '关键词命中上限不能为空' as const }
+  }
+  const value = Number.parseInt(trimmed, 10)
+  if (!Number.isFinite(value)) {
+    return { ok: false, error: '关键词命中上限必须是整数' as const }
+  }
+  if (value < 0) {
+    return { ok: false, error: '关键词命中上限不能小于 0' as const }
+  }
+  return { ok: true as const, value: String(value) }
 }
 
 const createFilterId = () => {
@@ -1669,13 +1723,26 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
         payload = { filter_type: 'user_repeat', filter_value: String(seconds) }
       }
 
+      if (websiteNewFilter.filter_type === 'keyword_match_limit') {
+        const normalized = normalizeKeywordMatchLimitFilter(websiteNewFilter.filter_value)
+        if (!normalized.ok) {
+          toast.error(normalized.error)
+          return
+        }
+        payload = { filter_type: 'keyword_match_limit', filter_value: normalized.value }
+      }
+
       if (websiteNewFilter.filter_type === 'image') {
         payload = { filter_type: 'image', filter_value: '' }
       }
 
-      if (websiteNewFilter.filter_type === 'role_id' && !websiteNewFilter.filter_value.trim()) {
-        toast.error('身份组ID不能为空')
-        return
+      if (websiteNewFilter.filter_type === 'role_id' || websiteNewFilter.filter_type === 'user_id') {
+        const normalized = normalizeMultiValueFilterInput(websiteNewFilter.filter_value)
+        if (!normalized) {
+          toast.error(websiteNewFilter.filter_type === 'role_id' ? '身份组ID不能为空' : '用户ID不能为空')
+          return
+        }
+        payload = { filter_type: websiteNewFilter.filter_type, filter_value: normalized }
       }
 
       const currentFilters = websiteFilters[websiteId] || []
@@ -1780,8 +1847,26 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
         filter.filter_value = String(seconds)
       }
 
+      if (filter.filter_type === 'keyword_match_limit') {
+        const normalized = normalizeKeywordMatchLimitFilter(filter.filter_value)
+        if (!normalized.ok) {
+          toast.error(normalized.error)
+          return
+        }
+        filter.filter_value = normalized.value
+      }
+
       if (filter.filter_type === 'image') {
         filter.filter_value = ''
+      }
+
+      if (filter.filter_type === 'role_id' || filter.filter_type === 'user_id') {
+        const normalized = normalizeMultiValueFilterInput(filter.filter_value)
+        if (!normalized) {
+          toast.error(filter.filter_type === 'role_id' ? '身份组ID不能为空' : '用户ID不能为空')
+          return
+        }
+        filter.filter_value = normalized
       }
 
       const currentFilters = websiteFilters[websiteId] || []
@@ -1977,6 +2062,24 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
         payload = { filter_type: 'user_repeat', filter_value: String(seconds) }
       }
 
+      if (newFilter.filter_type === 'keyword_match_limit') {
+        const normalized = normalizeKeywordMatchLimitFilter(newFilter.filter_value)
+        if (!normalized.ok) {
+          toast.error(normalized.error)
+          return
+        }
+        payload = { filter_type: 'keyword_match_limit', filter_value: normalized.value }
+      }
+
+      if (newFilter.filter_type === 'role_id' || newFilter.filter_type === 'user_id') {
+        const normalized = normalizeMultiValueFilterInput(newFilter.filter_value)
+        if (!normalized) {
+          toast.error(newFilter.filter_type === 'role_id' ? '身份组ID不能为空' : '用户ID不能为空')
+          return
+        }
+        payload = { filter_type: newFilter.filter_type, filter_value: normalized }
+      }
+
       const res = await fetch('/api/message-filters', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2056,6 +2159,30 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
         payload = {
           ...payload,
           filter_value: String(seconds)
+        }
+      }
+
+      if (editingFilter.filter_type === 'keyword_match_limit') {
+        const normalized = normalizeKeywordMatchLimitFilter(editingFilter.filter_value)
+        if (!normalized.ok) {
+          toast.error(normalized.error)
+          return
+        }
+        payload = {
+          ...payload,
+          filter_value: normalized.value
+        }
+      }
+
+      if (editingFilter.filter_type === 'role_id' || editingFilter.filter_type === 'user_id') {
+        const normalized = normalizeMultiValueFilterInput(editingFilter.filter_value)
+        if (!normalized) {
+          toast.error(editingFilter.filter_type === 'role_id' ? '身份组ID不能为空' : '用户ID不能为空')
+          return
+        }
+        payload = {
+          ...payload,
+          filter_value: normalized
         }
       }
 
@@ -2356,34 +2483,6 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                 </div>
               </div>
 
-              <div className="space-y-2" data-tutorial="accounts-keyword-limit">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="keyword-match-limit" className="text-sm font-medium">关键词命中上限</Label>
-                  <span className="text-sm font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded">
-                    {settings.keyword_match_limit <= 0 ? '不限' : settings.keyword_match_limit}
-                  </span>
-                </div>
-                <div className="space-y-1">
-                  <Input
-                    id="keyword-match-limit"
-                    type="number"
-                    min="0"
-                    step="1"
-                    value={settings.keyword_match_limit}
-                    onChange={(e) => {
-                      const value = Number.parseInt(e.target.value, 10)
-                      setSettings(prev => ({
-                        ...prev,
-                        keyword_match_limit: Number.isFinite(value) && value >= 0 ? value : 0,
-                      }))
-                    }}
-                    className="h-9"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    单条消息命中的不同关键词超过这个数量时不回复，`0` 表示不限制。
-                  </p>
-                </div>
-              </div>
             </div>
 
             <div className="space-y-4 border-t pt-4">
@@ -2572,13 +2671,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                             setNewFilter(prev => ({
                               ...prev,
                               filter_type: value,
-                              filter_value: value === 'numeric_range'
-                                ? buildNumericRangeFilterValue({ keyword: '', min: '', max: '' })
-                                : value === 'image_filter'
-                                  ? '0.95'
-                                  : value === 'user_repeat'
-                                    ? '5'
-                                    : ''
+                              filter_value: getDefaultFilterValueForType(value)
                             }))
                             if (value !== 'image_filter') {
                               setNewFilterImages([])
@@ -2602,6 +2695,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                             <SelectItem value="image_filter">图片过滤</SelectItem>
                             <SelectItem value="numeric_range">数字范围</SelectItem>
                             <SelectItem value="user_repeat">用户重复发送</SelectItem>
+                            <SelectItem value="keyword_match_limit">关键词命中上限</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -2714,13 +2808,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                           <Input
                             value={newFilter.filter_value}
                             onChange={e => setNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
-                            placeholder={
-                              newFilter.filter_type === 'user_id'
-                                ? "输入用户ID，多个用逗号分隔"
-                                : newFilter.filter_type === 'role_id'
-                                  ? "输入身份组ID，多个用逗号分隔"
-                                : "输入要过滤的内容"
-                            }
+                            placeholder={getFilterValuePlaceholder(newFilter.filter_type)}
                           />
                         )}
                       </div>
@@ -3081,41 +3169,10 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                         </div>
                       </div>
 
-                      <div className="space-y-2" data-tutorial="accounts-website-keyword-limit">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <div className="text-sm font-medium truncate">关键词命中上限</div>
-                            <span className="text-xs font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded shrink-0">
-                              {(() => {
-                                const value = websiteKeywordMatchInputs[website.id]
-                                if (value === '' || value === undefined) return '继承全局'
-                                const num = Number(value)
-                                if (!Number.isFinite(num)) return '未完成'
-                                return num <= 0 ? '不限' : String(num)
-                              })()}
-                            </span>
-                          </div>
-                        </div>
-                        <div className="space-y-1">
-                          <Input
-                            type="number"
-                            min="0"
-                            step="1"
-                            placeholder="继承全局"
-                            value={websiteKeywordMatchInputs[website.id] ?? ''}
-                            onChange={e => {
-                              const value = e.target.value
-                              setWebsiteKeywordMatchInputs(prev => ({ ...prev, [website.id]: value }))
-                              scheduleWebsiteKeywordMatchLimitSave(website.id, value)
-                            }}
-                            className="h-9 text-xs"
-                          />
-                        </div>
-                      </div>
                     </div>
 
                     {/* 频道绑定 */}
-                    <div className="space-y-2">
+                    <div className="space-y-2" data-tutorial="accounts-website-filters">
                       <div className="flex items-center gap-2">
                         <Hash className="w-4 h-4" />
                         <span className="text-sm font-medium">绑定频道</span>
@@ -3496,13 +3553,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                                     setWebsiteNewFilter(prev => ({
                                       ...prev,
                                       filter_type: value,
-                                      filter_value: value === 'numeric_range'
-                                        ? buildNumericRangeFilterValue({ keyword: '', min: '', max: '' })
-                                        : value === 'image_filter'
-                                          ? '0.95'
-                                          : value === 'user_repeat'
-                                            ? '5'
-                                            : ''
+                                      filter_value: getDefaultFilterValueForType(value)
                                     }))
                                     if (value !== 'image_filter') {
                                       setWebsiteNewFilterImages([])
@@ -3526,6 +3577,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                                     <SelectItem value="image_filter">图片过滤</SelectItem>
                                     <SelectItem value="numeric_range">数字范围</SelectItem>
                                     <SelectItem value="user_repeat">用户重复发送</SelectItem>
+                                    <SelectItem value="keyword_match_limit">关键词命中上限</SelectItem>
                                   </SelectContent>
                                 </Select>
                               </div>
@@ -3645,13 +3697,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                                   <Input
                                     value={websiteNewFilter.filter_value}
                                     onChange={e => setWebsiteNewFilter(prev => ({ ...prev, filter_value: e.target.value }))}
-                                    placeholder={
-                                      websiteNewFilter.filter_type === 'user_id'
-                                        ? "输入用户ID，多个用逗号分隔"
-                                        : websiteNewFilter.filter_type === 'role_id'
-                                          ? "输入身份组ID，多个用逗号分隔"
-                                          : "输入过滤条件"
-                                    }
+                                    placeholder={getFilterValuePlaceholder(websiteNewFilter.filter_type)}
                                   />
                                 )}
                               </div>
@@ -3718,13 +3764,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                       onValueChange={value => setEditingFilter((prev: any) => ({
                         ...prev,
                         filter_type: value,
-                        filter_value: value === 'numeric_range'
-                          ? buildNumericRangeFilterValue({ keyword: '', min: '', max: '' })
-                          : value === 'image_filter'
-                            ? '0.95'
-                            : value === 'user_repeat'
-                              ? '5'
-                              : ''
+                        filter_value: getDefaultFilterValueForType(value)
                       }))}
                     >
                       <SelectTrigger>
@@ -3741,6 +3781,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                       <SelectItem value="image_filter">图片过滤</SelectItem>
                       <SelectItem value="numeric_range">数字范围</SelectItem>
                       <SelectItem value="user_repeat">用户重复发送</SelectItem>
+                      <SelectItem value="keyword_match_limit">关键词命中上限</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -3859,13 +3900,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                     <Input
                       value={editingFilter.filter_value}
                       onChange={e => setEditingFilter((prev: any) => ({ ...prev, filter_value: e.target.value }))}
-                      placeholder={
-                        editingFilter.filter_type === 'role_id'
-                          ? '输入身份组ID，多个用逗号分隔'
-                          : editingFilter.filter_type === 'user_id'
-                            ? '输入用户ID，多个用逗号分隔'
-                            : undefined
-                      }
+                      placeholder={getFilterValuePlaceholder(editingFilter.filter_type)}
                     />
                   )}
                 </div>
@@ -3896,13 +3931,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                         filter: {
                           ...prev.filter,
                           filter_type: value,
-                          filter_value: value === 'numeric_range'
-                            ? buildNumericRangeFilterValue({ keyword: '', min: '', max: '' })
-                            : value === 'image_filter'
-                              ? '0.95'
-                              : value === 'user_repeat'
-                                ? '5'
-                                : ''
+                          filter_value: getDefaultFilterValueForType(value)
                         }
                       }))
                       if (value !== 'image_filter') {
@@ -3928,6 +3957,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                       <SelectItem value="image_filter">图片过滤</SelectItem>
                       <SelectItem value="numeric_range">数字范围</SelectItem>
                       <SelectItem value="user_repeat">用户重复发送</SelectItem>
+                      <SelectItem value="keyword_match_limit">关键词命中上限</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -4055,13 +4085,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                         ...prev,
                         filter: { ...prev.filter, filter_value: e.target.value }
                       }))}
-                      placeholder={
-                        editingWebsiteFilter.filter.filter_type === 'user_id'
-                          ? "输入用户ID，多个用逗号分隔"
-                          : editingWebsiteFilter.filter.filter_type === 'role_id'
-                            ? "输入身份组ID，多个用逗号分隔"
-                            : "输入过滤条件"
-                      }
+                      placeholder={getFilterValuePlaceholder(editingWebsiteFilter.filter.filter_type)}
                     />
                   )}
                 </div>

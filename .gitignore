@@ -295,6 +295,9 @@ test_*.py
 *_test.py
 tests/
 test_data/
+!backend/tests/
+backend/tests/*
+!backend/tests/test_message_filter_helpers.py
 
 # Development notes and planning
 *.plan.md

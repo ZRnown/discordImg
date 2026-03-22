@@ -36,6 +36,18 @@ try:
     from settings_validation import normalize_reply_delay_range
 except ImportError:
     from .settings_validation import normalize_reply_delay_range
+try:
+    from message_filter_utils import (
+        filters_block_message,
+        resolve_keyword_match_limit,
+        split_filter_values,
+    )
+except ImportError:
+    from .message_filter_utils import (
+        filters_block_message,
+        resolve_keyword_match_limit,
+        split_filter_values,
+    )
 # 全局变量用于多账号机器人管理
 bot_clients = []
 bot_tasks = []
@@ -748,91 +760,12 @@ class DiscordBotClient(discord.Client):
         return []
 
     def _filters_block_message(self, message, filters, match_context=None):
-        message_content = (message.content or '').lower()
-        for filter_rule in filters or []:
-            raw_filter_value = filter_rule.get('filter_value') or ''
-            filter_value = raw_filter_value.lower()
-            filter_type = filter_rule.get('filter_type')
-
-            if filter_type == 'contains':
-                if filter_value in message_content:
-                    return True
-            elif filter_type == 'starts_with':
-                if message_content.startswith(filter_value):
-                    return True
-            elif filter_type == 'ends_with':
-                if message_content.endswith(filter_value):
-                    return True
-            elif filter_type == 'regex':
-                try:
-                    if re.search(filter_value, message_content, re.IGNORECASE):
-                        return True
-                except re.error:
-                    continue
-            elif filter_type == 'numeric_range':
-                try:
-                    rule = json.loads(raw_filter_value) if raw_filter_value else {}
-                except json.JSONDecodeError:
-                    rule = {}
-
-                keyword = str(rule.get('keyword') or '').strip()
-                min_value = rule.get('min')
-                max_value = rule.get('max')
-
-                if not keyword:
-                    continue
-
-                try:
-                    min_value = int(min_value)
-                    max_value = int(max_value)
-                except (TypeError, ValueError):
-                    continue
-
-                if min_value >= max_value:
-                    continue
-
-                pattern = rf'(?i){re.escape(keyword)}\s*[:=-]?\s*(\d+)'
-                value_matches = re.findall(pattern, message.content or '')
-                for value_str in value_matches:
-                    try:
-                        value = int(value_str)
-                        if value < min_value or value > max_value:
-                            return True
-                    except ValueError:
-                        continue
-            elif filter_type == 'user_id':
-                filter_user_ids = [uid.strip() for uid in filter_value.split(',') if uid.strip()]
-                sender_id = str(message.author.id)
-                sender_name = str(message.author.name).lower()
-                for blocked_id in filter_user_ids:
-                    blocked_id = blocked_id.strip()
-                    if blocked_id == sender_id or blocked_id.lower() in sender_name:
-                        return True
-            elif filter_type == 'role_id':
-                role_ids = [rid.strip() for rid in filter_value.split(',') if rid.strip()]
-                if role_ids and getattr(message, 'guild', None):
-                    author_roles = getattr(message.author, 'roles', []) or []
-                    author_role_ids = {str(role.id) for role in author_roles if getattr(role, 'id', None) is not None}
-                    if author_role_ids.intersection(set(role_ids)):
-                        return True
-            elif filter_type == 'image':
-                if self._message_has_image(message):
-                    return True
-            elif filter_type == 'image_similarity':
-                if not match_context or match_context.get('type') != 'image':
-                    continue
-                try:
-                    threshold = float(raw_filter_value)
-                except (TypeError, ValueError):
-                    continue
-                similarity = match_context.get('similarity', 0)
-                try:
-                    similarity = float(similarity)
-                except (TypeError, ValueError):
-                    similarity = 0
-                if similarity >= threshold:
-                    return True
-        return False
+        return filters_block_message(
+            message,
+            filters,
+            match_context=match_context,
+            message_has_image=self._message_has_image,
+        )
 
     def _get_repeat_product_ids(self, product, custom_reply=None):
         product_id = product.get('id') if isinstance(product, dict) else None
@@ -2569,7 +2502,7 @@ class DiscordBotClient(discord.Client):
                             continue
                 elif filter_type == 'user_id':
                     # 检查用户ID过滤
-                    filter_user_ids = [uid.strip() for uid in filter_value.split(',') if uid.strip()]
+                    filter_user_ids = split_filter_values(filter_value)
                     sender_id = str(message.author.id)
                     sender_name = str(message.author.name).lower()
 
@@ -2579,7 +2512,7 @@ class DiscordBotClient(discord.Client):
                             logger.info(f'消息被过滤: 用户 {message.author.name} (ID: {sender_id}) 在过滤列表中')
                             return True
                 elif filter_type == 'role_id':
-                    role_ids = [rid.strip() for rid in filter_value.split(',') if rid.strip()]
+                    role_ids = split_filter_values(filter_value)
                     if role_ids and getattr(message, 'guild', None):
                         author_roles = getattr(message.author, 'roles', []) or []
                         author_role_ids = {str(role.id) for role in author_roles if getattr(role, 'id', None) is not None}
@@ -3288,6 +3221,21 @@ class DiscordBotClient(discord.Client):
                 if str(reason.get('canonical_keyword') or '').strip()
             }
 
+            db = None
+            global_filters = []
+            try:
+                try:
+                    from database import db as imported_db
+                except ImportError:
+                    from .database import db as imported_db
+                db = imported_db
+                global_filters = await asyncio.get_event_loop().run_in_executor(
+                    None, db.get_message_filters
+                )
+            except Exception as filter_error:
+                logger.error(f'获取全局过滤规则失败: {filter_error}')
+                global_filters = []
+
             user_settings = {}
             if self.user_id:
                 try:
@@ -3296,7 +3244,14 @@ class DiscordBotClient(discord.Client):
                     logger.error(f'获取全局关键词命中上限失败: {settings_error}')
                     user_settings = {}
 
-            global_keyword_match_limit = max(0, _coerce_int((user_settings or {}).get('keyword_match_limit', 0), 0))
+            legacy_global_keyword_match_limit = max(
+                0,
+                _coerce_int((user_settings or {}).get('keyword_match_limit', 0), 0),
+            )
+            global_keyword_match_limit = resolve_keyword_match_limit(
+                global_filters,
+                fallback_limit=legacy_global_keyword_match_limit,
+            )
 
             logger.info(f'关键词搜索成功: "{search_query}" -> 匹配 {len(matched_products)} 个商品')
             for product in matched_products:
@@ -3319,10 +3274,6 @@ class DiscordBotClient(discord.Client):
             user_website_settings_map = {}
             if self.user_id:
                 try:
-                    try:
-                        from database import db
-                    except ImportError:
-                        from .database import db
                     for website_config in website_configs:
                         website_id = website_config.get('id')
                         if not website_id:
@@ -3402,9 +3353,17 @@ class DiscordBotClient(discord.Client):
 
                 for website_config in website_configs:
                     website_settings = user_website_settings_map.get(website_config.get('id')) or {}
+                    website_filter_rules = self._parse_message_filters(website_settings.get('message_filters', '[]'))
                     website_keyword_match_limit = max(
                         0,
-                        _coerce_int(website_settings.get('keyword_match_limit', global_keyword_match_limit), global_keyword_match_limit),
+                        _coerce_int(
+                            website_settings.get('keyword_match_limit', global_keyword_match_limit),
+                            global_keyword_match_limit,
+                        ),
+                    )
+                    website_keyword_match_limit = resolve_keyword_match_limit(
+                        website_filter_rules,
+                        fallback_limit=website_keyword_match_limit,
                     )
                     if website_keyword_match_limit > 0 and len(matched_keyword_set) > website_keyword_match_limit:
                         logger.info(
@@ -3457,18 +3416,28 @@ class DiscordBotClient(discord.Client):
             per_website_content = {}
             per_website_reply_modes = {}
             try:
-                try:
-                    from database import db
-                except ImportError:
-                    from .database import db
+                if db is None:
+                    try:
+                        from database import db as imported_db
+                    except ImportError:
+                        from .database import db as imported_db
+                    db = imported_db
             except Exception as db_import_error:
                 logger.error(f"导入数据库模块失败: {db_import_error}")
                 db = None
             for website_config in website_configs:
                 website_settings = user_website_settings_map.get(website_config.get('id')) or {}
+                website_filter_rules = self._parse_message_filters(website_settings.get('message_filters', '[]'))
                 website_keyword_match_limit = max(
                     0,
-                    _coerce_int(website_settings.get('keyword_match_limit', global_keyword_match_limit), global_keyword_match_limit),
+                    _coerce_int(
+                        website_settings.get('keyword_match_limit', global_keyword_match_limit),
+                        global_keyword_match_limit,
+                    ),
+                )
+                website_keyword_match_limit = resolve_keyword_match_limit(
+                    website_filter_rules,
+                    fallback_limit=website_keyword_match_limit,
                 )
                 if website_keyword_match_limit > 0 and len(matched_keyword_set) > website_keyword_match_limit:
                     logger.info(

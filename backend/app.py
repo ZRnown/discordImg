@@ -91,12 +91,66 @@ except ModuleNotFoundError as e:
         from .shop_scrape_helpers import build_weidian_shop_api_headers, reset_scrape_stop_event
     else:
         raise
+try:
+    from message_filter_utils import split_filter_values
+except ModuleNotFoundError as e:
+    if e.name == 'message_filter_utils':
+        from .message_filter_utils import split_filter_values
+    else:
+        raise
 
 # === 全局状态变量 ===
 ai_model_ready = False  # AI模型是否已就绪
 # 全局 AI 并发控制（跨商品），避免 CPU 被同时推理任务打满
 GLOBAL_AI_SEMAPHORE = threading.Semaphore(4)
 MAX_LOG_HISTORY = 5000
+
+
+def _normalize_message_filter_value(filter_type, filter_value):
+    if not filter_type:
+        raise ValueError('过滤类型不能为空')
+
+    if filter_type not in {'image', 'image_filter'} and filter_value in (None, ''):
+        raise ValueError('过滤类型和值都是必填的')
+
+    if filter_type == 'image' and not filter_value:
+        return ''
+
+    if filter_type in {'user_id', 'role_id'}:
+        normalized_values = split_filter_values(filter_value)
+        if not normalized_values:
+            label = '用户ID' if filter_type == 'user_id' else '身份组ID'
+            raise ValueError(f'{label}不能为空')
+        return ','.join(normalized_values)
+
+    if filter_type == 'user_repeat':
+        try:
+            seconds_val = float(filter_value)
+        except (TypeError, ValueError):
+            raise ValueError('秒必须是数字')
+        if seconds_val <= 0:
+            raise ValueError('秒必须大于0')
+        return str(seconds_val)
+
+    if filter_type in {'image_similarity', 'image_filter'}:
+        try:
+            val = float(filter_value) if filter_value not in (None, '') else 0.95
+        except (TypeError, ValueError):
+            raise ValueError('相似度必须是数字')
+        if not (0.0 <= val <= 1.0):
+            raise ValueError('相似度必须在0.0-1.0之间')
+        return str(val)
+
+    if filter_type == 'keyword_match_limit':
+        try:
+            limit_val = int(filter_value)
+        except (TypeError, ValueError):
+            raise ValueError('关键词命中上限必须是整数')
+        if limit_val < 0:
+            raise ValueError('关键词命中上限不能小于 0')
+        return str(limit_val)
+
+    return str(filter_value)
 
 # 在应用启动时从数据库加载系统配置
 def load_system_config():
@@ -1983,28 +2037,10 @@ def update_website_filters(config_id):
             if filter_id in seen_ids:
                 filter_id = uuid.uuid4().hex
             seen_ids.add(filter_id)
-
-            if not filter_type or (filter_type not in {'image', 'image_filter'} and filter_value in (None, '')):
-                return jsonify({'error': '过滤类型和值都是必填的'}), 400
-
-            if filter_type == 'image' and not filter_value:
-                filter_value = ''
-            if filter_type == 'user_repeat':
-                try:
-                    seconds_val = float(filter_value)
-                except (TypeError, ValueError):
-                    return jsonify({'error': '秒必须是数字'}), 400
-                if seconds_val <= 0:
-                    return jsonify({'error': '秒必须大于0'}), 400
-                filter_value = str(seconds_val)
-            if filter_type == 'image_filter':
-                try:
-                    val = float(filter_value) if filter_value not in (None, '') else 0.95
-                except (TypeError, ValueError):
-                    return jsonify({'error': '相似度必须是数字'}), 400
-                if not (0.0 <= val <= 1.0):
-                    return jsonify({'error': '相似度必须在0.0-1.0之间'}), 400
-                filter_value = str(val)
+            try:
+                filter_value = _normalize_message_filter_value(filter_type, filter_value)
+            except ValueError as exc:
+                return jsonify({'error': str(exc)}), 400
 
             normalized_filters.append({
                 'id': filter_id,
@@ -2362,28 +2398,10 @@ def add_message_filter():
         data = request.get_json()
         filter_type = data.get('filter_type')
         filter_value = data.get('filter_value')
-
-        if not filter_type or (filter_type not in {'image', 'image_filter'} and not filter_value):
-            return jsonify({'error': '过滤类型和值都是必填的'}), 400
-
-        if filter_type == 'image' and not filter_value:
-            filter_value = ''
-        if filter_type == 'user_repeat':
-            try:
-                seconds_val = float(filter_value)
-            except (TypeError, ValueError):
-                return jsonify({'error': '秒必须是数字'}), 400
-            if seconds_val <= 0:
-                return jsonify({'error': '秒必须大于0'}), 400
-            filter_value = str(seconds_val)
-        if filter_type in {'image_similarity', 'image_filter'}:
-            try:
-                val = float(filter_value) if filter_value not in (None, '') else 0.95
-            except (TypeError, ValueError):
-                return jsonify({'error': '相似度必须是数字'}), 400
-            if not (0.0 <= val <= 1.0):
-                return jsonify({'error': '相似度必须在0.0-1.0之间'}), 400
-            filter_value = str(val)
+        try:
+            filter_value = _normalize_message_filter_value(filter_type, filter_value)
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
 
         filter_id = db.add_message_filter(filter_type, filter_value)
         if filter_id:
@@ -2405,28 +2423,10 @@ def update_message_filter(filter_id):
         filter_type = data.get('filter_type')
         filter_value = data.get('filter_value')
         is_active = data.get('is_active', True)
-
-        if not filter_type or (filter_type not in {'image', 'image_filter'} and not filter_value):
-            return jsonify({'error': '过滤类型和值都是必填的'}), 400
-
-        if filter_type == 'image' and not filter_value:
-            filter_value = ''
-        if filter_type == 'user_repeat':
-            try:
-                seconds_val = float(filter_value)
-            except (TypeError, ValueError):
-                return jsonify({'error': '秒必须是数字'}), 400
-            if seconds_val <= 0:
-                return jsonify({'error': '秒必须大于0'}), 400
-            filter_value = str(seconds_val)
-        if filter_type in {'image_similarity', 'image_filter'}:
-            try:
-                val = float(filter_value) if filter_value not in (None, '') else 0.95
-            except (TypeError, ValueError):
-                return jsonify({'error': '相似度必须是数字'}), 400
-            if not (0.0 <= val <= 1.0):
-                return jsonify({'error': '相似度必须在0.0-1.0之间'}), 400
-            filter_value = str(val)
+        try:
+            filter_value = _normalize_message_filter_value(filter_type, filter_value)
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
 
         if db.update_message_filter(filter_id, filter_type, filter_value, is_active):
             return jsonify({'success': True, 'message': '过滤规则更新成功'})
