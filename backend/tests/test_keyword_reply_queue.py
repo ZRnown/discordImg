@@ -649,9 +649,13 @@ class KeywordSearchMatchingTestCase(unittest.IsolatedAsyncioTestCase):
             _enqueue_or_dispatch_keyword_reply=enqueue_or_dispatch_keyword_reply,
             _start_keyword_reply_background_task=start_keyword_reply_background_task,
         )
+        client._get_user_settings_safe = MethodType(DiscordBotClient._get_user_settings_safe, client)
+        client._parse_message_filters = MethodType(DiscordBotClient._parse_message_filters, client)
 
         fake_db = SimpleNamespace(
             get_user_settings=lambda _user_id: {"keyword_match_limit": 2},
+            get_message_filters=lambda: [],
+            get_user_website_settings=lambda _user_id, _website_id: {},
         )
 
         with patch.object(database_module, "db", fake_db):
@@ -723,10 +727,14 @@ class KeywordSearchMatchingTestCase(unittest.IsolatedAsyncioTestCase):
             _start_keyword_reply_background_task=start_keyword_reply_background_task,
         )
         client._generate_reply_content = MethodType(DiscordBotClient._generate_reply_content, client)
+        client._get_user_settings_safe = MethodType(DiscordBotClient._get_user_settings_safe, client)
+        client._parse_message_filters = MethodType(DiscordBotClient._parse_message_filters, client)
 
         fake_db = SimpleNamespace(
             get_user_settings=lambda _user_id: {"keyword_match_limit": 0},
             get_website_senders=lambda _website_id, _user_id: [999],
+            get_message_filters=lambda: [],
+            get_user_website_settings=lambda _user_id, _website_id: {},
         )
 
         with patch.object(database_module, "db", fake_db):
@@ -739,6 +747,95 @@ class KeywordSearchMatchingTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn("https://www.acbuy.com/product/?id=111", content)
         self.assertIn("https://www.acbuy.com/product/?id=222", content)
         self.assertNotIn("仅 OOPBUY 自定义内容", content)
+
+    async def test_b30_query_does_not_schedule_plain_30_product(self):
+        scheduled_payloads = []
+        background_tasks = []
+
+        async def search_products_by_keyword(_query):
+            return {
+                "success": True,
+                "products": [
+                    {
+                        "id": 304,
+                        "english_title": "Dior B30, B30,B 30,Dior b30s",
+                        "weidianUrl": "https://weidian.com/item.html?itemID=7653365800",
+                        "autoReplyEnabled": True,
+                    },
+                    {
+                        "id": 365,
+                        "english_title": "Dior B30, B30,B 30,Dior b30s",
+                        "weidianUrl": "https://weidian.com/item.html?itemID=7653304418",
+                        "autoReplyEnabled": True,
+                    },
+                    {
+                        "id": 581,
+                        "english_title": "Asics Gel Kayano 30",
+                        "weidianUrl": "https://weidian.com/item.html?itemID=7681248139",
+                        "autoReplyEnabled": True,
+                    },
+                ],
+            }
+
+        async def get_website_configs_by_channel_async(_channel_id):
+            return [
+                {
+                    "id": 21,
+                    "name": "weidian",
+                    "display_name": "WEIDIAN",
+                    "reply_template": "{url}",
+                    "url_template": "https://weidian.com/item.html?itemID={id}",
+                }
+            ]
+
+        async def get_keyword_window_settings(_website_config, sender_count=0):
+            self.assertEqual(sender_count, 1)
+            return (180, 0, 0, "rotation", "immediate")
+
+        async def enqueue_or_dispatch_keyword_reply(_message, product, custom_reply, _website_config):
+            scheduled_payloads.append(
+                {
+                    "product_id": product["id"],
+                    "content": custom_reply.get("content", ""),
+                }
+            )
+            return True
+
+        def start_keyword_reply_background_task(coro, task_name):
+            task = asyncio.create_task(coro, name=task_name)
+            background_tasks.append(task)
+            return task
+
+        client = SimpleNamespace(
+            user_id=456,
+            user_shops=[],
+            search_products_by_keyword=search_products_by_keyword,
+            get_website_configs_by_channel_async=get_website_configs_by_channel_async,
+            _get_keyword_window_settings=get_keyword_window_settings,
+            _enqueue_or_dispatch_keyword_reply=enqueue_or_dispatch_keyword_reply,
+            _start_keyword_reply_background_task=start_keyword_reply_background_task,
+        )
+        client._generate_reply_content = MethodType(DiscordBotClient._generate_reply_content, client)
+        client._get_user_settings_safe = MethodType(DiscordBotClient._get_user_settings_safe, client)
+        client._parse_message_filters = MethodType(DiscordBotClient._parse_message_filters, client)
+
+        fake_db = SimpleNamespace(
+            get_user_settings=lambda _user_id: {"keyword_match_limit": 0},
+            get_website_senders=lambda _website_id, _user_id: [999],
+            get_message_filters=lambda: [],
+            get_user_website_settings=lambda _user_id, _website_id: {},
+        )
+
+        with patch.object(database_module, "db", fake_db):
+            await DiscordBotClient.handle_keyword_search(client, self._Message("b 30"))
+            if background_tasks:
+                await asyncio.gather(*background_tasks)
+
+        self.assertEqual(len(scheduled_payloads), 1)
+        self.assertEqual(scheduled_payloads[0]["product_id"], 304)
+        self.assertIn("7653365800", scheduled_payloads[0]["content"])
+        self.assertIn("7653304418", scheduled_payloads[0]["content"])
+        self.assertNotIn("7681248139", scheduled_payloads[0]["content"])
 
 
 if __name__ == "__main__":

@@ -98,6 +98,13 @@ except ModuleNotFoundError as e:
         from .message_filter_utils import split_filter_values
     else:
         raise
+try:
+    from keyword_search_terms import build_text_search_plan
+except ModuleNotFoundError as e:
+    if e.name == 'keyword_search_terms':
+        from .keyword_search_terms import build_text_search_plan
+    else:
+        raise
 
 # === 全局状态变量 ===
 ai_model_ready = False  # AI模型是否已就绪
@@ -4386,8 +4393,8 @@ def search_similar_text():
 
         with db.get_connection() as conn:
             cursor = conn.cursor()
-            query_lower = query.lower()
-            query_normalized = re.sub(r'\s+', ' ', query_lower).strip()
+            search_plan = build_text_search_plan(query)
+            query_normalized = search_plan['query_normalized']
 
             scoped_clause = ""
             scoped_params = ()
@@ -4429,33 +4436,9 @@ def search_similar_text():
             rows = fetch_by_terms([query_normalized], limit)
             found_ids = {row['id'] for row in rows}
 
-            raw_tokens = re.findall(r'\w+', query_normalized)
-            tokens = [kw for kw in raw_tokens if len(kw) >= 2 or kw.isdigit()]
-            extra_terms = []
-            numeric_terms = []
-            if tokens:
-                seen_numeric = set()
-                for idx, token in enumerate(tokens):
-                    if not any(ch.isdigit() for ch in token):
-                        continue
-                    if idx - 1 >= 0:
-                        phrase = f"{tokens[idx - 1]} {token}"
-                        if phrase not in seen_numeric:
-                            numeric_terms.append(phrase)
-                            seen_numeric.add(phrase)
-                    if idx - 2 >= 0:
-                        phrase = f"{tokens[idx - 2]} {tokens[idx - 1]} {token}"
-                        if phrase not in seen_numeric:
-                            numeric_terms.append(phrase)
-                            seen_numeric.add(phrase)
-            if len(tokens) >= 2:
-                for i in range(len(tokens) - 1):
-                    term = f"{tokens[i]} {tokens[i + 1]}"
-                    if term not in extra_terms:
-                        extra_terms.append(term)
-            for token in tokens:
-                if any(ch.isdigit() for ch in token) and len(token) >= 2 and token not in extra_terms:
-                    extra_terms.append(token)
+            numeric_terms = search_plan['numeric_terms']
+            extra_terms = search_plan['extra_terms']
+            tokens = search_plan['fallback_tokens']
 
             if numeric_terms and len(rows) < limit:
                 remaining = limit - len(rows)

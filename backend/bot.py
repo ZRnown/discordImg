@@ -27,6 +27,20 @@ try:
     from keyword_search_filters import _should_ignore_keyword_search_query
 except ImportError:
     from .keyword_search_filters import _should_ignore_keyword_search_query
+try:
+    from keyword_search_terms import (
+        build_product_keyword_variants as _shared_build_product_keyword_variants,
+        build_query_keyword_candidates as _shared_build_query_keyword_candidates,
+        normalize_keyword_search_text as _shared_normalize_keyword_search_text,
+        tokenize_keyword_search_text as _shared_tokenize_keyword_search_text,
+    )
+except ImportError:
+    from .keyword_search_terms import (
+        build_product_keyword_variants as _shared_build_product_keyword_variants,
+        build_query_keyword_candidates as _shared_build_query_keyword_candidates,
+        normalize_keyword_search_text as _shared_normalize_keyword_search_text,
+        tokenize_keyword_search_text as _shared_tokenize_keyword_search_text,
+    )
 
 try:
     from rotation_settings import resolve_rotation_settings_update
@@ -224,82 +238,19 @@ def _build_keyword_window_key(user_id, website_id, guild_id):
 
 
 def _normalize_keyword_search_text(value: str) -> str:
-    if not value:
-        return ''
-    value = re.sub(r'[\u200b-\u200d\uFEFF]', '', str(value))
-    value = value.lower()
-    value = re.sub(r'[^a-z0-9\u4e00-\u9fff]+', ' ', value)
-    return re.sub(r'\s+', ' ', value).strip()
+    return _shared_normalize_keyword_search_text(value)
 
 
 def _tokenize_keyword_search_text(normalized_text: str):
-    if not normalized_text:
-        return []
-    return re.findall(r'[a-z0-9\u4e00-\u9fff]+', normalized_text)
+    return _shared_tokenize_keyword_search_text(normalized_text)
 
 
 def _build_query_keyword_candidates(normalized_text: str):
-    candidates = {}
-    tokens = _tokenize_keyword_search_text(normalized_text)
-
-    def add(raw_value: str, display_value: str = None):
-        normalized = _normalize_keyword_search_text(raw_value)
-        canonical = re.sub(r'\s+', '', normalized)
-        if len(canonical) < 2:
-            return
-        candidates.setdefault(canonical, (display_value or normalized or canonical).strip())
-
-    if normalized_text and len(tokens) <= 3:
-        add(normalized_text, normalized_text)
-
-    for token in tokens:
-        if len(token) >= 2 or token.isdigit():
-            add(token, token)
-
-    for size in (2, 3):
-        if len(tokens) < size:
-            continue
-        for idx in range(len(tokens) - size + 1):
-            part_tokens = tokens[idx: idx + size]
-            compact = ''.join(part_tokens)
-            if len(compact) < 2:
-                continue
-            if size == 1 or any(ch.isdigit() for ch in compact):
-                add(compact, compact)
-
-    return candidates
+    return _shared_build_query_keyword_candidates(normalized_text)
 
 
 def _build_product_keyword_variants(raw_value: str):
-    normalized_text = _normalize_keyword_search_text(raw_value)
-    variants = set()
-    tokens = _tokenize_keyword_search_text(normalized_text)
-
-    def add(raw_text: str):
-        normalized = _normalize_keyword_search_text(raw_text)
-        canonical = re.sub(r'\s+', '', normalized)
-        if len(canonical) < 2:
-            return
-        variants.add(canonical)
-
-    if normalized_text:
-        add(normalized_text)
-
-    for token in tokens:
-        if len(token) >= 2 or token.isdigit():
-            add(token)
-
-    for size in (2, 3):
-        if len(tokens) < size:
-            continue
-        for idx in range(len(tokens) - size + 1):
-            compact = ''.join(tokens[idx: idx + size])
-            if len(compact) < 2:
-                continue
-            if any(ch.isdigit() for ch in compact):
-                add(compact)
-
-    return variants
+    return _shared_build_product_keyword_variants(raw_value)
 
 def _get_repeat_seconds_from_filters(filters):
     max_seconds = 0.0
