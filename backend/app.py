@@ -99,10 +99,27 @@ except ModuleNotFoundError as e:
     else:
         raise
 try:
-    from keyword_search_terms import build_text_search_plan
+    from keyword_search_terms import (
+        build_query_keyword_candidates,
+        build_text_search_plan,
+        find_query_keyword_match,
+        normalize_keyword_search_text,
+    )
 except ModuleNotFoundError as e:
     if e.name == 'keyword_search_terms':
-        from .keyword_search_terms import build_text_search_plan
+        from .keyword_search_terms import (
+            build_query_keyword_candidates,
+            build_text_search_plan,
+            find_query_keyword_match,
+            normalize_keyword_search_text,
+        )
+    else:
+        raise
+try:
+    from keyword_search_filters import _should_ignore_keyword_search_query
+except ModuleNotFoundError as e:
+    if e.name == 'keyword_search_filters':
+        from .keyword_search_filters import _should_ignore_keyword_search_query
     else:
         raise
 
@@ -4362,6 +4379,15 @@ def search_similar_text():
         if not query:
             return jsonify({'error': 'Query is required'}), 400
 
+        if _should_ignore_keyword_search_query(query):
+            logger.info(f'文字搜索忽略无效查询: "{query}"')
+            return jsonify({
+                'success': True,
+                'query': query,
+                'products': [],
+                'total': 0
+            })
+
         try:
             user_id = int(user_id) if user_id is not None else None
         except (TypeError, ValueError):
@@ -4395,6 +4421,7 @@ def search_similar_text():
             cursor = conn.cursor()
             search_plan = build_text_search_plan(query)
             query_normalized = search_plan['query_normalized']
+            query_keyword_candidates = build_query_keyword_candidates(query)
 
             scoped_clause = ""
             scoped_params = ()
@@ -4402,6 +4429,21 @@ def search_similar_text():
                 placeholders = ",".join("?" for _ in scoped_shop_list)
                 scoped_clause = f" AND LOWER(TRIM(COALESCE(shop_name, ''))) IN ({placeholders})"
                 scoped_params = tuple(scoped_shop_list)
+
+            def filter_exact_matches(candidate_rows):
+                matched_rows = []
+                for row in candidate_rows:
+                    reason = find_query_keyword_match(
+                        query_keyword_candidates,
+                        row['english_title'],
+                        row['title'],
+                    )
+                    if not reason:
+                        continue
+                    matched_rows.append(row)
+                    if len(matched_rows) >= limit:
+                        break
+                return matched_rows
 
             def fetch_by_terms(terms, remaining_limit, exclude_ids=None):
                 if not terms or remaining_limit <= 0:
@@ -4430,32 +4472,38 @@ def search_similar_text():
                     WHERE ({where_clause}){exclude_clause}{scoped_clause}
                     ORDER BY created_at DESC, id DESC
                     LIMIT ?
-                """, (*params, *exclude_params, *scoped_params, remaining_limit))
+                """, (*params, *exclude_params, *scoped_params, min(max(remaining_limit * 5, remaining_limit), 1000)))
                 return cursor.fetchall()
 
-            rows = fetch_by_terms([query_normalized], limit)
+            prefilter_terms = []
+            seen_prefilter_terms = set()
+            for canonical, display in query_keyword_candidates.items():
+                for term in (display, canonical):
+                    normalized_term = normalize_keyword_search_text(term)
+                    if len(normalized_term) < 2 or normalized_term in seen_prefilter_terms:
+                        continue
+                    seen_prefilter_terms.add(normalized_term)
+                    prefilter_terms.append(normalized_term)
+            if query_normalized and query_normalized not in seen_prefilter_terms:
+                prefilter_terms.insert(0, query_normalized)
+
+            rows = filter_exact_matches(fetch_by_terms(prefilter_terms[:8], limit))
             found_ids = {row['id'] for row in rows}
 
             numeric_terms = search_plan['numeric_terms']
             extra_terms = search_plan['extra_terms']
-            tokens = search_plan['fallback_tokens']
 
             if numeric_terms and len(rows) < limit:
                 remaining = limit - len(rows)
-                extra_rows = fetch_by_terms(numeric_terms, remaining, found_ids)
+                extra_rows = filter_exact_matches(fetch_by_terms(numeric_terms, remaining, found_ids))
                 rows.extend(extra_rows)
                 found_ids.update({row['id'] for row in extra_rows})
 
             if extra_terms and len(rows) < limit:
                 remaining = limit - len(rows)
-                extra_rows = fetch_by_terms(extra_terms, remaining, found_ids)
+                extra_rows = filter_exact_matches(fetch_by_terms(extra_terms, remaining, found_ids))
                 rows.extend(extra_rows)
                 found_ids.update({row['id'] for row in extra_rows})
-
-            if not rows:
-                tokens = tokens[:6]
-                if tokens:
-                    rows = fetch_by_terms(tokens, limit)
 
             if not rows:
                 cursor.execute("""
@@ -4478,8 +4526,8 @@ def search_similar_text():
                     ))""" + scoped_clause + """
                     ORDER BY created_at DESC, id DESC
                     LIMIT ?
-                """, (query_normalized, query_normalized, *scoped_params, limit))
-                rows = cursor.fetchall()
+                """, (query_normalized, query_normalized, *scoped_params, min(max(limit * 5, limit), 1000)))
+                rows = filter_exact_matches(cursor.fetchall())
 
             products = []
             for row in rows:

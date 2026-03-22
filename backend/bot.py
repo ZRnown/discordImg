@@ -31,6 +31,7 @@ try:
     from keyword_search_terms import (
         build_product_keyword_variants as _shared_build_product_keyword_variants,
         build_query_keyword_candidates as _shared_build_query_keyword_candidates,
+        find_query_keyword_match as _shared_find_query_keyword_match,
         normalize_keyword_search_text as _shared_normalize_keyword_search_text,
         tokenize_keyword_search_text as _shared_tokenize_keyword_search_text,
     )
@@ -38,6 +39,7 @@ except ImportError:
     from .keyword_search_terms import (
         build_product_keyword_variants as _shared_build_product_keyword_variants,
         build_query_keyword_candidates as _shared_build_query_keyword_candidates,
+        find_query_keyword_match as _shared_find_query_keyword_match,
         normalize_keyword_search_text as _shared_normalize_keyword_search_text,
         tokenize_keyword_search_text as _shared_tokenize_keyword_search_text,
     )
@@ -251,6 +253,11 @@ def _build_query_keyword_candidates(normalized_text: str):
 
 def _build_product_keyword_variants(raw_value: str):
     return _shared_build_product_keyword_variants(raw_value)
+
+
+def _find_query_keyword_match(query_keyword_candidates, english_title=None, title=None):
+    return _shared_find_query_keyword_match(query_keyword_candidates, english_title, title)
+
 
 def _get_repeat_seconds_from_filters(filters):
     max_seconds = 0.0
@@ -3101,57 +3108,14 @@ class DiscordBotClient(discord.Client):
 
             query_normalized = _normalize_keyword_search_text(search_query)
             query_keyword_candidates = _build_query_keyword_candidates(query_normalized)
-            query_keyword_keys = set(query_keyword_candidates.keys())
-
-            def _split_keywords(raw_value):
-                if not raw_value:
-                    return []
-                if isinstance(raw_value, list):
-                    parts = []
-                    for item in raw_value:
-                        parts.extend(re.split(r'[,\uFF0C]', str(item)))
-                else:
-                    parts = re.split(r'[,\uFF0C]', str(raw_value))
-                keywords = []
-                for part in parts:
-                    normalized = _normalize_keyword_search_text(part)
-                    if re.sub(r'\s+', '', normalized) and len(re.sub(r'\s+', '', normalized)) >= 2:
-                        keywords.append(normalized)
-                return keywords
 
             def _product_matches_query(product):
-                phrases = []
-                english_title = product.get('english_title') or product.get('englishTitle') or ''
-                english_phrases = _split_keywords(english_title)
-                for phrase in english_phrases:
-                    phrases.append((phrase, 'english_title'))
-
-                # 只有在没有英文关键词时才回退到中文标题匹配
-                if not english_phrases:
-                    title = _normalize_keyword_search_text(product.get('title') or '')
-                    if title:
-                        phrases.append((title, 'title'))
-                if not phrases:
-                    return False, None
-                seen = set()
-                for phrase, source in phrases:
-                    if phrase in seen:
-                        continue
-                    seen.add(phrase)
-                    product_variants = _build_product_keyword_variants(phrase)
-                    matched_keywords = sorted(
-                        query_keyword_keys.intersection(product_variants),
-                        key=lambda value: (-len(value), value),
-                    )
-                    if matched_keywords:
-                        matched_keyword = matched_keywords[0]
-                        return True, {
-                            'phrase': query_keyword_candidates.get(matched_keyword, matched_keyword),
-                            'source': source,
-                            'rule': 'canonical_keyword_match',
-                            'canonical_keyword': matched_keyword,
-                        }
-                return False, None
+                reason = _find_query_keyword_match(
+                    query_keyword_candidates,
+                    product.get('english_title') or product.get('englishTitle') or '',
+                    product.get('title') or '',
+                )
+                return bool(reason), reason
 
             matched_products = []
             match_reasons = {}

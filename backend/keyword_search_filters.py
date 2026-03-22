@@ -13,10 +13,17 @@ def _should_ignore_keyword_search_query(search_query):
     if len(normalized_query) < 2:
         return True
 
-    compact_query = normalized_query.replace(' ', '')
-    if compact_query.isdigit():
+    if re.fullmatch(r'[\d\s+\-*/.:]+', normalized_query):
+        digit_groups = re.findall(r'\d+', normalized_query)
+        if len(digit_groups) != 1:
+            return True
+        compact_query = digit_groups[0]
         if compact_query != normalized_query:
             return True
         return len(compact_query) < 3
+
+    compact_query = normalized_query.replace(' ', '')
+    if compact_query.isdigit():
+        return True
 
     return normalized_query.lower() in KEYWORD_SEARCH_MEANINGLESS_PATTERNS

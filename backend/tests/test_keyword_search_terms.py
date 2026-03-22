@@ -30,6 +30,18 @@ class KeywordSearchTermsTestCase(unittest.TestCase):
 
         self.assertIn("530", plan["fallback_tokens"])
 
+    def test_split_numeric_expression_does_not_collapse_into_model_candidate(self):
+        self.assertEqual(build_query_keyword_candidates("1+1"), {})
+        self.assertEqual(build_query_keyword_candidates("1 1"), {})
+
+    def test_split_numeric_expression_does_not_leave_fallback_numeric_tokens(self):
+        plan = build_text_search_plan("1+1")
+
+        self.assertEqual(plan["query_normalized"], "1 1")
+        self.assertEqual(plan["numeric_terms"], [])
+        self.assertEqual(plan["extra_terms"], [])
+        self.assertEqual(plan["fallback_tokens"], [])
+
 
 if __name__ == "__main__":
     unittest.main()
