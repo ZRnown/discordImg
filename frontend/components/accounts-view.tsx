@@ -2996,7 +2996,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                     </div>
 
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4" data-tutorial="accounts-website-overrides">
-                      <div className="space-y-2">
+                      <div className="space-y-2" data-tutorial="accounts-website-threshold">
                         <div className="flex items-center justify-between gap-3">
                           <div className="flex items-center gap-2 min-w-0">
                             <div className="text-sm font-medium truncate">相似度阈值</div>

@@ -228,6 +228,7 @@ export function TutorialTour({
 }: TutorialTourProps) {
   const [ready, setReady] = useState(false)
   const lastAnnouncedStepIdRef = useRef<string | null>(null)
+  const missingStepToastRef = useRef<string | null>(null)
 
   const currentStep = steps[stepIndex]
 
@@ -258,6 +259,7 @@ export function TutorialTour({
     if (!open || !currentStep) {
       setReady(false)
       lastAnnouncedStepIdRef.current = null
+      missingStepToastRef.current = null
       return
     }
 
@@ -301,9 +303,22 @@ export function TutorialTour({
     })
 
     const timeout = window.setTimeout(() => {
-      if (!cancelled) {
-        resolveTarget()
+      if (cancelled) {
+        return
       }
+
+      if (resolveTarget()) {
+        return
+      }
+
+      if (missingStepToastRef.current !== currentStep.id) {
+        missingStepToastRef.current = currentStep.id
+        toast.error(`教程目标未找到：${currentStep.title}`, {
+          description: "当前页面结构和教程步骤没有对上，教程已停止。刷新后重试即可。",
+          duration: 4000,
+        })
+      }
+      onClose()
     }, 8000)
 
     return () => {
@@ -311,7 +326,7 @@ export function TutorialTour({
       observer?.disconnect()
       window.clearTimeout(timeout)
     }
-  }, [open, currentStep, currentView, onCurrentViewChange])
+  }, [open, currentStep, currentView, onClose, onCurrentViewChange])
 
   useEffect(() => {
     if (!open || !ready || !currentStep) return
@@ -332,7 +347,20 @@ export function TutorialTour({
       return
     }
 
-    if (type === EVENTS.STEP_AFTER || type === EVENTS.TARGET_NOT_FOUND) {
+    if (type === EVENTS.TARGET_NOT_FOUND) {
+      const missingStep = steps[index]
+      if (missingStep && missingStepToastRef.current !== missingStep.id) {
+        missingStepToastRef.current = missingStep.id
+        toast.error(`教程目标未找到：${missingStep.title}`, {
+          description: "这一步的页面元素不存在，教程已停止。刷新后重试即可。",
+          duration: 4000,
+        })
+      }
+      onClose()
+      return
+    }
+
+    if (type === EVENTS.STEP_AFTER) {
       const delta = action === ACTIONS.PREV ? -1 : 1
       const nextIndex = Math.max(0, Math.min(index + delta, steps.length - 1))
       onStepIndexChange(nextIndex)
