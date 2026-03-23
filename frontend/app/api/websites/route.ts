@@ -1,28 +1,45 @@
 import { NextRequest, NextResponse } from 'next/server'
 
+export const dynamic = 'force-dynamic'
+
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001'
 
 export async function GET(request: NextRequest) {
   try {
     const cookieHeader = request.headers.get('cookie') || '';
     const response = await fetch(`${BACKEND_URL}/api/websites`, {
-      headers: { 'Cookie': cookieHeader }
+      headers: { 'Cookie': cookieHeader },
+      cache: 'no-store'
     })
 
     if (!response.ok) {
       // 404 handling specifically
       if (response.status === 404) {
-          return NextResponse.json({ websites: [] });
+          return NextResponse.json(
+            { websites: [] },
+            { headers: { 'Cache-Control': 'no-store' } }
+          );
       }
       const errorData = await response.json().catch(() => ({}));
-      return NextResponse.json(errorData, { status: response.status })
+      return NextResponse.json(errorData, {
+        status: response.status,
+        headers: { 'Cache-Control': 'no-store' },
+      })
     }
 
     const data = await response.json()
-    return NextResponse.json(data)
+    return NextResponse.json(data, {
+      headers: { 'Cache-Control': 'no-store' },
+    })
   } catch (error: any) {
     console.error('GET /api/websites failed:', error)
-    return NextResponse.json({ error: error.message }, { status: 500 })
+    return NextResponse.json(
+      { error: error.message },
+      {
+        status: 500,
+        headers: { 'Cache-Control': 'no-store' },
+      }
+    )
   }
 }
 
