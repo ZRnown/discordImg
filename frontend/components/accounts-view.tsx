@@ -320,6 +320,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
   const editingFilterImageInputRef = useRef<HTMLInputElement | null>(null)
   const websiteSimilaritySaveTimersRef = useRef<{[key: number]: ReturnType<typeof setTimeout> | undefined}>({})
   const websiteReplyDelaySaveTimersRef = useRef<{[key: number]: ReturnType<typeof setTimeout> | undefined}>({})
+  const websiteReplyDelayInputsRef = useRef<{[key: number]: { min: string, max: string }}>({})
   const websiteKeywordMatchSaveTimersRef = useRef<{[key: number]: ReturnType<typeof setTimeout> | undefined}>({})
   const formatThresholdForInput = (value: any) => {
     if (value === null || value === undefined || value === '') return ''
@@ -357,7 +358,9 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
           }
         : website
     )))
-    setWebsiteReplyDelayInputs(prev => ({ ...prev, [websiteId]: { min: minDelay, max: maxDelay } }))
+    const nextInputs = { ...websiteReplyDelayInputsRef.current, [websiteId]: { min: minDelay, max: maxDelay } }
+    websiteReplyDelayInputsRef.current = nextInputs
+    setWebsiteReplyDelayInputs(nextInputs)
   }
 
   const applyWebsiteKeywordMatchState = (websiteId: number, value: string) => {
@@ -988,12 +991,45 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
       Object.values(websiteSimilaritySaveTimersRef.current).forEach(timer => {
         if (timer) clearTimeout(timer)
       })
-      Object.values(websiteReplyDelaySaveTimersRef.current).forEach(timer => {
-        if (timer) clearTimeout(timer)
+      Object.entries(websiteReplyDelaySaveTimersRef.current).forEach(([websiteId, timer]) => {
+        if (timer) {
+          clearTimeout(timer)
+          flushWebsiteReplyDelaySave(Number(websiteId), { keepalive: true })
+        }
       })
       Object.values(websiteKeywordMatchSaveTimersRef.current).forEach(timer => {
         if (timer) clearTimeout(timer)
       })
+    }
+  }, [])
+
+  useEffect(() => {
+    websiteReplyDelayInputsRef.current = websiteReplyDelayInputs
+  }, [websiteReplyDelayInputs])
+
+  useEffect(() => {
+    const flushPendingReplyDelaySaves = () => {
+      Object.entries(websiteReplyDelaySaveTimersRef.current).forEach(([websiteId, timer]) => {
+        if (timer) {
+          flushWebsiteReplyDelaySave(Number(websiteId), { keepalive: true })
+        }
+      })
+    }
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        flushPendingReplyDelaySaves()
+      }
+    }
+
+    window.addEventListener('beforeunload', flushPendingReplyDelaySaves)
+    window.addEventListener('pagehide', flushPendingReplyDelaySaves)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      window.removeEventListener('beforeunload', flushPendingReplyDelaySaves)
+      window.removeEventListener('pagehide', flushPendingReplyDelaySaves)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [])
 
@@ -1374,6 +1410,11 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
     maxValue: string,
     options?: { silent?: boolean }
   ) => {
+    if (websiteReplyDelaySaveTimersRef.current[websiteId]) {
+      clearTimeout(websiteReplyDelaySaveTimersRef.current[websiteId])
+      delete websiteReplyDelaySaveTimersRef.current[websiteId]
+    }
+
     if (minValue === '' && maxValue === '') {
       try {
         const res = await fetch(`/api/websites/${websiteId}/rotation`, {
@@ -1442,6 +1483,55 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
     websiteReplyDelaySaveTimersRef.current[websiteId] = setTimeout(() => {
       void saveWebsiteReplyDelay(websiteId, minValue, maxValue, { silent: true })
     }, 450)
+  }
+
+  const flushWebsiteReplyDelaySave = (websiteId: number, options?: { keepalive?: boolean }) => {
+    const pendingTimer = websiteReplyDelaySaveTimersRef.current[websiteId]
+    if (pendingTimer) {
+      clearTimeout(pendingTimer)
+      delete websiteReplyDelaySaveTimersRef.current[websiteId]
+    }
+
+    const current = websiteReplyDelayInputsRef.current[websiteId] ?? { min: '', max: '' }
+
+    if (options?.keepalive) {
+      const sendPayload = (payload: Record<string, unknown>) => {
+        void fetch(`/api/websites/${websiteId}/rotation`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          keepalive: true,
+          body: JSON.stringify(payload),
+        }).catch(() => undefined)
+      }
+
+      if (current.min === '' && current.max === '') {
+        sendPayload({
+          reply_min_delay: '',
+          reply_max_delay: '',
+        })
+        return
+      }
+
+      if (current.min === '' || current.max === '') {
+        return
+      }
+
+      const min = Number(current.min)
+      const max = Number(current.max)
+      if (!Number.isFinite(min) || !Number.isFinite(max)) {
+        return
+      }
+
+      const [normalizedMin, normalizedMax] = normalizeReplyDelayRange(min, max)
+      sendPayload({
+        reply_min_delay: normalizedMin,
+        reply_max_delay: normalizedMax,
+      })
+      return
+    }
+
+    void saveWebsiteReplyDelay(websiteId, current.min, current.max, { silent: true })
   }
 
   const saveWebsiteKeywordMatchLimit = async (websiteId: number, rawValue: string, options?: { silent?: boolean }) => {
@@ -3144,8 +3234,12 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                                   const min = e.target.value
                                   const current = websiteReplyDelayInputs[website.id] ?? { min: '', max: '' }
                                   const next = { ...current, min }
+                                  websiteReplyDelayInputsRef.current = { ...websiteReplyDelayInputsRef.current, [website.id]: next }
                                   setWebsiteReplyDelayInputs(prev => ({ ...prev, [website.id]: next }))
                                   scheduleWebsiteReplyDelaySave(website.id, next.min, next.max)
+                                }}
+                                onBlur={() => {
+                                  flushWebsiteReplyDelaySave(website.id)
                                 }}
                                 className="w-24 h-9 text-center"
                               />
@@ -3161,8 +3255,12 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                                   const max = e.target.value
                                   const current = websiteReplyDelayInputs[website.id] ?? { min: '', max: '' }
                                   const next = { ...current, max }
+                                  websiteReplyDelayInputsRef.current = { ...websiteReplyDelayInputsRef.current, [website.id]: next }
                                   setWebsiteReplyDelayInputs(prev => ({ ...prev, [website.id]: next }))
                                   scheduleWebsiteReplyDelaySave(website.id, next.min, next.max)
+                                }}
+                                onBlur={() => {
+                                  flushWebsiteReplyDelaySave(website.id)
                                 }}
                                 className="w-24 h-9 text-center"
                               />
