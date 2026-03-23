@@ -60,6 +60,7 @@ from flask_cors import CORS
 import queue
 import threading
 import time
+import subprocess
 from urllib.parse import quote
 import hashlib
 import uuid
@@ -86,15 +87,25 @@ except ModuleNotFoundError as e:
         raise
 try:
     from retrieval_cache_warmup import (
+        get_auto_backfill_limit,
         get_backfill_limit,
+        get_backfill_interval_seconds,
+        get_backfill_timeout_seconds,
         normalize_backfill_limit,
+        reduce_backfill_limit_after_failure,
+        should_run_auto_backfill,
         should_run_startup_cache_warmup,
     )
 except ModuleNotFoundError as e:
     if e.name == 'retrieval_cache_warmup':
         from .retrieval_cache_warmup import (
+            get_auto_backfill_limit,
             get_backfill_limit,
+            get_backfill_interval_seconds,
+            get_backfill_timeout_seconds,
             normalize_backfill_limit,
+            reduce_backfill_limit_after_failure,
+            should_run_auto_backfill,
             should_run_startup_cache_warmup,
         )
     else:
@@ -143,6 +154,8 @@ ai_model_ready = False  # AI模型是否已就绪
 # 全局 AI 并发控制（跨商品），避免 CPU 被同时推理任务打满
 GLOBAL_AI_SEMAPHORE = threading.Semaphore(4)
 MAX_LOG_HISTORY = 5000
+AUTO_BACKFILL_THREAD = None
+AUTO_BACKFILL_THREAD_LOCK = threading.Lock()
 
 
 def _normalize_message_filter_value(filter_type, filter_value):
@@ -662,6 +675,8 @@ def initialize_runtime():
                     )
                 elif strategy_requires_persisted_catalog_cache(strategy_name):
                     print(f"⏭️ [后台] 已跳过 {strategy_name} 启动缓存预热")
+
+                _start_auto_retrieval_cache_backfill()
             except Exception as cache_error:
                 logger.warning("商品检索缓存预热失败: %s", cache_error)
             print("✅ [后台] AI模型预热完成，系统已就绪")
@@ -710,6 +725,127 @@ def invalidate_product_retrieval_runtime(strategy_name=None):
             raise
 
     invalidate_live_image_retriever(strategy_name)
+
+
+def _get_retrieval_cache_backfill_worker_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), 'retrieval_cache_backfill_worker.py')
+
+
+def _run_retrieval_cache_backfill_worker(strategy_name, limit, timeout_seconds):
+    worker_path = _get_retrieval_cache_backfill_worker_path()
+    command = [
+        sys.executable,
+        worker_path,
+        '--strategy',
+        str(strategy_name),
+        '--limit',
+        str(max(int(limit or 1), 1)),
+    ]
+    completed = subprocess.run(
+        command,
+        cwd=os.path.dirname(worker_path),
+        capture_output=True,
+        text=True,
+        timeout=max(int(timeout_seconds or 30), 30),
+        check=False,
+    )
+    stdout_lines = [line.strip() for line in (completed.stdout or '').splitlines() if line.strip()]
+    stderr_output = (completed.stderr or '').strip()
+    summary = {}
+    if stdout_lines:
+        try:
+            summary = json.loads(stdout_lines[-1])
+        except json.JSONDecodeError:
+            summary = {}
+
+    if completed.returncode != 0:
+        raise RuntimeError(
+            f"worker exit={completed.returncode} stdout={completed.stdout or ''} stderr={stderr_output}"
+        )
+
+    if not isinstance(summary, dict):
+        raise RuntimeError(f"worker returned invalid summary: {completed.stdout or ''}")
+
+    return {
+        'strategy': strategy_name,
+        'limit': limit,
+        **summary,
+    }
+
+
+def _start_auto_retrieval_cache_backfill():
+    global AUTO_BACKFILL_THREAD
+
+    strategy_name = getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank')
+    if not should_run_auto_backfill(config, strategy_name):
+        return
+
+    with AUTO_BACKFILL_THREAD_LOCK:
+        if AUTO_BACKFILL_THREAD and AUTO_BACKFILL_THREAD.is_alive():
+            return
+
+        def auto_backfill_loop():
+            configured_limit = get_auto_backfill_limit(config, default=24)
+            current_limit = configured_limit
+            interval_seconds = get_backfill_interval_seconds(config, 'RETRIEVAL_CACHE_AUTO_BACKFILL_INTERVAL', 180)
+            timeout_seconds = get_backfill_timeout_seconds(config, 'RETRIEVAL_CACHE_AUTO_BACKFILL_TIMEOUT', 1200)
+            logger.info(
+                "已启动商品检索缓存自动补全: strategy=%s batch_limit=%s interval=%ss timeout=%ss",
+                strategy_name,
+                configured_limit,
+                interval_seconds,
+                timeout_seconds,
+            )
+
+            while True:
+                try:
+                    missing_count = db.count_missing_product_image_retrieval_cache(strategy_name)
+                    if missing_count <= 0:
+                        time.sleep(interval_seconds)
+                        continue
+
+                    logger.info(
+                        "检测到 %s 条缺失商品检索缓存，开始执行自动补全批次: strategy=%s limit=%s",
+                        missing_count,
+                        strategy_name,
+                        current_limit,
+                    )
+                    summary = _run_retrieval_cache_backfill_worker(
+                        strategy_name=strategy_name,
+                        limit=current_limit,
+                        timeout_seconds=timeout_seconds,
+                    )
+                    processed = int(summary.get('processed') or 0)
+                    if processed > 0:
+                        invalidate_product_retrieval_runtime(strategy_name)
+                        current_limit = configured_limit
+                    logger.info(
+                        "自动补全批次完成: strategy=%s processed=%s skipped=%s failed=%s remaining=%s",
+                        strategy_name,
+                        summary.get('processed', 0),
+                        summary.get('skipped', 0),
+                        summary.get('failed', 0),
+                        db.count_missing_product_image_retrieval_cache(strategy_name),
+                    )
+                except Exception as auto_backfill_error:
+                    next_limit = reduce_backfill_limit_after_failure(current_limit)
+                    logger.warning(
+                        "商品检索缓存自动补全批次失败: strategy=%s limit=%s next_limit=%s error=%s",
+                        strategy_name,
+                        current_limit,
+                        next_limit,
+                        auto_backfill_error,
+                    )
+                    current_limit = next_limit
+
+                time.sleep(interval_seconds)
+
+        AUTO_BACKFILL_THREAD = threading.Thread(
+            target=auto_backfill_loop,
+            daemon=True,
+            name='retrieval-cache-auto-backfill',
+        )
+        AUTO_BACKFILL_THREAD.start()
 
 @app.route('/search_similar', methods=['POST'])
 def search_similar():

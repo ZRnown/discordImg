@@ -3,7 +3,11 @@ from types import SimpleNamespace
 
 from backend.live_retrieval import backfill_product_image_retrieval_cache
 from backend.retrieval_cache_warmup import (
+    get_auto_backfill_limit,
     get_backfill_limit,
+    get_backfill_interval_seconds,
+    reduce_backfill_limit_after_failure,
+    should_run_auto_backfill,
     should_run_startup_cache_warmup,
 )
 
@@ -87,6 +91,36 @@ class RetrievalCacheWarmupTestCase(unittest.TestCase):
         self.assertFalse(should_run_startup_cache_warmup(config, "siglip2_rerank"))
         self.assertEqual(get_backfill_limit(config, "RETRIEVAL_CACHE_STARTUP_LIMIT"), 200)
         self.assertIsNone(get_backfill_limit(SimpleNamespace(RETRIEVAL_CACHE_STARTUP_LIMIT=0), "RETRIEVAL_CACHE_STARTUP_LIMIT"))
+
+    def test_auto_backfill_defaults_to_enabled_for_persisted_cache_strategy(self):
+        config = SimpleNamespace(
+            RETRIEVAL_CACHE_AUTO_BACKFILL=True,
+            RETRIEVAL_CACHE_AUTO_BATCH_LIMIT=48,
+            RETRIEVAL_CACHE_AUTO_BACKFILL_INTERVAL=120,
+        )
+
+        self.assertTrue(should_run_auto_backfill(config, "siglip2_rerank"))
+        self.assertEqual(get_auto_backfill_limit(config, default=24), 48)
+        self.assertEqual(
+            get_backfill_interval_seconds(config, "RETRIEVAL_CACHE_AUTO_BACKFILL_INTERVAL", 60),
+            120,
+        )
+
+    def test_auto_backfill_helpers_clamp_invalid_values(self):
+        config = SimpleNamespace(
+            RETRIEVAL_CACHE_AUTO_BACKFILL="yes",
+            RETRIEVAL_CACHE_AUTO_BATCH_LIMIT=0,
+            RETRIEVAL_CACHE_AUTO_BACKFILL_INTERVAL="bad",
+        )
+
+        self.assertTrue(should_run_auto_backfill(config, "siglip2_rerank"))
+        self.assertEqual(get_auto_backfill_limit(config, default=24), 24)
+        self.assertEqual(
+            get_backfill_interval_seconds(config, "RETRIEVAL_CACHE_AUTO_BACKFILL_INTERVAL", 90),
+            90,
+        )
+        self.assertEqual(reduce_backfill_limit_after_failure(48), 24)
+        self.assertEqual(reduce_backfill_limit_after_failure(1), 1)
 
 
 if __name__ == "__main__":

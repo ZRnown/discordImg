@@ -32,6 +32,11 @@ def get_backfill_limit(config_obj: Any, attr_name: str) -> Optional[int]:
     return normalize_backfill_limit(getattr(config_obj, attr_name, None))
 
 
+def get_auto_backfill_limit(config_obj: Any, default: int = 24) -> int:
+    limit = get_backfill_limit(config_obj, "RETRIEVAL_CACHE_AUTO_BATCH_LIMIT")
+    return limit or max(int(default or 1), 1)
+
+
 def should_run_startup_cache_warmup(config_obj: Any, strategy_name: str) -> bool:
     try:
         from .live_retrieval import strategy_requires_persisted_catalog_cache
@@ -42,3 +47,41 @@ def should_run_startup_cache_warmup(config_obj: Any, strategy_name: str) -> bool
         return False
 
     return _to_bool(getattr(config_obj, "RETRIEVAL_CACHE_STARTUP_WARMUP", False), False)
+
+
+def should_run_auto_backfill(config_obj: Any, strategy_name: str) -> bool:
+    try:
+        from .live_retrieval import strategy_requires_persisted_catalog_cache
+    except ImportError:
+        from live_retrieval import strategy_requires_persisted_catalog_cache
+
+    if not strategy_requires_persisted_catalog_cache(strategy_name):
+        return False
+
+    return _to_bool(getattr(config_obj, "RETRIEVAL_CACHE_AUTO_BACKFILL", True), True)
+
+
+def get_backfill_interval_seconds(config_obj: Any, attr_name: str, default: int) -> int:
+    value = getattr(config_obj, attr_name, default)
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError):
+        seconds = default
+    return max(5, seconds)
+
+
+def get_backfill_timeout_seconds(config_obj: Any, attr_name: str, default: int) -> int:
+    value = getattr(config_obj, attr_name, default)
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError):
+        seconds = default
+    return max(30, seconds)
+
+
+def reduce_backfill_limit_after_failure(limit: Any) -> int:
+    try:
+        normalized = int(limit)
+    except (TypeError, ValueError):
+        normalized = 1
+    return max(1, normalized // 2)

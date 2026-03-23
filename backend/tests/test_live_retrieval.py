@@ -181,8 +181,11 @@ def test_backfill_product_image_retrieval_cache_only_persists_missing_rows():
         def __init__(self):
             self.upserts = []
 
-        def get_searchable_product_image_records(self, strategy_name=None):
-            assert strategy_name == "siglip2_rerank"
+        def get_searchable_product_image_records(self, **kwargs):
+            assert kwargs["strategy_name"] == "siglip2_rerank"
+            assert kwargs["require_cache"] is False
+            assert kwargs["only_missing_cache"] is True
+            assert kwargs["limit"] is None
             return [
                 {
                     "product_id": "1001",
@@ -238,8 +241,11 @@ def test_backfill_product_image_retrieval_cache_skips_deleted_rows_and_empty_emb
         def __init__(self):
             self.upserts = []
 
-        def get_searchable_product_image_records(self, strategy_name=None):
-            assert strategy_name == "siglip2_rerank"
+        def get_searchable_product_image_records(self, **kwargs):
+            assert kwargs["strategy_name"] == "siglip2_rerank"
+            assert kwargs["require_cache"] is False
+            assert kwargs["only_missing_cache"] is True
+            assert kwargs["limit"] is None
             return [
                 {
                     "product_id": "1001",

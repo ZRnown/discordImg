@@ -1293,6 +1293,26 @@ class Database:
             logger.error(f"统计商品检索缓存数量失败: {e}")
             return 0
 
+    def count_missing_product_image_retrieval_cache(self, strategy_name: str) -> int:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    SELECT COUNT(*)
+                    FROM product_images pi
+                    LEFT JOIN product_image_retrieval_cache rc
+                        ON rc.image_db_id = pi.id
+                       AND rc.strategy_name = ?
+                    WHERE rc.image_db_id IS NULL
+                    ''',
+                    (strategy_name,),
+                )
+                return cursor.fetchone()[0] or 0
+        except Exception as e:
+            logger.error(f"统计缺失商品检索缓存数量失败: {e}")
+            return 0
+
     def delete_product_images(self, product_id: int) -> bool:
         """删除商品的所有图像和物理文件"""
         try:
