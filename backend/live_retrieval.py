@@ -254,7 +254,15 @@ def backfill_product_image_retrieval_cache(
     limit: Optional[int] = None,
     strategy_factory=None,
 ) -> Dict[str, int]:
-    rows = list(db_handle.get_searchable_product_image_records(strategy_name=strategy_name))
+    effective_limit = max(int(limit or 0), 0) or None
+    rows = list(
+        db_handle.get_searchable_product_image_records(
+            strategy_name=strategy_name,
+            require_cache=False,
+            only_missing_cache=True,
+            limit=effective_limit,
+        )
+    )
     catalog_records = build_catalog_records(rows)
     strategy = get_retrieval_strategy_instance(strategy_name, strategy_factory=strategy_factory)
 

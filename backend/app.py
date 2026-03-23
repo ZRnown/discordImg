@@ -85,6 +85,21 @@ except ModuleNotFoundError as e:
     else:
         raise
 try:
+    from retrieval_cache_warmup import (
+        get_backfill_limit,
+        normalize_backfill_limit,
+        should_run_startup_cache_warmup,
+    )
+except ModuleNotFoundError as e:
+    if e.name == 'retrieval_cache_warmup':
+        from .retrieval_cache_warmup import (
+            get_backfill_limit,
+            normalize_backfill_limit,
+            should_run_startup_cache_warmup,
+        )
+    else:
+        raise
+try:
     from shop_scrape_helpers import build_weidian_shop_api_headers, reset_scrape_stop_event
 except ModuleNotFoundError as e:
     if e.name == 'shop_scrape_helpers':
@@ -632,13 +647,21 @@ def initialize_runtime():
                     else:
                         raise
 
-                if strategy_requires_persisted_catalog_cache(strategy_name):
-                    print(f"🧠 [后台] 正在预热 {strategy_name} 商品缓存...")
-                    summary = backfill_product_image_retrieval_cache(db, strategy_name)
+                if should_run_startup_cache_warmup(config, strategy_name):
+                    startup_limit = get_backfill_limit(config, 'RETRIEVAL_CACHE_STARTUP_LIMIT')
+                    batch_text = f" limit={startup_limit}" if startup_limit else ""
+                    print(f"🧠 [后台] 正在预热 {strategy_name} 商品缓存{batch_text}...")
+                    summary = backfill_product_image_retrieval_cache(
+                        db,
+                        strategy_name,
+                        limit=startup_limit,
+                    )
                     print(
                         f"✅ [后台] {strategy_name} 商品缓存预热完成: "
                         f"processed={summary['processed']} skipped={summary['skipped']} failed={summary['failed']}"
                     )
+                elif strategy_requires_persisted_catalog_cache(strategy_name):
+                    print(f"⏭️ [后台] 已跳过 {strategy_name} 启动缓存预热")
             except Exception as cache_error:
                 logger.warning("商品检索缓存预热失败: %s", cache_error)
             print("✅ [后台] AI模型预热完成，系统已就绪")
@@ -3064,6 +3087,9 @@ def rebuild_index():
     """重建当前商品检索缓存"""
     try:
         strategy_name = getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank')
+        data = request.get_json(silent=True) or {}
+        request_limit = normalize_backfill_limit(data.get('limit'))
+        limit = request_limit if request_limit is not None else get_backfill_limit(config, 'RETRIEVAL_CACHE_REBUILD_LIMIT')
         try:
             from live_retrieval import backfill_product_image_retrieval_cache
         except ModuleNotFoundError as import_error:
@@ -3072,13 +3098,14 @@ def rebuild_index():
             else:
                 raise
 
-        summary = backfill_product_image_retrieval_cache(db, strategy_name)
+        summary = backfill_product_image_retrieval_cache(db, strategy_name, limit=limit)
         invalidate_product_retrieval_runtime(strategy_name)
         logger.info("商品检索缓存重建完成: %s", summary)
         return jsonify({
             'success': True,
             'strategy': strategy_name,
             'message': '商品检索缓存重建完成',
+            'limit': limit,
             **summary,
         })
     except Exception as e:
@@ -4047,6 +4074,9 @@ def rebuild_product_retrieval_cache_route():
             return jsonify({'error': '只有管理员可以重建商品检索缓存'}), 403
 
         strategy_name = getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank')
+        data = request.get_json(silent=True) or {}
+        request_limit = normalize_backfill_limit(data.get('limit'))
+        limit = request_limit if request_limit is not None else get_backfill_limit(config, 'RETRIEVAL_CACHE_REBUILD_LIMIT')
         try:
             from live_retrieval import backfill_product_image_retrieval_cache
         except ModuleNotFoundError as import_error:
@@ -4055,12 +4085,13 @@ def rebuild_product_retrieval_cache_route():
             else:
                 raise
 
-        summary = backfill_product_image_retrieval_cache(db, strategy_name)
+        summary = backfill_product_image_retrieval_cache(db, strategy_name, limit=limit)
         invalidate_product_retrieval_runtime(strategy_name)
         return jsonify({
             'success': True,
             'strategy': strategy_name,
             'message': '商品检索缓存重建完成',
+            'limit': limit,
             **summary,
         })
 

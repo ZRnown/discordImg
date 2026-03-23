@@ -1083,15 +1083,23 @@ class Database:
         self,
         strategy_name: Optional[str] = None,
         require_cache: bool = False,
+        only_missing_cache: bool = False,
+        limit: Optional[int] = None,
     ) -> List[Dict]:
         """获取实时图片检索需要的商品图片与商品元数据"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 if strategy_name:
-                    cache_filter = "WHERE rc.image_db_id IS NOT NULL" if require_cache else ""
-                    cursor.execute(
-                        f'''
+                    where_clauses = []
+                    params: List[Any] = [strategy_name]
+                    if require_cache:
+                        where_clauses.append("rc.image_db_id IS NOT NULL")
+                    if only_missing_cache:
+                        where_clauses.append("rc.image_db_id IS NULL")
+
+                    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+                    query = f'''
                         SELECT
                             p.id AS product_id,
                             p.item_id,
@@ -1122,11 +1130,14 @@ class Database:
                         LEFT JOIN product_image_retrieval_cache rc
                             ON rc.image_db_id = pi.id
                            AND rc.strategy_name = ?
-                        {cache_filter}
+                        {where_sql}
                         ORDER BY p.id ASC, pi.image_index ASC
-                        ''',
-                        (strategy_name,),
-                    )
+                        '''
+                    effective_limit = int(limit) if limit is not None else None
+                    if effective_limit and effective_limit > 0:
+                        query += " LIMIT ?"
+                        params.append(effective_limit)
+                    cursor.execute(query, params)
                 else:
                     cursor.execute(
                         '''

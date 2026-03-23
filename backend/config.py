@@ -4,6 +4,28 @@ from dotenv import load_dotenv
 # 加载环境变量
 load_dotenv()
 
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {'1', 'true', 'yes', 'on'}:
+        return True
+    if normalized in {'0', 'false', 'no', 'off'}:
+        return False
+    return default
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value == '':
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
 class Config:
     # === 基础配置 ===
     HOST = '0.0.0.0'
@@ -45,6 +67,11 @@ class Config:
 
     # === 机器人 ===
     COMMAND_PREFIX = '!'
+
+    # === 检索缓存预热 ===
+    RETRIEVAL_CACHE_STARTUP_WARMUP = _env_bool('RETRIEVAL_CACHE_STARTUP_WARMUP', False)
+    RETRIEVAL_CACHE_STARTUP_LIMIT = _env_int('RETRIEVAL_CACHE_STARTUP_LIMIT', 200)
+    RETRIEVAL_CACHE_REBUILD_LIMIT = _env_int('RETRIEVAL_CACHE_REBUILD_LIMIT', 200)
 
     # === AI 模型 ===
     DINO_MODEL_NAME = 'facebook/dinov2-small'
