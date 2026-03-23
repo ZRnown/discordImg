@@ -88,11 +88,13 @@ except ModuleNotFoundError as e:
 try:
     from retrieval_cache_warmup import (
         get_auto_backfill_limit,
+        get_backfill_cooldown_seconds,
         get_backfill_limit,
         get_backfill_interval_seconds,
         get_backfill_timeout_seconds,
         normalize_backfill_limit,
         reduce_backfill_limit_after_failure,
+        should_continue_auto_backfill_burst,
         should_run_auto_backfill,
         should_run_startup_cache_warmup,
     )
@@ -100,11 +102,13 @@ except ModuleNotFoundError as e:
     if e.name == 'retrieval_cache_warmup':
         from .retrieval_cache_warmup import (
             get_auto_backfill_limit,
+            get_backfill_cooldown_seconds,
             get_backfill_limit,
             get_backfill_interval_seconds,
             get_backfill_timeout_seconds,
             normalize_backfill_limit,
             reduce_backfill_limit_after_failure,
+            should_continue_auto_backfill_burst,
             should_run_auto_backfill,
             should_run_startup_cache_warmup,
         )
@@ -788,12 +792,14 @@ def _start_auto_retrieval_cache_backfill():
             configured_limit = get_auto_backfill_limit(config, default=24)
             current_limit = configured_limit
             interval_seconds = get_backfill_interval_seconds(config, 'RETRIEVAL_CACHE_AUTO_BACKFILL_INTERVAL', 180)
+            batch_cooldown_seconds = get_backfill_cooldown_seconds(config, 'RETRIEVAL_CACHE_AUTO_BATCH_COOLDOWN', 3)
             timeout_seconds = get_backfill_timeout_seconds(config, 'RETRIEVAL_CACHE_AUTO_BACKFILL_TIMEOUT', 1200)
             logger.info(
-                "已启动商品检索缓存自动补全: strategy=%s batch_limit=%s interval=%ss timeout=%ss",
+                "已启动商品检索缓存自动补全: strategy=%s batch_limit=%s interval=%ss batch_cooldown=%ss timeout=%ss",
                 strategy_name,
                 configured_limit,
                 interval_seconds,
+                batch_cooldown_seconds,
                 timeout_seconds,
             )
 
@@ -819,14 +825,24 @@ def _start_auto_retrieval_cache_backfill():
                     if processed > 0:
                         invalidate_product_retrieval_runtime(strategy_name)
                         current_limit = configured_limit
+                    remaining_count = db.count_missing_product_image_retrieval_cache(strategy_name)
                     logger.info(
                         "自动补全批次完成: strategy=%s processed=%s skipped=%s failed=%s remaining=%s",
                         strategy_name,
                         summary.get('processed', 0),
                         summary.get('skipped', 0),
                         summary.get('failed', 0),
-                        db.count_missing_product_image_retrieval_cache(strategy_name),
+                        remaining_count,
                     )
+                    if should_continue_auto_backfill_burst(summary, remaining_count):
+                        time.sleep(batch_cooldown_seconds)
+                        continue
+                    if remaining_count > 0 and processed <= 0:
+                        logger.warning(
+                            "自动补全批次未产生进展，保留剩余缺口等待下个轮询周期: strategy=%s remaining=%s",
+                            strategy_name,
+                            remaining_count,
+                        )
                 except Exception as auto_backfill_error:
                     next_limit = reduce_backfill_limit_after_failure(current_limit)
                     logger.warning(
@@ -837,6 +853,8 @@ def _start_auto_retrieval_cache_backfill():
                         auto_backfill_error,
                     )
                     current_limit = next_limit
+                    time.sleep(batch_cooldown_seconds)
+                    continue
 
                 time.sleep(interval_seconds)
 

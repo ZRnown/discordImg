@@ -70,6 +70,15 @@ def get_backfill_interval_seconds(config_obj: Any, attr_name: str, default: int)
     return max(5, seconds)
 
 
+def get_backfill_cooldown_seconds(config_obj: Any, attr_name: str, default: int) -> int:
+    value = getattr(config_obj, attr_name, default)
+    try:
+        seconds = int(value)
+    except (TypeError, ValueError):
+        seconds = default
+    return max(1, seconds)
+
+
 def get_backfill_timeout_seconds(config_obj: Any, attr_name: str, default: int) -> int:
     value = getattr(config_obj, attr_name, default)
     try:
@@ -85,3 +94,17 @@ def reduce_backfill_limit_after_failure(limit: Any) -> int:
     except (TypeError, ValueError):
         normalized = 1
     return max(1, normalized // 2)
+
+
+def should_continue_auto_backfill_burst(summary: Any, remaining_count: Any) -> bool:
+    if not isinstance(summary, dict):
+        return False
+    try:
+        processed = int(summary.get("processed") or 0)
+    except (TypeError, ValueError):
+        processed = 0
+    try:
+        remaining = int(remaining_count or 0)
+    except (TypeError, ValueError):
+        remaining = 0
+    return processed > 0 and remaining > 0

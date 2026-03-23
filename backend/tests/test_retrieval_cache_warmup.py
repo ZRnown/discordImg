@@ -4,9 +4,11 @@ from types import SimpleNamespace
 from backend.live_retrieval import backfill_product_image_retrieval_cache
 from backend.retrieval_cache_warmup import (
     get_auto_backfill_limit,
+    get_backfill_cooldown_seconds,
     get_backfill_limit,
     get_backfill_interval_seconds,
     reduce_backfill_limit_after_failure,
+    should_continue_auto_backfill_burst,
     should_run_auto_backfill,
     should_run_startup_cache_warmup,
 )
@@ -111,6 +113,7 @@ class RetrievalCacheWarmupTestCase(unittest.TestCase):
             RETRIEVAL_CACHE_AUTO_BACKFILL="yes",
             RETRIEVAL_CACHE_AUTO_BATCH_LIMIT=0,
             RETRIEVAL_CACHE_AUTO_BACKFILL_INTERVAL="bad",
+            RETRIEVAL_CACHE_AUTO_BATCH_COOLDOWN=0,
         )
 
         self.assertTrue(should_run_auto_backfill(config, "siglip2_rerank"))
@@ -119,8 +122,23 @@ class RetrievalCacheWarmupTestCase(unittest.TestCase):
             get_backfill_interval_seconds(config, "RETRIEVAL_CACHE_AUTO_BACKFILL_INTERVAL", 90),
             90,
         )
+        self.assertEqual(
+            get_backfill_cooldown_seconds(config, "RETRIEVAL_CACHE_AUTO_BATCH_COOLDOWN", 3),
+            1,
+        )
         self.assertEqual(reduce_backfill_limit_after_failure(48), 24)
         self.assertEqual(reduce_backfill_limit_after_failure(1), 1)
+
+    def test_burst_backfill_only_continues_when_batch_made_progress_and_backlog_remains(self):
+        self.assertTrue(
+            should_continue_auto_backfill_burst({"processed": 24, "failed": 0}, remaining_count=100)
+        )
+        self.assertFalse(
+            should_continue_auto_backfill_burst({"processed": 0, "failed": 24}, remaining_count=100)
+        )
+        self.assertFalse(
+            should_continue_auto_backfill_burst({"processed": 24, "failed": 0}, remaining_count=0)
+        )
 
 
 if __name__ == "__main__":
