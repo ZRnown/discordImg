@@ -58,6 +58,7 @@ def resolve_rotation_settings_update(
     keyword_reply_batch_size: int = None,
     reply_mode: str = None,
     keyword_batch_dispatch_mode: str = None,
+    keyword_match_limit: int = None,
 ) -> Dict[str, int]:
     base_rotation_interval = _normalize_interval(
         (current_settings or {}).get("rotation_interval"),

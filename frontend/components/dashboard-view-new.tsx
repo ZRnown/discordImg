@@ -49,10 +49,12 @@ export function DashboardView({ currentUser }: { currentUser: any }) {
       fetchAnnouncements()
     }
 
-    // 每10秒自动刷新统计数据
+    // 仪表盘只需要低频刷新，且仅在页面可见时轮询
     const statsInterval = setInterval(() => {
-      fetchStats()
-    }, 10000)
+      if (!document.hidden) {
+        fetchStats()
+      }
+    }, 30000)
 
     return () => {
       clearInterval(statsInterval)
@@ -64,10 +66,7 @@ export function DashboardView({ currentUser }: { currentUser: any }) {
       const res = await fetch('/api/system/stats')
       if (res.ok) {
         const data = await res.json()
-        console.log('统计数据:', data)
         setStats(data)
-      } else {
-        console.error('获取统计信息失败:', res.status, res.statusText)
       }
     } catch (e) {
       console.error('获取统计信息失败:', e)

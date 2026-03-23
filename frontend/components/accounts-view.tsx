@@ -467,6 +467,11 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
       const channels: {[key: number]: string[]} = {}
       const accounts: {[key: number]: any[]} = {}
       const filters: {[key: number]: any[]} = {}
+      const replyModes: {[key: number]: string} = {}
+      const rotationInputs: {[key: number]: string} = {}
+      const keywordIntervalInputs: {[key: number]: string} = {}
+      const keywordBatchInputs: {[key: number]: string} = {}
+      const keywordDispatchModes: {[key: number]: string} = {}
       const similarityInputs: {[key: number]: string} = {}
       const replyDelayInputs: {[key: number]: { min: string, max: string }} = {}
       const keywordMatchInputs: {[key: number]: string} = {}
@@ -474,20 +479,11 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
       websites.forEach((website: any) => {
         channels[website.id] = website.channels || []
         accounts[website.id] = website.accounts || []
-        setReplyModes(prev => ({ ...prev, [website.id]: website.reply_mode || 'rotation' }))
-        setRotationInputs(prev => ({ ...prev, [website.id]: (website.rotation_interval || 180).toString() }))
-        setKeywordIntervalInputs(prev => ({
-          ...prev,
-          [website.id]: (website.keyword_reply_interval ?? website.rotation_interval ?? 180).toString()
-        }))
-        setKeywordBatchInputs(prev => ({
-          ...prev,
-          [website.id]: (website.keyword_reply_batch_size ?? 0).toString()
-        }))
-        setKeywordDispatchModes(prev => ({
-          ...prev,
-          [website.id]: website.keyword_batch_dispatch_mode ?? 'immediate'
-        }))
+        replyModes[website.id] = website.reply_mode || 'rotation'
+        rotationInputs[website.id] = (website.rotation_interval || 180).toString()
+        keywordIntervalInputs[website.id] = (website.keyword_reply_interval ?? website.rotation_interval ?? 180).toString()
+        keywordBatchInputs[website.id] = (website.keyword_reply_batch_size ?? 0).toString()
+        keywordDispatchModes[website.id] = website.keyword_batch_dispatch_mode ?? 'immediate'
         similarityInputs[website.id] = formatThresholdForInput(website.image_similarity_threshold)
         replyDelayInputs[website.id] = {
           min: formatReplyDelayForInput(website.reply_min_delay),
@@ -507,13 +503,20 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
         }
       })
 
-      setWebsites(websites)
-      setWebsiteChannels(channels)
-      setWebsiteAccounts(accounts)
-      setWebsiteFilters(filters)
-      setWebsiteSimilarityInputs(similarityInputs)
-      setWebsiteReplyDelayInputs(replyDelayInputs)
-      setWebsiteKeywordMatchInputs(keywordMatchInputs)
+      startTransition(() => {
+        setWebsites(websites)
+        setWebsiteChannels(channels)
+        setWebsiteAccounts(accounts)
+        setWebsiteFilters(filters)
+        setReplyModes(replyModes)
+        setRotationInputs(rotationInputs)
+        setKeywordIntervalInputs(keywordIntervalInputs)
+        setKeywordBatchInputs(keywordBatchInputs)
+        setKeywordDispatchModes(keywordDispatchModes)
+        setWebsiteSimilarityInputs(similarityInputs)
+        setWebsiteReplyDelayInputs(replyDelayInputs)
+        setWebsiteKeywordMatchInputs(keywordMatchInputs)
+      })
     } catch (e) {
       console.error('获取网站配置失败:', e)
       toast.error(getApiErrorMessage(e, '获取网站配置失败'))
@@ -913,19 +916,19 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
     fetchMessageFilters();
     fetchCooldowns();
 
-    // 优化轮询频率：每15秒刷新一次账号状态（降低服务器负载）
+    // 降低轮询频率，减轻账号页和后端的持续刷新压力
     const statusInterval = setInterval(() => {
       if (!document.hidden) { // 只在标签页可见时刷新
         fetchAccounts(true); // 强制刷新，清除缓存
       }
-    }, 15000);
+    }, 30000);
 
-    // 优化轮询频率：每10秒刷新一次冷却状态（降低服务器负载）
+    // 冷却状态允许稍慢一些，避免后台持续刷接口
     const cooldownInterval = setInterval(() => {
       if (!document.hidden) { // 只在标签页可见时刷新
         fetchCooldowns()
       }
-    }, 10000)
+    }, 20000)
 
     const handleStatusChange = () => {
       fetchAccounts(true)

@@ -1435,19 +1435,23 @@ def get_website_configs():
     try:
         current_user = get_current_user()
         configs = db.get_website_configs()
+        website_ids = [config['id'] for config in configs]
+        account_bindings_map = db.get_website_account_bindings_map(current_user['id'])
+        channel_bindings_map = db.get_website_channel_bindings_map(current_user['id'])
+        user_settings_map = db.get_user_website_settings_map(current_user['id'], website_ids)
 
         # 为每个配置添加绑定信息
         for config in configs:
             config_id = config['id']
 
             # 1) 账号绑定：只返回当前用户自己的绑定
-            config['accounts'] = db.get_website_account_bindings(config_id, current_user['id'])
+            config['accounts'] = account_bindings_map.get(config_id, [])
 
             # 2) 频道绑定：只返回当前用户自己的绑定
-            config['channels'] = db.get_website_channel_bindings(config_id, current_user['id'])
+            config['channels'] = channel_bindings_map.get(config_id, [])
 
             # 3) 用户级别的轮换设置
-            user_settings = db.get_user_website_settings(current_user['id'], config_id)
+            user_settings = user_settings_map.get(config_id, {})
             sender_count = len([
                 binding for binding in (config.get('accounts') or [])
                 if binding.get('role') in {'sender', 'both'}
@@ -2729,7 +2733,6 @@ def list_products():
         # 根据用户权限获取商品（支持分页）
         if current_user['role'] == 'admin':
             # 管理员可以看到所有商品
-            # 避免刷屏：不记录常规列表查询
             result = db.get_products_by_user_shops(
                 None,
                 limit=limit,
@@ -2741,7 +2744,6 @@ def list_products():
         else:
             # 普通用户只能看到自己管理的店铺的商品
             user_shops = current_user.get('shops', [])
-            logger.info(f"普通用户 {current_user['username']} 获取店铺商品 (页{page}, 每页{limit}条)，分配的店铺: {user_shops}")
             result = db.get_products_by_user_shops(
                 user_shops,
                 limit=limit,
@@ -2750,35 +2752,9 @@ def list_products():
                 search_type=search_type,
                 shop_name=shop_name
             )
-
-            # 调试：检查数据库中的商品和店铺匹配情况
-            if user_shops:
-                with db.get_connection() as conn:
-                    cursor = conn.cursor()
-                    placeholders = ','.join('?' * len(user_shops))
-                    cursor.execute(f"SELECT COUNT(*) FROM products WHERE shop_name IN ({placeholders})", user_shops)
-                    matching_products = cursor.fetchone()[0]
-                    logger.info(f"数据库中匹配的商品数量: {matching_products}")
-
-                    # 列出所有店铺名称
-                    cursor.execute("SELECT DISTINCT shop_name FROM products")
-                    all_shop_names = [row[0] for row in cursor.fetchall()]
-                    logger.info(f"数据库中的所有店铺名称: {all_shop_names}")
-
-        # 避免刷屏：不记录常规列表查询结果
-
-        # 添加调试信息到响应中
         response_data = {
             'products': result['products'],
             'total': result['total'],
-            'debug': {
-                'user_role': current_user['role'],
-                'user_shops': current_user.get('shops', []),
-                'is_admin': current_user['role'] == 'admin',
-                'keyword': keyword,
-                'search_type': search_type,
-                'shop_name': shop_name
-            }
         }
 
         # 添加缓存头以优化性能（5分钟缓存）

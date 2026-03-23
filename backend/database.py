@@ -2257,6 +2257,25 @@ class Database:
             logger.error(f"获取网站频道绑定失败: {e}")
             return []
 
+    def get_website_channel_bindings_map(self, user_id: int) -> Dict[int, List[str]]:
+        """批量获取用户的网站频道绑定，避免逐站点查询"""
+        bindings: Dict[int, List[str]] = {}
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT website_id, channel_id
+                    FROM website_channel_bindings
+                    WHERE user_id = ?
+                    ORDER BY website_id, created_at
+                ''', (user_id,))
+                for row in cursor.fetchall():
+                    website_id = row['website_id']
+                    bindings.setdefault(website_id, []).append(row['channel_id'])
+        except Exception as e:
+            logger.error(f"批量获取网站频道绑定失败: {e}")
+        return bindings
+
     def add_website_channel_binding(self, website_id: int, channel_id: str, user_id: int) -> bool:
         """添加网站频道绑定"""
         try:
@@ -2404,10 +2423,25 @@ class Database:
             logger.error(f"获取已绑定频道ID列表失败: {e}")
             return set()
 
-    def generate_website_urls(self, weidian_id: str) -> List[Dict]:
+    def get_website_url_configs(self) -> List[Dict]:
+        """获取生成商品跳转链接所需的网站模板配置"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT name, display_name, url_template, badge_color
+                    FROM website_configs
+                    ORDER BY created_at
+                ''')
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"获取网站URL模板失败: {e}")
+            return []
+
+    def generate_website_urls(self, weidian_id: str, website_configs: Optional[List[Dict]] = None) -> List[Dict]:
         """根据微店ID生成所有网站的URL"""
         try:
-            website_configs = self.get_website_configs()
+            website_configs = website_configs if website_configs is not None else self.get_website_url_configs()
             urls = []
 
             for config in website_configs:
@@ -2419,7 +2453,6 @@ class Database:
                         'display_name': config['display_name'],
                         'url': url,
                         'badge_color': config['badge_color'],
-                        'channels': self.get_website_channel_bindings(config['id'])
                     })
                 except Exception as e:
                     logger.warning(f"生成网站URL失败 {config['name']}: {e}")
@@ -2489,6 +2522,28 @@ class Database:
         except Exception as e:
             logger.error(f"获取网站账号绑定失败: {e}")
             return []
+
+    def get_website_account_bindings_map(self, user_id: int) -> Dict[int, List[Dict]]:
+        """批量获取用户的网站账号绑定，避免逐站点查询"""
+        bindings: Dict[int, List[Dict]] = {}
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT wab.website_id, wab.id, wab.account_id, wab.role, wab.created_at,
+                           da.username, da.token, da.status
+                    FROM website_account_bindings wab
+                    JOIN discord_accounts da ON wab.account_id = da.id
+                    WHERE wab.user_id = ?
+                    ORDER BY wab.website_id, wab.created_at
+                ''', (user_id,))
+                for row in cursor.fetchall():
+                    item = dict(row)
+                    website_id = item.pop('website_id')
+                    bindings.setdefault(website_id, []).append(item)
+        except Exception as e:
+            logger.error(f"批量获取网站账号绑定失败: {e}")
+        return bindings
 
     def get_account_website_bindings(self, account_id: int) -> List[Dict]:
         """获取账号的所有网站绑定"""
@@ -2606,6 +2661,48 @@ class Database:
 
     # ===== 用户级别的网站设置方法 =====
 
+    def _default_user_website_settings(self) -> Dict[str, Any]:
+        return {
+            'rotation_interval': 180,
+            'rotation_enabled': 1,
+            'reply_mode': 'rotation',
+            'keyword_reply_interval': 180,
+            'keyword_reply_batch_size': 0,
+            'keyword_batch_dispatch_mode': 'immediate',
+            'keyword_match_limit': None,
+            'message_filters': '[]',
+            'image_similarity_threshold': None,
+            'reply_min_delay': None,
+            'reply_max_delay': None,
+        }
+
+    def _normalize_user_website_settings_row(self, row: Any) -> Dict[str, Any]:
+        if not row:
+            return self._default_user_website_settings()
+
+        rotation_interval = row['rotation_interval'] or 180
+        keyword_reply_interval = row['keyword_reply_interval'] or rotation_interval
+        reply_mode = row['reply_mode']
+        if reply_mode not in {'default', 'rotation', 'keyword'}:
+            reply_mode = 'keyword' if (row['rotation_enabled'] == 0 and (row['keyword_reply_batch_size'] or 0) > 0) else 'rotation'
+        keyword_batch_dispatch_mode = (row['keyword_batch_dispatch_mode'] or 'immediate').strip().lower()
+        if keyword_batch_dispatch_mode not in {'immediate', 'window_end'}:
+            keyword_batch_dispatch_mode = 'immediate'
+
+        return {
+            'rotation_interval': rotation_interval,
+            'rotation_enabled': row['rotation_enabled'],
+            'reply_mode': reply_mode,
+            'keyword_reply_interval': keyword_reply_interval,
+            'keyword_reply_batch_size': row['keyword_reply_batch_size'] or 0,
+            'keyword_batch_dispatch_mode': keyword_batch_dispatch_mode,
+            'keyword_match_limit': row['keyword_match_limit'],
+            'message_filters': row['message_filters'],
+            'image_similarity_threshold': row['image_similarity_threshold'],
+            'reply_min_delay': row['reply_min_delay'],
+            'reply_max_delay': row['reply_max_delay'],
+        }
+
     def get_user_website_settings(self, user_id: int, website_id: int) -> Dict:
         """获取用户的网站设置（轮换和过滤）"""
         try:
@@ -2618,58 +2715,35 @@ class Database:
                     FROM user_website_settings
                     WHERE user_id = ? AND website_id = ?
                 ''', (user_id, website_id))
-                row = cursor.fetchone()
-                if row:
-                    rotation_interval = row['rotation_interval'] or 180
-                    keyword_reply_interval = row['keyword_reply_interval'] or rotation_interval
-                    reply_mode = row['reply_mode']
-                    if reply_mode not in {'default', 'rotation', 'keyword'}:
-                        reply_mode = 'keyword' if (row['rotation_enabled'] == 0 and (row['keyword_reply_batch_size'] or 0) > 0) else 'rotation'
-                    keyword_batch_dispatch_mode = (row['keyword_batch_dispatch_mode'] or 'immediate').strip().lower()
-                    if keyword_batch_dispatch_mode not in {'immediate', 'window_end'}:
-                        keyword_batch_dispatch_mode = 'immediate'
-                    return {
-                        'rotation_interval': rotation_interval,
-                        'rotation_enabled': row['rotation_enabled'],
-                        'reply_mode': reply_mode,
-                        'keyword_reply_interval': keyword_reply_interval,
-                        'keyword_reply_batch_size': row['keyword_reply_batch_size'] or 0,
-                        'keyword_batch_dispatch_mode': keyword_batch_dispatch_mode,
-                        'keyword_match_limit': row['keyword_match_limit'],
-                        'message_filters': row['message_filters'],
-                        'image_similarity_threshold': row['image_similarity_threshold'],
-                        'reply_min_delay': row['reply_min_delay'],
-                        'reply_max_delay': row['reply_max_delay'],
-                    }
-                # 返回默认值
-                return {
-                    'rotation_interval': 180,
-                    'rotation_enabled': 1,
-                    'reply_mode': 'rotation',
-                    'keyword_reply_interval': 180,
-                    'keyword_reply_batch_size': 0,
-                    'keyword_batch_dispatch_mode': 'immediate',
-                    'keyword_match_limit': None,
-                    'message_filters': '[]',
-                    'image_similarity_threshold': None,
-                    'reply_min_delay': None,
-                    'reply_max_delay': None,
-                }
+                return self._normalize_user_website_settings_row(cursor.fetchone())
         except Exception as e:
             logger.error(f"获取用户网站设置失败: {e}")
-            return {
-                'rotation_interval': 180,
-                'rotation_enabled': 1,
-                'reply_mode': 'rotation',
-                'keyword_reply_interval': 180,
-                'keyword_reply_batch_size': 0,
-                'keyword_batch_dispatch_mode': 'immediate',
-                'keyword_match_limit': None,
-                'message_filters': '[]',
-                'image_similarity_threshold': None,
-                'reply_min_delay': None,
-                'reply_max_delay': None,
-            }
+            return self._default_user_website_settings()
+
+    def get_user_website_settings_map(self, user_id: int, website_ids: Optional[List[int]] = None) -> Dict[int, Dict[str, Any]]:
+        """批量获取用户的网站设置，避免逐站点查询"""
+        settings_map: Dict[int, Dict[str, Any]] = {}
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                params: List[Any] = [user_id]
+                query = '''
+                    SELECT website_id, rotation_interval, rotation_enabled, reply_mode, keyword_reply_interval,
+                           keyword_reply_batch_size, keyword_batch_dispatch_mode, keyword_match_limit,
+                           message_filters, image_similarity_threshold, reply_min_delay, reply_max_delay
+                    FROM user_website_settings
+                    WHERE user_id = ?
+                '''
+                if website_ids:
+                    placeholders = ','.join('?' * len(website_ids))
+                    query += f' AND website_id IN ({placeholders})'
+                    params.extend(website_ids)
+                cursor.execute(query, params)
+                for row in cursor.fetchall():
+                    settings_map[row['website_id']] = self._normalize_user_website_settings_row(row)
+        except Exception as e:
+            logger.error(f"批量获取用户网站设置失败: {e}")
+        return settings_map
 
     def update_user_website_similarity(self, user_id: int, website_id: int, threshold: float = None) -> bool:
         """更新用户的网站图片相似度阈值"""
@@ -3466,6 +3540,7 @@ class Database:
                 total = cursor.fetchone()[0]
 
                 products = []
+                website_url_configs = self.get_website_url_configs()
                 for row in rows:
                     prod = dict(row)
                     if prod.get('image_indices'):
@@ -3510,7 +3585,11 @@ class Database:
                         prod['weidianId'] = ''
 
                     try:
-                        prod['websiteUrls'] = self.generate_website_urls(prod['weidianId']) if prod.get('weidianId') else []
+                        prod['websiteUrls'] = (
+                            self.generate_website_urls(prod['weidianId'], website_url_configs)
+                            if prod.get('weidianId')
+                            else []
+                        )
                     except Exception:
                         prod['websiteUrls'] = []
 
