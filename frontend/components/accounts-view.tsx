@@ -1451,7 +1451,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
     if (!Number.isFinite(min) || !Number.isFinite(max)) {
       return
     }
-    const [normalizedMin, normalizedMax] = normalizeReplyDelayRange(min, max)
+    const { minDelay: normalizedMin, maxDelay: normalizedMax } = normalizeReplyDelayRange(min, max)
 
     try {
       const res = await fetch(`/api/websites/${websiteId}/rotation`, {
@@ -1524,7 +1524,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
         return
       }
 
-      const [normalizedMin, normalizedMax] = normalizeReplyDelayRange(min, max)
+      const { minDelay: normalizedMin, maxDelay: normalizedMax } = normalizeReplyDelayRange(min, max)
       sendPayload({
         reply_min_delay: normalizedMin,
         reply_max_delay: normalizedMax,
