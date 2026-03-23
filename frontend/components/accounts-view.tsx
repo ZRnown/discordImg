@@ -13,6 +13,7 @@ import {
 } from "@/lib/utils"
 import {
   getMinimumReplyMaxDelay,
+  mergeReplyDelayDraft,
   normalizeReplyDelayRange,
   REPLY_DELAY_MAX,
   REPLY_DELAY_MIN,
@@ -3232,8 +3233,8 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                                 value={websiteReplyDelayInputs[website.id]?.min ?? ''}
                                 onChange={e => {
                                   const min = e.target.value
-                                  const current = websiteReplyDelayInputs[website.id] ?? { min: '', max: '' }
-                                  const next = { ...current, min }
+                                  const current = websiteReplyDelayInputsRef.current[website.id]
+                                  const next = mergeReplyDelayDraft(current, { min })
                                   websiteReplyDelayInputsRef.current = { ...websiteReplyDelayInputsRef.current, [website.id]: next }
                                   setWebsiteReplyDelayInputs(prev => ({ ...prev, [website.id]: next }))
                                   scheduleWebsiteReplyDelaySave(website.id, next.min, next.max)
@@ -3253,8 +3254,8 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                                 value={websiteReplyDelayInputs[website.id]?.max ?? ''}
                                 onChange={e => {
                                   const max = e.target.value
-                                  const current = websiteReplyDelayInputs[website.id] ?? { min: '', max: '' }
-                                  const next = { ...current, max }
+                                  const current = websiteReplyDelayInputsRef.current[website.id]
+                                  const next = mergeReplyDelayDraft(current, { max })
                                   websiteReplyDelayInputsRef.current = { ...websiteReplyDelayInputsRef.current, [website.id]: next }
                                   setWebsiteReplyDelayInputs(prev => ({ ...prev, [website.id]: next }))
                                   scheduleWebsiteReplyDelaySave(website.id, next.min, next.max)

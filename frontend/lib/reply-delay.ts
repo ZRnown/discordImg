@@ -2,6 +2,11 @@ export const REPLY_DELAY_STEP = 0.1
 export const REPLY_DELAY_MIN = 0.1
 export const REPLY_DELAY_MAX = 300
 
+export type ReplyDelayDraft = {
+  min: string
+  max: string
+}
+
 const roundToDelayStep = (value: number) => Math.round(value * 10) / 10
 
 export const getMinimumReplyMaxDelay = (minDelay: number) =>
@@ -23,3 +28,11 @@ export const normalizeReplyDelayRange = (minDelay: number, maxDelay: number) => 
     maxDelay: normalizedMax,
   }
 }
+
+export const mergeReplyDelayDraft = (
+  current: ReplyDelayDraft | undefined,
+  patch: Partial<ReplyDelayDraft>,
+): ReplyDelayDraft => ({
+  min: patch.min ?? current?.min ?? '',
+  max: patch.max ?? current?.max ?? '',
+})
