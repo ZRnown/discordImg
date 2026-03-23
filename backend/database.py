@@ -267,6 +267,7 @@ class Database:
                     username TEXT,
                     token TEXT UNIQUE NOT NULL,
                     user_id INTEGER,
+                    auto_start_enabled BOOLEAN DEFAULT 0,
                     status TEXT DEFAULT 'offline',
                     last_active TIMESTAMP,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -274,6 +275,11 @@ class Database:
                     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
                 )
             ''')
+
+            try:
+                cursor.execute('ALTER TABLE discord_accounts ADD COLUMN auto_start_enabled BOOLEAN DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
 
             # 插入默认管理员用户
             try:
@@ -1915,14 +1921,14 @@ class Database:
                 if user_id is None:
                     # 管理员查询所有账号
                     cursor.execute('''
-                        SELECT id, username, token, status, last_active, created_at, user_id
+                        SELECT id, username, token, status, last_active, created_at, user_id, auto_start_enabled
                     FROM discord_accounts
                     ORDER BY created_at DESC
                     ''')
                 else:
                     # 普通用户查询自己的账号
                     cursor.execute('''
-                        SELECT id, username, token, status, last_active, created_at, user_id
+                        SELECT id, username, token, status, last_active, created_at, user_id, auto_start_enabled
                         FROM discord_accounts
                         WHERE user_id = ?
                         ORDER BY created_at DESC
@@ -1931,6 +1937,43 @@ class Database:
         except Exception as e:
             logger.error(f"获取用户Discord账号失败: {e}")
             return []
+
+    def get_discord_accounts_marked_for_autostart(self) -> List[Dict]:
+        """获取服务重启后需要自动恢复的 Discord 账号"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    SELECT id, username, token, status, last_active, created_at, user_id, auto_start_enabled
+                    FROM discord_accounts
+                    WHERE auto_start_enabled = 1
+                    ORDER BY created_at DESC
+                    '''
+                )
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"获取自动恢复Discord账号失败: {e}")
+            return []
+
+    def set_discord_accounts_autostart_by_user(self, user_id: int, enabled: bool) -> int:
+        """按用户更新 Discord 账号的自动恢复开关"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    UPDATE discord_accounts
+                    SET auto_start_enabled = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE user_id = ?
+                    ''',
+                    (1 if enabled else 0, user_id),
+                )
+                conn.commit()
+                return cursor.rowcount
+        except Exception as e:
+            logger.error(f"更新Discord账号自动恢复开关失败: {e}")
+            return 0
 
     def update_product_title(self, product_id: int, title: str) -> bool:
         """更新商品标题"""

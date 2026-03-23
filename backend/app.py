@@ -4849,7 +4849,7 @@ def add_external_log():
         print(f"添加外部日志失败: {e}")
         return jsonify({'error': str(e)}), 500
 
-def start_discord_bot(user_id=None):
+def start_discord_bot(user_id=None, accounts=None):
     """启动Discord机器人 - 支持多账号"""
     global bot_running, bot_loop, bot_thread
 
@@ -4865,12 +4865,15 @@ def start_discord_bot(user_id=None):
 
         logger.info(f"正在启动Discord机器人... (用户ID: {user_id})")
 
-        # 获取账号 - 如果指定了用户ID，只获取该用户的账号
-        if user_id:
-            accounts = db.get_discord_accounts_by_user(user_id)
+        if accounts is None:
+            # 获取账号 - 如果指定了用户ID，只获取该用户的账号
+            if user_id:
+                accounts = db.get_discord_accounts_by_user(user_id)
+            else:
+                # 获取所有账号
+                accounts = db.get_discord_accounts_by_user(None)
         else:
-            # 获取所有账号
-            accounts = db.get_discord_accounts_by_user(None)
+            accounts = [dict(account) for account in accounts]
 
         if not accounts:
             logger.warning("没有找到可用的Discord账号")
@@ -4953,6 +4956,41 @@ def start_discord_bot(user_id=None):
         logger.error(f"Discord机器人启动失败: {e}")
         logger.info("Flask应用将继续运行，但机器人功能不可用")
         return 0
+
+
+def restore_discord_bots_after_restart():
+    """服务重启后自动恢复上次保持运行的 Discord 账号"""
+    try:
+        accounts = db.get_discord_accounts_marked_for_autostart()
+        if not accounts:
+            logger.info("没有需要自动恢复的Discord账号")
+            return 0
+
+        logger.info("检测到 %s 个Discord账号需要在服务启动后自动恢复", len(accounts))
+        started_count = start_discord_bot(accounts=accounts)
+        logger.info(
+            "Discord账号自动恢复完成: configured=%s started=%s",
+            len(accounts),
+            started_count,
+        )
+        return started_count
+    except Exception as e:
+        logger.error(f"自动恢复Discord账号失败: {e}")
+        return 0
+
+
+def schedule_discord_bot_restore():
+    """异步恢复 Discord 账号，避免阻塞 Flask 启动"""
+    def _restore_worker():
+        time.sleep(1.0)
+        restore_discord_bots_after_restart()
+
+    restore_thread = threading.Thread(
+        target=_restore_worker,
+        name="discord-bot-restore",
+        daemon=True,
+    )
+    restore_thread.start()
 
 def stop_discord_bot(user_id=None):
     """停止Discord机器人 (支持按用户停止)"""
@@ -5046,6 +5084,7 @@ def start_bot():
 
         # 启动机器人（启动所有账号，不管是否在线）
         started_count = start_discord_bot(user_id)
+        db.set_discord_accounts_autostart_by_user(user_id, True)
 
         if started_count == 0:
             logger.info(f"用户 {user_id} 的机器人已在运行中，共有 {len(user_accounts)} 个账号")
@@ -5076,6 +5115,7 @@ def stop_bot():
         user_id = current_user['id']
 
         stop_discord_bot(user_id)
+        db.set_discord_accounts_autostart_by_user(user_id, False)
 
         logger.info(f"用户 {user_id} 的机器人已停止")
         return jsonify({'message': '机器人停止成功'})
@@ -6937,6 +6977,9 @@ if __name__ == '__main__':
 
     # 注册退出时停止机器人的函数
     atexit.register(stop_discord_bot)
+
+    # 恢复上次保持运行的 Discord 账号
+    schedule_discord_bot_restore()
 
     # 启动 Flask 服务
     print("🚀 服务启动中...")
