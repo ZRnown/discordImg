@@ -116,6 +116,79 @@ def _should_send_plain_keyword_message(prevalidated_batch, explicit_mentions, re
     return str(reply_mode or "rotation").strip().lower() == "keyword"
 
 
+def _build_product_reply_channel_scopes(channel_id, website_config=None):
+    channel_id_str = str(channel_id)
+    channel_scopes = []
+
+    if website_config:
+        config_name = (website_config.get('name') or '').strip().lower()
+        config_display = (website_config.get('display_name') or '').strip().lower()
+        if config_name:
+            channel_scopes.append(config_name)
+        if config_display and config_display not in channel_scopes:
+            channel_scopes.append(config_display)
+        config_id = website_config.get('id')
+        if config_id is not None:
+            channel_scopes.append(str(config_id))
+
+    if channel_scopes:
+        return channel_scopes
+
+    if config.CNFANS_CHANNEL_ID and channel_id_str == str(config.CNFANS_CHANNEL_ID):
+        return ['cnfans']
+    if config.ACBUY_CHANNEL_ID and channel_id_str == str(config.ACBUY_CHANNEL_ID):
+        return ['acbuy']
+    return ['weidian']
+
+
+def _parse_product_reply_scopes(product_scope_raw):
+    if isinstance(product_scope_raw, str):
+        product_scope_raw = product_scope_raw.strip()
+
+    if (
+        not product_scope_raw
+        or (isinstance(product_scope_raw, str) and product_scope_raw.lower() == 'all')
+    ):
+        return []
+
+    if isinstance(product_scope_raw, list):
+        scopes = product_scope_raw
+    elif isinstance(product_scope_raw, str):
+        if product_scope_raw.startswith('['):
+            try:
+                scopes = json.loads(product_scope_raw)
+            except json.JSONDecodeError:
+                scopes = [product_scope_raw]
+        else:
+            scopes = [product_scope_raw]
+    else:
+        scopes = [str(product_scope_raw)]
+
+    return [
+        str(scope).strip().lower()
+        for scope in scopes
+        if str(scope).strip()
+    ]
+
+
+def _product_custom_scope_matches(product, channel_id, website_config=None):
+    product_scope_raw = (product or {}).get('replyScope') or (product or {}).get('reply_scope') or 'all'
+    normalized_scopes = _parse_product_reply_scopes(product_scope_raw)
+    if not normalized_scopes:
+        return True
+
+    channel_scopes = _build_product_reply_channel_scopes(channel_id, website_config=website_config)
+    return any(scope in channel_scopes for scope in normalized_scopes) if channel_scopes else False
+
+
+def _should_send_product_custom_images(custom_reply, product, channel_id, website_config=None):
+    if not isinstance(custom_reply, dict):
+        return True
+    if custom_reply.get('product_data') is None:
+        return True
+    return _product_custom_scope_matches(product, channel_id, website_config=website_config)
+
+
 def _build_keyword_direct_send_payload(
     author_id,
     reply_content,
@@ -1878,6 +1951,13 @@ class DiscordBotClient(discord.Client):
                                 active_custom_reply.get('reply_type') == 'custom_only' or
                                 active_custom_reply.get('reply_type') == 'text'
                             )
+                            if is_custom_mode and not _should_send_product_custom_images(
+                                active_custom_reply,
+                                product,
+                                message.channel.id,
+                                website_config=website_config,
+                            ):
+                                skip_images = True
 
                             if is_custom_mode and not skip_images:
                                 # 获取图片信息
@@ -2173,63 +2253,13 @@ class DiscordBotClient(discord.Client):
             except ImportError:
                 from .database import db
 
-            channel_id_str = str(channel_id)
             if not website_config:
-                website_config = db.get_website_config_by_channel(channel_id_str, self.user_id)
-            channel_scopes = []
-            if website_config:
-                config_name = (website_config.get('name') or '').strip().lower()
-                config_display = (website_config.get('display_name') or '').strip().lower()
-                if config_name:
-                    channel_scopes.append(config_name)
-                if config_display and config_display not in channel_scopes:
-                    channel_scopes.append(config_display)
-                config_id = website_config.get('id')
-                if config_id is not None:
-                    channel_scopes.append(str(config_id))
-
-            if not channel_scopes:
-                if config.CNFANS_CHANNEL_ID and channel_id_str == str(config.CNFANS_CHANNEL_ID):
-                    channel_scopes = ['cnfans']
-                elif config.ACBUY_CHANNEL_ID and channel_id_str == str(config.ACBUY_CHANNEL_ID):
-                    channel_scopes = ['acbuy']
-                else:
-                    channel_scopes = ['weidian']
+                website_config = db.get_website_config_by_channel(str(channel_id), self.user_id)
 
             is_product_custom = bool(custom_reply and custom_reply.get('product_data'))
             force_link_only = False
             if is_product_custom:
-                product_scope_raw = (product.get('replyScope') or product.get('reply_scope') or 'all')
-                scope_match = False
-
-                if isinstance(product_scope_raw, str):
-                    product_scope_raw = product_scope_raw.strip()
-
-                if not product_scope_raw or (isinstance(product_scope_raw, str) and product_scope_raw.lower() == 'all'):
-                    scope_match = True
-                else:
-                    scopes = []
-                    if isinstance(product_scope_raw, list):
-                        scopes = product_scope_raw
-                    elif isinstance(product_scope_raw, str):
-                        if product_scope_raw.startswith('['):
-                            try:
-                                scopes = json.loads(product_scope_raw)
-                            except json.JSONDecodeError:
-                                scopes = [product_scope_raw]
-                        else:
-                            scopes = [product_scope_raw]
-                    else:
-                        scopes = [str(product_scope_raw)]
-
-                    normalized_scopes = [
-                        str(scope).strip().lower()
-                        for scope in scopes
-                        if str(scope).strip()
-                    ]
-                    scope_match = any(scope in channel_scopes for scope in normalized_scopes) if channel_scopes else False
-
-                if not scope_match:
+                if not _product_custom_scope_matches(product, channel_id, website_config=website_config):
                     force_link_only = True
                     logger.info(
                         f"商品 {product.get('id')} 回复范围未命中当前网站 "
