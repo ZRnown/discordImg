@@ -2257,8 +2257,15 @@ class DiscordBotClient(discord.Client):
                 website_config = db.get_website_config_by_channel(str(channel_id), self.user_id)
 
             is_product_custom = bool(custom_reply and custom_reply.get('product_data'))
+            force_custom_reply = bool(
+                custom_reply and (
+                    custom_reply.get('explicit_mentions')
+                    or custom_reply.get('batched_reply')
+                    or custom_reply.get('final_direct_content')
+                )
+            )
             force_link_only = False
-            if is_product_custom:
+            if is_product_custom and not force_custom_reply:
                 if not _product_custom_scope_matches(product, channel_id, website_config=website_config):
                     force_link_only = True
                     logger.info(
@@ -2284,14 +2291,6 @@ class DiscordBotClient(discord.Client):
                 if append_link:
                     return f"{template}\n{response_url}".strip()
                 return template.strip()
-
-            force_custom_reply = bool(
-                custom_reply and (
-                    custom_reply.get('explicit_mentions')
-                    or custom_reply.get('batched_reply')
-                    or custom_reply.get('final_direct_content')
-                )
-            )
 
             # 1) 商品级自定义回复（优先级最高）
             if is_product_custom or force_custom_reply:
@@ -3444,6 +3443,7 @@ class DiscordBotClient(discord.Client):
                         'content': website_content,
                         'product_data': base_product,
                         'skip_images': True,
+                        'batched_reply': True,
                         'explicit_mentions': reply_mode == 'keyword',
                         'repeat_product_ids': repeat_product_ids,
                     }
