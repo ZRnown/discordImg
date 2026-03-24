@@ -69,6 +69,26 @@ class KeywordModelMatchingTestCase(unittest.TestCase):
         self.assertEqual(reason["canonical_keyword"], "palacehoodie")
         self.assertEqual(reason["source"], "english_title")
 
+    def test_longer_query_can_match_shorter_core_phrase(self):
+        reason = find_query_keyword_match(
+            build_query_keyword_candidates("Lv skate swarovski"),
+            "LV Skate",
+        )
+
+        self.assertIsNotNone(reason)
+        self.assertEqual(reason["canonical_keyword"], "lvskate")
+        self.assertEqual(reason["source"], "english_title")
+
+    def test_longer_query_with_suffix_can_match_shorter_phrase(self):
+        reason = find_query_keyword_match(
+            build_query_keyword_candidates("Palace Hoodie Zip"),
+            "Palace hoodie",
+        )
+
+        self.assertIsNotNone(reason)
+        self.assertEqual(reason["canonical_keyword"], "palacehoodie")
+        self.assertEqual(reason["source"], "english_title")
+
 
 if __name__ == "__main__":
     unittest.main()

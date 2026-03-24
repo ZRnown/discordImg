@@ -67,8 +67,7 @@ def build_query_keyword_candidates(value: str) -> dict[str, str]:
             compact = "".join(part_tokens)
             if len(compact) < 2:
                 continue
-            if any(ch.isdigit() for ch in compact):
-                add(compact, compact)
+            add(compact, compact)
 
     return candidates
 
