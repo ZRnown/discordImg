@@ -2261,6 +2261,7 @@ class DiscordBotClient(discord.Client):
                 custom_reply and (
                     custom_reply.get('explicit_mentions')
                     or custom_reply.get('batched_reply')
+                    or custom_reply.get('prebuilt_content')
                     or custom_reply.get('final_direct_content')
                 )
             )
@@ -3443,7 +3444,7 @@ class DiscordBotClient(discord.Client):
                         'content': website_content,
                         'product_data': base_product,
                         'skip_images': True,
-                        'batched_reply': True,
+                        'prebuilt_content': True,
                         'explicit_mentions': reply_mode == 'keyword',
                         'repeat_product_ids': repeat_product_ids,
                     }
