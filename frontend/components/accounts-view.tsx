@@ -2395,6 +2395,36 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                     Token 将被安全存储，系统会自动验证有效性
                   </p>
                 </div>
+                <div className="rounded-lg border bg-muted/40 p-4 space-y-3">
+                  <div className="space-y-1">
+                    <div className="text-sm font-medium">如何获取 Token</div>
+                    <p className="text-xs text-muted-foreground">
+                      需要使用 Chrome 浏览器安装插件，再到 Discord 网页版登录后获取。
+                    </p>
+                  </div>
+                  <a
+                    href="https://chromewebstore.google.com/detail/discord-get-user-token/accgjfooejbpdchkfpngkjjdekkcbnfd"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-2 text-sm text-primary hover:underline"
+                  >
+                    <Link className="h-4 w-4" />
+                    打开 Chrome 的 Discord Get User Token 插件
+                  </a>
+                  <img
+                    src="/discord-token-guide.png"
+                    alt="Discord Token 获取教程图"
+                    className="w-full rounded-md border bg-background"
+                  />
+                  <ol className="list-decimal space-y-1 pl-5 text-sm text-muted-foreground">
+                    <li>请先使用 Chrome 浏览器安装上面的插件。</li>
+                    <li>用 Chrome 打开 Discord 网页版并登录你的账号。</li>
+                    <li>登录后刷新一下页面。</li>
+                    <li>点击这个扩展，然后点 `Get Token`。</li>
+                    <li>把复制下来的 Token 粘贴到上面的输入框里。</li>
+                    <li>如果没有拿到 Token，就刷新网页后再点一次。</li>
+                  </ol>
+                </div>
               </div>
               <DialogFooter>
                 <Button onClick={handleAddAccount}>添加账号</Button>
