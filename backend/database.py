@@ -1859,6 +1859,36 @@ class Database:
             logger.error(f"更新用户店铺权限失败: {e}")
             return False
 
+    def add_user_shop_permission(self, user_id: int, shop_id: str) -> bool:
+        """为用户追加单个店铺权限"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT OR IGNORE INTO user_shop_permissions (user_id, shop_id)
+                    VALUES (?, ?)
+                ''', (user_id, shop_id))
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"追加用户店铺权限失败: {e}")
+            return False
+
+    def get_user_ids_by_shop(self, shop_id: str) -> List[int]:
+        """获取拥有某个店铺权限的用户ID列表"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT DISTINCT user_id
+                    FROM user_shop_permissions
+                    WHERE shop_id = ?
+                ''', (shop_id,))
+                return [int(row['user_id']) for row in cursor.fetchall() if row['user_id'] is not None]
+        except Exception as e:
+            logger.error(f"获取店铺权限用户失败: {e}")
+            return []
+
     def get_user_by_id(self, user_id: int) -> Optional[Dict]:
         """根据ID获取用户"""
         try:
@@ -4082,7 +4112,7 @@ class Database:
 
     # ===== 店铺管理方法 =====
 
-    def add_shop(self, shop_id: str, name: str) -> bool:
+    def add_shop(self, shop_id: str, name: str, owner_user_id: Optional[int] = None) -> bool:
         """添加新店铺"""
         try:
             with self.get_connection() as conn:
@@ -4098,6 +4128,13 @@ class Database:
                     INSERT INTO shops (shop_id, name, product_count)
                     VALUES (?, ?, 0)
                 ''', (shop_id, name))
+
+                if owner_user_id:
+                    cursor.execute('''
+                        INSERT OR IGNORE INTO user_shop_permissions (user_id, shop_id)
+                        VALUES (?, ?)
+                    ''', (owner_user_id, shop_id))
+
                 conn.commit()
                 return True
         except Exception as e:
@@ -4170,6 +4207,7 @@ class Database:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
+                cursor.execute('DELETE FROM user_shop_permissions WHERE shop_id = ?', (shop_id,))
                 cursor.execute('DELETE FROM shops WHERE shop_id = ?', (shop_id,))
                 conn.commit()
                 return cursor.rowcount > 0

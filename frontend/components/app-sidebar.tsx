@@ -63,9 +63,7 @@ export function AppSidebar({
           <SidebarGroupLabel>主要功能</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {baseMenuItems
-                .filter(item => item.id !== 'shops' || currentUser?.role === 'admin')
-                .map((item) => (
+              {baseMenuItems.map((item) => (
                 <SidebarMenuItem key={item.id}>
                   <SidebarMenuButton
                     onClick={() => item.id === 'tutorial' ? onStartTutorial() : setCurrentView(item.id)}

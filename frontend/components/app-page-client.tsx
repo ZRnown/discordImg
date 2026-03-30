@@ -50,6 +50,15 @@ export function AppPageClient() {
     console.log("BotStatus changed to:", botStatus)
   }, [botStatus])
 
+  useEffect(() => {
+    const handleShopsUpdated = () => {
+      checkLoginStatus()
+    }
+
+    window.addEventListener("shops-updated", handleShopsUpdated)
+    return () => window.removeEventListener("shops-updated", handleShopsUpdated)
+  }, [])
+
   const checkLoginStatus = async () => {
     try {
       const response = await fetch("/api/auth/me", {
@@ -269,11 +278,9 @@ export function AppPageClient() {
             <AccountsView isActive={currentView === "accounts"} />
           </div>
 
-          {(currentUser.role === "admin" || (currentUser.shops && currentUser.shops.length > 0)) && (
-            <div style={{ display: currentView === "shops" ? "block" : "none", height: "100%" }}>
-              <ShopsView currentUser={currentUser} />
-            </div>
-          )}
+          <div style={{ display: currentView === "shops" ? "block" : "none", height: "100%" }}>
+            <ShopsView currentUser={currentUser} />
+          </div>
 
           <div style={{ display: currentView === "scraper" ? "block" : "none", height: "100%" }}>
             <ScraperView currentUser={currentUser} isActive={currentView === "scraper"} />

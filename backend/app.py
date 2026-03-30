@@ -1495,6 +1495,10 @@ def require_admin():
     user = get_current_user()
     return user and user.get('role') == 'admin'
 
+def can_add_shops():
+    """检查当前用户是否可以新增店铺"""
+    return get_current_user() is not None
+
 def can_manage_shops():
     """检查用户是否有管理店铺的权限（管理员或有分配的店铺）"""
     user = get_current_user()
@@ -5305,8 +5309,9 @@ def get_shops():
 @app.route('/api/shops', methods=['POST'])
 def add_shop():
     """添加新店铺"""
-    if not can_manage_shops():
-        return jsonify({'error': '需要管理店铺的权限'}), 403
+    current_user = get_current_user()
+    if not can_add_shops() or not current_user:
+        return jsonify({'error': '需要登录'}), 401
 
     try:
         data = request.get_json()
@@ -5324,8 +5329,24 @@ def add_shop():
         if shop_info and shop_info.get('shopName'):
             name = shop_info['shopName']
 
-        if db.add_shop(shop_id, name):
-            return jsonify({'success': True, 'message': '店铺添加成功'})
+        owner_user_id = None if current_user.get('role') == 'admin' else current_user.get('id')
+
+        if db.add_shop(shop_id, name, owner_user_id=owner_user_id):
+            if owner_user_id:
+                updated_clients, scoped_shops = refresh_running_bot_user_shops(owner_user_id)
+                logger.info(
+                    "用户 %s 新增店铺 %s 后已自动授权，刷新运行中 Bot %s 个，当前作用域: %s",
+                    owner_user_id,
+                    shop_id,
+                    updated_clients,
+                    scoped_shops
+                )
+            return jsonify({
+                'success': True,
+                'message': '店铺添加成功',
+                'shopId': shop_id,
+                'autoAssigned': bool(owner_user_id),
+            })
         else:
             return jsonify({'error': '店铺已存在或添加失败'}), 400
     except Exception as e:
@@ -5349,7 +5370,18 @@ def delete_shop(shop_id):
         if current_user['role'] != 'admin' and shop_info['shop_id'] not in current_user.get('shops', []):
             return jsonify({'error': '无权限删除此店铺'}), 403
 
+        impacted_user_ids = db.get_user_ids_by_shop(shop_id)
+
         if db.delete_shop(shop_id):
+            for impacted_user_id in impacted_user_ids:
+                updated_clients, scoped_shops = refresh_running_bot_user_shops(impacted_user_id)
+                logger.info(
+                    "店铺 %s 删除后已刷新用户 %s 的运行中 Bot %s 个，当前作用域: %s",
+                    shop_id,
+                    impacted_user_id,
+                    updated_clients,
+                    scoped_shops
+                )
             return jsonify({'success': True, 'message': '店铺删除成功'})
         else:
             return jsonify({'error': '删除失败'}), 500
@@ -5431,6 +5463,11 @@ def scrape_shop():
         shop_id = data['shopId'].strip()
         if not shop_id.isdigit():
             return jsonify({'error': 'shopId必须是数字'}), 400
+
+        current_user = get_current_user()
+        if current_user and current_user.get('role') != 'admin':
+            if shop_id not in (current_user.get('shops') or []):
+                return jsonify({'error': '无权限抓取此店铺'}), 403
 
         # 检查是否已有抓取任务在运行
         current_status = db.get_scrape_status()

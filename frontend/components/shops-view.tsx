@@ -37,15 +37,7 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
     try {
       const res = await fetch('/api/shops')
       const data = await res.json()
-      let allShops = data.shops || []
-
-      // 根据用户权限过滤店铺
-      if (currentUser?.role !== 'admin' && currentUser?.shops) {
-        // 普通用户只看到分配给他们的店铺
-        allShops = allShops.filter((shop: any) => currentUser.shops.includes(shop.shop_id))
-      }
-
-      setShops(allShops)
+      setShops(data.shops || [])
     } catch (e) {
       toast.error("加载店铺列表失败")
     }
@@ -90,7 +82,11 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
       const data = await res.json()
 
       if (res.ok) {
-        toast.success("店铺添加成功")
+        toast.success(
+          data.autoAssigned
+            ? "店铺添加成功，当前账号已自动获得管理权限"
+            : "店铺添加成功"
+        )
         setNewShopId('')
         fetchShops()
         // 触发自定义事件通知其他组件刷新店铺列表
@@ -210,8 +206,6 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
         </div>
       </div>
 
-      {/* 添加新店铺 - 仅管理员可见 */}
-      {currentUser?.role === 'admin' && (
       <Card data-tutorial="shops-add-shop">
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
@@ -219,7 +213,7 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
             添加新店铺
           </CardTitle>
           <CardDescription>
-            输入微店店铺ID，系统会自动获取店铺名称
+            输入微店店铺ID，系统会自动获取店铺名称。新增成功后，当前账号默认可以管理这个店铺。
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -252,7 +246,6 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
           </div>
         </CardContent>
       </Card>
-      )}
 
 
       {/* 店铺列表 */}
