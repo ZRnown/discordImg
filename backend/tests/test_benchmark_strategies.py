@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 import pytest
 
@@ -122,3 +124,44 @@ def test_siglip2_rerank_score_without_text_renormalizes_available_modalities():
     )
 
     assert score == pytest.approx(1.0, abs=1e-6)
+
+
+def test_siglip2_rerank_resolves_best_stage2_report_from_glob(tmp_path):
+    low_quality_path = tmp_path / "low.json"
+    high_quality_path = tmp_path / "high.json"
+    low_quality_path.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "expected_product_id": "916",
+                        "ranked_products": [{"product_id": "920"}],
+                    }
+                ],
+                "metrics": {"hit_at_1": 0.2},
+            }
+        ),
+        encoding="utf-8",
+    )
+    high_quality_path.write_text(
+        json.dumps(
+            {
+                "results": [
+                    {
+                        "expected_product_id": "916",
+                        "ranked_products": [{"product_id": "916"}],
+                    }
+                ],
+                "metrics": {"hit_at_1": 0.8},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    resolved_path = Siglip2RerankStrategy._resolve_stage2_hard_negative_report_path(
+        "",
+        auto_enabled=True,
+        auto_glob=str(tmp_path / "*.json"),
+    )
+
+    assert resolved_path == str(high_quality_path)

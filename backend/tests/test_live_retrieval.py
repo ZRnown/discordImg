@@ -1,9 +1,15 @@
+import json
+from pathlib import Path
+
+from PIL import Image
+
 from backend.live_retrieval import (
     LiveCatalogImageRecord,
     LiveQueryRecord,
     backfill_product_image_retrieval_cache,
     build_query_record,
     build_catalog_records,
+    load_runtime_product_support_records,
     prepare_catalog_entries,
     rank_query_products,
 )
@@ -139,6 +145,46 @@ def test_rank_query_products_respects_threshold_and_shop_scope():
     assert [item["product_id"] for item in ranked] == ["1001"]
 
 
+def test_rank_query_products_returns_empty_for_explicit_empty_shop_scope():
+    catalog = [
+        LiveCatalogImageRecord(
+            product_id="1001",
+            title="Alpha Runner",
+            english_title="",
+            description="",
+            shop_name="shop-a",
+            image_path="/tmp/a-1.jpg",
+            image_index=0,
+            product_url="https://weidian.com/item.html?itemID=1001",
+            queries=["alpha runner"],
+        ),
+        LiveCatalogImageRecord(
+            product_id="1002",
+            title="Beta Runner",
+            english_title="",
+            description="",
+            shop_name="shop-b",
+            image_path="/tmp/b-1.jpg",
+            image_index=0,
+            product_url="https://weidian.com/item.html?itemID=1002",
+            queries=["beta runner"],
+        ),
+    ]
+    strategy = DummyLiveStrategy()
+    prepared = prepare_catalog_entries(strategy, catalog)
+    query = LiveQueryRecord(image_path="/tmp/query.jpg", query="alpha runner")
+
+    ranked = rank_query_products(
+        strategy=strategy,
+        prepared_catalog=prepared,
+        query_record=query,
+        top_k=3,
+        user_shops=[],
+    )
+
+    assert ranked == []
+
+
 def test_build_catalog_records_deserializes_siglip2_cache_fields():
     rows = [
         {
@@ -174,6 +220,55 @@ def test_build_query_record_ignores_query_text_for_live_image_search():
     assert record.image_path == "/tmp/query.jpg"
     assert record.query == ""
     assert record.product_queries == []
+
+
+def test_load_runtime_product_support_records_includes_external_support_in_auto_mode(
+    tmp_path,
+    monkeypatch,
+):
+    support_dir = tmp_path / "external-support" / "916"
+    support_dir.mkdir(parents=True)
+    support_image_path = support_dir / "support.jpg"
+    Image.new("RGB", (96, 96), color=(255, 0, 0)).save(support_image_path, format="JPEG")
+    (support_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "product_id": "916",
+                "item_id": "7713998250",
+                "title": "Alpha Runner",
+                "queries": ["alpha runner"],
+                "images": [{"path": "support.jpg"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    catalog_image_path = tmp_path / "catalog.jpg"
+    Image.new("RGB", (96, 96), color=(0, 255, 0)).save(catalog_image_path, format="JPEG")
+
+    monkeypatch.setenv("LIVE_IMAGE_SEARCH_PRODUCT_SUPPORT_MODE", "auto")
+    monkeypatch.setenv("LIVE_IMAGE_SEARCH_EXTERNAL_PRODUCT_SUPPORT_ENABLED", "1")
+    monkeypatch.setenv("LIVE_IMAGE_SEARCH_EXTERNAL_PRODUCT_SUPPORT_DIR", str(tmp_path / "external-support"))
+    monkeypatch.setenv("LIVE_IMAGE_SEARCH_AUTO_PRODUCT_SUPPORT_ENABLED", "0")
+    monkeypatch.delenv("LIVE_IMAGE_SEARCH_PRODUCT_SUPPORT_MANIFEST", raising=False)
+
+    records = load_runtime_product_support_records(
+        [
+            LiveCatalogImageRecord(
+                product_id="916",
+                item_id="7713998250",
+                title="Alpha Runner",
+                english_title="",
+                description="",
+                shop_name="shop-a",
+                image_path=str(catalog_image_path),
+                image_index=0,
+            )
+        ]
+    )
+
+    assert len(records) == 1
+    assert records[0].expected_product_id == "916"
+    assert Path(records[0].image_path) == support_image_path
 
 
 def test_backfill_product_image_retrieval_cache_only_persists_missing_rows():

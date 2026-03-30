@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 import json
+import os
 from threading import Lock
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+from PIL import Image, ImageFilter
 
 try:
     from .benchmarks.common import aggregate_product_rankings
@@ -30,6 +34,7 @@ class LiveCatalogImageRecord:
     custom_reply_images: str = ""
     custom_image_urls: str = ""
     uploaded_reply_images: str = ""
+    item_id: str = ""
     queries: List[str] = field(default_factory=list)
     image_db_id: int = 0
     cache_strategy_name: str = ""
@@ -48,6 +53,526 @@ class LiveQueryRecord:
     expected_product_id: str = ""
     shop_name: str = ""
     product_queries: List[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class LiveProductSupportRecord:
+    expected_product_id: str
+    image_path: str
+    title: str = ""
+    product_queries: List[str] = field(default_factory=list)
+
+
+_RUNTIME_SIGNATURE_ENV_PREFIXES: tuple[str, ...] = (
+    "LIVE_IMAGE_SEARCH_",
+    "SIGLIP2_RERANK_",
+    "RETRIEVAL_PRODUCT_RANK_",
+)
+_AUTO_SUPPORT_VARIANT_SUFFIXES: tuple[str, ...] = (
+    "center",
+    "compressed",
+    "perspective",
+    "background",
+)
+_EXTERNAL_SUPPORT_METADATA_FILENAME = "metadata.json"
+_RESAMPLING = getattr(Image, "Resampling", Image)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    value = str(raw).strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return bool(default)
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None:
+        return int(default)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return int(default)
+    return value if value >= 0 else int(default)
+
+
+def _resolve_auto_support_output_dir(raw_path: str = "") -> str:
+    output_dir = str(raw_path or "").strip()
+    if output_dir:
+        if os.path.isabs(output_dir):
+            return output_dir
+        backend_dir = os.path.dirname(__file__)
+        return os.path.abspath(os.path.join(backend_dir, output_dir))
+
+    return os.path.join(os.path.dirname(__file__), "data", "live_image_support")
+
+
+def _resolve_external_support_output_dir(raw_path: str = "") -> str:
+    output_dir = str(raw_path or "").strip()
+    if output_dir:
+        if os.path.isabs(output_dir):
+            return output_dir
+        backend_dir = os.path.dirname(__file__)
+        return os.path.abspath(os.path.join(backend_dir, output_dir))
+
+    return os.path.join(
+        os.path.dirname(__file__),
+        "data",
+        "live_image_external_support",
+    )
+
+
+def _normalize_product_support_mode(raw_mode: Any) -> str:
+    value = str(raw_mode or "").strip().lower()
+    if value in {"manifest", "merge", "auto"}:
+        return value
+    return "auto"
+
+
+def _get_product_support_mode() -> str:
+    return _normalize_product_support_mode(
+        os.getenv("LIVE_IMAGE_SEARCH_PRODUCT_SUPPORT_MODE", "auto")
+    )
+
+
+def _build_runtime_env_signature(strategy_name: str) -> Tuple[Tuple[str, str], ...]:
+    pairs = [("LIVE_IMAGE_SEARCH_STRATEGY_NAME", str(strategy_name or "").strip())]
+    for key, value in os.environ.items():
+        if any(key.startswith(prefix) for prefix in _RUNTIME_SIGNATURE_ENV_PREFIXES):
+            pairs.append((str(key), str(value)))
+    return tuple(sorted(pairs))
+
+
+def _collect_unique_product_queries(records: Sequence[LiveCatalogImageRecord]) -> List[str]:
+    seen: set[str] = set()
+    ordered: List[str] = []
+    for record in records:
+        for value in list(getattr(record, "queries", []) or []):
+            normalized = str(value or "").strip()
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                ordered.append(normalized)
+    return ordered
+
+
+def _open_rgb_image(image_path: str) -> Optional[Image.Image]:
+    try:
+        with Image.open(image_path) as image:
+            return image.convert("RGB")
+    except Exception:
+        return None
+
+
+def _verify_support_image(image_path: str) -> bool:
+    try:
+        with Image.open(image_path) as image:
+            image.verify()
+        return os.path.getsize(image_path) > 256
+    except Exception:
+        return False
+
+
+def _load_external_support_metadata(
+    metadata_path: str | os.PathLike[str],
+) -> Dict[str, Any]:
+    resolved_path = os.fspath(metadata_path)
+    if not resolved_path or not os.path.exists(resolved_path):
+        return {}
+    try:
+        with open(resolved_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def load_external_product_support_records(
+    catalog_records: Sequence[LiveCatalogImageRecord],
+    *,
+    support_dir: str | os.PathLike[str] | None = None,
+) -> List[LiveProductSupportRecord]:
+    if not _env_bool("LIVE_IMAGE_SEARCH_EXTERNAL_PRODUCT_SUPPORT_ENABLED", True):
+        return []
+
+    resolved_support_dir = _resolve_external_support_output_dir(
+        str(
+            os.fspath(support_dir)
+            if support_dir is not None
+            else os.getenv("LIVE_IMAGE_SEARCH_EXTERNAL_PRODUCT_SUPPORT_DIR", "")
+        )
+    )
+    if not os.path.isdir(resolved_support_dir):
+        return []
+
+    allowed_product_ids = {
+        str(record.product_id or "").strip()
+        for record in catalog_records
+        if str(record.product_id or "").strip()
+    }
+    allowed_item_ids = {
+        str(record.item_id or "").strip()
+        for record in catalog_records
+        if str(record.item_id or "").strip()
+    }
+    per_product_limit = max(
+        _env_int("LIVE_IMAGE_SEARCH_EXTERNAL_PRODUCT_SUPPORT_MAX_RECORDS", 4),
+        1,
+    )
+
+    records: List[LiveProductSupportRecord] = []
+    seen: set[tuple[str, str]] = set()
+    metadata_paths: List[str] = []
+    for root, _dirs, files in os.walk(resolved_support_dir):
+        if _EXTERNAL_SUPPORT_METADATA_FILENAME in files:
+            metadata_paths.append(os.path.join(root, _EXTERNAL_SUPPORT_METADATA_FILENAME))
+
+    for metadata_path in sorted(metadata_paths):
+        payload = _load_external_support_metadata(metadata_path)
+        if not payload:
+            continue
+
+        product_id = str(
+            payload.get("product_id")
+            or payload.get("expected_product_id")
+            or os.path.basename(os.path.dirname(metadata_path))
+            or ""
+        ).strip()
+        item_id = str(payload.get("item_id") or "").strip()
+        expected_product_id = ""
+        if product_id and product_id in allowed_product_ids:
+            expected_product_id = product_id
+        elif item_id and item_id in allowed_item_ids:
+            expected_product_id = item_id
+        elif not allowed_product_ids and product_id:
+            expected_product_id = product_id
+
+        if not expected_product_id:
+            continue
+
+        metadata_dir = os.path.dirname(metadata_path)
+        title = str(payload.get("title") or "")
+        product_queries = list(payload.get("queries") or payload.get("product_queries") or [])
+        image_entries = payload.get("images") or payload.get("support_images") or payload.get("query_images") or []
+        added = 0
+        for image_entry in image_entries:
+            if added >= per_product_limit:
+                break
+            raw_image_path = ""
+            if isinstance(image_entry, str):
+                raw_image_path = image_entry
+            elif isinstance(image_entry, dict):
+                raw_image_path = str(
+                    image_entry.get("path")
+                    or image_entry.get("local_path")
+                    or image_entry.get("image_path")
+                    or ""
+                )
+            image_path = str(raw_image_path or "").strip()
+            if not image_path:
+                continue
+            if not os.path.isabs(image_path):
+                image_path = os.path.abspath(os.path.join(metadata_dir, image_path))
+            key = (expected_product_id, image_path)
+            if key in seen or not os.path.exists(image_path) or not _verify_support_image(image_path):
+                continue
+            seen.add(key)
+            records.append(
+                LiveProductSupportRecord(
+                    expected_product_id=expected_product_id,
+                    image_path=image_path,
+                    title=title,
+                    product_queries=list(product_queries),
+                )
+            )
+            added += 1
+
+    return records
+
+
+def _center_crop_image(image: Image.Image, crop_ratio: float = 0.88) -> Image.Image:
+    crop_ratio = min(max(float(crop_ratio or 0.0), 0.1), 1.0)
+    width, height = image.size
+    crop_width = max(int(width * crop_ratio), 1)
+    crop_height = max(int(height * crop_ratio), 1)
+    left = max((width - crop_width) // 2, 0)
+    top = max((height - crop_height) // 2, 0)
+    return image.crop((left, top, left + crop_width, top + crop_height))
+
+
+def _compress_image(image: Image.Image, max_side: int = 480) -> Image.Image:
+    max_side = max(int(max_side or 0), 64)
+    width, height = image.size
+    longest_side = max(width, height)
+    if longest_side <= max_side:
+        return image.copy()
+    scale = max_side / float(longest_side)
+    resized = image.resize(
+        (max(int(width * scale), 1), max(int(height * scale), 1)),
+        _RESAMPLING.LANCZOS,
+    )
+    return resized
+
+
+def _perspective_warp_image(image: Image.Image) -> Image.Image:
+    width, height = image.size
+    inset_x = max(width * 0.08, 2.0)
+    inset_y = max(height * 0.05, 2.0)
+    quad = (
+        inset_x,
+        inset_y,
+        width - inset_x,
+        0.0,
+        width,
+        height - inset_y,
+        0.0,
+        height,
+    )
+    return image.transform(
+        (width, height),
+        Image.Transform.QUAD,
+        quad,
+        resample=_RESAMPLING.BICUBIC,
+    )
+
+
+def _background_perturb_image(image: Image.Image) -> Image.Image:
+    width, height = image.size
+    background = image.resize(
+        (max(width, 64), max(height, 64)),
+        _RESAMPLING.LANCZOS,
+    ).filter(ImageFilter.GaussianBlur(radius=max(min(width, height) / 24.0, 2.0)))
+    overlay_scale = 0.86
+    overlay = image.resize(
+        (
+            max(int(width * overlay_scale), 1),
+            max(int(height * overlay_scale), 1),
+        ),
+        _RESAMPLING.LANCZOS,
+    )
+    canvas = background.copy()
+    offset = (
+        max((canvas.width - overlay.width) // 2, 0),
+        max((canvas.height - overlay.height) // 2, 0),
+    )
+    canvas.paste(overlay, offset)
+    return canvas
+
+
+def _materialize_auto_support_variant(
+    source_path: str,
+    variant_name: str,
+    output_dir: str,
+    image_factory,
+) -> str:
+    absolute_source_path = os.path.abspath(source_path)
+    try:
+        stat_result = os.stat(absolute_source_path)
+    except OSError:
+        return ""
+
+    source_signature = "|".join(
+        [
+            absolute_source_path,
+            variant_name,
+            str(int(stat_result.st_mtime_ns)),
+            str(int(stat_result.st_size)),
+        ]
+    )
+    digest = hashlib.sha1(source_signature.encode("utf-8")).hexdigest()[:16]
+    stem = os.path.splitext(os.path.basename(absolute_source_path))[0]
+    output_path = os.path.join(output_dir, f"{stem}-{variant_name}-{digest}.jpg")
+    if os.path.exists(output_path):
+        return output_path
+
+    image = _open_rgb_image(absolute_source_path)
+    if image is None:
+        return ""
+
+    try:
+        variant_image = image_factory(image)
+        os.makedirs(output_dir, exist_ok=True)
+        variant_image.save(output_path, format="JPEG", quality=78, optimize=True)
+    except Exception:
+        return ""
+    return output_path
+
+
+def build_auto_product_support_records(
+    catalog_records: Sequence[LiveCatalogImageRecord],
+    *,
+    output_dir: str | os.PathLike[str] | None = None,
+    max_source_images_per_product: int = 3,
+    max_records_per_product: int = 5,
+    include_original_images: bool = True,
+    enable_center_crop: bool = True,
+    enable_compressed: bool = True,
+    enable_perspective: bool = True,
+    enable_background_perturb: bool = True,
+) -> List[LiveProductSupportRecord]:
+    grouped_records: Dict[str, List[LiveCatalogImageRecord]] = {}
+    for record in catalog_records:
+        product_id = str(record.product_id or "").strip()
+        if not product_id:
+            continue
+        image_path = str(record.image_path or "").strip()
+        if not image_path or not os.path.exists(image_path):
+            continue
+        grouped_records.setdefault(product_id, []).append(record)
+
+    resolved_output_dir = _resolve_auto_support_output_dir(str(output_dir or ""))
+    source_limit = max(int(max_source_images_per_product or 0), 1)
+    record_limit = max(int(max_records_per_product or 0), 1)
+    variant_builders = [
+        ("center", _center_crop_image, bool(enable_center_crop)),
+        ("compressed", _compress_image, bool(enable_compressed)),
+        ("perspective", _perspective_warp_image, bool(enable_perspective)),
+        ("background", _background_perturb_image, bool(enable_background_perturb)),
+    ]
+
+    support_records: List[LiveProductSupportRecord] = []
+    for product_id, product_records in grouped_records.items():
+        ordered_records = sorted(
+            product_records,
+            key=lambda item: (int(getattr(item, "image_index", 0) or 0), str(item.image_path)),
+        )[:source_limit]
+        if not ordered_records:
+            continue
+
+        title = str(getattr(ordered_records[0], "title", "") or "")
+        product_queries = _collect_unique_product_queries(ordered_records)
+        added_paths: set[str] = set()
+        product_support_records: List[LiveProductSupportRecord] = []
+
+        def _append_support_record(image_path: str) -> bool:
+            normalized_path = str(image_path or "").strip()
+            if (
+                not normalized_path
+                or normalized_path in added_paths
+                or not os.path.exists(normalized_path)
+                or len(product_support_records) >= record_limit
+            ):
+                return False
+            added_paths.add(normalized_path)
+            product_support_records.append(
+                LiveProductSupportRecord(
+                    expected_product_id=product_id,
+                    image_path=normalized_path,
+                    title=title,
+                    product_queries=list(product_queries),
+                )
+            )
+            return True
+
+        if include_original_images:
+            for record in ordered_records:
+                if len(product_support_records) >= record_limit:
+                    break
+                _append_support_record(record.image_path)
+
+        if len(product_support_records) < record_limit:
+            for record in ordered_records:
+                for variant_name, image_factory, enabled in variant_builders:
+                    if not enabled or len(product_support_records) >= record_limit:
+                        continue
+                    variant_path = _materialize_auto_support_variant(
+                        record.image_path,
+                        variant_name=variant_name,
+                        output_dir=resolved_output_dir,
+                        image_factory=image_factory,
+                    )
+                    _append_support_record(variant_path)
+                if len(product_support_records) >= record_limit:
+                    break
+
+        support_records.extend(product_support_records)
+
+    return support_records
+
+
+def _load_auto_product_support_records_from_env(
+    catalog_records: Sequence[LiveCatalogImageRecord],
+) -> List[LiveProductSupportRecord]:
+    if not _env_bool("LIVE_IMAGE_SEARCH_AUTO_PRODUCT_SUPPORT_ENABLED", True):
+        return []
+
+    return build_auto_product_support_records(
+        catalog_records,
+        output_dir=os.getenv("LIVE_IMAGE_SEARCH_AUTO_PRODUCT_SUPPORT_DIR", ""),
+        max_source_images_per_product=_env_int(
+            "LIVE_IMAGE_SEARCH_AUTO_PRODUCT_SUPPORT_MAX_SOURCE_IMAGES",
+            3,
+        ),
+        max_records_per_product=_env_int(
+            "LIVE_IMAGE_SEARCH_AUTO_PRODUCT_SUPPORT_MAX_RECORDS",
+            5,
+        ),
+        include_original_images=_env_bool(
+            "LIVE_IMAGE_SEARCH_AUTO_PRODUCT_SUPPORT_INCLUDE_ORIGINALS",
+            True,
+        ),
+        enable_center_crop=_env_bool(
+            "LIVE_IMAGE_SEARCH_AUTO_PRODUCT_SUPPORT_CENTER_CROP",
+            True,
+        ),
+        enable_compressed=_env_bool(
+            "LIVE_IMAGE_SEARCH_AUTO_PRODUCT_SUPPORT_COMPRESSED",
+            True,
+        ),
+        enable_perspective=_env_bool(
+            "LIVE_IMAGE_SEARCH_AUTO_PRODUCT_SUPPORT_PERSPECTIVE",
+            True,
+        ),
+        enable_background_perturb=_env_bool(
+            "LIVE_IMAGE_SEARCH_AUTO_PRODUCT_SUPPORT_BACKGROUND",
+            True,
+        ),
+    )
+
+
+def load_runtime_product_support_records(
+    catalog_records: Sequence[LiveCatalogImageRecord],
+) -> List[LiveProductSupportRecord]:
+    support_mode = _get_product_support_mode()
+    external_records: List[LiveProductSupportRecord] = []
+    manifest_records: List[LiveProductSupportRecord] = []
+    auto_records: List[LiveProductSupportRecord] = []
+
+    if _env_bool("LIVE_IMAGE_SEARCH_EXTERNAL_PRODUCT_SUPPORT_ENABLED", True):
+        external_records = load_external_product_support_records(catalog_records)
+    if support_mode in {"manifest", "merge"}:
+        manifest_records = load_product_support_records_from_manifest(
+            os.getenv("LIVE_IMAGE_SEARCH_PRODUCT_SUPPORT_MANIFEST", "")
+        )
+    if support_mode in {"auto", "merge"}:
+        auto_records = _load_auto_product_support_records_from_env(catalog_records)
+    merged_records: List[LiveProductSupportRecord] = []
+    seen: set[tuple[str, str]] = set()
+
+    for record in list(manifest_records) + list(external_records) + list(auto_records):
+        product_id = str(getattr(record, "expected_product_id", "") or "").strip()
+        image_path = str(getattr(record, "image_path", "") or "").strip()
+        key = (product_id, image_path)
+        if not product_id or not image_path or key in seen:
+            continue
+        seen.add(key)
+        merged_records.append(
+            LiveProductSupportRecord(
+                expected_product_id=product_id,
+                image_path=image_path,
+                title=str(getattr(record, "title", "") or ""),
+                product_queries=list(
+                    getattr(record, "product_queries", None)
+                    or getattr(record, "queries", None)
+                    or []
+                ),
+            )
+        )
+    return merged_records
 
 
 def _build_queries(row: Dict[str, Any]) -> List[str]:
@@ -74,6 +599,97 @@ def _parse_json_list(raw_value: Any) -> Optional[List[Any]]:
     return None
 
 
+def _resolve_product_support_manifest_path(raw_path: str) -> str:
+    manifest_path = str(raw_path or "").strip()
+    if not manifest_path:
+        return ""
+
+    if os.path.isabs(manifest_path):
+        return manifest_path
+
+    backend_dir = os.path.dirname(__file__)
+    project_root = os.path.dirname(backend_dir)
+    candidates = [
+        manifest_path,
+        os.path.join(backend_dir, manifest_path),
+        os.path.join(project_root, manifest_path),
+    ]
+    for candidate in candidates:
+        absolute_candidate = os.path.abspath(candidate)
+        if os.path.exists(absolute_candidate):
+            return absolute_candidate
+    return os.path.abspath(candidates[0])
+
+
+def load_product_support_records_from_manifest(
+    manifest_path: str | os.PathLike[str],
+) -> List[LiveProductSupportRecord]:
+    resolved_path = _resolve_product_support_manifest_path(str(manifest_path or ""))
+    if not resolved_path or not os.path.exists(resolved_path):
+        return []
+
+    try:
+        with open(resolved_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception:
+        return []
+
+    manifest_dir = os.path.dirname(resolved_path)
+
+    def _resolve_image_path(raw_image_path: Any) -> str:
+        image_path = str(raw_image_path or "").strip()
+        if not image_path:
+            return ""
+        if not os.path.isabs(image_path):
+            image_path = os.path.abspath(os.path.join(manifest_dir, image_path))
+        return image_path if os.path.exists(image_path) else ""
+
+    records: List[LiveProductSupportRecord] = []
+    items = payload.get("items") if isinstance(payload, dict) else None
+    if isinstance(items, list):
+        for item in items:
+            product_id = str(item.get("item_id") or item.get("product_id") or "").strip()
+            if not product_id:
+                continue
+            title = str(item.get("title") or "")
+            product_queries = list(item.get("queries", []) or [])
+            for image in item.get("support_images") or item.get("query_images") or []:
+                image_path = _resolve_image_path(
+                    image.get("local_path") or image.get("image_path") or image.get("path")
+                )
+                if not image_path:
+                    continue
+                records.append(
+                    LiveProductSupportRecord(
+                        expected_product_id=product_id,
+                        image_path=image_path,
+                        title=title,
+                        product_queries=product_queries,
+                    )
+                )
+        return records
+
+    rows = payload if isinstance(payload, list) else payload.get("records", []) if isinstance(payload, dict) else []
+    if not isinstance(rows, list):
+        return records
+
+    for row in rows:
+        product_id = str(row.get("expected_product_id") or row.get("product_id") or "").strip()
+        image_path = _resolve_image_path(row.get("image_path") or row.get("local_path") or row.get("path"))
+        if not product_id or not image_path:
+            continue
+        records.append(
+            LiveProductSupportRecord(
+                expected_product_id=product_id,
+                image_path=image_path,
+                title=str(row.get("title") or ""),
+                product_queries=list(row.get("product_queries") or row.get("queries") or []),
+            )
+        )
+
+    return records
+
+
 def build_catalog_records(rows: Sequence[Dict[str, Any]]) -> List[LiveCatalogImageRecord]:
     records: List[LiveCatalogImageRecord] = []
     for row in rows:
@@ -83,6 +699,7 @@ def build_catalog_records(rows: Sequence[Dict[str, Any]]) -> List[LiveCatalogIma
         records.append(
             LiveCatalogImageRecord(
                 product_id=str(row.get("product_id") or row.get("id") or ""),
+                item_id=str(row.get("item_id") or ""),
                 title=str(row.get("title") or ""),
                 english_title=str(row.get("english_title") or ""),
                 description=str(row.get("description") or ""),
@@ -154,7 +771,48 @@ def build_catalog_record_for_product_image(
     )[0]
 
 
-def prepare_catalog_entries(strategy: Any, catalog_records: Sequence[LiveCatalogImageRecord]) -> List[Dict[str, Any]]:
+def prepare_catalog_entries(
+    strategy: Any,
+    catalog_records: Sequence[LiveCatalogImageRecord],
+    support_records: Optional[Sequence[LiveProductSupportRecord]] = None,
+) -> List[Dict[str, Any]]:
+    alias_to_product_id: Dict[str, str] = {}
+    for record in catalog_records:
+        product_id = str(record.product_id or "").strip()
+        if not product_id:
+            continue
+        alias_to_product_id.setdefault(product_id, product_id)
+        item_id = str(getattr(record, "item_id", "") or "").strip()
+        if item_id:
+            alias_to_product_id.setdefault(item_id, product_id)
+
+    resolved_support_records: List[LiveProductSupportRecord] = []
+    for record in support_records or []:
+        raw_product_id = str(
+            getattr(record, "expected_product_id", "")
+            or getattr(record, "product_id", "")
+            or ""
+        ).strip()
+        resolved_product_id = alias_to_product_id.get(raw_product_id, raw_product_id)
+        if not resolved_product_id:
+            continue
+        resolved_support_records.append(
+            LiveProductSupportRecord(
+                expected_product_id=resolved_product_id,
+                image_path=str(getattr(record, "image_path", "") or "").strip(),
+                title=str(getattr(record, "title", "") or ""),
+                product_queries=list(
+                    getattr(record, "product_queries", None)
+                    or getattr(record, "queries", None)
+                    or []
+                ),
+            )
+        )
+
+    set_support_records = getattr(strategy, "set_product_support_records", None)
+    if callable(set_support_records):
+        set_support_records(resolved_support_records)
+
     prepared = []
     for record in catalog_records:
         prepared.append(
@@ -166,25 +824,27 @@ def prepare_catalog_entries(strategy: Any, catalog_records: Sequence[LiveCatalog
     return prepared
 
 
-def rank_query_products(
+def _rank_products_for_query(
     strategy: Any,
     prepared_catalog: Sequence[Dict[str, Any]],
-    query_record: LiveQueryRecord,
-    top_k: int = 5,
-    threshold: float = 0.0,
-    user_shops: Optional[Sequence[str]] = None,
-) -> List[Dict[str, Any]]:
-    query_context = strategy.prepare_query_image(query_record)
+    query_context: Dict[str, Any],
+    top_k: int,
+) -> Dict[str, Any]:
+    custom_ranker = getattr(strategy, "rank_products", None)
+    if callable(custom_ranker):
+        custom_result = custom_ranker(
+            query_context=query_context,
+            prepared_catalog=prepared_catalog,
+            top_k=top_k,
+        )
+        if isinstance(custom_result, dict):
+            return custom_result
+        if custom_result is not None:
+            return {"ranked_products": list(custom_result)}
+
     image_rankings: List[Dict[str, Any]] = []
-    product_metadata: Dict[str, Dict[str, Any]] = {}
-
-    allowed_shops = {str(shop) for shop in (user_shops or []) if str(shop).strip()}
-
     for entry in prepared_catalog:
         record: LiveCatalogImageRecord = entry["record"]
-        if allowed_shops and record.shop_name not in allowed_shops:
-            continue
-
         score = float(strategy.score(query_context, entry["context"]))
         image_rankings.append(
             {
@@ -195,6 +855,34 @@ def rank_query_products(
                 "image_index": record.image_index,
             }
         )
+
+    return {
+        "ranked_products": aggregate_product_rankings(image_rankings, top_k=max(int(top_k or 1), 1)),
+    }
+
+
+def rank_query_products(
+    strategy: Any,
+    prepared_catalog: Sequence[Dict[str, Any]],
+    query_record: LiveQueryRecord,
+    top_k: int = 5,
+    threshold: float = 0.0,
+    user_shops: Optional[Sequence[str]] = None,
+) -> List[Dict[str, Any]]:
+    query_context = strategy.prepare_query_image(query_record)
+    product_metadata: Dict[str, Dict[str, Any]] = {}
+
+    if user_shops is None:
+        allowed_shops: Optional[set[str]] = None
+    else:
+        allowed_shops = {str(shop).strip() for shop in user_shops if str(shop).strip()}
+        if not allowed_shops:
+            return []
+
+    for entry in prepared_catalog:
+        record: LiveCatalogImageRecord = entry["record"]
+        if allowed_shops is not None and record.shop_name not in allowed_shops:
+            continue
         product_metadata.setdefault(
             record.product_id,
             {
@@ -215,7 +903,18 @@ def rank_query_products(
             },
         )
 
-    ranked_products = aggregate_product_rankings(image_rankings, top_k=max(int(top_k or 1), 1))
+    filtered_catalog = [
+        entry
+        for entry in prepared_catalog
+        if allowed_shops is None or entry["record"].shop_name in allowed_shops
+    ]
+    rank_payload = _rank_products_for_query(
+        strategy,
+        filtered_catalog,
+        query_context,
+        top_k=max(int(top_k or 1), 1),
+    )
+    ranked_products = list(rank_payload.get("ranked_products", []))
     filtered_ranked_products = [
         {
             **item,
@@ -343,7 +1042,7 @@ class LiveImageRetriever:
         self.db = db_handle
         self.strategy_name = strategy_name
         self._lock = Lock()
-        self._catalog_signature: Optional[Tuple[int, int]] = None
+        self._catalog_signature: Optional[Tuple[Any, ...]] = None
         self._prepared_catalog: List[Dict[str, Any]] = []
         self._strategy = None
 
@@ -356,11 +1055,49 @@ class LiveImageRetriever:
         )
 
     @staticmethod
-    def _build_signature(rows: Sequence[Dict[str, Any]]) -> Tuple[int, int]:
+    def _build_signature(rows: Sequence[Dict[str, Any]]) -> Tuple[int, int, str]:
         if not rows:
-            return (0, 0)
+            return (0, 0, "")
+        digest = hashlib.sha1()
         max_image_db_id = max(int(row.get("image_db_id") or 0) for row in rows)
-        return (len(rows), max_image_db_id)
+        for row in sorted(
+            rows,
+            key=lambda item: (
+                int(item.get("image_db_id") or 0),
+                str(item.get("image_path") or ""),
+            ),
+        ):
+            digest.update(
+                "|".join(
+                    [
+                        str(row.get("product_id") or row.get("id") or ""),
+                        str(row.get("item_id") or ""),
+                        str(row.get("shop_name") or ""),
+                        str(row.get("image_db_id") or 0),
+                        str(row.get("image_index") or 0),
+                        str(row.get("image_path") or ""),
+                        str(row.get("retrieval_cache_strategy") or ""),
+                        str(row.get("retrieval_cache_version") or ""),
+                    ]
+                ).encode("utf-8")
+            )
+            digest.update(b"\n")
+        return (len(rows), max_image_db_id, digest.hexdigest())
+
+    @staticmethod
+    def _build_support_signature(manifest_path: str) -> Tuple[str, int, int]:
+        resolved_path = _resolve_product_support_manifest_path(manifest_path)
+        if not resolved_path:
+            return ("", 0, 0)
+        try:
+            stat_result = os.stat(resolved_path)
+        except OSError:
+            return (resolved_path, 0, 0)
+        return (
+            resolved_path,
+            int(stat_result.st_mtime_ns),
+            int(stat_result.st_size),
+        )
 
     def invalidate(self):
         with self._lock:
@@ -375,7 +1112,12 @@ class LiveImageRetriever:
             from benchmarks.strategies import create_strategy
 
         rows = self._load_catalog_rows()
-        signature = self._build_signature(rows)
+        catalog_records = build_catalog_records(rows)
+        support_manifest_path = os.getenv("LIVE_IMAGE_SEARCH_PRODUCT_SUPPORT_MANIFEST", "")
+        support_signature = self._build_support_signature(support_manifest_path)
+        runtime_signature = _build_runtime_env_signature(self.strategy_name)
+        signature = self._build_signature(rows) + support_signature + runtime_signature
+        support_records = load_runtime_product_support_records(catalog_records)
 
         with self._lock:
             if (
@@ -386,8 +1128,11 @@ class LiveImageRetriever:
                 return self._strategy, self._prepared_catalog
 
             strategy = create_strategy(self.strategy_name)
-            catalog_records = build_catalog_records(rows)
-            prepared_catalog = prepare_catalog_entries(strategy, catalog_records)
+            prepared_catalog = prepare_catalog_entries(
+                strategy,
+                catalog_records,
+                support_records=support_records,
+            )
 
             self._strategy = strategy
             self._catalog_signature = signature

@@ -389,6 +389,7 @@ def process_and_save_image_core(product_id, image_url_or_file, index, existing_f
             existing_features.append(features)  # 关键：实时加入列表
 
         invalidate_product_retrieval_runtime(strategy_name)
+        schedule_external_product_support_refresh(product_id, reason='image_upload')
 
         # 8. 完成
         return {
@@ -729,6 +730,82 @@ def invalidate_product_retrieval_runtime(strategy_name=None):
             raise
 
     invalidate_live_image_retriever(strategy_name)
+
+
+_external_support_refresh_lock = threading.Lock()
+_external_support_refresh_inflight = set()
+
+
+def _env_flag(name, default=True):
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    value = str(raw).strip().lower()
+    if value in {'1', 'true', 'yes', 'on'}:
+        return True
+    if value in {'0', 'false', 'no', 'off'}:
+        return False
+    return bool(default)
+
+
+def _refresh_external_support_for_product(product_id, reason='upload'):
+    try:
+        from live_retrieval import refresh_external_product_support_assets
+    except ModuleNotFoundError as import_error:
+        if import_error.name == 'live_retrieval':
+            from .live_retrieval import refresh_external_product_support_assets
+        else:
+            raise
+
+    product_row = db._get_product_info_by_id(product_id)
+    if not product_row:
+        return {'product_id': str(product_id or ''), 'saved': 0, 'total_images': 0}
+
+    result = refresh_external_product_support_assets(product_row)
+    if int(result.get('saved') or 0) > 0:
+        invalidate_product_retrieval_runtime(
+            getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank')
+        )
+    logger.info(
+        f"external support refresh product={product_id} reason={reason} "
+        f"saved={int(result.get('saved') or 0)} total={int(result.get('total_images') or 0)}"
+    )
+    return result
+
+
+def schedule_external_product_support_refresh(product_id, reason='upload'):
+    if not _env_flag('LIVE_IMAGE_SEARCH_EXTERNAL_PRODUCT_SUPPORT_ENABLED', True):
+        return False
+    if not _env_flag('LIVE_IMAGE_SEARCH_EXTERNAL_PRODUCT_SUPPORT_REFRESH_ON_UPLOAD', True):
+        return False
+
+    normalized_product_id = str(product_id or '').strip()
+    if not normalized_product_id:
+        return False
+
+    with _external_support_refresh_lock:
+        if normalized_product_id in _external_support_refresh_inflight:
+            return False
+        _external_support_refresh_inflight.add(normalized_product_id)
+
+    def _runner():
+        try:
+            _refresh_external_support_for_product(normalized_product_id, reason=reason)
+        except Exception as exc:
+            logger.warning(
+                f"external support refresh failed product={normalized_product_id} "
+                f"reason={reason}: {exc}"
+            )
+        finally:
+            with _external_support_refresh_lock:
+                _external_support_refresh_inflight.discard(normalized_product_id)
+
+    threading.Thread(
+        target=_runner,
+        name=f"external-support-{normalized_product_id}",
+        daemon=True,
+    ).start()
+    return True
 
 
 def _get_retrieval_cache_backfill_worker_path():
@@ -1163,9 +1240,6 @@ def search_similar():
             if results:
                 # 处理多个搜索结果
                 processed_results = []
-
-                # 预先导入 json，防止循环中报错
-                import json
 
                 for i, result in enumerate(results):
                     # 获取完整产品信息
@@ -6890,6 +6964,7 @@ def save_product_images_unified(product_id, image_urls, max_workers=None, shutdo
 
     if stats['stored'] > 0:
         invalidate_product_retrieval_runtime(strategy_name)
+        schedule_external_product_support_refresh(product_id, reason='catalog_sync')
 
     return stats['processed'], stats
 
