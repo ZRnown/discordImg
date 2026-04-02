@@ -133,6 +133,13 @@ except ModuleNotFoundError as e:
     else:
         raise
 try:
+    from optional_image_support import enable_optional_pillow_image_plugins
+except ModuleNotFoundError as e:
+    if e.name == 'optional_image_support':
+        from .optional_image_support import enable_optional_pillow_image_plugins
+    else:
+        raise
+try:
     from keyword_search_terms import (
         build_query_keyword_candidates,
         build_text_search_plan,
@@ -483,6 +490,7 @@ class QueueHandler(logging.Handler):
 # 这些配置现在在 initialize_runtime() 中执行
 
 logger = logging.getLogger(__name__)
+enable_optional_pillow_image_plugins(log=logger)
 
 # 机器人相关变量
 # [修改] 从 bot 模块导入列表，确保 app.py 和 bot.py 操作同一个列表对象
