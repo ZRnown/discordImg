@@ -115,10 +115,14 @@ except ModuleNotFoundError as e:
     else:
         raise
 try:
-    from shop_scrape_helpers import build_weidian_shop_api_headers, reset_scrape_stop_event
+    from shop_scrape_helpers import (
+        build_weidian_shop_api_headers,
+        clear_stale_scrape_stop_state,
+        reset_scrape_stop_event,
+    )
 except ModuleNotFoundError as e:
     if e.name == 'shop_scrape_helpers':
-        from .shop_scrape_helpers import build_weidian_shop_api_headers, reset_scrape_stop_event
+        from .shop_scrape_helpers import build_weidian_shop_api_headers, clear_stale_scrape_stop_state, reset_scrape_stop_event
     else:
         raise
 try:
@@ -5618,6 +5622,25 @@ def batch_scrape_products():
         product_ids = data.get('productIds', [])
         if not isinstance(product_ids, list) or len(product_ids) == 0:
             return jsonify({'error': 'productIds必须是非空数组'}), 400
+
+        current_status = db.get_scrape_status()
+        has_stale_stop_state = (
+            not current_status.get('is_scraping', False)
+            and (
+                current_status.get('stop_signal', False)
+                or scrape_stop_event.is_set()
+            )
+        )
+        if has_stale_stop_state:
+            cleared = clear_stale_scrape_stop_state(
+                current_status,
+                scrape_stop_event,
+                db.update_scrape_status,
+            )
+            if not cleared:
+                logger.error("批量抓取前清理残留停止状态失败")
+                return jsonify({'error': '清理上一次停止状态失败，请重试'}), 500
+            logger.info("♻️ 批量抓取前检测到残留停止状态，已自动清理")
 
         # ====================================================
         # 修复：确保SCRAPE_THREADS从config正确获取
