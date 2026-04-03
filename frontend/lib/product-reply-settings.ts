@@ -1,6 +1,7 @@
 export type ProductReplyScopeWebsite = {
   id: string | number
   name: string
+  display_name?: string
 }
 
 export type WebsiteReplySetting = {
@@ -11,6 +12,8 @@ export type WebsiteReplySetting = {
   existingUploadedImageUrls: string[]
   uploadedImages: File[]
 }
+
+export const SHARED_REPLY_TARGET_KEY = 'all'
 
 export const parseReplyScopes = (rawScope: any): string[] => {
   if (!rawScope || rawScope === 'all') return []
@@ -121,6 +124,26 @@ export const getLegacyWebsiteReplySetting = (product: any) => normalizeWebsiteRe
   existingUploadedImageUrls: product?.existingUploadedImageUrls || product?.uploadedImages || [],
 })
 
+export const hasWebsiteReplyCustomization = (value: any) => {
+  const setting = normalizeWebsiteReplySetting(value)
+  if (setting.customReplyText.trim()) {
+    return true
+  }
+  if (setting.imageSource === 'product' && setting.selectedImageIndexes.length > 0) {
+    return true
+  }
+  if (setting.imageSource === 'custom' && setting.customImageUrls.length > 0) {
+    return true
+  }
+  if (setting.imageSource === 'upload' && (
+    setting.existingUploadedImageUrls.length > 0
+    || setting.uploadedImages.length > 0
+  )) {
+    return true
+  }
+  return false
+}
+
 export const normalizePerWebsiteReplySettings = (
   rawSettings: any,
 ): Record<string, WebsiteReplySetting> => {
@@ -174,19 +197,16 @@ export const getWebsiteReplySetting = (
   websiteId: string | number,
   availableWebsites: ProductReplyScopeWebsite[],
 ): WebsiteReplySetting => {
+  const key = String(websiteId)
+  if (key === SHARED_REPLY_TARGET_KEY) {
+    return getLegacyWebsiteReplySetting(product)
+  }
+
   const settings = normalizePerWebsiteReplySettings(
     product?.perWebsiteReplySettings || product?.per_website_reply_settings,
   )
-  const key = String(websiteId)
-  if (settings[key]) {
+  if (settings[key] && hasWebsiteReplyCustomization(settings[key])) {
     return settings[key]
-  }
-  if (Object.keys(settings).length > 0) {
-    return createEmptyWebsiteReplySetting()
-  }
-  const scopedWebsites = getScopedWebsites(product, availableWebsites)
-  if (scopedWebsites.length <= 1) {
-    return getLegacyWebsiteReplySetting(product)
   }
   return createEmptyWebsiteReplySetting()
 }

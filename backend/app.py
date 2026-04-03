@@ -122,7 +122,26 @@ try:
     )
 except ModuleNotFoundError as e:
     if e.name == 'shop_scrape_helpers':
-        from .shop_scrape_helpers import build_weidian_shop_api_headers, clear_stale_scrape_stop_state, reset_scrape_stop_event
+        from .shop_scrape_helpers import (
+            build_weidian_shop_api_headers,
+            clear_stale_scrape_stop_state,
+            reset_scrape_stop_event,
+        )
+    else:
+        raise
+try:
+    from product_reply_settings import (
+        build_frontend_per_website_reply_settings,
+        parse_per_website_reply_settings,
+        serialize_per_website_reply_settings,
+    )
+except ModuleNotFoundError as e:
+    if e.name == 'product_reply_settings':
+        from .product_reply_settings import (
+            build_frontend_per_website_reply_settings,
+            parse_per_website_reply_settings,
+            serialize_per_website_reply_settings,
+        )
     else:
         raise
 try:
@@ -1316,6 +1335,7 @@ def search_similar():
                             'imageSource': product_info.get('image_source', 'product') if product_info else 'product',
                             'custom_reply_text': product_info.get('custom_reply_text', '') if product_info else '',
                             'replyScope': product_info.get('reply_scope', 'all') if product_info else 'all',
+                            'per_website_reply_settings': product_info.get('per_website_reply_settings') if product_info else None,
                             'uploaded_reply_images': uploaded_reply_images,
                             'selectedImageIndexes': selected_indexes,
                             'customImageUrls': custom_urls,
@@ -3125,6 +3145,10 @@ def update_product():
             # 图片相关
             'selectedImageIndexes': selected_indexes,
             'customImageUrls': custom_urls,
+            'perWebsiteReplySettings': build_frontend_per_website_reply_settings(
+                product.get('per_website_reply_settings'),
+                pid,
+            ),
             'images': image_urls, # 包含所有商品图片
             'uploadedImages': uploaded_reply_image_urls, # 上传的自定义回复图片URL数组
 
@@ -3191,11 +3215,52 @@ def update_product():
             if existing_filenames_to_keep:
                 logger.info(f"保留了 {len(existing_filenames_to_keep)} 张已有的自定义回复图片")
 
+            # 1.4 处理各网站独立的自定义回复图片
+            per_website_reply_settings = {}
+            if 'perWebsiteReplySettings' in request.form:
+                per_website_reply_settings = parse_per_website_reply_settings(
+                    request.form.get('perWebsiteReplySettings')
+                )
+
+            per_website_upload_prefix = 'perWebsiteUploadedImages:'
+            per_website_upload_keys = [
+                key for key in request.files.keys()
+                if str(key).startswith(per_website_upload_prefix)
+            ]
+            if per_website_reply_settings or per_website_upload_keys:
+                import uuid
+                import os
+
+                custom_reply_dir = os.path.join('data', 'custom_reply_images', str(pid_int))
+                os.makedirs(custom_reply_dir, exist_ok=True)
+
+                for file_key in per_website_upload_keys:
+                    website_id = str(file_key)[len(per_website_upload_prefix):].strip()
+                    if not website_id:
+                        continue
+                    entry = per_website_reply_settings.get(website_id) or {}
+                    existing_site_filenames = list(entry.get('uploadedReplyImages') or [])
+                    new_site_filenames = []
+
+                    for file in request.files.getlist(file_key):
+                        if not file or not file.filename:
+                            continue
+                        filename = f"{uuid.uuid4()}_{file.filename}"
+                        file_path = os.path.join(custom_reply_dir, filename)
+                        file.save(file_path)
+                        new_site_filenames.append(filename)
+
+                    normalized_entry = dict(entry)
+                    normalized_entry['uploadedReplyImages'] = existing_site_filenames + new_site_filenames
+                    per_website_reply_settings[website_id] = normalized_entry
+
             # 2. 构建更新数据
             updates = {}
 
             # 如果有上传的自定义回复图片（已有的或新上传的），将文件名列表存储到数据库
-            if all_uploaded_filenames:
+            if 'existingUploadedImageUrls' in request.form or 'uploadedImages' in request.files:
+                updates['uploaded_reply_images'] = json.dumps(all_uploaded_filenames)
+            elif all_uploaded_filenames:
                 updates['uploaded_reply_images'] = json.dumps(all_uploaded_filenames)
             for key in ['title', 'englishTitle', 'ruleEnabled', 'customReplyText', 'imageSource', 'replyScope']:
                 value = request.form.get(key)
@@ -3223,6 +3288,11 @@ def update_product():
 
             if 'customImageUrls' in request.form:
                 updates['custom_image_urls'] = request.form.get('customImageUrls') # 已经是JSON字符串
+
+            if 'perWebsiteReplySettings' in request.form or per_website_upload_keys:
+                updates['per_website_reply_settings'] = serialize_per_website_reply_settings(
+                    per_website_reply_settings
+                )
 
             # 4. 执行更新
             if updates:
@@ -3269,6 +3339,10 @@ def update_product():
                 updates['custom_image_urls'] = json.dumps(data['customImageUrls'])
             if 'imageSource' in data:
                 updates['image_source'] = data['imageSource']
+            if 'perWebsiteReplySettings' in data:
+                updates['per_website_reply_settings'] = serialize_per_website_reply_settings(
+                    data['perWebsiteReplySettings']
+                )
 
             if updates:
                 db.update_product(product_id, updates)
@@ -4088,6 +4162,18 @@ def get_product(product_id):
         # 获取商品图片
         images = db.get_product_images(product_id)
         product['images'] = [f"/api/image/{product_id}/{img['image_index']}" for img in images]
+        product['perWebsiteReplySettings'] = build_frontend_per_website_reply_settings(
+            product.get('per_website_reply_settings'),
+            product_id,
+        )
+        try:
+            filenames = json.loads(product.get('uploaded_reply_images') or '[]')
+        except Exception:
+            filenames = []
+        product['uploadedImages'] = [
+            f"/api/custom_reply_image/{product_id}/{filename}"
+            for filename in filenames
+        ]
 
         return jsonify(product)
     except Exception as e:
@@ -4717,7 +4803,7 @@ def search_similar_text():
                            ruleEnabled, min_delay, max_delay, created_at,
                            cnfans_url, shop_name, custom_reply_text,
                            custom_reply_images, custom_image_urls, image_source,
-                           reply_scope,
+                           reply_scope, per_website_reply_settings,
                            uploaded_reply_images
                     FROM products
                     WHERE ({where_clause}){exclude_clause}{scoped_clause}
@@ -4762,7 +4848,7 @@ def search_similar_text():
                            ruleEnabled, min_delay, max_delay, created_at,
                            cnfans_url, shop_name, custom_reply_text,
                            custom_reply_images, custom_image_urls, image_source,
-                           reply_scope,
+                           reply_scope, per_website_reply_settings,
                            uploaded_reply_images
                     FROM products
                     WHERE ((
@@ -4803,6 +4889,11 @@ def search_similar_text():
                         prod['selectedImageIndexes'] = json.loads(prod['custom_reply_images'])
                     if prod.get('custom_image_urls'):
                         prod['customImageUrls'] = json.loads(prod['custom_image_urls'])
+                    if prod.get('per_website_reply_settings'):
+                        prod['perWebsiteReplySettings'] = build_frontend_per_website_reply_settings(
+                            prod['per_website_reply_settings'],
+                            prod.get('id'),
+                        )
                     # 解析上传的自定义回复图片
                     if prod.get('uploaded_reply_images'):
                         prod['uploaded_reply_images'] = json.loads(prod['uploaded_reply_images'])

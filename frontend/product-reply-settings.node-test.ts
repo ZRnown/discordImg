@@ -2,10 +2,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 
 import {
-  createInitialWebsiteReplySetting,
   createEmptyWebsiteReplySetting,
   ensurePerWebsiteReplySettings,
+  getLegacyWebsiteReplySetting,
   getWebsiteReplySetting,
+  hasWebsiteReplyCustomization,
+  SHARED_REPLY_TARGET_KEY,
 } from './lib/product-reply-settings.ts'
 
 const websites = [
@@ -13,7 +15,7 @@ const websites = [
   { id: 2, name: 'acbuy' },
 ]
 
-test('single scoped website can still reuse legacy custom reply as the starting value', () => {
+test('shared reply target reads the legacy global product reply fields', () => {
   const product = {
     replyScope: '["cnfans"]',
     customReplyText: 'legacy text',
@@ -22,7 +24,7 @@ test('single scoped website can still reuse legacy custom reply as the starting 
   }
 
   assert.deepEqual(
-    getWebsiteReplySetting(product, 1, websites),
+    getWebsiteReplySetting(product, SHARED_REPLY_TARGET_KEY, websites),
     {
       customReplyText: 'legacy text',
       imageSource: 'custom',
@@ -34,21 +36,21 @@ test('single scoped website can still reuse legacy custom reply as the starting 
   )
 })
 
-test('multiple scoped websites no longer auto-share the same legacy content', () => {
+test('single website editor starts empty until that site has its own override', () => {
   const product = {
-    replyScope: '["cnfans","acbuy"]',
+    replyScope: '["cnfans"]',
     customReplyText: 'legacy text',
     imageSource: 'custom',
     customImageUrls: ['https://example.com/legacy.jpg'],
   }
 
   assert.deepEqual(
-    getWebsiteReplySetting(product, 2, websites),
+    getWebsiteReplySetting(product, 1, websites),
     createEmptyWebsiteReplySetting(),
   )
 })
 
-test('adding another website after one site is configured starts from empty', () => {
+test('site override wins when that website has its own reply setting', () => {
   const product = {
     replyScope: '["cnfans","acbuy"]',
     perWebsiteReplySettings: {
@@ -61,8 +63,15 @@ test('adding another website after one site is configured starts from empty', ()
   }
 
   assert.deepEqual(
-    createInitialWebsiteReplySetting(product, { useLegacyFallback: true }),
-    createEmptyWebsiteReplySetting(),
+    getWebsiteReplySetting(product, 1, websites),
+    {
+      customReplyText: 'cnfans only',
+      imageSource: 'upload',
+      selectedImageIndexes: [],
+      customImageUrls: [],
+      existingUploadedImageUrls: ['/api/custom_reply_image/1/a.jpg'],
+      uploadedImages: [],
+    },
   )
 })
 
@@ -89,4 +98,16 @@ test('ensure helper keeps only persisted per-website settings', () => {
       uploadedImages: [],
     },
   })
+})
+
+test('customization helper only treats real content or images as an override', () => {
+  assert.equal(hasWebsiteReplyCustomization(createEmptyWebsiteReplySetting()), false)
+  assert.equal(hasWebsiteReplyCustomization({
+    customReplyText: '',
+    imageSource: 'product',
+    selectedImageIndexes: [1],
+  }), true)
+  assert.equal(hasWebsiteReplyCustomization(getLegacyWebsiteReplySetting({
+    customReplyText: 'shared text',
+  })), true)
 })

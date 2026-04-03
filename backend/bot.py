@@ -64,6 +64,10 @@ except ImportError:
         resolve_keyword_match_limit,
         split_filter_values,
     )
+try:
+    from product_reply_settings import apply_effective_product_reply_settings
+except ImportError:
+    from .product_reply_settings import apply_effective_product_reply_settings
 # 全局变量用于多账号机器人管理
 bot_clients = []
 bot_tasks = []
@@ -114,6 +118,96 @@ def _should_send_plain_keyword_message(prevalidated_batch, explicit_mentions, re
         return True
 
     return str(reply_mode or "rotation").strip().lower() == "keyword"
+
+
+def _coerce_product_list(value):
+    if not value:
+        return []
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
+
+
+def _is_product_rule_enabled(product):
+    rule_enabled = (product or {}).get('autoReplyEnabled', (product or {}).get('ruleEnabled', True))
+    if isinstance(rule_enabled, str):
+        return rule_enabled.strip().lower() not in {'0', 'false', 'no', 'off'}
+    if isinstance(rule_enabled, (int, float)):
+        return bool(rule_enabled)
+    return bool(rule_enabled)
+
+
+def _product_has_custom_reply_images(product):
+    image_source = (product or {}).get('imageSource') or (product or {}).get('image_source') or 'product'
+    if image_source == 'upload':
+        return bool(
+            _coerce_product_list((product or {}).get('uploaded_reply_images'))
+            or _coerce_product_list((product or {}).get('uploadedReplyImages'))
+        )
+    if image_source == 'custom':
+        return bool(
+            _coerce_product_list((product or {}).get('customImageUrls'))
+            or _coerce_product_list((product or {}).get('custom_image_urls'))
+        )
+    if image_source == 'product':
+        return bool(
+            _coerce_product_list((product or {}).get('selectedImageIndexes'))
+            or _coerce_product_list((product or {}).get('custom_reply_images'))
+        )
+    return False
+
+
+def _prepare_effective_product_reply(product, website_config=None, fallback_custom_reply=None):
+    resolved_product = apply_effective_product_reply_settings(product, website_config=website_config)
+    resolved_product['ruleEnabled'] = _is_product_rule_enabled(product)
+    resolved_product['autoReplyEnabled'] = resolved_product['ruleEnabled']
+
+    image_source = resolved_product.get('imageSource') or resolved_product.get('image_source') or 'product'
+    if image_source == 'upload':
+        uploaded_imgs = (
+            _coerce_product_list(resolved_product.get('uploaded_reply_images'))
+            or _coerce_product_list(resolved_product.get('uploadedReplyImages'))
+        )
+        resolved_product['uploaded_reply_images'] = uploaded_imgs
+        resolved_product['uploadedReplyImages'] = uploaded_imgs
+    elif image_source == 'custom':
+        custom_urls = (
+            _coerce_product_list(resolved_product.get('customImageUrls'))
+            or _coerce_product_list(resolved_product.get('custom_image_urls'))
+        )
+        resolved_product['customImageUrls'] = custom_urls
+        resolved_product['custom_image_urls'] = custom_urls
+    elif image_source == 'product':
+        selected_indexes = (
+            _coerce_product_list(resolved_product.get('selectedImageIndexes'))
+            or _coerce_product_list(resolved_product.get('custom_reply_images'))
+        )
+        resolved_product['selectedImageIndexes'] = selected_indexes
+        resolved_product['custom_reply_images'] = selected_indexes
+
+    rule_enabled = _is_product_rule_enabled(resolved_product)
+    has_custom_images = _product_has_custom_reply_images(resolved_product)
+    custom_reply = fallback_custom_reply
+
+    if not rule_enabled or has_custom_images:
+        custom_text = (
+            resolved_product.get('custom_reply_text')
+            or resolved_product.get('customReplyText')
+            or ''
+        ).strip()
+        custom_reply = {
+            'reply_type': 'text' if custom_text else 'custom_only',
+            'content': custom_text,
+            'product_data': resolved_product,
+        }
+
+    return resolved_product, custom_reply, rule_enabled, has_custom_images
 
 
 def _build_product_reply_channel_scopes(channel_id, website_config=None):
@@ -1787,6 +1881,11 @@ class DiscordBotClient(discord.Client):
                         )
                         continue
 
+                active_product, website_product_custom_reply, _, _ = _prepare_effective_product_reply(
+                    product,
+                    website_config=website_config,
+                )
+
                 active_custom_reply = custom_reply
                 if isinstance(custom_reply, dict):
                     per_website_content = custom_reply.get('per_website_content')
@@ -1795,14 +1894,37 @@ class DiscordBotClient(discord.Client):
                         if scoped_content:
                             active_custom_reply = dict(custom_reply)
                             active_custom_reply['content'] = scoped_content
+                    if active_custom_reply.get('product_data') is not None:
+                        active_custom_reply = dict(active_custom_reply)
+                        active_custom_reply['product_data'] = active_product
+
+                forced_custom_payload = bool(
+                    isinstance(active_custom_reply, dict)
+                    and (
+                        active_custom_reply.get('explicit_mentions')
+                        or active_custom_reply.get('batched_reply')
+                        or active_custom_reply.get('prebuilt_content')
+                        or active_custom_reply.get('final_direct_content')
+                    )
+                )
+                if website_product_custom_reply and not forced_custom_payload:
+                    active_custom_reply = website_product_custom_reply
+                elif (
+                    not website_product_custom_reply
+                    and isinstance(active_custom_reply, dict)
+                    and active_custom_reply.get('product_data') is not None
+                    and not forced_custom_payload
+                ):
+                    active_custom_reply = None
+
                 response_content = self._generate_reply_content(
-                    product,
+                    active_product,
                     message.channel.id,
                     active_custom_reply,
                     website_config=website_config
                 )
                 if response_content is None:
-                    logger.info(f"商品 {product.get('id')} 回复范围不匹配，跳过发送")
+                    logger.info(f"商品 {active_product.get('id')} 回复范围不匹配，跳过发送")
                     continue
 
                 # 2. 获取数据库配置的发送者 ID
@@ -1959,7 +2081,7 @@ class DiscordBotClient(discord.Client):
                             )
                             if is_custom_mode and not _should_send_product_custom_images(
                                 active_custom_reply,
-                                product,
+                                active_product,
                                 message.channel.id,
                                 website_config=website_config,
                             ):
@@ -1972,14 +2094,14 @@ class DiscordBotClient(discord.Client):
                                     # 需要兼容处理
 
                                     # 1. 尝试获取自定义图片链接
-                                    custom_urls = product.get('customImageUrls', []) or product.get('custom_image_urls', [])
+                                    custom_urls = active_product.get('customImageUrls', []) or active_product.get('custom_image_urls', [])
                                     if isinstance(custom_urls, str):
                                         try:
                                             custom_urls = json.loads(custom_urls)
                                         except Exception:
                                             custom_urls = []
 
-                                    image_source = product.get('imageSource') or product.get('image_source') or 'product'
+                                    image_source = active_product.get('imageSource') or active_product.get('image_source') or 'product'
 
                                     # 收集图片文件（Discord限制最多10个文件）
                                     if image_source == 'custom' and custom_urls:
@@ -1998,10 +2120,10 @@ class DiscordBotClient(discord.Client):
 
                                     elif image_source == 'upload':
                                         # 处理上传的自定义回复图片
-                                        pid = product.get('id')
+                                        pid = active_product.get('id')
 
                                         # 从 uploaded_reply_images 字段获取上传的图片文件名列表
-                                        uploaded_filenames = product.get('uploaded_reply_images', [])
+                                        uploaded_filenames = active_product.get('uploaded_reply_images', [])
                                         if isinstance(uploaded_filenames, str):
                                             try:
                                                 uploaded_filenames = json.loads(uploaded_filenames)
@@ -2026,8 +2148,8 @@ class DiscordBotClient(discord.Client):
 
                                     elif image_source == 'product':
                                         # 处理商品图集中的图片
-                                        pid = product.get('id')
-                                        indexes = product.get('selectedImageIndexes', []) or product.get('custom_reply_images', [])
+                                        pid = active_product.get('id')
+                                        indexes = active_product.get('selectedImageIndexes', []) or active_product.get('custom_reply_images', [])
 
                                         if isinstance(indexes, str):
                                             try:
@@ -2086,7 +2208,7 @@ class DiscordBotClient(discord.Client):
                             # === 2. 发送文字和所有图片（合并为一条消息） ===
                             if not response_content and not files:
                                 logger.warning(
-                                    f"⚠️ 无可发送内容: 商品ID={product.get('id')}，未生成文字且无图片"
+                                    f"⚠️ 无可发送内容: 商品ID={active_product.get('id')}，未生成文字且无图片"
                                 )
                                 continue
 
@@ -2162,7 +2284,7 @@ class DiscordBotClient(discord.Client):
                             )
                             logger.info(
                                 f"✅ [回复成功] {target_client.user.name} -> {author_label} | 频道: {message.channel.name}: "
-                                f"{reply_preview} | 商品ID: {product.get('id')}"
+                                f"{reply_preview} | 商品ID: {active_product.get('id')}"
                             )
                             try:
                                 has_text = bool(response_content)
@@ -2206,7 +2328,7 @@ class DiscordBotClient(discord.Client):
                                     continue
                             elif files:
                                 logger.error(
-                                    f"图片消息发送失败且无法复用附件重试，跳过本次发送。商品ID: {product.get('id')}"
+                                    f"图片消息发送失败且无法复用附件重试，跳过本次发送。商品ID: {active_product.get('id')}"
                                 )
                                 continue
 
@@ -2234,7 +2356,7 @@ class DiscordBotClient(discord.Client):
                             )
                             logger.info(
                                 f"✅ [发送成功] {target_client.user.name} -> {author_label} | 频道: {message.channel.name}: "
-                                f"{reply_preview} | 商品ID: {product.get('id')}"
+                                f"{reply_preview} | 商品ID: {active_product.get('id')}"
                             )
                             try:
                                 if website_config and website_config.get('id') and response_content:
@@ -3254,256 +3376,7 @@ class DiscordBotClient(discord.Client):
                 except Exception as settings_error:
                     logger.error(f'获取网站关键词命中上限失败: {settings_error}')
 
-            def _coerce_list(value):
-                if not value:
-                    return []
-                if isinstance(value, str):
-                    try:
-                        parsed = json.loads(value)
-                    except json.JSONDecodeError:
-                        return []
-                    return parsed if isinstance(parsed, list) else []
-                if isinstance(value, list):
-                    return value
-                return []
-
-            # 单个商品时保留原有发送逻辑（支持自定义图片）
-            if len(matched_products) == 1:
-                product = matched_products[0]
-
-                # === 关键修复逻辑 ===
-                # 检查规则是否启用（兼容字符串/数字）
-                # 注意：后端API返回的 autoReplyEnabled 即 ruleEnabled
-                rule_enabled = product.get('autoReplyEnabled', product.get('ruleEnabled', True))
-                if isinstance(rule_enabled, str):
-                    rule_enabled = rule_enabled.strip().lower() not in {'0', 'false', 'no', 'off'}
-                elif isinstance(rule_enabled, (int, float)):
-                    rule_enabled = bool(rule_enabled)
-
-                custom_reply = None
-
-                has_custom_images = False
-                image_source = product.get('imageSource') or product.get('image_source')
-
-                if image_source == 'upload':
-                    uploaded_imgs = _coerce_list(product.get('uploaded_reply_images'))
-                    product['uploaded_reply_images'] = uploaded_imgs
-                    has_custom_images = bool(uploaded_imgs)
-                elif image_source == 'custom':
-                    custom_urls = _coerce_list(product.get('customImageUrls')) or _coerce_list(product.get('custom_image_urls'))
-                    if custom_urls:
-                        product['customImageUrls'] = custom_urls
-                    has_custom_images = bool(custom_urls)
-                elif image_source == 'product':
-                    selected_indexes = _coerce_list(product.get('selectedImageIndexes')) or _coerce_list(product.get('custom_reply_images'))
-                    if selected_indexes:
-                        product['selectedImageIndexes'] = selected_indexes
-                    has_custom_images = bool(selected_indexes)
-
-                # 如果规则禁用了，或者配置了自定义图片，都需要创建 custom_reply
-                if not rule_enabled or has_custom_images:
-                    # 构造 custom_reply 对象供 schedule_reply 使用
-                    custom_text = (product.get('custom_reply_text') or '').strip()
-
-                    # 即使没有文本，只要是要发图片，也需要传递 custom_reply 信号
-                    # schedule_reply 会进一步处理图片逻辑
-                    custom_reply = {
-                        'reply_type': 'text' if custom_text else 'custom_only',  # custom_only 表示不发默认链接
-                        'content': custom_text,
-                        # 传递图片信息供 schedule_reply 内部处理
-                        'product_data': product
-                    }
-                    if not rule_enabled:
-                        logger.info(f"商品 {product['id']} 规则已禁用，准备发送自定义回复")
-                    elif has_custom_images:
-                        logger.info(f"商品 {product['id']} 配置了自定义图片，准备发送自定义回复")
-
-                for website_config in website_configs:
-                    website_settings = user_website_settings_map.get(website_config.get('id')) or {}
-                    website_filter_rules = self._parse_message_filters(website_settings.get('message_filters', '[]'))
-                    website_keyword_match_limit = max(
-                        0,
-                        _coerce_int(
-                            website_settings.get('keyword_match_limit', global_keyword_match_limit),
-                            global_keyword_match_limit,
-                        ),
-                    )
-                    website_keyword_match_limit = resolve_keyword_match_limit(
-                        website_filter_rules,
-                        fallback_limit=website_keyword_match_limit,
-                    )
-                    if website_keyword_match_limit > 0 and len(matched_keyword_set) > website_keyword_match_limit:
-                        logger.info(
-                            f'关键词搜索命中过多，跳过网站 {website_config.get("id")}: query="{search_query}" | '
-                            f'命中关键词 {len(matched_keyword_set)} 个 | 上限 {website_keyword_match_limit}'
-                        )
-                        continue
-                    self._start_keyword_reply_background_task(
-                        self._enqueue_or_dispatch_keyword_reply(
-                            message,
-                            product,
-                            custom_reply,
-                            website_config,
-                        ),
-                        task_name=(
-                            f"keyword-single website={website_config.get('id')} "
-                            f"channel={getattr(message.channel, 'id', 'unknown')}"
-                        ),
-                    )
-                return
-
-            def _product_has_custom_reply_images(product):
-                image_source = product.get('imageSource') or product.get('image_source') or 'product'
-                if image_source == 'upload':
-                    return bool(_coerce_list(product.get('uploaded_reply_images')))
-                if image_source == 'custom':
-                    return bool(_coerce_list(product.get('customImageUrls') or product.get('custom_image_urls')))
-                if image_source == 'product':
-                    return bool(_coerce_list(product.get('selectedImageIndexes') or product.get('custom_reply_images')))
-                return False
-
-            products_with_custom_images = [
-                product for product in matched_products[:5]
-                if _product_has_custom_reply_images(product)
-            ]
-
-            if len(products_with_custom_images) > 1:
-                logger.info("关键词搜索命中多个带自定义图片的商品，改为逐商品发送以保留图片")
-                for product in matched_products[:5]:
-                    rule_enabled = product.get('autoReplyEnabled', product.get('ruleEnabled', True))
-                    if isinstance(rule_enabled, str):
-                        rule_enabled = rule_enabled.strip().lower() not in {'0', 'false', 'no', 'off'}
-                    elif isinstance(rule_enabled, (int, float)):
-                        rule_enabled = bool(rule_enabled)
-
-                    custom_reply = None
-
-                    has_custom_images = False
-                    image_source = product.get('imageSource') or product.get('image_source')
-
-                    if image_source == 'upload':
-                        uploaded_imgs = _coerce_list(product.get('uploaded_reply_images'))
-                        product['uploaded_reply_images'] = uploaded_imgs
-                        has_custom_images = bool(uploaded_imgs)
-                    elif image_source == 'custom':
-                        custom_urls = _coerce_list(product.get('customImageUrls')) or _coerce_list(product.get('custom_image_urls'))
-                        if custom_urls:
-                            product['customImageUrls'] = custom_urls
-                        has_custom_images = bool(custom_urls)
-                    elif image_source == 'product':
-                        selected_indexes = _coerce_list(product.get('selectedImageIndexes')) or _coerce_list(product.get('custom_reply_images'))
-                        if selected_indexes:
-                            product['selectedImageIndexes'] = selected_indexes
-                        has_custom_images = bool(selected_indexes)
-
-                    if not rule_enabled or has_custom_images:
-                        custom_text = (product.get('custom_reply_text') or '').strip()
-                        custom_reply = {
-                            'reply_type': 'text' if custom_text else 'custom_only',
-                            'content': custom_text,
-                            'product_data': product
-                        }
-                        if not rule_enabled:
-                            logger.info(f"商品 {product['id']} 规则已禁用，准备发送自定义回复")
-                        elif has_custom_images:
-                            logger.info(f"商品 {product['id']} 配置了自定义图片，准备发送自定义回复")
-                    elif rule_enabled:
-                        custom_reply = self._get_custom_reply()
-
-                    for website_config in website_configs:
-                        website_settings = user_website_settings_map.get(website_config.get('id')) or {}
-                        website_filter_rules = self._parse_message_filters(website_settings.get('message_filters', '[]'))
-                        website_keyword_match_limit = max(
-                            0,
-                            _coerce_int(
-                                website_settings.get('keyword_match_limit', global_keyword_match_limit),
-                                global_keyword_match_limit,
-                            ),
-                        )
-                        website_keyword_match_limit = resolve_keyword_match_limit(
-                            website_filter_rules,
-                            fallback_limit=website_keyword_match_limit,
-                        )
-                        if website_keyword_match_limit > 0 and len(matched_keyword_set) > website_keyword_match_limit:
-                            logger.info(
-                                f'关键词搜索命中过多，跳过网站 {website_config.get("id")}: query="{search_query}" | '
-                                f'命中关键词 {len(matched_keyword_set)} 个 | 上限 {website_keyword_match_limit}'
-                            )
-                            continue
-                        self._start_keyword_reply_background_task(
-                            self._enqueue_or_dispatch_keyword_reply(
-                                message,
-                                product,
-                                custom_reply,
-                                website_config,
-                            ),
-                            task_name=(
-                                f"keyword-single website={website_config.get('id')} "
-                                f"channel={getattr(message.channel, 'id', 'unknown')}"
-                            ),
-                        )
-                return
-
-            # 多商品合并回复
-            reply_entries = []
-
-            for product in matched_products:
-                if len(reply_entries) >= 5:
-                    break
-
-                rule_enabled = product.get('autoReplyEnabled', product.get('ruleEnabled', True))
-                if isinstance(rule_enabled, str):
-                    rule_enabled = rule_enabled.strip().lower() not in {'0', 'false', 'no', 'off'}
-                elif isinstance(rule_enabled, (int, float)):
-                    rule_enabled = bool(rule_enabled)
-
-                custom_reply = None
-                has_custom_images = False
-                image_source = product.get('imageSource') or product.get('image_source')
-
-                if image_source == 'upload':
-                    uploaded_imgs = _coerce_list(product.get('uploaded_reply_images'))
-                    product['uploaded_reply_images'] = uploaded_imgs
-                    has_custom_images = bool(uploaded_imgs)
-                elif image_source == 'custom':
-                    custom_urls = _coerce_list(product.get('customImageUrls')) or _coerce_list(product.get('custom_image_urls'))
-                    if custom_urls:
-                        product['customImageUrls'] = custom_urls
-                    has_custom_images = bool(custom_urls)
-                elif image_source == 'product':
-                    selected_indexes = _coerce_list(product.get('selectedImageIndexes')) or _coerce_list(product.get('custom_reply_images'))
-                    if selected_indexes:
-                        product['selectedImageIndexes'] = selected_indexes
-                    has_custom_images = bool(selected_indexes)
-
-                if not rule_enabled or has_custom_images:
-                    custom_text = (product.get('custom_reply_text') or '').strip()
-                    custom_reply = {
-                        'reply_type': 'text' if custom_text else 'custom_only',
-                        'content': custom_text,
-                        'product_data': product
-                    }
-                elif rule_enabled:
-                    custom_reply = self._get_custom_reply()
-
-                reply_entries.append({
-                    'product': product,
-                    'custom_reply': custom_reply
-                })
-
-            per_website_content = {}
-            per_website_reply_modes = {}
-            try:
-                if db is None:
-                    try:
-                        from database import db as imported_db
-                    except ImportError:
-                        from .database import db as imported_db
-                    db = imported_db
-            except Exception as db_import_error:
-                logger.error(f"导入数据库模块失败: {db_import_error}")
-                db = None
-            for website_config in website_configs:
+            def _website_keyword_limit_exceeded(website_config):
                 website_settings = user_website_settings_map.get(website_config.get('id')) or {}
                 website_filter_rules = self._parse_message_filters(website_settings.get('message_filters', '[]'))
                 website_keyword_match_limit = max(
@@ -3522,7 +3395,61 @@ class DiscordBotClient(discord.Client):
                         f'关键词搜索命中过多，跳过网站 {website_config.get("id")}: query="{search_query}" | '
                         f'命中关键词 {len(matched_keyword_set)} 个 | 上限 {website_keyword_match_limit}'
                     )
+                    return True
+                return False
+
+            def _log_product_reply_mode(prepared_product, rule_enabled, has_custom_images):
+                if not rule_enabled:
+                    logger.info(f"商品 {prepared_product.get('id')} 规则已禁用，准备发送自定义回复")
+                elif has_custom_images:
+                    logger.info(f"商品 {prepared_product.get('id')} 配置了自定义图片，准备发送自定义回复")
+
+            # 单个商品时逐网站生成对应自定义配置
+            if len(matched_products) == 1:
+                product = matched_products[0]
+                for website_config in website_configs:
+                    if _website_keyword_limit_exceeded(website_config):
+                        continue
+
+                    prepared_product, custom_reply, rule_enabled, has_custom_images = _prepare_effective_product_reply(
+                        product,
+                        website_config=website_config,
+                        fallback_custom_reply=self._get_custom_reply(),
+                    )
+                    _log_product_reply_mode(prepared_product, rule_enabled, has_custom_images)
+
+                    self._start_keyword_reply_background_task(
+                        self._enqueue_or_dispatch_keyword_reply(
+                            message,
+                            prepared_product,
+                            custom_reply,
+                            website_config,
+                        ),
+                        task_name=(
+                            f"keyword-single website={website_config.get('id')} "
+                            f"channel={getattr(message.channel, 'id', 'unknown')}"
+                        ),
+                    )
+                return
+
+            limited_products = matched_products[:5]
+            any_reply_scheduled = False
+
+            try:
+                if db is None:
+                    try:
+                        from database import db as imported_db
+                    except ImportError:
+                        from .database import db as imported_db
+                    db = imported_db
+            except Exception as db_import_error:
+                logger.error(f"导入数据库模块失败: {db_import_error}")
+                db = None
+
+            for website_config in website_configs:
+                if _website_keyword_limit_exceeded(website_config):
                     continue
+
                 sender_count = 0
                 if db is not None:
                     try:
@@ -3538,67 +3465,101 @@ class DiscordBotClient(discord.Client):
                     website_config,
                     sender_count=sender_count,
                 )
-                per_website_reply_modes[str(website_config.get('id'))] = reply_mode
+
+                prepared_entries = []
+                products_with_custom_images = []
+                for product in limited_products:
+                    prepared_product, custom_reply, rule_enabled, has_custom_images = _prepare_effective_product_reply(
+                        product,
+                        website_config=website_config,
+                        fallback_custom_reply=self._get_custom_reply(),
+                    )
+                    prepared_entries.append({
+                        'product': prepared_product,
+                        'custom_reply': custom_reply,
+                    })
+                    if has_custom_images:
+                        products_with_custom_images.append(prepared_product)
+
+                if len(products_with_custom_images) > 1:
+                    logger.info(
+                        f"关键词搜索命中多个带自定义图片的商品，网站 {website_config.get('id')} 改为逐商品发送以保留图片"
+                    )
+                    for entry in prepared_entries:
+                        any_reply_scheduled = True
+                        self._start_keyword_reply_background_task(
+                            self._enqueue_or_dispatch_keyword_reply(
+                                message,
+                                entry['product'],
+                                entry['custom_reply'],
+                                website_config,
+                            ),
+                            task_name=(
+                                f"keyword-single website={website_config.get('id')} "
+                                f"channel={getattr(message.channel, 'id', 'unknown')}"
+                            ),
+                        )
+                    continue
+
                 website_lines = []
-                for entry in reply_entries:
+                reply_entries = []
+                for entry in prepared_entries:
                     reply_text = self._generate_reply_content(
                         entry['product'],
                         message.channel.id,
                         entry['custom_reply'],
                         website_config=website_config
                     )
-                    if reply_text:
-                        website_lines.append(reply_text)
-                if website_lines:
-                    per_website_content[str(website_config.get('id'))] = _build_multi_reply_content(
-                        author_id=getattr(message.author, 'id', None),
-                        reply_contents=website_lines,
-                        reply_mode=reply_mode,
-                    )
+                    if not reply_text:
+                        continue
+                    website_lines.append(reply_text)
+                    reply_entries.append(entry)
 
-            if per_website_content:
+                if not website_lines or not reply_entries:
+                    continue
+
+                any_reply_scheduled = True
                 aggregate_image_product = products_with_custom_images[0] if len(products_with_custom_images) == 1 else None
                 base_product = aggregate_image_product or reply_entries[0]['product']
-                max_lines = max(content.count('\n') + 1 for content in per_website_content.values())
-                logger.info(f"发送合并回复，最多包含 {max_lines} 条内容")
                 if aggregate_image_product is not None:
                     logger.info(
-                        f"关键词搜索命中单个带自定义图片的商品，改为合并文字并复用商品 {aggregate_image_product.get('id')} 的图片"
+                        f"关键词搜索命中单个带自定义图片的商品，网站 {website_config.get('id')} 合并文字并复用商品 "
+                        f"{aggregate_image_product.get('id')} 的图片"
                     )
+
+                website_content = _build_multi_reply_content(
+                    author_id=getattr(message.author, 'id', None),
+                    reply_contents=website_lines,
+                    reply_mode=reply_mode,
+                )
                 repeat_product_ids = [
                     entry['product'].get('id')
                     for entry in reply_entries
                     if entry['product'].get('id')
                 ]
+                agg_custom_reply = {
+                    'reply_type': 'custom_only',
+                    'content': website_content,
+                    'product_data': base_product,
+                    'skip_images': aggregate_image_product is None,
+                    'prebuilt_content': True,
+                    'explicit_mentions': reply_mode == 'keyword',
+                    'repeat_product_ids': repeat_product_ids,
+                }
+                self._start_keyword_reply_background_task(
+                    self._enqueue_or_dispatch_keyword_reply(
+                        message,
+                        base_product,
+                        agg_custom_reply,
+                        website_config,
+                    ),
+                    task_name=(
+                        f"keyword-aggregate website={website_config.get('id')} "
+                        f"channel={getattr(message.channel, 'id', 'unknown')}"
+                    ),
+                )
 
-                for website_config in website_configs:
-                    website_key = str(website_config.get('id'))
-                    website_content = per_website_content.get(website_key)
-                    if not website_content:
-                        continue
-                    reply_mode = per_website_reply_modes.get(website_key, 'rotation')
-                    agg_custom_reply = {
-                        'reply_type': 'custom_only',
-                        'content': website_content,
-                        'product_data': base_product,
-                        'skip_images': aggregate_image_product is None,
-                        'prebuilt_content': True,
-                        'explicit_mentions': reply_mode == 'keyword',
-                        'repeat_product_ids': repeat_product_ids,
-                    }
-                    self._start_keyword_reply_background_task(
-                        self._enqueue_or_dispatch_keyword_reply(
-                            message,
-                            base_product,
-                            agg_custom_reply,
-                            website_config,
-                        ),
-                        task_name=(
-                            f"keyword-aggregate website={website_config.get('id')} "
-                            f"channel={getattr(message.channel, 'id', 'unknown')}"
-                        ),
-                    )
-            else:
+            if not any_reply_scheduled:
                 logger.info(f'关键词搜索无可用回复内容: {search_query}')
 
         except Exception as e:

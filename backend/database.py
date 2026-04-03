@@ -13,6 +13,10 @@ try:
     from settings_validation import normalize_reply_delay_range
 except ImportError:
     from .settings_validation import normalize_reply_delay_range
+try:
+    from product_reply_settings import build_frontend_per_website_reply_settings
+except ImportError:
+    from .product_reply_settings import build_frontend_per_website_reply_settings
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +181,11 @@ class Database:
 
             try:
                 cursor.execute('ALTER TABLE products ADD COLUMN uploaded_reply_images TEXT')  # JSON格式存储上传的自定义回复图片文件名数组
+            except sqlite3.OperationalError:
+                pass  # 字段已存在
+
+            try:
+                cursor.execute('ALTER TABLE products ADD COLUMN per_website_reply_settings TEXT')  # JSON格式存储各网站独立回复设置
             except sqlite3.OperationalError:
                 pass  # 字段已存在
 
@@ -1123,6 +1132,7 @@ class Database:
                             p.custom_reply_images,
                             p.custom_image_urls,
                             p.uploaded_reply_images,
+                            p.per_website_reply_settings,
                             pi.id AS image_db_id,
                             pi.image_path,
                             pi.image_index,
@@ -1164,6 +1174,7 @@ class Database:
                             p.custom_reply_images,
                             p.custom_image_urls,
                             p.uploaded_reply_images,
+                            p.per_website_reply_settings,
                             pi.id AS image_db_id,
                             pi.image_path,
                             pi.image_index
@@ -1205,6 +1216,7 @@ class Database:
                             p.custom_reply_images,
                             p.custom_image_urls,
                             p.uploaded_reply_images,
+                            p.per_website_reply_settings,
                             pi.id AS image_db_id,
                             pi.image_path,
                             pi.image_index,
@@ -1242,6 +1254,7 @@ class Database:
                             p.custom_reply_images,
                             p.custom_image_urls,
                             p.uploaded_reply_images,
+                            p.per_website_reply_settings,
                             pi.id AS image_db_id,
                             pi.image_path,
                             pi.image_index
@@ -2033,7 +2046,8 @@ class Database:
                 allowed_fields = [
                     'title', 'english_title', 'ruleEnabled',
                     'custom_reply_text', 'custom_reply_images', 'custom_image_urls',
-                    'image_source', 'uploaded_reply_images', 'reply_scope'
+                    'image_source', 'uploaded_reply_images', 'reply_scope',
+                    'per_website_reply_settings'
                 ]
 
                 for field in allowed_fields:
@@ -3662,6 +3676,10 @@ class Database:
                     prod['shopName'] = prod.get('shop_name') or '未知店铺'
                     prod['customReplyText'] = prod.get('custom_reply_text') or ''
                     prod['replyScope'] = prod.get('reply_scope') or 'all'
+                    prod['perWebsiteReplySettings'] = build_frontend_per_website_reply_settings(
+                        prod.get('per_website_reply_settings'),
+                        prod.get('id'),
+                    )
 
                     try:
                         custom_reply_images = prod.get('custom_reply_images')
