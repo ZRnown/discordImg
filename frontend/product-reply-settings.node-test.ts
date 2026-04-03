@@ -118,11 +118,11 @@ test('reply editor dialog uses a wider width when auto reply rules are disabled'
   assert.equal(typeof replySettings.getReplyEditorDialogClass, 'function')
   assert.equal(
     replySettings.getReplyEditorDialogClass?.(false),
-    'max-w-6xl max-h-[85vh] overflow-y-auto',
+    'sm:max-w-6xl max-h-[85vh] overflow-y-auto',
   )
   assert.equal(
     replySettings.getReplyEditorDialogClass?.(true),
-    'max-w-3xl max-h-[85vh] overflow-y-auto',
+    'sm:max-w-3xl max-h-[85vh] overflow-y-auto',
   )
 })
 
