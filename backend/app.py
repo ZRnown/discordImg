@@ -3289,6 +3289,8 @@ def update_product():
 
                     normalized_entry = dict(entry)
                     normalized_entry['uploadedReplyImages'] = existing_site_filenames + new_site_filenames
+                    if new_site_filenames:
+                        normalized_entry['imageSource'] = 'upload'
                     per_website_reply_settings[website_id] = normalized_entry
 
             # 2. 构建更新数据
@@ -3299,6 +3301,8 @@ def update_product():
                 updates['uploaded_reply_images'] = json.dumps(all_uploaded_filenames)
             elif all_uploaded_filenames:
                 updates['uploaded_reply_images'] = json.dumps(all_uploaded_filenames)
+            if new_uploaded_filenames and 'imageSource' not in request.form:
+                updates['image_source'] = 'upload'
             for key in ['title', 'englishTitle', 'ruleEnabled', 'customReplyText', 'imageSource', 'replyScope']:
                 value = request.form.get(key)
                 if value is not None:
