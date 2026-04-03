@@ -3,10 +3,37 @@ import unittest
 from backend.keyword_search_terms import (
     build_query_keyword_candidates,
     build_text_search_plan,
+    extract_marketplace_item_id_from_text,
 )
 
 
 class KeywordSearchTermsTestCase(unittest.TestCase):
+    def test_extract_marketplace_item_id_from_encoded_kakobuy_url(self):
+        query = (
+            "https://www.kakobuy.com/item/details?"
+            "url=https%3A%2F%2Fweidian.com%2Fitem.html%3FitemID%3D7704997828%26spider_token%3D09e3"
+        )
+
+        self.assertEqual(extract_marketplace_item_id_from_text(query), "7704997828")
+
+    def test_extract_marketplace_item_id_from_oopbuy_path_url(self):
+        query = "https://oopbuy.com/product/weidian/7653365800"
+
+        self.assertEqual(extract_marketplace_item_id_from_text(query), "7653365800")
+
+    def test_extract_marketplace_item_id_from_bbdbuy_path_url(self):
+        query = "https://www.bbdbuyeu.com/goods/WEIDIAN/7467867059"
+
+        self.assertEqual(extract_marketplace_item_id_from_text(query), "7467867059")
+
+    def test_extract_marketplace_item_id_from_acbuy2_direct_id_url(self):
+        query = "https://www.acbuy.com/product?id=7460328518&source=WD&u=XNX5L3"
+
+        self.assertEqual(extract_marketplace_item_id_from_text(query), "7460328518")
+
+    def test_extract_marketplace_item_id_returns_none_for_non_product_text(self):
+        self.assertIsNone(extract_marketplace_item_id_from_text("nba socks"))
+
     def test_alpha_numeric_query_does_not_promote_standalone_number_candidate(self):
         candidates = build_query_keyword_candidates("b 30")
 

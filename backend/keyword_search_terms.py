@@ -1,5 +1,6 @@
 import re
 from typing import Any
+from urllib.parse import parse_qs, unquote, urlparse
 
 
 def normalize_keyword_search_text(value: str) -> str:
@@ -222,3 +223,57 @@ def build_text_search_plan(query: Any) -> dict[str, list[str] | str]:
         "extra_terms": extra_terms,
         "fallback_tokens": fallback_tokens,
     }
+
+
+def _extract_urls_from_text(value: Any) -> list[str]:
+    text = str(value or "").strip()
+    if not text:
+        return []
+    urls = re.findall(r"https?://[^\s<>'\"]+", text, flags=re.IGNORECASE)
+    return urls or [text]
+
+
+def _iter_decoded_texts(value: str, max_rounds: int = 4) -> list[str]:
+    variants: list[str] = []
+    current = value
+    for _ in range(max_rounds + 1):
+        if current not in variants:
+            variants.append(current)
+        decoded = unquote(current)
+        if decoded == current:
+            break
+        current = decoded
+    return variants
+
+
+def extract_marketplace_item_id_from_text(value: Any) -> str | None:
+    for raw_candidate in _extract_urls_from_text(value):
+        for candidate in _iter_decoded_texts(raw_candidate):
+            direct_item_match = re.search(r"itemID=(\d+)", candidate, flags=re.IGNORECASE)
+            if direct_item_match:
+                return direct_item_match.group(1)
+
+            path_match = re.search(
+                r"/(?:product/weidian|goods/weidian)/(\d+)",
+                candidate,
+                flags=re.IGNORECASE,
+            )
+            if path_match:
+                return path_match.group(1)
+
+            parsed = urlparse(candidate)
+            host = (parsed.netloc or "").lower()
+            query_params = parse_qs(parsed.query)
+            direct_id = (query_params.get("id") or [None])[0]
+            if direct_id and str(direct_id).isdigit():
+                source = ((query_params.get("source") or [""])[0]).lower()
+                platform = ((query_params.get("platform") or [""])[0]).lower()
+                if (
+                    source == "wd"
+                    or platform == "weidian"
+                    or "acbuy.com" in host
+                    or "cnfans.com" in host
+                ):
+                    return str(direct_id)
+
+    return None

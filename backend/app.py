@@ -179,6 +179,7 @@ try:
     from keyword_search_terms import (
         build_query_keyword_candidates,
         build_text_search_plan,
+        extract_marketplace_item_id_from_text,
         find_query_keyword_match,
         normalize_keyword_search_text,
     )
@@ -187,6 +188,7 @@ except ModuleNotFoundError as e:
         from .keyword_search_terms import (
             build_query_keyword_candidates,
             build_text_search_plan,
+            extract_marketplace_item_id_from_text,
             find_query_keyword_match,
             normalize_keyword_search_text,
         )
@@ -4834,6 +4836,80 @@ def search_similar_text():
 
         with db.get_connection() as conn:
             cursor = conn.cursor()
+
+            def build_products_from_rows(rows):
+                products = []
+                for row in rows:
+                    prod = dict(row)
+                    cursor.execute(
+                        "SELECT image_index FROM product_images WHERE product_id = ? ORDER BY image_index LIMIT 1",
+                        (prod['id'],),
+                    )
+                    img_row = cursor.fetchone()
+                    if img_row:
+                        prod['images'] = [f"/api/image/{prod['id']}/{img_row[0]}"]
+                    else:
+                        prod['images'] = []
+
+                    prod['weidianUrl'] = prod.get('product_url')
+                    prod['englishTitle'] = prod.get('english_title') or ''
+                    prod['titleTranslations'] = normalize_title_translations(
+                        prod.get('title_translations'),
+                        title=prod.get('title'),
+                        english_title=prod.get('english_title'),
+                    )
+                    prod['autoReplyEnabled'] = bool(prod.get('ruleEnabled', True))
+                    prod['replyScope'] = prod.get('reply_scope') or 'all'
+
+                    try:
+                        if prod.get('custom_reply_images'):
+                            prod['selectedImageIndexes'] = json.loads(prod['custom_reply_images'])
+                        if prod.get('custom_image_urls'):
+                            prod['customImageUrls'] = json.loads(prod['custom_image_urls'])
+                        if prod.get('per_website_reply_settings'):
+                            prod['perWebsiteReplySettings'] = build_frontend_per_website_reply_settings(
+                                prod['per_website_reply_settings'],
+                                prod.get('id'),
+                            )
+                        if prod.get('uploaded_reply_images'):
+                            prod['uploaded_reply_images'] = json.loads(prod['uploaded_reply_images'])
+                    except Exception:
+                        pass
+
+                    products.append(prod)
+
+                return products
+
+            linked_item_id = extract_marketplace_item_id_from_text(query)
+            if linked_item_id:
+                cursor.execute("""
+                    SELECT id, product_url, title, english_title, title_translations, description,
+                           ruleEnabled, min_delay, max_delay, created_at,
+                           cnfans_url, shop_name, custom_reply_text,
+                           custom_reply_images, custom_image_urls, image_source,
+                           reply_scope, per_website_reply_settings,
+                           uploaded_reply_images
+                    FROM products
+                    WHERE (
+                        item_id = ?
+                        OR product_url LIKE ?
+                    )""" + scoped_clause + """
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ?
+                """, (linked_item_id, f"%itemID={linked_item_id}%", *scoped_params, limit))
+                direct_rows = cursor.fetchall()
+                if direct_rows:
+                    products = build_products_from_rows(direct_rows)
+                    logger.info(
+                        f'文字搜索链接直查命中: "{query}" -> item_id={linked_item_id} | 找到 {len(products)} 个商品'
+                    )
+                    return jsonify({
+                        'success': True,
+                        'query': query,
+                        'products': products,
+                        'total': len(products)
+                    })
+
             search_plan = build_text_search_plan(query)
             query_normalized = search_plan['query_normalized']
             query_keyword_candidates = build_query_keyword_candidates(query)
@@ -4944,47 +5020,7 @@ def search_similar_text():
                 """, (query_normalized, query_normalized, *scoped_params, min(max(limit * 5, limit), 1000)))
                 rows = filter_exact_matches(cursor.fetchall())
 
-            products = []
-            for row in rows:
-                prod = dict(row)
-                # 简单获取第一张图作为预览
-                cursor.execute("SELECT image_index FROM product_images WHERE product_id = ? ORDER BY image_index LIMIT 1", (prod['id'],))
-                img_row = cursor.fetchone()
-                # 构造符合 Bot 逻辑的 image 路径
-                if img_row:
-                    prod['images'] = [f"/api/image/{prod['id']}/{img_row[0]}"]
-                else:
-                    prod['images'] = []
-
-                # 补充 Bot 需要的字段
-                prod['weidianUrl'] = prod.get('product_url')
-                prod['englishTitle'] = prod.get('english_title') or ''
-                prod['titleTranslations'] = normalize_title_translations(
-                    prod.get('title_translations'),
-                    title=prod.get('title'),
-                    english_title=prod.get('english_title'),
-                )
-                prod['autoReplyEnabled'] = bool(prod.get('ruleEnabled', True))
-                prod['replyScope'] = prod.get('reply_scope') or 'all'
-
-                # 解析 JSON 字段供 Bot 使用
-                try:
-                    if prod.get('custom_reply_images'):
-                        prod['selectedImageIndexes'] = json.loads(prod['custom_reply_images'])
-                    if prod.get('custom_image_urls'):
-                        prod['customImageUrls'] = json.loads(prod['custom_image_urls'])
-                    if prod.get('per_website_reply_settings'):
-                        prod['perWebsiteReplySettings'] = build_frontend_per_website_reply_settings(
-                            prod['per_website_reply_settings'],
-                            prod.get('id'),
-                        )
-                    # 解析上传的自定义回复图片
-                    if prod.get('uploaded_reply_images'):
-                        prod['uploaded_reply_images'] = json.loads(prod['uploaded_reply_images'])
-                except:
-                    pass
-
-                products.append(prod)
+            products = build_products_from_rows(rows)
 
         logger.info(f'文字搜索完成，找到 {len(products)} 个商品')
 
