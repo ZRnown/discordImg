@@ -4880,6 +4880,13 @@ def search_similar_text():
 
                 return products
 
+            scoped_clause = ""
+            scoped_params = ()
+            if scoped_shop_list:
+                placeholders = ",".join("?" for _ in scoped_shop_list)
+                scoped_clause = f" AND LOWER(TRIM(COALESCE(shop_name, ''))) IN ({placeholders})"
+                scoped_params = tuple(scoped_shop_list)
+
             linked_item_id = extract_marketplace_item_id_from_text(query)
             if linked_item_id:
                 cursor.execute("""
@@ -4913,13 +4920,6 @@ def search_similar_text():
             search_plan = build_text_search_plan(query)
             query_normalized = search_plan['query_normalized']
             query_keyword_candidates = build_query_keyword_candidates(query)
-
-            scoped_clause = ""
-            scoped_params = ()
-            if scoped_shop_list:
-                placeholders = ",".join("?" for _ in scoped_shop_list)
-                scoped_clause = f" AND LOWER(TRIM(COALESCE(shop_name, ''))) IN ({placeholders})"
-                scoped_params = tuple(scoped_shop_list)
 
             def filter_exact_matches(candidate_rows):
                 matched_rows = []
