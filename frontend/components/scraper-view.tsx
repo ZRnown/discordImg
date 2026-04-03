@@ -29,6 +29,7 @@ import {
   cloneWebsiteReplySetting,
   ensurePerWebsiteReplySettings,
   getLegacyWebsiteReplySetting,
+  getReplyEditorDialogClass,
   getWebsiteReplySetting,
   hasWebsiteReplyCustomization,
   normalizeImageSource,
@@ -1871,7 +1872,7 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
                                                 <Edit className="size-3.5"/>
                         </Button>
                       </DialogTrigger>
-                                        <DialogContent className="max-w-3xl max-h-[85vh] overflow-y-auto">
+                                        <DialogContent className={getReplyEditorDialogClass(!!editingProduct?.ruleEnabled)}>
                         <DialogHeader>
                                                 <DialogTitle>编辑商品与规则 - {product.weidianId}</DialogTitle>
                           <DialogDescription>配置商品信息和自动回复规则</DialogDescription>
@@ -1930,9 +1931,9 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
                                         />
                                       </div>
                                       <div className="min-w-0 flex-1 space-y-1">
-                                        <label htmlFor="scope-all" className="text-sm font-medium cursor-pointer">
+                                        <div className="text-sm font-medium">
                                           所有网站
-                                        </label>
+                                        </div>
                                         <p className="text-xs text-muted-foreground">
                                           这里填一套共享文案和图片。勾选的具体网站如果没单独配置，就用这套。
                                         </p>
@@ -1964,9 +1965,9 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
                                             />
                                           </div>
                                           <div className="min-w-0 flex-1 space-y-1">
-                                            <label htmlFor={`scope-${site.name}`} className="text-sm font-medium cursor-pointer">
+                                            <div className="text-sm font-medium">
                                               {site.display_name} ({site.name})
-                                            </label>
+                                            </div>
                                             <p className="text-xs text-muted-foreground">
                                               {siteCustomized
                                                 ? '已单独配置，命中时优先用这里。'

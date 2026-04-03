@@ -144,6 +144,12 @@ export const hasWebsiteReplyCustomization = (value: any) => {
   return false
 }
 
+export const getReplyEditorDialogClass = (ruleEnabled: boolean) => {
+  return ruleEnabled
+    ? 'max-w-3xl max-h-[85vh] overflow-y-auto'
+    : 'max-w-6xl max-h-[85vh] overflow-y-auto'
+}
+
 export const normalizePerWebsiteReplySettings = (
   rawSettings: any,
 ): Record<string, WebsiteReplySetting> => {

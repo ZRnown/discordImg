@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 
+import * as replySettings from './lib/product-reply-settings.ts'
 import {
   createEmptyWebsiteReplySetting,
   ensurePerWebsiteReplySettings,
@@ -110,4 +112,22 @@ test('customization helper only treats real content or images as an override', (
   assert.equal(hasWebsiteReplyCustomization(getLegacyWebsiteReplySetting({
     customReplyText: 'shared text',
   })), true)
+})
+
+test('reply editor dialog uses a wider width when auto reply rules are disabled', () => {
+  assert.equal(typeof replySettings.getReplyEditorDialogClass, 'function')
+  assert.equal(
+    replySettings.getReplyEditorDialogClass?.(false),
+    'max-w-6xl max-h-[85vh] overflow-y-auto',
+  )
+  assert.equal(
+    replySettings.getReplyEditorDialogClass?.(true),
+    'max-w-3xl max-h-[85vh] overflow-y-auto',
+  )
+})
+
+test('reply scope row text is not bound to checkbox htmlFor toggles', () => {
+  const source = readFileSync(new URL('./components/scraper-view.tsx', import.meta.url), 'utf8')
+  assert.equal(source.includes('htmlFor="scope-all"'), false)
+  assert.equal(source.includes('htmlFor={`scope-${site.name}`}'), false)
 })
