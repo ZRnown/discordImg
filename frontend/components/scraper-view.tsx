@@ -25,6 +25,18 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Checkbox } from "@/components/ui/checkbox"
+import {
+  cloneWebsiteReplySetting,
+  createInitialWebsiteReplySetting,
+  ensurePerWebsiteReplySettings,
+  getScopedWebsites,
+  getWebsiteReplySetting,
+  normalizeImageSource,
+  normalizePerWebsiteReplySettings,
+  normalizeWebsiteReplySetting,
+  parseReplyScopes,
+  type WebsiteReplySetting,
+} from "@/lib/product-reply-settings"
 
 type FailedDetail = {
   index: number
@@ -427,6 +439,7 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
         selectedImageIndexes: product.selectedImageIndexes || [],
         customImageUrls: product.customImageUrls || product.custom_image_urls || [],
         imageSource: product.imageSource || product.image_source || (product.custom_image_urls ? 'custom' : 'upload'),
+        perWebsiteReplySettings: product.perWebsiteReplySettings || product.per_website_reply_settings || {},
         uploadedImages: [],
         existingUploadedImageUrls: product.uploadedImages || []
       }))
@@ -525,24 +538,40 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
     ? `${scrapeStatus?.updated_at || ''}:${shopFailedItems.map(item => item.id).join(',')}`
     : ''
 
-  const parseReplyScopes = (rawScope: any): string[] => {
-    if (!rawScope || rawScope === 'all') return []
-    if (Array.isArray(rawScope)) return rawScope.map(scope => String(scope))
-    if (typeof rawScope === 'string') {
-      const trimmed = rawScope.trim()
-      if (trimmed.startsWith('[')) {
-        try {
-          const parsed = JSON.parse(trimmed)
-          if (Array.isArray(parsed)) {
-            return parsed.map(scope => String(scope))
-          }
-        } catch {
-          return [trimmed]
-        }
-      }
-      return [trimmed]
+  const updateWebsiteReplySetting = (
+    websiteId: string | number,
+    updater: (current: WebsiteReplySetting) => WebsiteReplySetting
+  ) => {
+    if (!editingProduct) return
+    const key = String(websiteId)
+    const currentSettings = {
+      ...ensurePerWebsiteReplySettings(editingProduct),
     }
-    return [String(rawScope)]
+    const currentSetting = currentSettings[key]
+      ? cloneWebsiteReplySetting(currentSettings[key])
+      : getWebsiteReplySetting(editingProduct, key, availableWebsites)
+
+    currentSettings[key] = normalizeWebsiteReplySetting(updater(currentSetting))
+    setEditingProduct({
+      ...editingProduct,
+      perWebsiteReplySettings: currentSettings,
+    })
+  }
+
+  const serializePerWebsiteReplySettings = (product: any) => {
+    const normalized = normalizePerWebsiteReplySettings(product?.perWebsiteReplySettings)
+    return Object.fromEntries(
+      Object.entries(normalized).map(([websiteId, setting]) => [
+        websiteId,
+        {
+          customReplyText: setting.customReplyText || '',
+          imageSource: normalizeImageSource(setting.imageSource),
+          selectedImageIndexes: [...(setting.selectedImageIndexes || [])],
+          customImageUrls: [...(setting.customImageUrls || [])],
+          existingUploadedImageUrls: [...(setting.existingUploadedImageUrls || [])],
+        },
+      ])
+    )
   }
 
   const handleScopeChange = (websiteName: string, checked: boolean) => {
@@ -558,9 +587,20 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
       currentScopes = currentScopes.filter(scope => scope !== websiteName)
     }
 
+    const nextSettings = {
+      ...ensurePerWebsiteReplySettings(editingProduct),
+    }
+    const website = availableWebsites.find(site => site.name === websiteName)
+    if (checked && website && !nextSettings[String(website.id)]) {
+      nextSettings[String(website.id)] = createInitialWebsiteReplySetting(editingProduct, {
+        useLegacyFallback: true,
+      })
+    }
+
     setEditingProduct({
       ...editingProduct,
-      replyScope: JSON.stringify(currentScopes)
+      replyScope: JSON.stringify(currentScopes),
+      perWebsiteReplySettings: nextSettings,
     })
   }
 
@@ -742,57 +782,72 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
 
   const handleUpdateProduct = async (updatedProduct: any) => {
     try {
-      let res;
+      let res
 
-      // 检查是否有上传的图片文件或已保存的图片URL
-      const hasNewUploads = updatedProduct.uploadedImages && updatedProduct.uploadedImages.length > 0;
-      const hasExistingUploads = updatedProduct.existingUploadedImageUrls && updatedProduct.existingUploadedImageUrls.length > 0;
+      const hasNewUploads = updatedProduct.uploadedImages && updatedProduct.uploadedImages.length > 0
+      const hasExistingUploads = updatedProduct.existingUploadedImageUrls && updatedProduct.existingUploadedImageUrls.length > 0
+      const perWebsiteReplySettings = normalizePerWebsiteReplySettings(updatedProduct.perWebsiteReplySettings)
+      const serializedPerWebsiteReplySettings = serializePerWebsiteReplySettings({
+        perWebsiteReplySettings,
+      })
+      const hasPerWebsiteNewUploads = Object.values(perWebsiteReplySettings).some(
+        (setting: any) => Array.isArray(setting.uploadedImages) && setting.uploadedImages.length > 0
+      )
+      const hasPerWebsiteExistingUploads = Object.values(perWebsiteReplySettings).some(
+        (setting: any) => Array.isArray(setting.existingUploadedImageUrls) && setting.existingUploadedImageUrls.length > 0
+      )
 
-      if (hasNewUploads || hasExistingUploads) {
-        // 使用FormData发送文件和已有图片信息
-        const formData = new FormData();
+      if (hasNewUploads || hasExistingUploads || hasPerWebsiteNewUploads || hasPerWebsiteExistingUploads) {
+        const formData = new FormData()
 
-        // 添加基本数据
-        formData.append('id', updatedProduct.id.toString());
-        if (updatedProduct.title) formData.append('title', updatedProduct.title);
-        if (updatedProduct.englishTitle) formData.append('englishTitle', updatedProduct.englishTitle);
-        if (updatedProduct.ruleEnabled !== undefined) formData.append('ruleEnabled', updatedProduct.ruleEnabled.toString());
-        if (updatedProduct.customReplyText) formData.append('customReplyText', updatedProduct.customReplyText);
-        if (updatedProduct.imageSource) formData.append('imageSource', updatedProduct.imageSource);
-        if (updatedProduct.replyScope) formData.append('replyScope', updatedProduct.replyScope);
+        formData.append('id', updatedProduct.id.toString())
+        if (updatedProduct.title) formData.append('title', updatedProduct.title)
+        if (updatedProduct.englishTitle) formData.append('englishTitle', updatedProduct.englishTitle)
+        if (updatedProduct.ruleEnabled !== undefined) formData.append('ruleEnabled', updatedProduct.ruleEnabled.toString())
+        if (updatedProduct.customReplyText) formData.append('customReplyText', updatedProduct.customReplyText)
+        if (updatedProduct.imageSource) formData.append('imageSource', updatedProduct.imageSource)
+        if (updatedProduct.replyScope) formData.append('replyScope', updatedProduct.replyScope)
+        formData.append('perWebsiteReplySettings', JSON.stringify(serializedPerWebsiteReplySettings))
 
-        // 添加数组数据（序列化为JSON）
         if (updatedProduct.selectedImageIndexes) {
-          formData.append('selectedImageIndexes', JSON.stringify(updatedProduct.selectedImageIndexes));
+          formData.append('selectedImageIndexes', JSON.stringify(updatedProduct.selectedImageIndexes))
         }
         if (updatedProduct.customImageUrls) {
-          formData.append('customImageUrls', JSON.stringify(updatedProduct.customImageUrls));
+          formData.append('customImageUrls', JSON.stringify(updatedProduct.customImageUrls))
         }
 
-        // 添加要保留的已有上传图片URL列表
         if (hasExistingUploads) {
-          formData.append('existingUploadedImageUrls', JSON.stringify(updatedProduct.existingUploadedImageUrls));
+          formData.append('existingUploadedImageUrls', JSON.stringify(updatedProduct.existingUploadedImageUrls))
         }
 
-        // 添加新上传的文件
         if (hasNewUploads) {
-          updatedProduct.uploadedImages.forEach((file: File, index: number) => {
-            formData.append('uploadedImages', file);
-          });
+          updatedProduct.uploadedImages.forEach((file: File) => {
+            formData.append('uploadedImages', file)
+          })
         }
+
+        Object.entries(perWebsiteReplySettings).forEach(([websiteId, setting]: [string, any]) => {
+          if (Array.isArray(setting.uploadedImages) && setting.uploadedImages.length > 0) {
+            setting.uploadedImages.forEach((file: File) => {
+              formData.append(`perWebsiteUploadedImages:${websiteId}`, file)
+            })
+          }
+        })
 
         res = await fetch('/api/products', {
           method: 'PUT',
           credentials: 'include',
-          body: formData
-        });
+          body: formData,
+        })
       } else {
-        // 使用JSON发送普通数据
         res = await fetch('/api/products', {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           credentials: 'include',
-          body: JSON.stringify(updatedProduct)
+          body: JSON.stringify({
+            ...updatedProduct,
+            perWebsiteReplySettings: serializedPerWebsiteReplySettings,
+          })
         });
       }
 
@@ -803,7 +858,8 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
         const transformedProduct = {
           ...data.product,
           uploadedImages: [], // 新上传的File对象（清空）
-          existingUploadedImageUrls: data.product.uploadedImages || [] // 已保存的图片URL
+          existingUploadedImageUrls: data.product.uploadedImages || [], // 已保存的图片URL
+          perWebsiteReplySettings: normalizePerWebsiteReplySettings(data.product.perWebsiteReplySettings),
         }
 
         setProducts(products.map(p => p.id === data.product.id ? transformedProduct : p))
@@ -1500,7 +1556,15 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
                                     {/* 编辑按钮 */}
                                     <Dialog open={editingProduct?.id === product.id} onOpenChange={(open)=>!open && setEditingProduct(null)}>
                       <DialogTrigger asChild>
-                                            <Button variant="outline" size="icon" className="h-8 w-8" onClick={()=>setEditingProduct(product)}>
+                                            <Button
+                                              variant="outline"
+                                              size="icon"
+                                              className="h-8 w-8"
+                                              onClick={() => setEditingProduct({
+                                                ...product,
+                                                perWebsiteReplySettings: ensurePerWebsiteReplySettings(product),
+                                              })}
+                                            >
                                                 <Edit className="size-3.5"/>
                         </Button>
                       </DialogTrigger>
@@ -1543,9 +1607,25 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
                                       onCheckedChange={(checked) => {
                                         if (!editingProduct) return
                                         if (checked === true) {
-                                          setEditingProduct({ ...editingProduct, replyScope: 'all' })
+                                          const currentSettings = {
+                                            ...ensurePerWebsiteReplySettings(editingProduct),
+                                          }
+                                          availableWebsites.forEach(site => {
+                                            if (!currentSettings[String(site.id)]) {
+                                              currentSettings[String(site.id)] = createInitialWebsiteReplySetting(editingProduct)
+                                            }
+                                          })
+                                          setEditingProduct({
+                                            ...editingProduct,
+                                            replyScope: 'all',
+                                            perWebsiteReplySettings: currentSettings,
+                                          })
                                         } else {
-                                          setEditingProduct({ ...editingProduct, replyScope: JSON.stringify([]) })
+                                          setEditingProduct({
+                                            ...editingProduct,
+                                            replyScope: JSON.stringify([]),
+                                            perWebsiteReplySettings: ensurePerWebsiteReplySettings(editingProduct),
+                                          })
                                         }
                                       }}
                                     />
@@ -1572,253 +1652,275 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
                                 </p>
                               </div>
                               <div className="space-y-2">
-                                <Label className="text-sm font-medium">自定义回复消息</Label>
-                                <Textarea
-                                  value={editingProduct?.customReplyText || ""}
-                                  onChange={(e) => setEditingProduct({...editingProduct, customReplyText: e.target.value})}
-                                  placeholder="输入自定义回复消息内容..."
-                                  rows={3}
-                                />
+                                <Label className="text-sm font-medium">网站独立回复设置</Label>
                                 <p className="text-xs text-muted-foreground">
-                                  支持 <span className="font-mono">{`{url}`}</span> 占位符；留空将只发送选中的图片
+                                  每个网站单独设置回复内容和图片。新选网站默认空白，不会自动沿用其他网站刚填写的内容。
                                 </p>
                               </div>
 
-                              <div className="space-y-3">
-                                <Label className="text-sm font-medium">附带图片回复</Label>
+                              {getScopedWebsites(editingProduct, availableWebsites).length > 0 ? (
+                                <div className="space-y-4">
+                                  {getScopedWebsites(editingProduct, availableWebsites).map(site => {
+                                    const websiteSetting = getWebsiteReplySetting(editingProduct, site.id, availableWebsites)
+                                    const uploadInputId = `edit-upload-input-${site.id}`
 
-                                {/* 图片来源选择器 */}
-                                <div className="space-y-2 p-3 bg-gray-50 rounded-md border">
-                                  <Label className="text-xs font-medium text-gray-700">选择图片来源</Label>
-                                  <div className="flex gap-4">
-                                    <label className="flex items-center gap-2 cursor-pointer">
-                                      <input
-                                        type="radio"
-                                        name="imageSource"
-                                        value="product"
-                                        checked={!editingProduct?.imageSource || editingProduct?.imageSource === 'product'}
-                                        onChange={() => {
-                                          setEditingProduct({
-                                            ...editingProduct,
-                                            imageSource: 'product',
-                                            uploadedImages: [],
-                                            existingUploadedImageUrls: [],
-                                            customImageUrls: []
-                                          });
-                                        }}
-                                        className="w-4 h-4"
-                                      />
-                                      <span className="text-sm">使用商品图片</span>
-                                    </label>
-                                    <label className="flex items-center gap-2 cursor-pointer">
-                                      <input
-                                        type="radio"
-                                        name="imageSource"
-                                        value="upload"
-                                        checked={editingProduct?.imageSource === 'upload'}
-                                        onChange={() => {
-                                          setEditingProduct({
-                                            ...editingProduct,
-                                            imageSource: 'upload',
-                                            selectedImageIndexes: [],
-                                            customImageUrls: []
-                                          });
-                                        }}
-                                        className="w-4 h-4"
-                                      />
-                                      <span className="text-sm">上传本地图片</span>
-                                    </label>
-                                    <label className="flex items-center gap-2 cursor-pointer">
-                                      <input
-                                        type="radio"
-                                        name="imageSource"
-                                        value="custom"
-                                        checked={editingProduct?.imageSource === 'custom'}
-                                        onChange={() => {
-                                          setEditingProduct({
-                                            ...editingProduct,
-                                            imageSource: 'custom',
-                                            selectedImageIndexes: [],
-                                            uploadedImages: [],
-                                            existingUploadedImageUrls: []
-                                          });
-                                        }}
-                                        className="w-4 h-4"
-                                      />
-                                      <span className="text-sm">使用图片链接</span>
-                                    </label>
-                                  </div>
-                                </div>
+                                    return (
+                                      <div key={site.id} className="space-y-4 rounded-lg border bg-white p-4">
+                                        <div className="flex items-center justify-between">
+                                          <div className="space-y-1">
+                                            <Label className="text-sm font-semibold">
+                                              {site.display_name} ({site.name})
+                                            </Label>
+                                            <p className="text-xs text-muted-foreground">
+                                              这个网站命中时只用这里的文案和图片
+                                            </p>
+                                          </div>
+                                          <Badge variant="secondary">{site.name}</Badge>
+                                        </div>
 
-                                {/* 模式1: 使用商品图片 */}
-                                {(!editingProduct?.imageSource || editingProduct?.imageSource === 'product') && (
-                                  <div className="space-y-2">
-                                    <Label className="text-xs text-muted-foreground">勾选现有商品图片</Label>
-                                    <div className="grid grid-cols-3 md:grid-cols-4 gap-3 max-h-60 overflow-y-auto p-2 border rounded-md bg-white">
-                                      {editingProduct?.images?.map((image: string, index: number) => (
-                                        <div
-                                          key={`prod-${index}`}
-                                          className={`relative aspect-square rounded-md overflow-hidden cursor-pointer border-2 transition-all ${
-                                            editingProduct?.selectedImageIndexes?.includes(index)
-                                              ? 'border-blue-500 ring-2 ring-blue-200'
-                                              : 'border-transparent hover:border-gray-200'
-                                          }`}
-                                          onClick={() => {
-                                            const selectedIndexes = editingProduct?.selectedImageIndexes || [];
-                                            const newIndexes = selectedIndexes.includes(index)
-                                              ? selectedIndexes.filter((i: number) => i !== index)
-                                              : [...selectedIndexes, index];
-                                            setEditingProduct({
-                                              ...editingProduct,
-                                              selectedImageIndexes: newIndexes,
-                                              imageSource: 'product'
-                                            });
-                                          }}
-                                        >
-                                          <img
-                                            src={image}
-                                            alt={`图片 ${index + 1}`}
-                                            className="w-full h-full object-cover"
+                                        <div className="space-y-2">
+                                          <Label className="text-sm font-medium">自定义回复消息</Label>
+                                          <Textarea
+                                            value={websiteSetting.customReplyText || ""}
+                                            onChange={(e) => updateWebsiteReplySetting(site.id, current => ({
+                                              ...current,
+                                              customReplyText: e.target.value,
+                                            }))}
+                                            placeholder="输入这个网站的自定义回复内容..."
+                                            rows={3}
                                           />
-                                          {editingProduct?.selectedImageIndexes?.includes(index) && (
-                                            <div className="absolute top-1 right-1 bg-blue-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs shadow-sm">
-                                              ✓
+                                          <p className="text-xs text-muted-foreground">
+                                            支持 <span className="font-mono">{`{url}`}</span> 占位符；留空将只发送下面选中的图片
+                                          </p>
+                                        </div>
+
+                                        <div className="space-y-3">
+                                          <Label className="text-sm font-medium">附带图片回复</Label>
+
+                                          <div className="space-y-2 rounded-md border bg-gray-50 p-3">
+                                            <Label className="text-xs font-medium text-gray-700">选择图片来源</Label>
+                                            <div className="flex flex-wrap gap-4">
+                                              <label className="flex items-center gap-2 cursor-pointer">
+                                                <input
+                                                  type="radio"
+                                                  name={`imageSource-${site.id}`}
+                                                  value="product"
+                                                  checked={websiteSetting.imageSource === 'product'}
+                                                  onChange={() => updateWebsiteReplySetting(site.id, current => ({
+                                                    ...current,
+                                                    imageSource: 'product',
+                                                    uploadedImages: [],
+                                                    existingUploadedImageUrls: [],
+                                                    customImageUrls: [],
+                                                  }))}
+                                                  className="w-4 h-4"
+                                                />
+                                                <span className="text-sm">使用商品图片</span>
+                                              </label>
+                                              <label className="flex items-center gap-2 cursor-pointer">
+                                                <input
+                                                  type="radio"
+                                                  name={`imageSource-${site.id}`}
+                                                  value="upload"
+                                                  checked={websiteSetting.imageSource === 'upload'}
+                                                  onChange={() => updateWebsiteReplySetting(site.id, current => ({
+                                                    ...current,
+                                                    imageSource: 'upload',
+                                                    selectedImageIndexes: [],
+                                                    customImageUrls: [],
+                                                  }))}
+                                                  className="w-4 h-4"
+                                                />
+                                                <span className="text-sm">上传本地图片</span>
+                                              </label>
+                                              <label className="flex items-center gap-2 cursor-pointer">
+                                                <input
+                                                  type="radio"
+                                                  name={`imageSource-${site.id}`}
+                                                  value="custom"
+                                                  checked={websiteSetting.imageSource === 'custom'}
+                                                  onChange={() => updateWebsiteReplySetting(site.id, current => ({
+                                                    ...current,
+                                                    imageSource: 'custom',
+                                                    selectedImageIndexes: [],
+                                                    uploadedImages: [],
+                                                    existingUploadedImageUrls: [],
+                                                  }))}
+                                                  className="w-4 h-4"
+                                                />
+                                                <span className="text-sm">使用图片链接</span>
+                                              </label>
+                                            </div>
+                                          </div>
+
+                                          {websiteSetting.imageSource === 'product' && (
+                                            <div className="space-y-2">
+                                              <Label className="text-xs text-muted-foreground">勾选现有商品图片</Label>
+                                              <div className="grid grid-cols-3 md:grid-cols-4 gap-3 max-h-60 overflow-y-auto p-2 border rounded-md bg-white">
+                                                {editingProduct?.images?.map((image: string, index: number) => (
+                                                  <div
+                                                    key={`${site.id}-prod-${index}`}
+                                                    className={`relative aspect-square rounded-md overflow-hidden cursor-pointer border-2 transition-all ${
+                                                      websiteSetting.selectedImageIndexes.includes(index)
+                                                        ? 'border-blue-500 ring-2 ring-blue-200'
+                                                        : 'border-transparent hover:border-gray-200'
+                                                    }`}
+                                                    onClick={() => {
+                                                      const selectedIndexes = websiteSetting.selectedImageIndexes.includes(index)
+                                                        ? websiteSetting.selectedImageIndexes.filter((item: number) => item !== index)
+                                                        : [...websiteSetting.selectedImageIndexes, index]
+                                                      updateWebsiteReplySetting(site.id, current => ({
+                                                        ...current,
+                                                        imageSource: 'product',
+                                                        selectedImageIndexes: selectedIndexes,
+                                                      }))
+                                                    }}
+                                                  >
+                                                    <img
+                                                      src={image}
+                                                      alt={`图片 ${index + 1}`}
+                                                      className="w-full h-full object-cover"
+                                                    />
+                                                    {websiteSetting.selectedImageIndexes.includes(index) && (
+                                                      <div className="absolute top-1 right-1 bg-blue-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs shadow-sm">
+                                                        ✓
+                                                      </div>
+                                                    )}
+                                                  </div>
+                                                ))}
+                                              </div>
+                                              <p className="text-xs text-muted-foreground">
+                                                已选 {websiteSetting.selectedImageIndexes.length} 张现有图片
+                                              </p>
+                                            </div>
+                                          )}
+
+                                          {websiteSetting.imageSource === 'upload' && (
+                                            <div className="space-y-2">
+                                              <input
+                                                type="file"
+                                                multiple
+                                                accept="image/*"
+                                                className="hidden"
+                                                id={uploadInputId}
+                                                onChange={(e) => {
+                                                  const files = Array.from(e.target.files || [])
+                                                  if (files.length > 0) {
+                                                    updateWebsiteReplySetting(site.id, current => ({
+                                                      ...current,
+                                                      imageSource: 'upload',
+                                                      uploadedImages: [...(current.uploadedImages || []), ...files],
+                                                    }))
+                                                  }
+                                                }}
+                                              />
+                                              <div className="flex justify-between items-center">
+                                                <Label className="text-xs text-muted-foreground">上传本地图片</Label>
+                                                <Label
+                                                  htmlFor={uploadInputId}
+                                                  className="cursor-pointer text-xs bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 flex items-center"
+                                                >
+                                                  <Upload className="w-3 h-3 mr-1"/> 选择文件
+                                                </Label>
+                                              </div>
+
+                                              {(websiteSetting.existingUploadedImageUrls.length > 0 || websiteSetting.uploadedImages.length > 0) && (
+                                                <>
+                                                  <div className="grid grid-cols-3 md:grid-cols-4 gap-3 p-2 border rounded-md bg-white">
+                                                    {websiteSetting.existingUploadedImageUrls.map((url: string, index: number) => (
+                                                      <div key={`${site.id}-existing-${index}`} className="relative aspect-square rounded-md overflow-hidden border-2 border-blue-500">
+                                                        <img
+                                                          src={url}
+                                                          alt="已保存图片"
+                                                          className="w-full h-full object-cover"
+                                                        />
+                                                        <div className="absolute top-1 right-1 bg-blue-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">
+                                                          ✓
+                                                        </div>
+                                                        <button
+                                                          type="button"
+                                                          className="absolute bottom-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center"
+                                                          onClick={(e) => {
+                                                            e.stopPropagation()
+                                                            updateWebsiteReplySetting(site.id, current => ({
+                                                              ...current,
+                                                              existingUploadedImageUrls: current.existingUploadedImageUrls.filter((_: any, i: number) => i !== index),
+                                                            }))
+                                                          }}
+                                                        >
+                                                          <X className="w-3 h-3"/>
+                                                        </button>
+                                                      </div>
+                                                    ))}
+
+                                                    {websiteSetting.uploadedImages.map((file: File, index: number) => (
+                                                      <div key={`${site.id}-new-${index}`} className="relative aspect-square rounded-md overflow-hidden border-2 border-green-500">
+                                                        <img
+                                                          src={URL.createObjectURL(file)}
+                                                          alt="新上传图片"
+                                                          className="w-full h-full object-cover"
+                                                        />
+                                                        <div className="absolute top-1 right-1 bg-green-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">
+                                                          新
+                                                        </div>
+                                                        <button
+                                                          type="button"
+                                                          className="absolute bottom-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center"
+                                                          onClick={(e) => {
+                                                            e.stopPropagation()
+                                                            updateWebsiteReplySetting(site.id, current => ({
+                                                              ...current,
+                                                              uploadedImages: current.uploadedImages.filter((_: any, i: number) => i !== index),
+                                                            }))
+                                                          }}
+                                                        >
+                                                          <X className="w-3 h-3"/>
+                                                        </button>
+                                                      </div>
+                                                    ))}
+                                                  </div>
+                                                  <p className="text-xs text-muted-foreground">
+                                                    已保存: {websiteSetting.existingUploadedImageUrls.length} 张 | 新上传: {websiteSetting.uploadedImages.length} 张
+                                                  </p>
+                                                </>
+                                              )}
+                                            </div>
+                                          )}
+
+                                          {websiteSetting.imageSource === 'custom' && (
+                                            <div className="space-y-2">
+                                              <Label className="text-xs text-muted-foreground">填写图片链接（每行一个）</Label>
+                                              <Textarea
+                                                value={websiteSetting.customImageUrls.join('\n')}
+                                                onChange={(e) => {
+                                                  const urls = e.target.value.split('\n').map(url => url.trim()).filter(Boolean)
+                                                  updateWebsiteReplySetting(site.id, current => ({
+                                                    ...current,
+                                                    imageSource: 'custom',
+                                                    customImageUrls: urls,
+                                                  }))
+                                                }}
+                                                placeholder="https://example.com/image1.jpg&#10;https://example.com/image2.jpg"
+                                                rows={4}
+                                                className="text-xs"
+                                              />
+                                              <p className="text-xs text-muted-foreground">
+                                                {websiteSetting.customImageUrls.length > 0
+                                                  ? `已填写 ${websiteSetting.customImageUrls.length} 个图片链接`
+                                                  : '填写后将使用这些链接的图片回复'}
+                                              </p>
                                             </div>
                                           )}
                                         </div>
-                                      ))}
-                                    </div>
-                                    <p className="text-xs text-muted-foreground">
-                                      已选 {editingProduct?.selectedImageIndexes?.length || 0} 张现有图片
-                                    </p>
-                                  </div>
-                                )}
-
-                                {/* 模式2: 上传本地图片 */}
-                                {editingProduct?.imageSource === 'upload' && (
-                                  <div className="space-y-2">
-                                    {/* 隐藏的文件输入框 */}
-                                    <input
-                                      type="file"
-                                      multiple
-                                      accept="image/*"
-                                      className="hidden"
-                                      id="edit-upload-input"
-                                      onChange={(e) => {
-                                        const files = Array.from(e.target.files || []);
-                                        if (files.length > 0) {
-                                          setEditingProduct({
-                                            ...editingProduct,
-                                            uploadedImages: [...(editingProduct?.uploadedImages || []), ...files],
-                                            imageSource: 'upload'
-                                          });
-                                        }
-                                      }}
-                                    />
-                                    <div className="flex justify-between items-center">
-                                      <Label className="text-xs text-muted-foreground">上传本地图片</Label>
-                                      <Label
-                                        htmlFor="edit-upload-input"
-                                        className="cursor-pointer text-xs bg-blue-500 text-white px-3 py-1 rounded hover:bg-blue-600 flex items-center"
-                                      >
-                                        <Upload className="w-3 h-3 mr-1"/> 选择文件
-                                      </Label>
-                                    </div>
-
-                                    {/* 显示已保存的图片和新上传的图片 */}
-                                    {((editingProduct?.existingUploadedImageUrls?.length > 0) || (editingProduct?.uploadedImages?.length > 0)) && (
-                                      <>
-                                        <div className="grid grid-cols-3 md:grid-cols-4 gap-3 p-2 border rounded-md bg-white">
-                                          {/* 显示已保存的图片（URL） */}
-                                          {editingProduct?.existingUploadedImageUrls?.map((url: string, index: number) => (
-                                            <div key={`existing-${index}`} className="relative aspect-square rounded-md overflow-hidden border-2 border-blue-500">
-                                              <img
-                                                src={url}
-                                                alt="已保存图片"
-                                                className="w-full h-full object-cover"
-                                              />
-                                              <div className="absolute top-1 right-1 bg-blue-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">
-                                                ✓
-                                              </div>
-                                              <button
-                                                type="button"
-                                                className="absolute bottom-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center"
-                                                onClick={(e) => {
-                                                  e.stopPropagation();
-                                                  const newUrls = editingProduct.existingUploadedImageUrls.filter((_: any, i: number) => i !== index);
-                                                  setEditingProduct({
-                                                    ...editingProduct,
-                                                    existingUploadedImageUrls: newUrls
-                                                  });
-                                                }}
-                                              >
-                                                <X className="w-3 h-3"/>
-                                              </button>
-                                            </div>
-                                          ))}
-
-                                          {/* 显示新上传的图片（File对象） */}
-                                          {editingProduct?.uploadedImages?.map((file: File, index: number) => (
-                                            <div key={`new-${index}`} className="relative aspect-square rounded-md overflow-hidden border-2 border-green-500">
-                                              <img
-                                                src={URL.createObjectURL(file)}
-                                                alt="新上传图片"
-                                                className="w-full h-full object-cover"
-                                              />
-                                              <div className="absolute top-1 right-1 bg-green-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs">
-                                                新
-                                              </div>
-                                              <button
-                                                type="button"
-                                                className="absolute bottom-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center"
-                                                onClick={(e) => {
-                                                  e.stopPropagation();
-                                                  const newUploads = editingProduct.uploadedImages.filter((_: any, i: number) => i !== index);
-                                                  setEditingProduct({
-                                                    ...editingProduct,
-                                                    uploadedImages: newUploads
-                                                  });
-                                                }}
-                                              >
-                                                <X className="w-3 h-3"/>
-                                              </button>
-                                            </div>
-                                          ))}
-                                        </div>
-                                        <p className="text-xs text-muted-foreground">
-                                          已保存: {editingProduct?.existingUploadedImageUrls?.length || 0} 张 | 新上传: {editingProduct?.uploadedImages?.length || 0} 张
-                                        </p>
-                                      </>
-                                    )}
-                                  </div>
-                                )}
-
-                                {/* 模式3: 使用图片链接 */}
-                                {editingProduct?.imageSource === 'custom' && (
-                                  <div className="space-y-2">
-                                    <Label className="text-xs text-muted-foreground">填写图片链接（每行一个）</Label>
-                                    <Textarea
-                                      value={Array.isArray(editingProduct?.customImageUrls) ? editingProduct.customImageUrls.join('\n') : (editingProduct?.customImageUrls || "")}
-                                      onChange={(e) => {
-                                        const urls = e.target.value.split('\n').filter(url => url.trim());
-                                        setEditingProduct({
-                                          ...editingProduct,
-                                          customImageUrls: urls,
-                                          imageSource: 'custom'
-                                        });
-                                      }}
-                                      placeholder="https://example.com/image1.jpg&#10;https://example.com/image2.jpg"
-                                      rows={4}
-                                      className="text-xs"
-                                    />
-                                    <p className="text-xs text-muted-foreground">
-                                      {Array.isArray(editingProduct?.customImageUrls) && editingProduct.customImageUrls.length > 0
-                                        ? `已填写 ${editingProduct.customImageUrls.length} 个图片链接`
-                                        : '填写后将使用这些链接的图片回复'}
-                                    </p>
-                                  </div>
-                                )}
-                              </div>
+                                      </div>
+                                    )
+                                  })}
+                                </div>
+                              ) : (
+                                <p className="text-xs text-muted-foreground">
+                                  先在上面勾选要生效的网站，下面才会出现对应的网站独立配置。
+                                </p>
+                              )}
                             </div>
                           )}
                         </div>
