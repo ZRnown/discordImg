@@ -66,23 +66,39 @@ def normalize_reply_setting_entry(entry: Any) -> Dict[str, Any]:
     if uploaded_reply_images is None:
         uploaded_reply_images = entry.get('uploadedImages')
 
+    selected_image_indexes = _coerce_list(
+        entry.get(
+            'selectedImageIndexes',
+            entry.get('selected_image_indexes', entry.get('custom_reply_images')),
+        )
+    )
+    custom_image_urls = _coerce_list(
+        entry.get('customImageUrls', entry.get('custom_image_urls'))
+    )
+    normalized_uploaded_reply_images = _extract_uploaded_filenames(uploaded_reply_images)
+
+    explicit_image_source = entry.get('imageSource')
+    if explicit_image_source is None:
+        explicit_image_source = entry.get('image_source')
+
+    if explicit_image_source is None:
+        if normalized_uploaded_reply_images:
+            image_source = 'upload'
+        elif custom_image_urls:
+            image_source = 'custom'
+        else:
+            image_source = 'product'
+    else:
+        image_source = _normalize_image_source(explicit_image_source)
+
     return {
         'customReplyText': _coerce_text(
             entry.get('customReplyText', entry.get('custom_reply_text', ''))
         ),
-        'imageSource': _normalize_image_source(
-            entry.get('imageSource', entry.get('image_source', 'product'))
-        ),
-        'selectedImageIndexes': _coerce_list(
-            entry.get(
-                'selectedImageIndexes',
-                entry.get('selected_image_indexes', entry.get('custom_reply_images')),
-            )
-        ),
-        'customImageUrls': _coerce_list(
-            entry.get('customImageUrls', entry.get('custom_image_urls'))
-        ),
-        'uploadedReplyImages': _extract_uploaded_filenames(uploaded_reply_images),
+        'imageSource': image_source,
+        'selectedImageIndexes': selected_image_indexes,
+        'customImageUrls': custom_image_urls,
+        'uploadedReplyImages': normalized_uploaded_reply_images,
     }
 
 

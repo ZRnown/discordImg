@@ -131,6 +131,38 @@ class ProductReplySettingsTestCase(unittest.TestCase):
         self.assertEqual(resolved['customImageUrls'], [])
         self.assertEqual(resolved['uploadedReplyImages'], ['shared-upload.jpg'])
 
+    def test_uploaded_site_images_without_explicit_source_infer_upload_mode(self):
+        product = {
+            'image_source': 'product',
+            'per_website_reply_settings': json.dumps({
+                '2': {
+                    'customReplyText': 'website text',
+                    'uploadedReplyImages': ['website-upload.jpg'],
+                }
+            }),
+        }
+
+        resolved = resolve_effective_product_reply_settings(product, {'id': 2, 'name': 'cnfans'})
+
+        self.assertEqual(resolved['customReplyText'], 'website text')
+        self.assertEqual(resolved['imageSource'], 'upload')
+        self.assertEqual(resolved['uploadedReplyImages'], ['website-upload.jpg'])
+
+    def test_custom_url_site_images_without_explicit_source_infer_custom_mode(self):
+        product = {
+            'image_source': 'product',
+            'per_website_reply_settings': json.dumps({
+                '2': {
+                    'customImageUrls': ['https://website.example/custom.jpg'],
+                }
+            }),
+        }
+
+        resolved = resolve_effective_product_reply_settings(product, {'id': 2, 'name': 'cnfans'})
+
+        self.assertEqual(resolved['imageSource'], 'custom')
+        self.assertEqual(resolved['customImageUrls'], ['https://website.example/custom.jpg'])
+
 
 class ProductTitleTranslationTestCase(unittest.TestCase):
     def test_title_translation_helpers_exist(self):
