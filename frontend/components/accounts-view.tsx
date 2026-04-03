@@ -28,6 +28,11 @@ import {
   DEFAULT_WEBSITE_TEMPLATE_KEY,
   getWebsiteTemplateByKey,
 } from "@/lib/website-templates"
+import {
+  getNormalizedWebsiteReplyLanguage,
+  getReplyTemplateForLanguageChange,
+  WEBSITE_REPLY_LANGUAGE_OPTIONS,
+} from "@/lib/product-title-translations"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -163,6 +168,9 @@ const createFilterId = () => {
 const BARK_SETTINGS_CACHE_KEY = 'discord_marketing_bark_settings_v1'
 
 const hasOwn = (obj: any, key: string) => Object.prototype.hasOwnProperty.call(obj, key)
+const WEBSITE_REPLY_LANGUAGE_LABELS = Object.fromEntries(
+  WEBSITE_REPLY_LANGUAGE_OPTIONS.map(option => [option.value, option.label]),
+)
 const toBoolean = (value: any) => (
   value === true ||
   value === 1 ||
@@ -337,6 +345,8 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
 
   const formatWebsiteForEdit = (website: any) => ({
     ...website,
+    reply_language: getNormalizedWebsiteReplyLanguage(website?.reply_language),
+    reply_template: String(website?.reply_template || '{url}'),
     image_similarity_threshold: formatThresholdForInput(website?.image_similarity_threshold)
   })
 
@@ -465,7 +475,11 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
       } else {
         data = await cachedFetch('/api/websites', { credentials: 'include' })
       }
-      const websites = data.websites || []
+      const websites = (data.websites || []).map((website: any) => ({
+        ...website,
+        reply_language: getNormalizedWebsiteReplyLanguage(website?.reply_language),
+        reply_template: String(website?.reply_template || '{url}'),
+      }))
 
       // 后端已包含channels和accounts信息
       const channels: {[key: number]: string[]} = {}
@@ -1299,7 +1313,14 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
       const existingNames = websites.map(website => String(website.name || '').trim()).filter(Boolean)
       const baseConfig = selectedWebsiteTemplateKey === CUSTOM_WEBSITE_TEMPLATE_KEY
         ? { ...createEmptyWebsiteConfig(), ...newWebsite }
-        : createWebsiteConfigFromTemplateKey(selectedWebsiteTemplateKey, displayName)
+        : {
+            ...createWebsiteConfigFromTemplateKey(selectedWebsiteTemplateKey, displayName),
+            reply_language: getNormalizedWebsiteReplyLanguage(newWebsite.reply_language),
+            reply_template: getReplyTemplateForLanguageChange(
+              getWebsiteTemplateByKey(selectedWebsiteTemplateKey)?.reply_template,
+              newWebsite.reply_language,
+            ),
+          }
       const internalName = buildUniqueWebsiteInternalName(
         selectedWebsiteTemplateKey === CUSTOM_WEBSITE_TEMPLATE_KEY
           ? displayName
@@ -1310,6 +1331,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
         ...baseConfig,
         name: internalName || baseConfig.name,
         display_name: displayName,
+        reply_language: getNormalizedWebsiteReplyLanguage(baseConfig.reply_language),
       }
 
       const res = await fetch('/api/websites', {
@@ -2703,6 +2725,28 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                     onChange={e => setEditingWebsite(prev => ({ ...prev, display_name: e.target.value }))}
                   />
                 </div>
+                <div>
+                  <Label>回复语言</Label>
+                  <Select
+                    value={getNormalizedWebsiteReplyLanguage(editingWebsite?.reply_language)}
+                    onValueChange={value => setEditingWebsite(prev => ({
+                      ...prev,
+                      reply_language: value,
+                      reply_template: getReplyTemplateForLanguageChange(prev?.reply_template, value),
+                    }))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {WEBSITE_REPLY_LANGUAGE_OPTIONS.map(option => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               <div>
                 <Label>URL模板</Label>
                 <Input
@@ -2718,7 +2762,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                   rows={3}
                 />
                 <p className="text-xs text-muted-foreground mt-1">
-                  使用 <span className="font-mono">{`{url}`}</span> 作为链接占位符。
+                  支持 <span className="font-mono">{`{url}`}</span>、<span className="font-mono">{`{title}`}</span>、<span className="font-mono">{`{title_en}`}</span>、<span className="font-mono">{`{title_zh}`}</span> 等占位符。
                 </p>
               </div>
                 <div>
@@ -3020,11 +3064,21 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                         <Select
                           value={selectedWebsiteTemplateKey}
                           onValueChange={value => {
+                            const nextReplyLanguage = getNormalizedWebsiteReplyLanguage(newWebsite.reply_language)
                             setSelectedWebsiteTemplateKey(value)
                             if (value === CUSTOM_WEBSITE_TEMPLATE_KEY) {
-                              setNewWebsite(createEmptyWebsiteConfig())
+                              setNewWebsite({
+                                ...createEmptyWebsiteConfig(),
+                                reply_language: nextReplyLanguage,
+                                reply_template: getReplyTemplateForLanguageChange('{url}', nextReplyLanguage),
+                              })
                             } else {
-                              setNewWebsite(createWebsiteConfigFromTemplateKey(value))
+                              const nextWebsite = createWebsiteConfigFromTemplateKey(value)
+                              setNewWebsite({
+                                ...nextWebsite,
+                                reply_language: nextReplyLanguage,
+                                reply_template: getReplyTemplateForLanguageChange(nextWebsite.reply_template, nextReplyLanguage),
+                              })
                             }
                           }}
                         >
@@ -3053,6 +3107,28 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                           这个名字只影响页面展示。系统内部标识会自动生成并去重。
                         </p>
                       </div>
+                      <div>
+                        <Label>回复语言</Label>
+                        <Select
+                          value={getNormalizedWebsiteReplyLanguage(newWebsite.reply_language)}
+                          onValueChange={value => setNewWebsite(prev => ({
+                            ...prev,
+                            reply_language: value,
+                            reply_template: getReplyTemplateForLanguageChange(prev.reply_template, value),
+                          }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {WEBSITE_REPLY_LANGUAGE_OPTIONS.map(option => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
                       {selectedWebsiteTemplateKey === CUSTOM_WEBSITE_TEMPLATE_KEY ? (
                         <div className="space-y-4" data-tutorial="accounts-template-custom-fields">
                           <div>
@@ -3072,7 +3148,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                               rows={3}
                             />
                             <p className="text-xs text-muted-foreground mt-1">
-                              使用 <span className="font-mono">{`{url}`}</span> 作为链接占位符。
+                              支持 <span className="font-mono">{`{url}`}</span>、<span className="font-mono">{`{title}`}</span>、<span className="font-mono">{`{title_en}`}</span>、<span className="font-mono">{`{title_zh}`}</span> 等占位符。
                             </p>
                           </div>
                           <div>
@@ -3113,7 +3189,13 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                             ID 模式: {getWebsiteTemplateByKey(selectedWebsiteTemplateKey)?.id_pattern}
                           </div>
                           <div className="text-xs text-muted-foreground">
-                            回复模板: {getWebsiteTemplateByKey(selectedWebsiteTemplateKey)?.reply_template}
+                            回复语言: {WEBSITE_REPLY_LANGUAGE_LABELS[getNormalizedWebsiteReplyLanguage(newWebsite.reply_language)] || '只发链接'}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            回复模板: {getReplyTemplateForLanguageChange(
+                              getWebsiteTemplateByKey(selectedWebsiteTemplateKey)?.reply_template,
+                              newWebsite.reply_language,
+                            )}
                           </div>
                           <div className="text-xs text-muted-foreground break-all">
                             内部标识预览: {buildUniqueWebsiteInternalName(
@@ -3154,6 +3236,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                         <div className="text-xs text-muted-foreground">
                           <div>URL模板: {website.url_template}</div>
                           <div>ID模式: {website.id_pattern}</div>
+                          <div>回复语言: {WEBSITE_REPLY_LANGUAGE_LABELS[getNormalizedWebsiteReplyLanguage(website.reply_language)] || '只发链接'}</div>
                         </div>
                       </div>
 

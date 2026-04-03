@@ -39,6 +39,11 @@ import {
   SHARED_REPLY_TARGET_KEY,
   type WebsiteReplySetting,
 } from "@/lib/product-reply-settings"
+import {
+  normalizeProductTitleTranslations,
+  PRODUCT_TITLE_LANGUAGE_OPTIONS,
+  serializeProductTitleTranslations,
+} from "@/lib/product-title-translations"
 
 type FailedDetail = {
   index: number
@@ -51,6 +56,10 @@ type FailedItem = {
   reason: string
   details?: FailedDetail[]
 }
+
+const EXTRA_PRODUCT_TITLE_LANGUAGE_OPTIONS = PRODUCT_TITLE_LANGUAGE_OPTIONS.filter(
+  option => option.value !== 'zh' && option.value !== 'en',
+)
 
 function ImageLightbox({
   images,
@@ -235,6 +244,46 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
     if (!url) return ''
     const match = url.match(/itemID=(\d+)/i)
     return match ? match[1] : ''
+  }
+
+  const getNormalizedTitleTranslations = (
+    rawValue: any,
+    title: any,
+    englishTitle: any,
+  ) => normalizeProductTitleTranslations(rawValue, {
+    title,
+    englishTitle,
+  })
+
+  const buildProductState = (product: any) => {
+    const title = product.title || ''
+    const englishTitle = product.englishTitle || product.english_title || ''
+    return {
+      ...product,
+      id: product.id,
+      shopName: product.shopName || product.shop_name || '未知店铺',
+      title,
+      englishTitle,
+      titleTranslations: getNormalizedTitleTranslations(
+        product.titleTranslations || product.title_translations,
+        title,
+        englishTitle,
+      ),
+      weidianUrl: product.weidianUrl || product.product_url || '',
+      cnfansUrl: product.cnfansUrl || product.cnfans_url || '',
+      acbuyUrl: product.acbuyUrl || product.acbuy_url || '',
+      weidianId: product.weidianId || '',
+      ruleEnabled: product.ruleEnabled !== undefined ? product.ruleEnabled : true,
+      customReplyText: product.customReplyText || product.custom_reply_text || '',
+      replyScope: product.replyScope || product.reply_scope || 'all',
+      customReplyImages: product.customReplyImages || product.custom_reply_images || [],
+      selectedImageIndexes: product.selectedImageIndexes || [],
+      customImageUrls: product.customImageUrls || product.custom_image_urls || [],
+      imageSource: product.imageSource || product.image_source || (product.custom_image_urls ? 'custom' : 'upload'),
+      perWebsiteReplySettings: product.perWebsiteReplySettings || product.per_website_reply_settings || {},
+      uploadedImages: [],
+      existingUploadedImageUrls: product.existingUploadedImageUrls || product.uploadedImages || [],
+    }
   }
 
   const mergeWebsiteLinks = (links: any[], weidianId: string) => {
@@ -425,27 +474,9 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
       const data = await res.json()
       if (fetchSeq !== productsFetchSeqRef.current) return
 
-      const processedProducts = (Array.isArray(data.products) ? data.products : []).map((product: any) => ({
-        ...product,
-        id: product.id,
-        shopName: product.shopName || product.shop_name || '未知店铺',
-        title: product.title || '',
-        englishTitle: product.englishTitle || product.english_title || '',
-        weidianUrl: product.weidianUrl || product.product_url || '',
-        cnfansUrl: product.cnfansUrl || product.cnfans_url || '',
-        acbuyUrl: product.acbuyUrl || product.acbuy_url || '',
-        weidianId: product.weidianId || '',
-        ruleEnabled: product.ruleEnabled !== undefined ? product.ruleEnabled : true,
-        customReplyText: product.customReplyText || product.custom_reply_text || '',
-        replyScope: product.replyScope || product.reply_scope || 'all',
-        customReplyImages: product.customReplyImages || product.custom_reply_images || [],
-        selectedImageIndexes: product.selectedImageIndexes || [],
-        customImageUrls: product.customImageUrls || product.custom_image_urls || [],
-        imageSource: product.imageSource || product.image_source || (product.custom_image_urls ? 'custom' : 'upload'),
-        perWebsiteReplySettings: product.perWebsiteReplySettings || product.per_website_reply_settings || {},
-        uploadedImages: [],
-        existingUploadedImageUrls: product.uploadedImages || []
-      }))
+      const processedProducts = (Array.isArray(data.products) ? data.products : []).map((product: any) => (
+        buildProductState(product)
+      ))
 
       setProducts(processedProducts)
       setSelectedProducts([])
@@ -639,6 +670,43 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
       ? getLegacyWebsiteReplySetting(editingProduct)
       : getWebsiteReplySetting(editingProduct, activeReplyTarget, availableWebsites)
 
+  const updateEditingProductTitleFields = (field: 'title' | 'englishTitle', value: string) => {
+    if (!editingProduct) return
+    const nextTitle = field === 'title' ? value : editingProduct.title
+    const nextEnglishTitle = field === 'englishTitle' ? value : editingProduct.englishTitle
+    setEditingProduct({
+      ...editingProduct,
+      [field]: value,
+      titleTranslations: getNormalizedTitleTranslations(
+        editingProduct.titleTranslations,
+        nextTitle,
+        nextEnglishTitle,
+      ),
+    })
+  }
+
+  const updateEditingProductTranslation = (language: string, value: string) => {
+    if (!editingProduct) return
+    const nextTranslations = {
+      ...getNormalizedTitleTranslations(
+        editingProduct.titleTranslations,
+        editingProduct.title,
+        editingProduct.englishTitle,
+      ),
+    }
+
+    if (value.trim()) {
+      nextTranslations[language] = value.trim()
+    } else {
+      delete nextTranslations[language]
+    }
+
+    setEditingProduct({
+      ...editingProduct,
+      titleTranslations: nextTranslations,
+    })
+  }
+
   const activeTargetUsesSharedFallback = !!(
     editingProduct
     && activeReplyTarget !== SHARED_REPLY_TARGET_KEY
@@ -680,7 +748,7 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
             rows={3}
           />
           <p className="text-xs text-muted-foreground">
-            支持 <span className="font-mono">{`{url}`}</span> 占位符；留空将只发送下面选中的图片
+            支持 <span className="font-mono">{`{url}`}</span>、<span className="font-mono">{`{title}`}</span>、<span className="font-mono">{`{title_en}`}</span>、<span className="font-mono">{`{title_zh}`}</span>；留空将只发送下面选中的图片
           </p>
         </div>
 
@@ -1079,6 +1147,19 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
   const handleUpdateProduct = async (updatedProduct: any) => {
     try {
       let res
+      const normalizedTitleTranslations = getNormalizedTitleTranslations(
+        updatedProduct.titleTranslations,
+        updatedProduct.title,
+        updatedProduct.englishTitle,
+      )
+      const serializedTitleTranslations = serializeProductTitleTranslations(
+        normalizedTitleTranslations,
+        {
+          title: updatedProduct.title,
+          englishTitle: updatedProduct.englishTitle,
+        },
+      )
+      const hasField = (key: string) => Object.prototype.hasOwnProperty.call(updatedProduct, key)
 
       const hasNewUploads = updatedProduct.uploadedImages && updatedProduct.uploadedImages.length > 0
       const hasExistingUploads = updatedProduct.existingUploadedImageUrls && updatedProduct.existingUploadedImageUrls.length > 0
@@ -1097,12 +1178,13 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
         const formData = new FormData()
 
         formData.append('id', updatedProduct.id.toString())
-        if (updatedProduct.title) formData.append('title', updatedProduct.title)
-        if (updatedProduct.englishTitle) formData.append('englishTitle', updatedProduct.englishTitle)
+        if (hasField('title')) formData.append('title', updatedProduct.title ?? '')
+        if (hasField('englishTitle')) formData.append('englishTitle', updatedProduct.englishTitle ?? '')
+        formData.append('titleTranslations', serializedTitleTranslations)
         if (updatedProduct.ruleEnabled !== undefined) formData.append('ruleEnabled', updatedProduct.ruleEnabled.toString())
-        if (updatedProduct.customReplyText) formData.append('customReplyText', updatedProduct.customReplyText)
-        if (updatedProduct.imageSource) formData.append('imageSource', updatedProduct.imageSource)
-        if (updatedProduct.replyScope) formData.append('replyScope', updatedProduct.replyScope)
+        if (hasField('customReplyText')) formData.append('customReplyText', updatedProduct.customReplyText ?? '')
+        if (hasField('imageSource')) formData.append('imageSource', updatedProduct.imageSource ?? '')
+        if (hasField('replyScope')) formData.append('replyScope', updatedProduct.replyScope ?? 'all')
         formData.append('perWebsiteReplySettings', JSON.stringify(serializedPerWebsiteReplySettings))
 
         if (updatedProduct.selectedImageIndexes) {
@@ -1142,6 +1224,7 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
           credentials: 'include',
           body: JSON.stringify({
             ...updatedProduct,
+            titleTranslations: normalizedTitleTranslations,
             perWebsiteReplySettings: serializedPerWebsiteReplySettings,
           })
         });
@@ -1152,7 +1235,7 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
 
         // 转换后端返回的数据格式，将 uploadedImages (URL数组) 转换为 existingUploadedImageUrls
         const transformedProduct = {
-          ...data.product,
+          ...buildProductState(data.product),
           uploadedImages: [], // 新上传的File对象（清空）
           existingUploadedImageUrls: data.product.uploadedImages || [], // 已保存的图片URL
           perWebsiteReplySettings: normalizePerWebsiteReplySettings(data.product.perWebsiteReplySettings),
@@ -1862,9 +1945,10 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
                                               size="icon"
                                               className="h-8 w-8"
                                               onClick={() => {
+                                                const nextProduct = buildProductState(product)
                                                 setEditingProduct({
-                                                  ...product,
-                                                  perWebsiteReplySettings: ensurePerWebsiteReplySettings(product),
+                                                  ...nextProduct,
+                                                  perWebsiteReplySettings: ensurePerWebsiteReplySettings(nextProduct),
                                                 })
                                                 setActiveReplyTarget(SHARED_REPLY_TARGET_KEY)
                                               }}
@@ -1879,14 +1963,40 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
                         </DialogHeader>
 
                                             <div className="space-y-6 py-4">
-                          <div className="grid grid-cols-2 gap-4">
+                          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
                             <div className="space-y-2">
                               <Label>商品名称 (中文)</Label>
-                              <Input value={editingProduct?.title || ""} onChange={(e) => setEditingProduct({...editingProduct, title: e.target.value})} />
+                              <Input
+                                value={editingProduct?.title || ""}
+                                onChange={(e) => updateEditingProductTitleFields('title', e.target.value)}
+                              />
                             </div>
                             <div className="space-y-2">
                               <Label>英文关键词</Label>
-                              <Input value={editingProduct?.englishTitle || ""} onChange={(e) => setEditingProduct({...editingProduct, englishTitle: e.target.value})} />
+                              <Input
+                                value={editingProduct?.englishTitle || ""}
+                                onChange={(e) => updateEditingProductTitleFields('englishTitle', e.target.value)}
+                              />
+                            </div>
+                          </div>
+                          <div className="space-y-3 rounded-lg border bg-muted/20 p-4">
+                            <div className="space-y-1">
+                              <Label className="text-sm font-medium">其他语言翻译</Label>
+                              <p className="text-xs text-muted-foreground">
+                                这里填写商品标题的多语言版本。网站配置里选了对应语言后，回复模板里的 <span className="font-mono">{`{title}`}</span> 就会优先用这里。
+                              </p>
+                            </div>
+                            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                              {EXTRA_PRODUCT_TITLE_LANGUAGE_OPTIONS.map(option => (
+                                <div key={option.value} className="space-y-2">
+                                  <Label>{option.label}</Label>
+                                  <Input
+                                    value={editingProduct?.titleTranslations?.[option.value] || ""}
+                                    onChange={(e) => updateEditingProductTranslation(option.value, e.target.value)}
+                                    placeholder={`输入${option.label}标题`}
+                                  />
+                                </div>
+                              ))}
                             </div>
                           </div>
                           <div className="flex items-center justify-between p-4 border rounded-lg bg-muted/30">

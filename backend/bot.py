@@ -68,6 +68,18 @@ try:
     from product_reply_settings import apply_effective_product_reply_settings
 except ImportError:
     from .product_reply_settings import apply_effective_product_reply_settings
+try:
+    from product_title_translations import (
+        apply_reply_language_template_default,
+        normalize_reply_language,
+        render_reply_template,
+    )
+except ImportError:
+    from .product_title_translations import (
+        apply_reply_language_template_default,
+        normalize_reply_language,
+        render_reply_template,
+    )
 # 全局变量用于多账号机器人管理
 bot_clients = []
 bot_tasks = []
@@ -2421,18 +2433,30 @@ class DiscordBotClient(discord.Client):
                 self.user_id,
                 website_config=website_config
             )
+            reply_language = normalize_reply_language(
+                website_config.get('reply_language') if website_config else None
+            )
 
             if force_link_only:
                 return response_url
 
-            def apply_template(template: str, append_link: bool) -> str:
-                if not template:
+            def apply_template(template: str, append_link: bool, allow_language_default: bool = False) -> str:
+                template_text = str(template or '').strip()
+                if allow_language_default:
+                    template_text = apply_reply_language_template_default(template_text, reply_language)
+                if not template_text:
                     return ''
-                if '{url}' in template:
-                    return template.replace('{url}', response_url).strip()
+                rendered = render_reply_template(
+                    template_text,
+                    response_url,
+                    product,
+                    reply_language,
+                )
+                if '{url}' in template_text:
+                    return rendered
                 if append_link:
-                    return f"{template}\n{response_url}".strip()
-                return template.strip()
+                    return f"{rendered}\n{response_url}".strip()
+                return rendered
 
             # 1) 商品级自定义回复（优先级最高）
             if is_product_custom or force_custom_reply:
@@ -2449,7 +2473,11 @@ class DiscordBotClient(discord.Client):
             if website_config:
                 website_template = (website_config.get('reply_template') or '{url}').strip()
                 if website_template:
-                    return apply_template(website_template, append_link=True)
+                    return apply_template(
+                        website_template,
+                        append_link=True,
+                        allow_language_default=True,
+                    )
 
             # 3) 原有自定义回复（全局随机）
             if custom_reply and not is_product_custom:

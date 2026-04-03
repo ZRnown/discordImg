@@ -145,6 +145,21 @@ except ModuleNotFoundError as e:
     else:
         raise
 try:
+    from product_title_translations import (
+        normalize_reply_language,
+        normalize_title_translations,
+        serialize_title_translations,
+    )
+except ModuleNotFoundError as e:
+    if e.name == 'product_title_translations':
+        from .product_title_translations import (
+            normalize_reply_language,
+            normalize_title_translations,
+            serialize_title_translations,
+        )
+    else:
+        raise
+try:
     from message_filter_utils import split_filter_values
 except ModuleNotFoundError as e:
     if e.name == 'message_filter_utils':
@@ -1327,6 +1342,11 @@ def search_similar():
                             'id': product_id,
                             'title': product_info['title'] if product_info else result.get('title', ''),
                             'englishTitle': product_info.get('english_title', '') if product_info else result.get('english_title', ''),
+                            'titleTranslations': normalize_title_translations(
+                                product_info.get('title_translations') if product_info else result.get('title_translations'),
+                                title=product_info.get('title') if product_info else result.get('title', ''),
+                                english_title=product_info.get('english_title') if product_info else result.get('english_title', ''),
+                            ),
                             'weidianUrl': product_info['product_url'] if product_info else result.get('product_url', ''),
                             'cnfansUrl': product_info.get('cnfans_url', '') if product_info else result.get('cnfans_url', ''),
                             'acbuyUrl': product_info.get('acbuy_url', '') if product_info else result.get('acbuy_url', ''),
@@ -1497,6 +1517,11 @@ def scrape_product():
             'product_url': product_info['weidian_url'],
             'title': product_info['title'],
             'englishTitle': product_info['english_title'],
+            'titleTranslations': normalize_title_translations(
+                product_info.get('title_translations'),
+                title=product_info.get('title'),
+                english_title=product_info.get('english_title'),
+            ),
             'weidianUrl': product_info['weidian_url'],
             'cnfansUrl': product_info['cnfans_url'],
             'description': product_info['description'],
@@ -1784,6 +1809,7 @@ def add_website_config():
         id_pattern = data.get('id_pattern')
         badge_color = data.get('badge_color', 'blue')
         reply_template = data.get('reply_template') or '{url}'
+        reply_language = normalize_reply_language(data.get('reply_language'))
         image_similarity_threshold = data.get('image_similarity_threshold', None)
         blocked_role_ids = data.get('blocked_role_ids', None)
 
@@ -1831,6 +1857,7 @@ def add_website_config():
             id_pattern,
             badge_color,
             reply_template,
+            reply_language,
             image_similarity_threshold,
             blocked_role_ids
         )
@@ -1856,6 +1883,7 @@ def update_website_config(config_id):
         id_pattern = data.get('id_pattern')
         badge_color = data.get('badge_color', 'blue')
         reply_template = data.get('reply_template') or '{url}'
+        reply_language = normalize_reply_language(data.get('reply_language'))
         image_similarity_threshold = data.get('image_similarity_threshold', None)
         blocked_role_ids = data.get('blocked_role_ids', None)
 
@@ -1904,6 +1932,7 @@ def update_website_config(config_id):
             id_pattern,
             badge_color,
             reply_template,
+            reply_language,
             image_similarity_threshold,
             blocked_role_ids
         )
@@ -3130,6 +3159,11 @@ def update_product():
             'id': product['id'],
             'title': product.get('title', ''),
             'englishTitle': product.get('english_title', ''),
+            'titleTranslations': normalize_title_translations(
+                product.get('title_translations'),
+                title=product.get('title'),
+                english_title=product.get('english_title'),
+            ),
             'weidianUrl': product.get('product_url', ''),
             'cnfansUrl': product.get('cnfans_url', ''),
             'acbuyUrl': product.get('acbuy_url', ''),
@@ -3168,6 +3202,7 @@ def update_product():
             pid_int = int(product_id)
             if not check_permission(pid_int):
                 return jsonify({'error': '无权限更新此商品'}), 403
+            current_product = db._get_product_info_by_id(pid_int) or {}
 
             # 1. 处理上传的自定义回复图片
             # 注意：这些图片只用于自定义回复，不添加到商品图集和检索缓存
@@ -3282,6 +3317,19 @@ def update_product():
                     else:
                         updates[key] = value
 
+            if (
+                'titleTranslations' in request.form
+                or 'title' in request.form
+                or 'englishTitle' in request.form
+            ):
+                title_value = updates.get('title', current_product.get('title', ''))
+                english_title_value = updates.get('english_title', current_product.get('english_title', ''))
+                updates['title_translations'] = serialize_title_translations(
+                    request.form.get('titleTranslations', current_product.get('title_translations')),
+                    title=title_value,
+                    english_title=english_title_value,
+                )
+
             # 3. 处理数组数据 (JSON)
             if 'selectedImageIndexes' in request.form:
                 updates['custom_reply_images'] = request.form.get('selectedImageIndexes') # 已经是JSON字符串
@@ -3321,12 +3369,21 @@ def update_product():
         try:
             if not check_permission(product_id):
                 return jsonify({'error': '无权限更新此商品'}), 403
+            current_product = db._get_product_info_by_id(int(product_id)) or {}
 
             updates = {}
             if 'title' in data:
                 updates['title'] = data['title']
             if 'englishTitle' in data:
                 updates['english_title'] = data['englishTitle']
+            if 'titleTranslations' in data or 'title' in data or 'englishTitle' in data:
+                title_value = updates.get('title', current_product.get('title', ''))
+                english_title_value = updates.get('english_title', current_product.get('english_title', ''))
+                updates['title_translations'] = serialize_title_translations(
+                    data.get('titleTranslations', current_product.get('title_translations')),
+                    title=title_value,
+                    english_title=english_title_value,
+                )
             if 'ruleEnabled' in data:
                 updates['ruleEnabled'] = 1 if data['ruleEnabled'] else 0
             if 'customReplyText' in data:
@@ -4162,6 +4219,11 @@ def get_product(product_id):
         # 获取商品图片
         images = db.get_product_images(product_id)
         product['images'] = [f"/api/image/{product_id}/{img['image_index']}" for img in images]
+        product['titleTranslations'] = normalize_title_translations(
+            product.get('title_translations'),
+            title=product.get('title'),
+            english_title=product.get('english_title'),
+        )
         product['perWebsiteReplySettings'] = build_frontend_per_website_reply_settings(
             product.get('per_website_reply_settings'),
             product_id,
@@ -4237,6 +4299,11 @@ def upload_product_image(product_id):
         product['weidianId'] = product.get('product_url', '').split('itemID=')[1] if 'itemID=' in product.get('product_url', '') else ''
         product['weidianUrl'] = product.get('product_url')
         product['englishTitle'] = product.get('english_title')
+        product['titleTranslations'] = normalize_title_translations(
+            product.get('title_translations'),
+            title=product.get('title'),
+            english_title=product.get('english_title'),
+        )
         product['cnfansUrl'] = product.get('cnfans_url')
         product['ruleEnabled'] = product.get('ruleEnabled')
         product['matchType'] = 'fuzzy'
@@ -4300,6 +4367,11 @@ def delete_product_image(product_id, image_index):
 
         product['weidianUrl'] = product.get('product_url')
         product['englishTitle'] = product.get('english_title')
+        product['titleTranslations'] = normalize_title_translations(
+            product.get('title_translations'),
+            title=product.get('title'),
+            english_title=product.get('english_title'),
+        )
         product['cnfansUrl'] = product.get('cnfans_url')
         product['acbuyUrl'] = product.get('acbuy_url')
         product['ruleEnabled'] = product.get('ruleEnabled')
@@ -4799,7 +4871,7 @@ def search_similar_text():
                     exclude_clause = f" AND id NOT IN ({placeholders})"
                     exclude_params = list(exclude_ids)
                 cursor.execute(f"""
-                    SELECT id, product_url, title, english_title, description,
+                    SELECT id, product_url, title, english_title, title_translations, description,
                            ruleEnabled, min_delay, max_delay, created_at,
                            cnfans_url, shop_name, custom_reply_text,
                            custom_reply_images, custom_image_urls, image_source,
@@ -4844,7 +4916,7 @@ def search_similar_text():
 
             if not rows:
                 cursor.execute("""
-                    SELECT id, product_url, title, english_title, description,
+                    SELECT id, product_url, title, english_title, title_translations, description,
                            ruleEnabled, min_delay, max_delay, created_at,
                            cnfans_url, shop_name, custom_reply_text,
                            custom_reply_images, custom_image_urls, image_source,
@@ -4880,6 +4952,12 @@ def search_similar_text():
 
                 # 补充 Bot 需要的字段
                 prod['weidianUrl'] = prod.get('product_url')
+                prod['englishTitle'] = prod.get('english_title') or ''
+                prod['titleTranslations'] = normalize_title_translations(
+                    prod.get('title_translations'),
+                    title=prod.get('title'),
+                    english_title=prod.get('english_title'),
+                )
                 prod['autoReplyEnabled'] = bool(prod.get('ruleEnabled', True))
                 prod['replyScope'] = prod.get('reply_scope') or 'all'
 
@@ -6796,6 +6874,11 @@ def process_single_product(product_info):
                 'title': product_details.get('title', ''),
                 'description': product_details.get('description', ''),
                 'english_title': english_title,
+                'title_translations': serialize_title_translations(
+                    {},
+                    title=product_details.get('title', ''),
+                    english_title=english_title,
+                ),
                 'cnfans_url': generate_cnfans_url(item_id),
                 'acbuy_url': generate_acbuy_url(item_url),
                 'shop_name': actual_shop_name,

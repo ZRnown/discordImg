@@ -17,6 +17,10 @@ try:
     from product_reply_settings import build_frontend_per_website_reply_settings
 except ImportError:
     from .product_reply_settings import build_frontend_per_website_reply_settings
+try:
+    from product_title_translations import normalize_reply_language, normalize_title_translations
+except ImportError:
+    from .product_title_translations import normalize_reply_language, normalize_title_translations
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +81,7 @@ class Database:
                     title TEXT,
                     description TEXT,
                     english_title TEXT,
+                    title_translations TEXT,
                     cnfans_url TEXT,
                     acbuy_url TEXT,
                     shop_name TEXT,
@@ -125,6 +130,11 @@ class Database:
             # 新增英文标题与 cnfans 链接字段（兼容已有数据库）
             try:
                 cursor.execute('ALTER TABLE products ADD COLUMN english_title TEXT')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE products ADD COLUMN title_translations TEXT')
             except sqlite3.OperationalError:
                 pass
 
@@ -383,6 +393,7 @@ class Database:
                     id_pattern TEXT NOT NULL,
                     badge_color TEXT DEFAULT 'blue',
                     reply_template TEXT DEFAULT '{url}',
+                    reply_language TEXT DEFAULT 'link_only',
                     image_similarity_threshold REAL DEFAULT NULL,
                     blocked_role_ids TEXT DEFAULT '[]',
                     rotation_interval INTEGER DEFAULT 180,
@@ -418,6 +429,11 @@ class Database:
 
             try:
                 cursor.execute('ALTER TABLE website_configs ADD COLUMN reply_template TEXT DEFAULT \'{url}\'')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE website_configs ADD COLUMN reply_language TEXT DEFAULT \'link_only\'')
             except sqlite3.OperationalError:
                 pass
 
@@ -934,6 +950,7 @@ class Database:
                     SET title = ?,
                         description = ?,
                         english_title = ?,
+                        title_translations = ?,
                         cnfans_url = ?,
                         acbuy_url = ?,
                         shop_name = ?,
@@ -945,6 +962,7 @@ class Database:
                     product_data.get('title', ''),
                     product_data.get('description', ''),
                     product_data.get('english_title', ''),
+                    product_data.get('title_translations'),
                     product_data.get('cnfans_url', ''),
                     product_data.get('acbuy_url', ''),
                     product_data.get('shop_name', ''),
@@ -955,13 +973,14 @@ class Database:
             else:
                 cursor.execute('''
                     INSERT INTO products
-                    (product_url, title, description, english_title, cnfans_url, acbuy_url, shop_name, ruleEnabled, item_id, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    (product_url, title, description, english_title, title_translations, cnfans_url, acbuy_url, shop_name, ruleEnabled, item_id, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ''', (
                     product_url,
                     product_data.get('title', ''),
                     product_data.get('description', ''),
                     product_data.get('english_title', ''),
+                    product_data.get('title_translations'),
                     product_data.get('cnfans_url', ''),
                     product_data.get('acbuy_url', ''),
                     product_data.get('shop_name', ''),
@@ -2044,7 +2063,7 @@ class Database:
                 set_parts = []
                 params = []
                 allowed_fields = [
-                    'title', 'english_title', 'ruleEnabled',
+                    'title', 'english_title', 'title_translations', 'ruleEnabled',
                     'custom_reply_text', 'custom_reply_images', 'custom_image_urls',
                     'image_source', 'uploaded_reply_images', 'reply_scope',
                     'per_website_reply_settings'
@@ -2136,7 +2155,7 @@ class Database:
                 cursor.execute('''
                     SELECT
                         wc.id, wc.name, wc.display_name, wc.url_template,
-                        wc.id_pattern, wc.badge_color, wc.reply_template,
+                        wc.id_pattern, wc.badge_color, wc.reply_template, wc.reply_language,
                         wc.image_similarity_threshold, wc.blocked_role_ids,
                         wc.rotation_interval, wc.rotation_enabled, wc.message_filters,
                         wc.stat_replies_text, wc.stat_replies_image, wc.stat_replies_total,
@@ -2150,13 +2169,14 @@ class Database:
                     LEFT JOIN website_reply_stats_daily wrd
                         ON wc.id = wrd.website_id
                         AND wrd.stat_date = date('now','localtime')
-                    GROUP BY wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.reply_template, wc.image_similarity_threshold, wc.blocked_role_ids, wc.rotation_interval, wc.rotation_enabled, wc.message_filters, wc.stat_replies_text, wc.stat_replies_image, wc.stat_replies_total, wrd.stat_replies_text, wrd.stat_replies_image, wrd.stat_replies_total, wc.created_at
+                    GROUP BY wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern, wc.badge_color, wc.reply_template, wc.reply_language, wc.image_similarity_threshold, wc.blocked_role_ids, wc.rotation_interval, wc.rotation_enabled, wc.message_filters, wc.stat_replies_text, wc.stat_replies_image, wc.stat_replies_total, wrd.stat_replies_text, wrd.stat_replies_image, wrd.stat_replies_total, wc.created_at
                     ORDER BY wc.created_at
                 ''')
 
                 configs = []
                 for row in cursor.fetchall():
                     config = dict(row)
+                    config['reply_language'] = normalize_reply_language(config.get('reply_language'))
                     config['stat_replies_text'] = config.get('stat_replies_text', 0) or 0
                     config['stat_replies_image'] = config.get('stat_replies_image', 0) or 0
                     config['stat_replies_total'] = config.get('stat_replies_total', 0) or 0
@@ -2287,7 +2307,7 @@ class Database:
                 'daily_replies_total': 0
             }
 
-    def add_website_config(self, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str = 'blue', reply_template: str = '{url}', image_similarity_threshold: float = None, blocked_role_ids: str = '[]', rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> Tuple[bool, Optional[str]]:
+    def add_website_config(self, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str = 'blue', reply_template: str = '{url}', reply_language: str = 'link_only', image_similarity_threshold: float = None, blocked_role_ids: str = '[]', rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> Tuple[bool, Optional[str]]:
         """添加网站配置"""
         try:
             with self.get_connection() as conn:
@@ -2299,9 +2319,9 @@ class Database:
                 while True:
                     try:
                         cursor.execute('''
-                            INSERT INTO website_configs (name, display_name, url_template, id_pattern, badge_color, reply_template, image_similarity_threshold, blocked_role_ids, rotation_interval, rotation_enabled, message_filters)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ''', (candidate_name, display_name, url_template, id_pattern, badge_color, reply_template, image_similarity_threshold, blocked_role_ids, rotation_interval, rotation_enabled, message_filters))
+                            INSERT INTO website_configs (name, display_name, url_template, id_pattern, badge_color, reply_template, reply_language, image_similarity_threshold, blocked_role_ids, rotation_interval, rotation_enabled, message_filters)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ''', (candidate_name, display_name, url_template, id_pattern, badge_color, reply_template, normalize_reply_language(reply_language), image_similarity_threshold, blocked_role_ids, rotation_interval, rotation_enabled, message_filters))
                         conn.commit()
                         return True, None
                     except sqlite3.IntegrityError as e:
@@ -2315,16 +2335,16 @@ class Database:
             logger.error(f"添加网站配置失败: {e}")
             return False, f"添加网站配置失败: {e}"
 
-    def update_website_config(self, config_id: int, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str, reply_template: str, image_similarity_threshold: float = None, blocked_role_ids: str = '[]', rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> Tuple[bool, Optional[str]]:
+    def update_website_config(self, config_id: int, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str, reply_template: str, reply_language: str = 'link_only', image_similarity_threshold: float = None, blocked_role_ids: str = '[]', rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> Tuple[bool, Optional[str]]:
         """更新网站配置"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     UPDATE website_configs
-                    SET name = ?, display_name = ?, url_template = ?, id_pattern = ?, badge_color = ?, reply_template = ?, image_similarity_threshold = ?, blocked_role_ids = ?, rotation_interval = ?, rotation_enabled = ?, message_filters = ?
+                    SET name = ?, display_name = ?, url_template = ?, id_pattern = ?, badge_color = ?, reply_template = ?, reply_language = ?, image_similarity_threshold = ?, blocked_role_ids = ?, rotation_interval = ?, rotation_enabled = ?, message_filters = ?
                     WHERE id = ?
-                ''', (name, display_name, url_template, id_pattern, badge_color, reply_template, image_similarity_threshold, blocked_role_ids, rotation_interval, rotation_enabled, message_filters, config_id))
+                ''', (name, display_name, url_template, id_pattern, badge_color, reply_template, normalize_reply_language(reply_language), image_similarity_threshold, blocked_role_ids, rotation_interval, rotation_enabled, message_filters, config_id))
                 conn.commit()
                 if cursor.rowcount > 0:
                     return True, None
@@ -2464,7 +2484,7 @@ class Database:
                 if user_id:
                     cursor.execute('''
                         SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern,
-                               wc.badge_color, wc.reply_template,
+                               wc.badge_color, wc.reply_template, wc.reply_language,
                                COALESCE(uws.image_similarity_threshold, wc.image_similarity_threshold) as image_similarity_threshold,
                                COALESCE(uws.keyword_match_limit, NULL) as keyword_match_limit,
                                wc.blocked_role_ids, wc.rotation_interval, wc.rotation_enabled, wc.message_filters
@@ -2478,14 +2498,20 @@ class Database:
                 else:
                     cursor.execute('''
                         SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern,
-                               wc.badge_color, wc.reply_template, wc.image_similarity_threshold, wc.blocked_role_ids,
+                               wc.badge_color, wc.reply_template, wc.reply_language, wc.image_similarity_threshold, wc.blocked_role_ids,
                                wc.rotation_interval, wc.rotation_enabled, wc.message_filters
                         FROM website_configs wc
                         JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
                         WHERE wcb.channel_id = ?
                         ORDER BY wcb.created_at, wc.created_at
                     ''', (str(channel_id),))
-                return [dict(row) for row in cursor.fetchall()]
+
+                configs = []
+                for row in cursor.fetchall():
+                    config = dict(row)
+                    config['reply_language'] = normalize_reply_language(config.get('reply_language'))
+                    configs.append(config)
+                return configs
         except Exception as e:
             logger.error(f"根据频道获取网站配置失败: {e}")
             return []
@@ -3669,6 +3695,11 @@ class Database:
 
                     prod['weidianUrl'] = prod.get('product_url')
                     prod['englishTitle'] = prod.get('english_title') or ''
+                    prod['titleTranslations'] = normalize_title_translations(
+                        prod.get('title_translations'),
+                        title=prod.get('title'),
+                        english_title=prod.get('english_title'),
+                    )
                     prod['cnfansUrl'] = prod.get('cnfans_url') or ''
                     prod['acbuyUrl'] = prod.get('acbuy_url') or ''
                     prod['createdAt'] = prod.get('created_at')
