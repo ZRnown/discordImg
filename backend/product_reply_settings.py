@@ -163,6 +163,33 @@ def apply_effective_product_reply_settings(product: Any, website_config: Any = N
     return product_dict
 
 
+def collect_uploaded_reply_filenames(product: Any) -> list[str]:
+    product_dict = product if isinstance(product, dict) else {}
+    filenames = []
+    seen = set()
+
+    for filename in _extract_uploaded_filenames(
+        product_dict.get('uploadedReplyImages', product_dict.get('uploaded_reply_images'))
+    ):
+        if filename in seen:
+            continue
+        filenames.append(filename)
+        seen.add(filename)
+
+    per_website_settings = parse_per_website_reply_settings(
+        product_dict.get('perWebsiteReplySettings')
+        or product_dict.get('per_website_reply_settings')
+    )
+    for entry in per_website_settings.values():
+        for filename in entry.get('uploadedReplyImages', []):
+            if filename in seen:
+                continue
+            filenames.append(filename)
+            seen.add(filename)
+
+    return filenames
+
+
 def build_frontend_per_website_reply_settings(raw_settings: Any, product_id: Any) -> Dict[str, Dict[str, Any]]:
     normalized = parse_per_website_reply_settings(raw_settings)
     frontend_settings: Dict[str, Dict[str, Any]] = {}

@@ -2047,7 +2047,11 @@ class DiscordBotClient(discord.Client):
                     )
                     continue
 
-                if rotation_enabled:
+                should_spread_senders = rotation_enabled or (
+                    skip_sender_cooldown and len(available_senders) > 1
+                )
+
+                if should_spread_senders:
                     selected_id = random.choice(available_senders)
                 else:
                     available_set = set(available_senders)

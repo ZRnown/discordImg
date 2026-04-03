@@ -132,6 +132,7 @@ except ModuleNotFoundError as e:
 try:
     from product_reply_settings import (
         build_frontend_per_website_reply_settings,
+        collect_uploaded_reply_filenames,
         parse_per_website_reply_settings,
         serialize_per_website_reply_settings,
     )
@@ -139,6 +140,7 @@ except ModuleNotFoundError as e:
     if e.name == 'product_reply_settings':
         from .product_reply_settings import (
             build_frontend_per_website_reply_settings,
+            collect_uploaded_reply_filenames,
             parse_per_website_reply_settings,
             serialize_per_website_reply_settings,
         )
@@ -3524,21 +3526,21 @@ def serve_product_image(product_id: int, image_index: int):
 def serve_custom_reply_image(product_id: int, filename: str):
     """返回指定商品的自定义回复图片文件"""
     try:
-        # 从数据库读取 uploaded_reply_images 字段，验证文件名
+        # 兼容全局上传和网站独立上传的文件名校验
         with db.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT uploaded_reply_images FROM products WHERE id = ?", (product_id,))
+            cursor.execute(
+                "SELECT uploaded_reply_images, per_website_reply_settings FROM products WHERE id = ?",
+                (product_id,),
+            )
             row = cursor.fetchone()
-            if not row or not row[0]:
-                return jsonify({'error': 'Product not found or no uploaded images'}), 404
-
-            # 解析 JSON 数组
-            try:
-                uploaded_filenames = json.loads(row[0])
-            except:
-                return jsonify({'error': 'Invalid image data'}), 500
+            if not row:
+                return jsonify({'error': 'Product not found'}), 404
 
             # 安全检查：验证文件名是否在列表中
+            uploaded_filenames = collect_uploaded_reply_filenames(dict(row))
+            if not uploaded_filenames:
+                return jsonify({'error': 'Product not found or no uploaded images'}), 404
             if filename not in uploaded_filenames:
                 return jsonify({'error': 'Image not found'}), 404
 

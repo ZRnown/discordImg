@@ -1,7 +1,10 @@
 import json
 import unittest
 
-from backend.product_reply_settings import resolve_effective_product_reply_settings
+from backend.product_reply_settings import (
+    collect_uploaded_reply_filenames,
+    resolve_effective_product_reply_settings,
+)
 
 try:
     from backend.product_title_translations import (
@@ -20,6 +23,24 @@ except ModuleNotFoundError:
 
 
 class ProductReplySettingsTestCase(unittest.TestCase):
+    def test_collect_uploaded_reply_filenames_includes_per_website_uploads(self):
+        product = {
+            'uploaded_reply_images': json.dumps(['global-a.jpg']),
+            'per_website_reply_settings': json.dumps({
+                '2': {
+                    'uploadedReplyImages': ['site-a.jpg', 'site-b.jpg'],
+                },
+                '5': {
+                    'uploadedReplyImages': ['site-b.jpg', 'site-c.jpg'],
+                },
+            }),
+        }
+
+        self.assertEqual(
+            collect_uploaded_reply_filenames(product),
+            ['global-a.jpg', 'site-a.jpg', 'site-b.jpg', 'site-c.jpg'],
+        )
+
     def test_website_specific_settings_override_global_settings(self):
         product = {
             'custom_reply_text': 'global text',
