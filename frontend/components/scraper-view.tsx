@@ -40,8 +40,8 @@ import {
   type WebsiteReplySetting,
 } from "@/lib/product-reply-settings"
 import {
+  getUsedProductTitleLanguageOptions,
   normalizeProductTitleTranslations,
-  PRODUCT_TITLE_LANGUAGE_OPTIONS,
   serializeProductTitleTranslations,
 } from "@/lib/product-title-translations"
 
@@ -56,10 +56,6 @@ type FailedItem = {
   reason: string
   details?: FailedDetail[]
 }
-
-const EXTRA_PRODUCT_TITLE_LANGUAGE_OPTIONS = PRODUCT_TITLE_LANGUAGE_OPTIONS.filter(
-  option => option.value !== 'zh' && option.value !== 'en',
-)
 
 function ImageLightbox({
   images,
@@ -194,6 +190,7 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
   // 搜索类型状态
   const [searchType, setSearchType] = useState<'all' | 'id' | 'keyword' | 'chinese'>('all')
   const isStopping = Boolean(scrapeStatus?.stop_signal && !scrapeStatus?.completed)
+  const usedProductTitleLanguageOptions = getUsedProductTitleLanguageOptions(availableWebsites)
 
   const copyToClipboard = async (text: string) => {
     if (!text) return
@@ -1983,21 +1980,27 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
                             <div className="space-y-1">
                               <Label className="text-sm font-medium">其他语言翻译</Label>
                               <p className="text-xs text-muted-foreground">
-                                这里填写商品标题的多语言版本。网站配置里选了对应语言后，回复模板里的 <span className="font-mono">{`{title}`}</span> 就会优先用这里。
+                                这里只显示当前网站实际启用的语言。英文继续使用上面的“英文关键词”，网站命中对应语言时，回复模板里的 <span className="font-mono">{`{title}`}</span> 会优先用这里。
                               </p>
                             </div>
-                            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                              {EXTRA_PRODUCT_TITLE_LANGUAGE_OPTIONS.map(option => (
-                                <div key={option.value} className="space-y-2">
-                                  <Label>{option.label}</Label>
-                                  <Input
-                                    value={editingProduct?.titleTranslations?.[option.value] || ""}
-                                    onChange={(e) => updateEditingProductTranslation(option.value, e.target.value)}
-                                    placeholder={`输入${option.label}标题`}
-                                  />
-                                </div>
-                              ))}
-                            </div>
+                            {usedProductTitleLanguageOptions.length > 0 ? (
+                              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                                {usedProductTitleLanguageOptions.map(option => (
+                                  <div key={option.value} className="space-y-2">
+                                    <Label>{option.label}</Label>
+                                    <Input
+                                      value={editingProduct?.titleTranslations?.[option.value] || ""}
+                                      onChange={(e) => updateEditingProductTranslation(option.value, e.target.value)}
+                                      placeholder={`输入${option.label}标题`}
+                                    />
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="rounded-md border border-dashed bg-white/70 px-3 py-4 text-xs text-muted-foreground">
+                                当前网站配置里只用了英文关键词，暂时不需要填写额外语言标题。
+                              </div>
+                            )}
                           </div>
                           <div className="flex items-center justify-between p-4 border rounded-lg bg-muted/30">
                             <div className="space-y-1">

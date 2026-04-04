@@ -18,9 +18,15 @@ try:
 except ImportError:
     from .product_reply_settings import build_frontend_per_website_reply_settings
 try:
-    from product_title_translations import normalize_reply_language, normalize_title_translations
+    from product_title_translations import (
+        get_effective_reply_languages,
+        normalize_title_translations,
+    )
 except ImportError:
-    from .product_title_translations import normalize_reply_language, normalize_title_translations
+    from .product_title_translations import (
+        get_effective_reply_languages,
+        normalize_title_translations,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -2176,7 +2182,9 @@ class Database:
                 configs = []
                 for row in cursor.fetchall():
                     config = dict(row)
-                    config['reply_language'] = normalize_reply_language(config.get('reply_language'))
+                    config['reply_language'] = get_effective_reply_languages(
+                        config.get('reply_language')
+                    )
                     config['stat_replies_text'] = config.get('stat_replies_text', 0) or 0
                     config['stat_replies_image'] = config.get('stat_replies_image', 0) or 0
                     config['stat_replies_total'] = config.get('stat_replies_total', 0) or 0
@@ -2307,7 +2315,7 @@ class Database:
                 'daily_replies_total': 0
             }
 
-    def add_website_config(self, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str = 'blue', reply_template: str = '{url}', reply_language: str = 'link_only', image_similarity_threshold: float = None, blocked_role_ids: str = '[]', rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> Tuple[bool, Optional[str]]:
+    def add_website_config(self, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str = 'blue', reply_template: str = '{url}', reply_language: Any = None, image_similarity_threshold: float = None, blocked_role_ids: str = '[]', rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> Tuple[bool, Optional[str]]:
         """添加网站配置"""
         try:
             with self.get_connection() as conn:
@@ -2315,13 +2323,17 @@ class Database:
                 base_name = str(name or '').strip() or str(display_name or '').strip() or 'website'
                 candidate_name = base_name
                 suffix = 2
+                serialized_reply_languages = json.dumps(
+                    get_effective_reply_languages(reply_language),
+                    ensure_ascii=False,
+                )
 
                 while True:
                     try:
                         cursor.execute('''
                             INSERT INTO website_configs (name, display_name, url_template, id_pattern, badge_color, reply_template, reply_language, image_similarity_threshold, blocked_role_ids, rotation_interval, rotation_enabled, message_filters)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ''', (candidate_name, display_name, url_template, id_pattern, badge_color, reply_template, normalize_reply_language(reply_language), image_similarity_threshold, blocked_role_ids, rotation_interval, rotation_enabled, message_filters))
+                        ''', (candidate_name, display_name, url_template, id_pattern, badge_color, reply_template, serialized_reply_languages, image_similarity_threshold, blocked_role_ids, rotation_interval, rotation_enabled, message_filters))
                         conn.commit()
                         return True, None
                     except sqlite3.IntegrityError as e:
@@ -2335,16 +2347,20 @@ class Database:
             logger.error(f"添加网站配置失败: {e}")
             return False, f"添加网站配置失败: {e}"
 
-    def update_website_config(self, config_id: int, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str, reply_template: str, reply_language: str = 'link_only', image_similarity_threshold: float = None, blocked_role_ids: str = '[]', rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> Tuple[bool, Optional[str]]:
+    def update_website_config(self, config_id: int, name: str, display_name: str, url_template: str, id_pattern: str, badge_color: str, reply_template: str, reply_language: Any = None, image_similarity_threshold: float = None, blocked_role_ids: str = '[]', rotation_interval: int = 180, rotation_enabled: int = 1, message_filters: str = '[]') -> Tuple[bool, Optional[str]]:
         """更新网站配置"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
+                serialized_reply_languages = json.dumps(
+                    get_effective_reply_languages(reply_language),
+                    ensure_ascii=False,
+                )
                 cursor.execute('''
                     UPDATE website_configs
                     SET name = ?, display_name = ?, url_template = ?, id_pattern = ?, badge_color = ?, reply_template = ?, reply_language = ?, image_similarity_threshold = ?, blocked_role_ids = ?, rotation_interval = ?, rotation_enabled = ?, message_filters = ?
                     WHERE id = ?
-                ''', (name, display_name, url_template, id_pattern, badge_color, reply_template, normalize_reply_language(reply_language), image_similarity_threshold, blocked_role_ids, rotation_interval, rotation_enabled, message_filters, config_id))
+                ''', (name, display_name, url_template, id_pattern, badge_color, reply_template, serialized_reply_languages, image_similarity_threshold, blocked_role_ids, rotation_interval, rotation_enabled, message_filters, config_id))
                 conn.commit()
                 if cursor.rowcount > 0:
                     return True, None
@@ -2509,7 +2525,9 @@ class Database:
                 configs = []
                 for row in cursor.fetchall():
                     config = dict(row)
-                    config['reply_language'] = normalize_reply_language(config.get('reply_language'))
+                    config['reply_language'] = get_effective_reply_languages(
+                        config.get('reply_language')
+                    )
                     configs.append(config)
                 return configs
         except Exception as e:

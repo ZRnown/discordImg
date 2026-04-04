@@ -29,11 +29,12 @@ import {
   getWebsiteTemplateByKey,
 } from "@/lib/website-templates"
 import {
-  getNormalizedWebsiteReplyLanguage,
-  getReplyTemplateForLanguageChange,
+  getEffectiveWebsiteReplyLanguages,
+  normalizeWebsiteReplyLanguages,
   WEBSITE_REPLY_LANGUAGE_OPTIONS,
 } from "@/lib/product-title-translations"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
@@ -171,6 +172,30 @@ const hasOwn = (obj: any, key: string) => Object.prototype.hasOwnProperty.call(o
 const WEBSITE_REPLY_LANGUAGE_LABELS = Object.fromEntries(
   WEBSITE_REPLY_LANGUAGE_OPTIONS.map(option => [option.value, option.label]),
 )
+const formatWebsiteReplyLanguageSummary = (value: unknown) => {
+  const languages = getEffectiveWebsiteReplyLanguages(value)
+  return languages
+    .map(language => WEBSITE_REPLY_LANGUAGE_LABELS[language] || String(language))
+    .join('、')
+}
+const toggleWebsiteReplyLanguage = (
+  currentValue: unknown,
+  language: string,
+  checked: boolean,
+) => {
+  const next = new Set(normalizeWebsiteReplyLanguages(currentValue))
+  if (checked) {
+    next.add(language)
+  } else {
+    next.delete(language)
+  }
+
+  const ordered = WEBSITE_REPLY_LANGUAGE_OPTIONS
+    .map(option => option.value)
+    .filter(value => next.has(value))
+
+  return ordered.length > 0 ? ordered : ['en']
+}
 const toBoolean = (value: any) => (
   value === true ||
   value === 1 ||
@@ -343,12 +368,12 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
     return Number.isFinite(num) ? String(num) : ''
   }
 
-  const formatWebsiteForEdit = (website: any) => ({
-    ...website,
-    reply_language: getNormalizedWebsiteReplyLanguage(website?.reply_language),
-    reply_template: String(website?.reply_template || '{url}'),
-    image_similarity_threshold: formatThresholdForInput(website?.image_similarity_threshold)
-  })
+const formatWebsiteForEdit = (website: any) => ({
+  ...website,
+  reply_language: normalizeWebsiteReplyLanguages(website?.reply_language),
+  reply_template: String(website?.reply_template || '{url}'),
+  image_similarity_threshold: formatThresholdForInput(website?.image_similarity_threshold)
+})
 
   const applyWebsiteSimilarityState = (websiteId: number, threshold: string) => {
     setWebsites(prev => prev.map(website => (
@@ -477,7 +502,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
       }
       const websites = (data.websites || []).map((website: any) => ({
         ...website,
-        reply_language: getNormalizedWebsiteReplyLanguage(website?.reply_language),
+        reply_language: normalizeWebsiteReplyLanguages(website?.reply_language),
         reply_template: String(website?.reply_template || '{url}'),
       }))
 
@@ -1315,11 +1340,8 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
         ? { ...createEmptyWebsiteConfig(), ...newWebsite }
         : {
             ...createWebsiteConfigFromTemplateKey(selectedWebsiteTemplateKey, displayName),
-            reply_language: getNormalizedWebsiteReplyLanguage(newWebsite.reply_language),
-            reply_template: getReplyTemplateForLanguageChange(
-              getWebsiteTemplateByKey(selectedWebsiteTemplateKey)?.reply_template,
-              newWebsite.reply_language,
-            ),
+            reply_language: normalizeWebsiteReplyLanguages(newWebsite.reply_language),
+            reply_template: getWebsiteTemplateByKey(selectedWebsiteTemplateKey)?.reply_template || '{url}',
           }
       const internalName = buildUniqueWebsiteInternalName(
         selectedWebsiteTemplateKey === CUSTOM_WEBSITE_TEMPLATE_KEY
@@ -1331,7 +1353,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
         ...baseConfig,
         name: internalName || baseConfig.name,
         display_name: displayName,
-        reply_language: getNormalizedWebsiteReplyLanguage(baseConfig.reply_language),
+        reply_language: normalizeWebsiteReplyLanguages(baseConfig.reply_language),
       }
 
       const res = await fetch('/api/websites', {
@@ -1356,11 +1378,15 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
   const handleUpdateWebsite = async () => {
     if (!editingWebsite) return
     try {
+      const payload = {
+        ...editingWebsite,
+        reply_language: normalizeWebsiteReplyLanguages(editingWebsite.reply_language),
+      }
       const res = await fetch(`/api/websites/${editingWebsite.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify(editingWebsite)
+        body: JSON.stringify(payload)
       })
       const data = await res.json().catch(() => ({}))
       if (res.ok) {
@@ -1823,7 +1849,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
 
       if (websiteNewFilter.filter_type === 'numeric_range') {
         const normalized = normalizeNumericRangeFilter(websiteNewFilter.filter_value)
-        if (!normalized.ok) {
+        if (!normalized.ok || normalized.value === undefined) {
           toast.error(normalized.error)
           return
         }
@@ -1841,7 +1867,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
 
       if (websiteNewFilter.filter_type === 'keyword_match_limit') {
         const normalized = normalizeKeywordMatchLimitFilter(websiteNewFilter.filter_value)
-        if (!normalized.ok) {
+        if (!normalized.ok || normalized.value === undefined) {
           toast.error(normalized.error)
           return
         }
@@ -1887,9 +1913,9 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
         let actualFilterId = newFilterId
 
         if (finalFilters.length > 0) {
-          const matchById = finalFilters.find(item => String(item.id) === String(newFilterId))
-          const addedFilters = finalFilters.filter(item => !currentIds.has(String(item.id)))
-          const matchByValue = finalFilters.find(item =>
+          const matchById = finalFilters.find((item: any) => String(item.id) === String(newFilterId))
+          const addedFilters = finalFilters.filter((item: any) => !currentIds.has(String(item.id)))
+          const matchByValue = finalFilters.find((item: any) =>
             item.filter_type === payload.filter_type && String(item.filter_value) === String(payload.filter_value)
           )
           actualFilterId = (matchById || addedFilters[0] || matchByValue || { id: newFilterId }).id
@@ -2005,8 +2031,8 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
 
         if (refreshedFilters) {
           finalFilters = refreshedFilters
-          const matchById = refreshedFilters.find(item => String(item.id) === String(filter.id))
-          const matchByValue = refreshedFilters.find(item =>
+          const matchById = refreshedFilters.find((item: any) => String(item.id) === String(filter.id))
+          const matchByValue = refreshedFilters.find((item: any) =>
             item.filter_type === filter.filter_type && String(item.filter_value) === String(filter.filter_value)
           )
           const resolved = matchById || matchByValue
@@ -2163,7 +2189,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
       }
       if (newFilter.filter_type === 'numeric_range') {
         const normalized = normalizeNumericRangeFilter(newFilter.filter_value)
-        if (!normalized.ok) {
+        if (!normalized.ok || normalized.value === undefined) {
           toast.error(normalized.error)
           return
         }
@@ -2180,7 +2206,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
 
       if (newFilter.filter_type === 'keyword_match_limit') {
         const normalized = normalizeKeywordMatchLimitFilter(newFilter.filter_value)
-        if (!normalized.ok) {
+        if (!normalized.ok || normalized.value === undefined) {
           toast.error(normalized.error)
           return
         }
@@ -2722,43 +2748,52 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                   <Label>显示名称</Label>
                   <Input
                     value={editingWebsite.display_name}
-                    onChange={e => setEditingWebsite(prev => ({ ...prev, display_name: e.target.value }))}
+                    onChange={e => setEditingWebsite((prev: any) => ({ ...prev, display_name: e.target.value }))}
                   />
                 </div>
                 <div>
-                  <Label>回复语言</Label>
-                  <Select
-                    value={getNormalizedWebsiteReplyLanguage(editingWebsite?.reply_language)}
-                    onValueChange={value => setEditingWebsite(prev => ({
-                      ...prev,
-                      reply_language: value,
-                      reply_template: getReplyTemplateForLanguageChange(prev?.reply_template, value),
-                    }))}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {WEBSITE_REPLY_LANGUAGE_OPTIONS.map(option => (
-                        <SelectItem key={option.value} value={option.value}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <Label>关键词语言</Label>
+                  <div className="mt-2 grid grid-cols-2 gap-2 rounded-md border p-3">
+                    {WEBSITE_REPLY_LANGUAGE_OPTIONS.map(option => {
+                      const checked = normalizeWebsiteReplyLanguages(editingWebsite?.reply_language)
+                        .includes(option.value)
+                      return (
+                        <label
+                          key={option.value}
+                          className="flex items-center gap-2 rounded-md border px-3 py-2 cursor-pointer hover:bg-muted/40"
+                        >
+                          <Checkbox
+                            checked={checked}
+                            onCheckedChange={nextChecked => setEditingWebsite((prev: any) => ({
+                              ...prev,
+                              reply_language: toggleWebsiteReplyLanguage(
+                                prev?.reply_language,
+                                option.value,
+                                Boolean(nextChecked),
+                              ),
+                            }))}
+                          />
+                          <span className="text-sm">{option.label}</span>
+                        </label>
+                      )
+                    })}
+                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    勾选哪些语言，就按哪些语言的关键词命中这个网站；默认保留英文。
+                  </p>
                 </div>
               <div>
                 <Label>URL模板</Label>
                 <Input
                   value={editingWebsite.url_template}
-                  onChange={e => setEditingWebsite(prev => ({ ...prev, url_template: e.target.value }))}
+                  onChange={e => setEditingWebsite((prev: any) => ({ ...prev, url_template: e.target.value }))}
                 />
               </div>
               <div>
                 <Label>回复模板</Label>
                 <Textarea
                   value={editingWebsite.reply_template || '{url}'}
-                  onChange={e => setEditingWebsite(prev => ({ ...prev, reply_template: e.target.value }))}
+                  onChange={e => setEditingWebsite((prev: any) => ({ ...prev, reply_template: e.target.value }))}
                   rows={3}
                 />
                 <p className="text-xs text-muted-foreground mt-1">
@@ -2769,12 +2804,12 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                   <Label>ID提取模式</Label>
                   <Input
                     value={editingWebsite.id_pattern}
-                    onChange={e => setEditingWebsite(prev => ({ ...prev, id_pattern: e.target.value }))}
+                    onChange={e => setEditingWebsite((prev: any) => ({ ...prev, id_pattern: e.target.value }))}
                   />
                 </div>
                 <div>
                   <Label>徽章颜色</Label>
-                  <Select value={editingWebsite?.badge_color || 'blue'} onValueChange={value => setEditingWebsite(prev => ({ ...prev, badge_color: value }))}>
+                  <Select value={editingWebsite?.badge_color || 'blue'} onValueChange={value => setEditingWebsite((prev: any) => ({ ...prev, badge_color: value }))}>
                     <SelectTrigger>
                       <SelectValue />
                     </SelectTrigger>
@@ -3064,20 +3099,20 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                         <Select
                           value={selectedWebsiteTemplateKey}
                           onValueChange={value => {
-                            const nextReplyLanguage = getNormalizedWebsiteReplyLanguage(newWebsite.reply_language)
+                            const nextReplyLanguage = normalizeWebsiteReplyLanguages(newWebsite.reply_language)
                             setSelectedWebsiteTemplateKey(value)
                             if (value === CUSTOM_WEBSITE_TEMPLATE_KEY) {
                               setNewWebsite({
                                 ...createEmptyWebsiteConfig(),
                                 reply_language: nextReplyLanguage,
-                                reply_template: getReplyTemplateForLanguageChange('{url}', nextReplyLanguage),
+                                reply_template: '{url}',
                               })
                             } else {
                               const nextWebsite = createWebsiteConfigFromTemplateKey(value)
                               setNewWebsite({
                                 ...nextWebsite,
                                 reply_language: nextReplyLanguage,
-                                reply_template: getReplyTemplateForLanguageChange(nextWebsite.reply_template, nextReplyLanguage),
+                                reply_template: nextWebsite.reply_template,
                               })
                             }
                           }}
@@ -3108,26 +3143,35 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                         </p>
                       </div>
                       <div>
-                        <Label>回复语言</Label>
-                        <Select
-                          value={getNormalizedWebsiteReplyLanguage(newWebsite.reply_language)}
-                          onValueChange={value => setNewWebsite(prev => ({
-                            ...prev,
-                            reply_language: value,
-                            reply_template: getReplyTemplateForLanguageChange(prev.reply_template, value),
-                          }))}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {WEBSITE_REPLY_LANGUAGE_OPTIONS.map(option => (
-                              <SelectItem key={option.value} value={option.value}>
-                                {option.label}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        <Label>关键词语言</Label>
+                        <div className="mt-2 grid grid-cols-2 gap-2 rounded-md border p-3">
+                          {WEBSITE_REPLY_LANGUAGE_OPTIONS.map(option => {
+                            const checked = normalizeWebsiteReplyLanguages(newWebsite.reply_language)
+                              .includes(option.value)
+                            return (
+                              <label
+                                key={option.value}
+                                className="flex items-center gap-2 rounded-md border px-3 py-2 cursor-pointer hover:bg-muted/40"
+                              >
+                                <Checkbox
+                                  checked={checked}
+                                  onCheckedChange={nextChecked => setNewWebsite(prev => ({
+                                    ...prev,
+                                    reply_language: toggleWebsiteReplyLanguage(
+                                      prev.reply_language,
+                                      option.value,
+                                      Boolean(nextChecked),
+                                    ),
+                                  }))}
+                                />
+                                <span className="text-sm">{option.label}</span>
+                              </label>
+                            )
+                          })}
+                        </div>
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          勾选哪些语言，就按哪些语言的关键词命中这个网站；默认保留英文。
+                        </p>
                       </div>
                       {selectedWebsiteTemplateKey === CUSTOM_WEBSITE_TEMPLATE_KEY ? (
                         <div className="space-y-4" data-tutorial="accounts-template-custom-fields">
@@ -3189,13 +3233,10 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                             ID 模式: {getWebsiteTemplateByKey(selectedWebsiteTemplateKey)?.id_pattern}
                           </div>
                           <div className="text-xs text-muted-foreground">
-                            回复语言: {WEBSITE_REPLY_LANGUAGE_LABELS[getNormalizedWebsiteReplyLanguage(newWebsite.reply_language)] || '只发链接'}
+                            关键词语言: {formatWebsiteReplyLanguageSummary(newWebsite.reply_language)}
                           </div>
                           <div className="text-xs text-muted-foreground">
-                            回复模板: {getReplyTemplateForLanguageChange(
-                              getWebsiteTemplateByKey(selectedWebsiteTemplateKey)?.reply_template,
-                              newWebsite.reply_language,
-                            )}
+                            回复模板: {getWebsiteTemplateByKey(selectedWebsiteTemplateKey)?.reply_template}
                           </div>
                           <div className="text-xs text-muted-foreground break-all">
                             内部标识预览: {buildUniqueWebsiteInternalName(
@@ -3236,7 +3277,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
                         <div className="text-xs text-muted-foreground">
                           <div>URL模板: {website.url_template}</div>
                           <div>ID模式: {website.id_pattern}</div>
-                          <div>回复语言: {WEBSITE_REPLY_LANGUAGE_LABELS[getNormalizedWebsiteReplyLanguage(website.reply_language)] || '只发链接'}</div>
+                          <div>关键词语言: {formatWebsiteReplyLanguageSummary(website.reply_language)}</div>
                         </div>
                       </div>
 

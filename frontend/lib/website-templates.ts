@@ -5,7 +5,7 @@ export type WebsiteConfigDraft = {
   id_pattern: string
   badge_color: string
   reply_template: string
-  reply_language?: string
+  reply_language?: string | string[]
 }
 
 export type WebsiteTemplate = WebsiteConfigDraft & {
@@ -324,7 +324,7 @@ export function createEmptyWebsiteConfig(): WebsiteConfigDraft {
     id_pattern: '',
     badge_color: 'blue',
     reply_template: '{url}',
-    reply_language: 'link_only',
+    reply_language: ['en'],
   }
 }
 
@@ -389,6 +389,6 @@ export function createWebsiteConfigFromTemplateKey(
     id_pattern: template.id_pattern,
     badge_color: template.badge_color,
     reply_template: template.reply_template,
-    reply_language: template.reply_language || 'link_only',
+    reply_language: template.reply_language || ['en'],
   }
 }

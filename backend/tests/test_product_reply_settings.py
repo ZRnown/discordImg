@@ -9,17 +9,34 @@ from backend.product_reply_settings import (
 try:
     from backend.product_title_translations import (
         apply_reply_language_template_default,
+        fill_missing_title_translations,
+        get_localized_product_titles,
         get_localized_product_title,
+        normalize_enabled_title_languages,
         normalize_reply_language,
+        normalize_reply_languages,
         normalize_title_translations,
         render_reply_template,
     )
 except ModuleNotFoundError:
     apply_reply_language_template_default = None
+    fill_missing_title_translations = None
+    get_localized_product_titles = None
     get_localized_product_title = None
+    normalize_enabled_title_languages = None
     normalize_reply_language = None
+    normalize_reply_languages = None
     normalize_title_translations = None
     render_reply_template = None
+
+try:
+    from backend.keyword_search_terms import (
+        build_query_keyword_candidates,
+        find_query_keyword_match,
+    )
+except ModuleNotFoundError:
+    build_query_keyword_candidates = None
+    find_query_keyword_match = None
 
 
 class ProductReplySettingsTestCase(unittest.TestCase):
@@ -167,10 +184,16 @@ class ProductReplySettingsTestCase(unittest.TestCase):
 class ProductTitleTranslationTestCase(unittest.TestCase):
     def test_title_translation_helpers_exist(self):
         self.assertIsNotNone(normalize_reply_language)
+        self.assertIsNotNone(normalize_enabled_title_languages)
+        self.assertIsNotNone(normalize_reply_languages)
         self.assertIsNotNone(normalize_title_translations)
+        self.assertIsNotNone(get_localized_product_titles)
         self.assertIsNotNone(get_localized_product_title)
+        self.assertIsNotNone(fill_missing_title_translations)
         self.assertIsNotNone(render_reply_template)
         self.assertIsNotNone(apply_reply_language_template_default)
+        self.assertIsNotNone(build_query_keyword_candidates)
+        self.assertIsNotNone(find_query_keyword_match)
 
     def test_normalize_title_translations_keeps_zh_en_fallbacks(self):
         normalized = normalize_title_translations(
@@ -187,6 +210,25 @@ class ProductTitleTranslationTestCase(unittest.TestCase):
         self.assertEqual(normalized['es'], 'Zapatillas')
         self.assertEqual(normalized['fr'], 'Chaussures')
 
+    def test_normalize_enabled_and_reply_languages_support_portuguese_and_arrays(self):
+        self.assertEqual(normalize_enabled_title_languages(None), ['en'])
+        self.assertEqual(
+            normalize_enabled_title_languages(['pt', 'es']),
+            ['en', 'pt', 'es'],
+        )
+        self.assertEqual(
+            normalize_reply_languages(json.dumps(['pt', 'es'])),
+            ['pt', 'es'],
+        )
+        self.assertEqual(
+            normalize_reply_languages(None, legacy_reply_language='link_only'),
+            [],
+        )
+        self.assertEqual(
+            normalize_reply_languages(None, legacy_reply_language='fr'),
+            ['fr'],
+        )
+
     def test_localized_title_prefers_requested_language_then_falls_back(self):
         product = {
             'title': '运动鞋',
@@ -199,6 +241,30 @@ class ProductTitleTranslationTestCase(unittest.TestCase):
         self.assertEqual(get_localized_product_title(product, 'es'), 'Zapatillas')
         self.assertEqual(get_localized_product_title(product, 'de'), 'Sneakers')
         self.assertEqual(get_localized_product_title(product, 'link_only'), 'Sneakers')
+
+    def test_localized_titles_join_selected_reply_languages_for_title_placeholder(self):
+        product = {
+            'title': '运动鞋',
+            'english_title': 'Sneakers',
+            'title_translations': json.dumps({
+                'pt': 'Tenis',
+                'es': 'Zapatillas',
+            }),
+        }
+
+        self.assertEqual(
+            get_localized_product_titles(product, ['pt', 'es']),
+            ['Tenis', 'Zapatillas'],
+        )
+        self.assertEqual(
+            render_reply_template(
+                '{title}\n{url}',
+                'https://example.com/p/1',
+                product,
+                reply_languages=['pt', 'es'],
+            ),
+            'Tenis / Zapatillas\nhttps://example.com/p/1',
+        )
 
     def test_render_reply_template_uses_selected_language_and_named_placeholders(self):
         product = {
@@ -222,9 +288,85 @@ class ProductTitleTranslationTestCase(unittest.TestCase):
             'Zapatillas\nhttps://example.com/p/1\nFR:Chaussures\nZH:运动鞋',
         )
 
+    def test_fill_missing_title_translations_uses_translator_for_enabled_languages(self):
+        calls = []
+
+        def fake_translator(text, language):
+            calls.append((text, language))
+            return {
+                'en': 'Sneakers',
+                'pt': 'Tenis',
+            }.get(language, '')
+
+        filled = fill_missing_title_translations(
+            {},
+            title='运动鞋',
+            english_title='',
+            enabled_languages=['pt'],
+            translator=fake_translator,
+        )
+
+        self.assertEqual(filled['zh'], '运动鞋')
+        self.assertEqual(filled['en'], 'Sneakers')
+        self.assertEqual(filled['pt'], 'Tenis')
+        self.assertEqual(calls, [('运动鞋', 'en'), ('运动鞋', 'pt')])
+
+    def test_keyword_matching_uses_translated_titles(self):
+        candidates = build_query_keyword_candidates('tênis')
+        matched = find_query_keyword_match(
+            candidates,
+            english_title='Sneakers',
+            title='运动鞋',
+            title_translations=json.dumps({
+                'ru': 'Теннисные кроссовки',
+                'pt': 'Tênis de corrida',
+            }),
+        )
+
+        self.assertIsNotNone(matched)
+        self.assertEqual(matched['source'], 'title_translation:pt')
+        self.assertEqual(matched['phrase'], 'tênis')
+
+    def test_keyword_matching_only_uses_languages_enabled_for_current_website(self):
+        japanese_candidates = build_query_keyword_candidates('スニーカー')
+        japanese_match = find_query_keyword_match(
+            japanese_candidates,
+            english_title='Sneakers',
+            title='运动鞋',
+            title_translations=json.dumps({
+                'pt': 'Tênis de corrida',
+                'ja': 'スニーカー',
+            }),
+            allowed_languages=['ja'],
+        )
+
+        portuguese_candidates = build_query_keyword_candidates('tênis')
+        portuguese_match = find_query_keyword_match(
+            portuguese_candidates,
+            english_title='Sneakers',
+            title='运动鞋',
+            title_translations=json.dumps({
+                'pt': 'Tênis de corrida',
+                'ja': 'スニーカー',
+            }),
+            allowed_languages=['ja'],
+        )
+
+        self.assertIsNotNone(japanese_match)
+        self.assertEqual(japanese_match['source'], 'title_translation:ja')
+        self.assertIsNone(portuguese_match)
+
     def test_reply_language_default_template_switches_with_language_mode(self):
         self.assertEqual(apply_reply_language_template_default('{url}', 'es'), '{title}\n{url}')
+        self.assertEqual(
+            apply_reply_language_template_default('{url}', reply_languages=['pt', 'es']),
+            '{url}',
+        )
         self.assertEqual(apply_reply_language_template_default('{title}\n{url}', 'link_only'), '{url}')
+        self.assertEqual(
+            apply_reply_language_template_default('{title}\n{url}', reply_languages=[]),
+            '{url}',
+        )
         self.assertEqual(normalize_reply_language('unknown'), 'link_only')
 
 

@@ -1,6 +1,12 @@
+import json
 import re
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
+
+
+WORD_RE = re.compile(r"[^\W_]+", re.UNICODE)
+NON_WORD_RE = re.compile(r"[\W_]+", re.UNICODE)
+SUPPORTED_KEYWORD_LANGUAGES = {'zh', 'en', 'pt', 'es', 'fr', 'de', 'ru', 'ja', 'ko'}
 
 
 def normalize_keyword_search_text(value: str) -> str:
@@ -8,14 +14,14 @@ def normalize_keyword_search_text(value: str) -> str:
         return ""
     value = re.sub(r"[\u200b-\u200d\uFEFF]", "", str(value))
     value = value.lower()
-    value = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", value)
+    value = NON_WORD_RE.sub(" ", value)
     return re.sub(r"\s+", " ", value).strip()
 
 
 def tokenize_keyword_search_text(normalized_text: str) -> list[str]:
     if not normalized_text:
         return []
-    return re.findall(r"[a-z0-9\u4e00-\u9fff]+", normalized_text)
+    return WORD_RE.findall(normalized_text)
 
 
 def _query_has_alpha_context(tokens: list[str]) -> bool:
@@ -77,7 +83,7 @@ def build_product_keyword_variants(raw_value: str) -> set[str]:
     normalized_text = normalize_keyword_search_text(raw_value)
     variants: set[str] = set()
     tokens = tokenize_keyword_search_text(normalized_text)
-    allow_alpha_token_variants = len(tokens) == 1
+    allow_alpha_token_variants = len(tokens) <= 3
 
     def add(raw_text: str):
         normalized = normalize_keyword_search_text(raw_text)
@@ -129,15 +135,51 @@ def split_keyword_phrases(raw_value: Any) -> list[str]:
     return phrases
 
 
+def _normalize_allowed_languages(value: Any) -> set[str] | None:
+    if value is None:
+        return None
+
+    parsed: list[Any]
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return set()
+        try:
+            loaded = json.loads(text)
+        except json.JSONDecodeError:
+            parsed = [part.strip() for part in text.replace('，', ',').split(',')]
+        else:
+            if isinstance(loaded, list):
+                parsed = loaded
+            elif isinstance(loaded, str):
+                parsed = [loaded]
+            else:
+                parsed = [text]
+    elif isinstance(value, (list, tuple, set)):
+        parsed = list(value)
+    else:
+        parsed = [value]
+
+    normalized = set()
+    for item in parsed:
+        language = str(item or '').strip().lower()
+        if language in SUPPORTED_KEYWORD_LANGUAGES:
+            normalized.add(language)
+    return normalized
+
+
 def find_query_keyword_match(
     query_keyword_candidates: dict[str, str],
     english_title: Any = None,
     title: str | None = None,
+    title_translations: Any = None,
+    allowed_languages: Any = None,
 ) -> dict[str, str] | None:
     if not query_keyword_candidates:
         return None
 
     query_keyword_keys = set(query_keyword_candidates.keys())
+    allowed_language_set = _normalize_allowed_languages(allowed_languages)
 
     def match_phrases(phrases: list[str], source: str) -> dict[str, str] | None:
         seen = set()
@@ -160,12 +202,35 @@ def find_query_keyword_match(
                 }
         return None
 
-    english_phrases = split_keyword_phrases(english_title)
-    matched = match_phrases(english_phrases, "english_title")
-    if matched:
-        return matched
+    if allowed_language_set is None or 'en' in allowed_language_set:
+        english_phrases = split_keyword_phrases(english_title)
+        matched = match_phrases(english_phrases, "english_title")
+        if matched:
+            return matched
 
-    if not english_phrases:
+    parsed_translations = {}
+    if isinstance(title_translations, str):
+        try:
+            parsed = json.loads(title_translations)
+            if isinstance(parsed, dict):
+                parsed_translations = parsed
+        except json.JSONDecodeError:
+            parsed_translations = {}
+    elif isinstance(title_translations, dict):
+        parsed_translations = title_translations
+
+    for language, translated_title in parsed_translations.items():
+        normalized_language = str(language or '').strip().lower()
+        if allowed_language_set is not None and normalized_language not in allowed_language_set:
+            continue
+        matched = match_phrases(
+            split_keyword_phrases(translated_title),
+            f"title_translation:{normalized_language}",
+        )
+        if matched:
+            return matched
+
+    if allowed_language_set is None or 'zh' in allowed_language_set:
         normalized_title = normalize_keyword_search_text(title or "")
         canonical_title = re.sub(r"\s+", "", normalized_title)
         if canonical_title and len(canonical_title) >= 2:

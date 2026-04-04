@@ -71,13 +71,13 @@ except ImportError:
 try:
     from product_title_translations import (
         apply_reply_language_template_default,
-        normalize_reply_language,
+        get_effective_reply_languages,
         render_reply_template,
     )
 except ImportError:
     from .product_title_translations import (
         apply_reply_language_template_default,
-        normalize_reply_language,
+        get_effective_reply_languages,
         render_reply_template,
     )
 # 全局变量用于多账号机器人管理
@@ -434,8 +434,20 @@ def _build_product_keyword_variants(raw_value: str):
     return _shared_build_product_keyword_variants(raw_value)
 
 
-def _find_query_keyword_match(query_keyword_candidates, english_title=None, title=None):
-    return _shared_find_query_keyword_match(query_keyword_candidates, english_title, title)
+def _find_query_keyword_match(
+    query_keyword_candidates,
+    english_title=None,
+    title=None,
+    title_translations=None,
+    allowed_languages=None,
+):
+    return _shared_find_query_keyword_match(
+        query_keyword_candidates,
+        english_title,
+        title,
+        title_translations=title_translations,
+        allowed_languages=allowed_languages,
+    )
 
 
 def _get_repeat_seconds_from_filters(filters):
@@ -2402,7 +2414,14 @@ class DiscordBotClient(discord.Client):
 
         return sent_any
 
-    def _generate_reply_content(self, product, channel_id, custom_reply=None, website_config=None):
+    def _generate_reply_content(
+        self,
+        product,
+        channel_id,
+        custom_reply=None,
+        website_config=None,
+        reply_languages=None,
+    ):
         """生成回复内容（支持 {url}、范围与全局模板）"""
         try:
             try:
@@ -2437,8 +2456,10 @@ class DiscordBotClient(discord.Client):
                 self.user_id,
                 website_config=website_config
             )
-            reply_language = normalize_reply_language(
-                website_config.get('reply_language') if website_config else None
+            active_reply_languages = get_effective_reply_languages(
+                reply_languages if reply_languages is not None else (
+                    website_config.get('reply_language') if website_config else None
+                )
             )
 
             if force_link_only:
@@ -2447,14 +2468,17 @@ class DiscordBotClient(discord.Client):
             def apply_template(template: str, append_link: bool, allow_language_default: bool = False) -> str:
                 template_text = str(template or '').strip()
                 if allow_language_default:
-                    template_text = apply_reply_language_template_default(template_text, reply_language)
+                    template_text = apply_reply_language_template_default(
+                        template_text,
+                        reply_languages=active_reply_languages,
+                    )
                 if not template_text:
                     return ''
                 rendered = render_reply_template(
                     template_text,
                     response_url,
                     product,
-                    reply_language,
+                    reply_languages=active_reply_languages,
                 )
                 if '{url}' in template_text:
                     return rendered
@@ -3316,32 +3340,69 @@ class DiscordBotClient(discord.Client):
             query_normalized = _normalize_keyword_search_text(search_query)
             query_keyword_candidates = _build_query_keyword_candidates(query_normalized)
 
-            def _product_matches_query(product):
-                reason = _find_query_keyword_match(
-                    query_keyword_candidates,
-                    product.get('english_title') or product.get('englishTitle') or '',
-                    product.get('title') or '',
-                )
-                return bool(reason), reason
-
-            matched_products = []
-            match_reasons = {}
-            for product in all_products:
-                matched, reason = _product_matches_query(product)
-                if matched:
-                    matched_products.append(product)
-                    product_id = product.get('id')
-                    if reason and product_id is not None:
-                        match_reasons[product_id] = reason
-            if not matched_products:
-                logger.info(f'关键词搜索无精确匹配: {search_query}')
+            # 检查频道是否绑定了网站配置（必须绑定才能回复）
+            website_configs = await self.get_website_configs_by_channel_async(message.channel.id)
+            if not website_configs:
+                logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过关键词回复")
                 return
 
-            matched_keyword_set = {
-                str(reason.get('canonical_keyword')).strip()
-                for reason in match_reasons.values()
-                if str(reason.get('canonical_keyword') or '').strip()
-            }
+            def _match_products_for_languages(allowed_languages):
+                matched_products = []
+                match_reasons = {}
+                for product in all_products:
+                    reason = _find_query_keyword_match(
+                        query_keyword_candidates,
+                        product.get('english_title') or product.get('englishTitle') or '',
+                        product.get('title') or '',
+                        title_translations=product.get('title_translations') or product.get('titleTranslations'),
+                        allowed_languages=allowed_languages,
+                    )
+                    if not reason:
+                        continue
+                    matched_products.append(product)
+                    product_id = product.get('id')
+                    if product_id is not None:
+                        match_reasons[product_id] = reason
+
+                matched_keyword_set = {
+                    str(reason.get('canonical_keyword')).strip()
+                    for reason in match_reasons.values()
+                    if str(reason.get('canonical_keyword') or '').strip()
+                }
+                return matched_products, match_reasons, matched_keyword_set
+
+            website_match_contexts = []
+            matched_product_ids = set()
+            for website_config in website_configs:
+                reply_languages = get_effective_reply_languages(
+                    website_config.get('reply_language')
+                )
+                matched_products, match_reasons, matched_keyword_set = _match_products_for_languages(
+                    reply_languages
+                )
+                if not matched_products:
+                    logger.info(
+                        f'关键词搜索未命中网站 {website_config.get("id")}: '
+                        f'query="{search_query}" | languages={",".join(reply_languages)}'
+                    )
+                    continue
+
+                website_match_contexts.append({
+                    'website_config': website_config,
+                    'reply_languages': reply_languages,
+                    'matched_products': matched_products,
+                    'match_reasons': match_reasons,
+                    'matched_keyword_set': matched_keyword_set,
+                })
+                matched_product_ids.update(
+                    product.get('id')
+                    for product in matched_products
+                    if product.get('id') is not None
+                )
+
+            if not website_match_contexts:
+                logger.info(f'关键词搜索无精确匹配: {search_query}')
+                return
 
             db = None
             global_filters = []
@@ -3375,23 +3436,22 @@ class DiscordBotClient(discord.Client):
                 fallback_limit=legacy_global_keyword_match_limit,
             )
 
-            logger.info(f'关键词搜索成功: "{search_query}" -> 匹配 {len(matched_products)} 个商品')
-            for product in matched_products:
-                product_id = product.get('id')
-                reason = match_reasons.get(product_id)
-                if not reason:
-                    continue
-                rule_desc = '关键词出现在消息中'
-                logger.info(
-                    f'关键词命中: query="{search_query}" | 商品 {product_id} | 命中词 "{reason.get("phrase")}" '
-                    f'({reason.get("source")}) | 原因: {rule_desc}'
-                )
-
-            # 检查频道是否绑定了网站配置（必须绑定才能回复）
-            website_configs = await self.get_website_configs_by_channel_async(message.channel.id)
-            if not website_configs:
-                logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过关键词回复")
-                return
+            logger.info(
+                f'关键词搜索成功: "{search_query}" -> 网站命中 {len(website_match_contexts)} 个, '
+                f'商品命中 {len(matched_product_ids)} 个'
+            )
+            for website_context in website_match_contexts:
+                website_config = website_context['website_config']
+                for product in website_context['matched_products']:
+                    product_id = product.get('id')
+                    reason = website_context['match_reasons'].get(product_id)
+                    if not reason:
+                        continue
+                    logger.info(
+                        f'关键词命中: query="{search_query}" | 网站 {website_config.get("id")} '
+                        f'| 语言 {",".join(website_context["reply_languages"])} | 商品 {product_id} '
+                        f'| 命中词 "{reason.get("phrase")}" ({reason.get("source")})'
+                    )
 
             user_website_settings_map = {}
             if self.user_id:
@@ -3408,7 +3468,8 @@ class DiscordBotClient(discord.Client):
                 except Exception as settings_error:
                     logger.error(f'获取网站关键词命中上限失败: {settings_error}')
 
-            def _website_keyword_limit_exceeded(website_config):
+            def _website_keyword_limit_exceeded(website_context):
+                website_config = website_context['website_config']
                 website_settings = user_website_settings_map.get(website_config.get('id')) or {}
                 website_filter_rules = self._parse_message_filters(website_settings.get('message_filters', '[]'))
                 website_keyword_match_limit = max(
@@ -3422,6 +3483,7 @@ class DiscordBotClient(discord.Client):
                     website_filter_rules,
                     fallback_limit=website_keyword_match_limit,
                 )
+                matched_keyword_set = website_context['matched_keyword_set']
                 if website_keyword_match_limit > 0 and len(matched_keyword_set) > website_keyword_match_limit:
                     logger.info(
                         f'关键词搜索命中过多，跳过网站 {website_config.get("id")}: query="{search_query}" | '
@@ -3436,35 +3498,6 @@ class DiscordBotClient(discord.Client):
                 elif has_custom_images:
                     logger.info(f"商品 {prepared_product.get('id')} 配置了自定义图片，准备发送自定义回复")
 
-            # 单个商品时逐网站生成对应自定义配置
-            if len(matched_products) == 1:
-                product = matched_products[0]
-                for website_config in website_configs:
-                    if _website_keyword_limit_exceeded(website_config):
-                        continue
-
-                    prepared_product, custom_reply, rule_enabled, has_custom_images = _prepare_effective_product_reply(
-                        product,
-                        website_config=website_config,
-                        fallback_custom_reply=self._get_custom_reply(),
-                    )
-                    _log_product_reply_mode(prepared_product, rule_enabled, has_custom_images)
-
-                    self._start_keyword_reply_background_task(
-                        self._enqueue_or_dispatch_keyword_reply(
-                            message,
-                            prepared_product,
-                            custom_reply,
-                            website_config,
-                        ),
-                        task_name=(
-                            f"keyword-single website={website_config.get('id')} "
-                            f"channel={getattr(message.channel, 'id', 'unknown')}"
-                        ),
-                    )
-                return
-
-            limited_products = matched_products[:5]
             any_reply_scheduled = False
 
             try:
@@ -3478,10 +3511,12 @@ class DiscordBotClient(discord.Client):
                 logger.error(f"导入数据库模块失败: {db_import_error}")
                 db = None
 
-            for website_config in website_configs:
-                if _website_keyword_limit_exceeded(website_config):
+            for website_context in website_match_contexts:
+                website_config = website_context['website_config']
+                if _website_keyword_limit_exceeded(website_context):
                     continue
 
+                matched_products = website_context['matched_products']
                 sender_count = 0
                 if db is not None:
                     try:
@@ -3498,6 +3533,30 @@ class DiscordBotClient(discord.Client):
                     sender_count=sender_count,
                 )
 
+                if len(matched_products) == 1:
+                    product = matched_products[0]
+                    prepared_product, custom_reply, rule_enabled, has_custom_images = _prepare_effective_product_reply(
+                        product,
+                        website_config=website_config,
+                        fallback_custom_reply=self._get_custom_reply(),
+                    )
+                    _log_product_reply_mode(prepared_product, rule_enabled, has_custom_images)
+                    any_reply_scheduled = True
+                    self._start_keyword_reply_background_task(
+                        self._enqueue_or_dispatch_keyword_reply(
+                            message,
+                            prepared_product,
+                            custom_reply,
+                            website_config,
+                        ),
+                        task_name=(
+                            f"keyword-single website={website_config.get('id')} "
+                            f"channel={getattr(message.channel, 'id', 'unknown')}"
+                        ),
+                    )
+                    continue
+
+                limited_products = matched_products[:5]
                 prepared_entries = []
                 products_with_custom_images = []
                 for product in limited_products:

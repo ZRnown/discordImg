@@ -148,14 +148,12 @@ except ModuleNotFoundError as e:
         raise
 try:
     from product_title_translations import (
-        normalize_reply_language,
         normalize_title_translations,
         serialize_title_translations,
     )
 except ModuleNotFoundError as e:
     if e.name == 'product_title_translations':
         from .product_title_translations import (
-            normalize_reply_language,
             normalize_title_translations,
             serialize_title_translations,
         )
@@ -1813,7 +1811,7 @@ def add_website_config():
         id_pattern = data.get('id_pattern')
         badge_color = data.get('badge_color', 'blue')
         reply_template = data.get('reply_template') or '{url}'
-        reply_language = normalize_reply_language(data.get('reply_language'))
+        reply_language = data.get('reply_language')
         image_similarity_threshold = data.get('image_similarity_threshold', None)
         blocked_role_ids = data.get('blocked_role_ids', None)
 
@@ -1887,7 +1885,7 @@ def update_website_config(config_id):
         id_pattern = data.get('id_pattern')
         badge_color = data.get('badge_color', 'blue')
         reply_template = data.get('reply_template') or '{url}'
-        reply_language = normalize_reply_language(data.get('reply_language'))
+        reply_language = data.get('reply_language')
         image_similarity_threshold = data.get('image_similarity_threshold', None)
         blocked_role_ids = data.get('blocked_role_ids', None)
 
