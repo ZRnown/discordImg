@@ -1,3 +1,26 @@
+const fs = require("fs")
+const path = require("path")
+
+const resolvePythonInterpreter = () => {
+  const explicit = process.env.PYTHON_INTERPRETER
+  if (explicit) {
+    return explicit
+  }
+
+  const candidates = [
+    path.join(__dirname, ".venv/bin/python"),
+    path.join(__dirname, "backend/.venv/bin/python"),
+  ]
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate
+    }
+  }
+
+  return "python3"
+}
+
 module.exports = {
   apps: [
     {
@@ -17,7 +40,7 @@ module.exports = {
       // 脚本路径，相对于下面的 cwd
       script: "app.py",
       // 使用项目依赖完整的 Python 解释器，避免系统 python 缺 torch/transformers
-      interpreter: "/Users/wanghaixin/Development/DiscordBotWork/discord-marketing-system/.venv/bin/python",
+      interpreter: resolvePythonInterpreter(),
       cwd: "./backend",
       // 必须确保 kill_timeout 足够，防止重启时旧进程没杀掉
       kill_timeout: 3000,
