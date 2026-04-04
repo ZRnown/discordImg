@@ -1,6 +1,8 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
+from backend.bot import DiscordBotClient
 from backend.message_filter_utils import (
     filters_block_message,
     get_keyword_match_limit_from_filters,
@@ -65,6 +67,60 @@ class MessageFilterHelperTestCase(unittest.TestCase):
         )
 
         self.assertEqual(limit, 2)
+
+
+class ManagedAccountMessageGuardTestCase(unittest.IsolatedAsyncioTestCase):
+    def _build_client(self):
+        return SimpleNamespace(
+            running=True,
+            user=SimpleNamespace(id=999999),
+            user_id=42,
+            role='both',
+            _should_ignore_mass_or_activity_message=lambda message: False,
+            _notify_direct_interaction_if_needed=AsyncMock(),
+            _is_account_bound_in_channel=AsyncMock(return_value=(True, None)),
+        )
+
+    def _build_message(self, author_id):
+        return SimpleNamespace(
+            author=SimpleNamespace(id=author_id, bot=False),
+            webhook_id=None,
+            guild=SimpleNamespace(id=1),
+            mentions=[],
+            reference=None,
+            id=123456789,
+            channel=SimpleNamespace(id=987654321, name='finds'),
+            content='https://www.kakobuy.com/item/details?url=test',
+        )
+
+    async def test_managed_account_message_exits_before_reply_pipeline(self):
+        client = self._build_client()
+        message = self._build_message(author_id=111)
+        managed_sender = SimpleNamespace(user=SimpleNamespace(id=111))
+
+        with patch('backend.bot.bot_clients', [managed_sender]), patch(
+            'backend.bot.mark_message_as_processed',
+            side_effect=AssertionError('managed account message should not enter dedupe'),
+        ):
+            await DiscordBotClient.on_message(client, message)
+
+        client._notify_direct_interaction_if_needed.assert_not_awaited()
+        client._is_account_bound_in_channel.assert_not_awaited()
+
+    async def test_regular_user_message_still_reaches_dedupe(self):
+        client = self._build_client()
+        message = self._build_message(author_id=222)
+        managed_sender = SimpleNamespace(user=SimpleNamespace(id=111))
+
+        with patch('backend.bot.bot_clients', [managed_sender]), patch(
+            'backend.bot.mark_message_as_processed',
+            return_value=False,
+        ) as mark_processed:
+            await DiscordBotClient.on_message(client, message)
+
+        client._notify_direct_interaction_if_needed.assert_awaited_once()
+        client._is_account_bound_in_channel.assert_awaited_once_with(message.channel.id)
+        mark_processed.assert_called_once_with(message.id, client.user_id)
 
 
 if __name__ == "__main__":

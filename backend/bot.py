@@ -105,6 +105,22 @@ def _coerce_int(value, default):
         return default
 
 
+def _is_managed_account_author_id(author_id):
+    normalized_author_id = _coerce_int(author_id, None)
+    if normalized_author_id is None:
+        return False
+
+    for client in bot_clients:
+        managed_user = getattr(client, "user", None)
+        managed_user_id = _coerce_int(getattr(managed_user, "id", None), None)
+        if managed_user_id is None:
+            continue
+        if managed_user_id == normalized_author_id:
+            return True
+
+    return False
+
+
 def _normalize_keyword_batch_size(value):
     return max(0, _coerce_int(value, 0))
 
@@ -2802,6 +2818,10 @@ class DiscordBotClient(discord.Client):
 
         # 忽略机器人和webhook的消息
         if message.author.bot or message.webhook_id:
+            return
+
+        # 忽略当前系统托管账号发出的消息，避免账号之间互相触发自动回复
+        if _is_managed_account_author_id(getattr(message.author, "id", None)):
             return
 
         # 他人发起私信（DM）立即通知；DM 不进入自动回复链路
