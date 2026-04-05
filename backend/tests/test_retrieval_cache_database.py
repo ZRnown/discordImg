@@ -364,3 +364,20 @@ def test_insert_product_persists_item_id_and_updates_existing_row(tmp_path: Path
     assert product["description"] == "v2"
     assert product["english_title"] == "Updated"
     assert product["shop_name"] == "shop-b"
+
+
+def test_database_creates_partial_usable_retrieval_cache_index(tmp_path: Path):
+    db_path = tmp_path / "metadata.db"
+    Database(db_path=str(db_path))
+
+    with sqlite3.connect(str(db_path)) as conn:
+        index_rows = conn.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'index' AND tbl_name = 'product_image_retrieval_cache'
+            """
+        ).fetchall()
+
+    index_names = {row[0] for row in index_rows}
+    assert "idx_retrieval_cache_usable_image_strategy" in index_names
