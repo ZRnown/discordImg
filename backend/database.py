@@ -31,6 +31,8 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 MAX_USABLE_RETRIEVAL_EMBEDDING_JSON_LENGTH = 200000
+MAX_USABLE_RETRIEVAL_COLOR_HIST_JSON_LENGTH = 20000
+MAX_USABLE_RETRIEVAL_TOKENS_JSON_LENGTH = 20000
 
 class Database:
     def __init__(self, db_path: Optional[str] = None):
@@ -1129,6 +1131,19 @@ class Database:
             f"AND LENGTH({alias}.embedding_json) <= {MAX_USABLE_RETRIEVAL_EMBEDDING_JSON_LENGTH}"
         )
 
+    @staticmethod
+    def _safe_retrieval_cache_field_sql(
+        alias: str,
+        field_name: str,
+        max_length: int,
+    ) -> str:
+        return (
+            f"CASE "
+            f"WHEN {alias}.{field_name} IS NULL THEN NULL "
+            f"WHEN LENGTH({alias}.{field_name}) <= {int(max_length)} THEN {alias}.{field_name} "
+            f"ELSE NULL END"
+        )
+
     def get_searchable_product_image_records(
         self,
         strategy_name: Optional[str] = None,
@@ -1173,9 +1188,9 @@ class Database:
                             pi.image_index,
                             rc.strategy_name AS retrieval_cache_strategy,
                             rc.cache_version AS retrieval_cache_version,
-                            rc.embedding_json AS retrieval_embedding,
-                            rc.color_hist_json AS retrieval_color_hist,
-                            rc.tokens_json AS retrieval_tokens
+                            {self._safe_retrieval_cache_field_sql('rc', 'embedding_json', MAX_USABLE_RETRIEVAL_EMBEDDING_JSON_LENGTH)} AS retrieval_embedding,
+                            {self._safe_retrieval_cache_field_sql('rc', 'color_hist_json', MAX_USABLE_RETRIEVAL_COLOR_HIST_JSON_LENGTH)} AS retrieval_color_hist,
+                            {self._safe_retrieval_cache_field_sql('rc', 'tokens_json', MAX_USABLE_RETRIEVAL_TOKENS_JSON_LENGTH)} AS retrieval_tokens
                         FROM products p
                         JOIN product_images pi ON pi.product_id = p.id
                         LEFT JOIN product_image_retrieval_cache rc
@@ -1257,9 +1272,9 @@ class Database:
                             pi.image_index,
                             rc.strategy_name AS retrieval_cache_strategy,
                             rc.cache_version AS retrieval_cache_version,
-                            rc.embedding_json AS retrieval_embedding,
-                            rc.color_hist_json AS retrieval_color_hist,
-                            rc.tokens_json AS retrieval_tokens
+                            {self._safe_retrieval_cache_field_sql('rc', 'embedding_json', MAX_USABLE_RETRIEVAL_EMBEDDING_JSON_LENGTH)} AS retrieval_embedding,
+                            {self._safe_retrieval_cache_field_sql('rc', 'color_hist_json', MAX_USABLE_RETRIEVAL_COLOR_HIST_JSON_LENGTH)} AS retrieval_color_hist,
+                            {self._safe_retrieval_cache_field_sql('rc', 'tokens_json', MAX_USABLE_RETRIEVAL_TOKENS_JSON_LENGTH)} AS retrieval_tokens
                         FROM product_images pi
                         JOIN products p ON p.id = pi.product_id
                         LEFT JOIN product_image_retrieval_cache rc

@@ -52,6 +52,11 @@ class KeywordSearchTermsTestCase(unittest.TestCase):
         self.assertNotIn("pony", candidates)
         self.assertNotIn("sweatpants", candidates)
 
+    def test_four_word_phrase_keeps_full_phrase_candidate(self):
+        candidates = build_query_keyword_candidates("Shark-Fish Sweatpants Collection")
+
+        self.assertIn("sharkfishsweatpantscollection", candidates)
+
     def test_alpha_numeric_query_does_not_expand_standalone_numeric_search_term(self):
         plan = build_text_search_plan("b 30")
 

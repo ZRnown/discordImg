@@ -53,7 +53,7 @@ def build_query_keyword_candidates(value: str) -> dict[str, str]:
             return
         candidates.setdefault(canonical, (display_value or normalized or canonical).strip())
 
-    if normalized_text and len(tokens) <= 3 and not _is_split_numeric_only_query(tokens):
+    if normalized_text and not _is_split_numeric_only_query(tokens):
         add(normalized_text, normalized_text)
 
     for token in tokens:

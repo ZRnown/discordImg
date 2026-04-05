@@ -1111,21 +1111,19 @@ class LiveImageRetriever:
         except ImportError:
             from benchmarks.strategies import create_strategy
 
-        rows = self._load_catalog_rows()
-        catalog_records = build_catalog_records(rows)
-        support_manifest_path = os.getenv("LIVE_IMAGE_SEARCH_PRODUCT_SUPPORT_MANIFEST", "")
-        support_signature = self._build_support_signature(support_manifest_path)
-        runtime_signature = _build_runtime_env_signature(self.strategy_name)
-        signature = self._build_signature(rows) + support_signature + runtime_signature
-        support_records = load_runtime_product_support_records(catalog_records)
-
         with self._lock:
-            if (
-                self._strategy is not None
-                and self._catalog_signature == signature
-                and self._prepared_catalog
-            ):
+            # Product/cache updates already invalidate this retriever explicitly,
+            # so avoid reloading the full SQLite catalog on every query.
+            if self._strategy is not None and self._catalog_signature is not None:
                 return self._strategy, self._prepared_catalog
+
+            rows = self._load_catalog_rows()
+            catalog_records = build_catalog_records(rows)
+            support_manifest_path = os.getenv("LIVE_IMAGE_SEARCH_PRODUCT_SUPPORT_MANIFEST", "")
+            support_signature = self._build_support_signature(support_manifest_path)
+            runtime_signature = _build_runtime_env_signature(self.strategy_name)
+            signature = self._build_signature(rows) + support_signature + runtime_signature
+            support_records = load_runtime_product_support_records(catalog_records)
 
             strategy = create_strategy(self.strategy_name)
             prepared_catalog = prepare_catalog_entries(

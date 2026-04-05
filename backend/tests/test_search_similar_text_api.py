@@ -86,6 +86,52 @@ class SearchSimilarTextApiTestCase(unittest.TestCase):
                 "7724464447",
             ),
         )
+        self.conn.execute(
+            """
+            INSERT INTO products (
+                id, product_url, title, english_title, title_translations, description,
+                ruleEnabled, min_delay, max_delay, created_at, cnfans_url, shop_name,
+                custom_reply_text, custom_reply_images, custom_image_urls, image_source,
+                reply_scope, per_website_reply_settings, uploaded_reply_images, item_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                2,
+                "https://weidian.com/item.html?itemID=5277",
+                "鲨.鱼卫裤系列",
+                "Shark-Fish Sweatpants Collection",
+                json.dumps({"en": "Shark-Fish Sweatpants Collection"}),
+                "demo shark product",
+                1,
+                1,
+                3,
+                "2026-04-05 00:00:00",
+                None,
+                "vibeo",
+                None,
+                None,
+                None,
+                "product",
+                "all",
+                None,
+                None,
+                None,
+            ),
+        )
+        self.conn.execute(
+            """
+            INSERT INTO product_images (id, product_id, image_path, image_index)
+            VALUES (?, ?, ?, ?)
+            """,
+            (1, 1, "/tmp/pur-0.jpg", 0),
+        )
+        self.conn.execute(
+            """
+            INSERT INTO product_images (id, product_id, image_path, image_index)
+            VALUES (?, ?, ?, ?)
+            """,
+            (2, 2, "/tmp/shark-0.jpg", 0),
+        )
         self.conn.commit()
 
     @contextmanager
@@ -110,6 +156,21 @@ class SearchSimilarTextApiTestCase(unittest.TestCase):
             "https://weidian.com/item.html?itemID=7724464447",
         )
         self.assertEqual(data["products"][0]["title"], "pur牛仔短裤top")
+
+    def test_four_word_hyphenated_english_title_returns_match(self):
+        payload = {
+            "query": "Shark-Fish Sweatpants Collection",
+            "limit": 5,
+        }
+
+        with patch.object(app_module.db, "get_connection", self._fake_get_connection):
+            response = self.client.post("/api/search_similar_text", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data["success"])
+        self.assertEqual(data["total"], 1)
+        self.assertEqual(data["products"][0]["id"], 2)
 
 
 if __name__ == "__main__":
