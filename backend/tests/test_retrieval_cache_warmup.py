@@ -130,8 +130,15 @@ class RetrievalCacheWarmupTestCase(unittest.TestCase):
         self.assertEqual(reduce_backfill_limit_after_failure(1), 1)
 
     def test_burst_backfill_only_continues_when_batch_made_progress_and_backlog_remains(self):
-        self.assertTrue(
+        self.assertFalse(
             should_continue_auto_backfill_burst({"processed": 24, "failed": 0}, remaining_count=100)
+        )
+        self.assertTrue(
+            should_continue_auto_backfill_burst(
+                {"processed": 24, "failed": 0},
+                remaining_count=100,
+                burst_enabled=True,
+            )
         )
         self.assertFalse(
             should_continue_auto_backfill_burst({"processed": 0, "failed": 24}, remaining_count=100)

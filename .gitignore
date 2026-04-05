@@ -311,6 +311,7 @@ backend/tests/*
 !backend/tests/test_keyword_search_filters.py
 !backend/tests/test_keyword_search_terms.py
 !backend/tests/test_keyword_model_matching.py
+!backend/tests/test_bot_timeouts.py
 
 # Development notes and planning
 *.plan.md

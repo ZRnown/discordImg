@@ -96,7 +96,13 @@ def reduce_backfill_limit_after_failure(limit: Any) -> int:
     return max(1, normalized // 2)
 
 
-def should_continue_auto_backfill_burst(summary: Any, remaining_count: Any) -> bool:
+def should_continue_auto_backfill_burst(
+    summary: Any,
+    remaining_count: Any,
+    burst_enabled: bool = False,
+) -> bool:
+    if not _to_bool(burst_enabled, False):
+        return False
     if not isinstance(summary, dict):
         return False
     try:

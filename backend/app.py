@@ -916,16 +916,18 @@ def _start_auto_retrieval_cache_backfill():
         def auto_backfill_loop():
             configured_limit = get_auto_backfill_limit(config, default=24)
             current_limit = configured_limit
+            burst_enabled = bool(getattr(config, 'RETRIEVAL_CACHE_AUTO_BACKFILL_BURST', False))
             interval_seconds = get_backfill_interval_seconds(config, 'RETRIEVAL_CACHE_AUTO_BACKFILL_INTERVAL', 180)
             batch_cooldown_seconds = get_backfill_cooldown_seconds(config, 'RETRIEVAL_CACHE_AUTO_BATCH_COOLDOWN', 3)
             timeout_seconds = get_backfill_timeout_seconds(config, 'RETRIEVAL_CACHE_AUTO_BACKFILL_TIMEOUT', 1200)
             logger.info(
-                "已启动商品检索缓存自动补全: strategy=%s batch_limit=%s interval=%ss batch_cooldown=%ss timeout=%ss",
+                "已启动商品检索缓存自动补全: strategy=%s batch_limit=%s interval=%ss batch_cooldown=%ss timeout=%ss burst=%s",
                 strategy_name,
                 configured_limit,
                 interval_seconds,
                 batch_cooldown_seconds,
                 timeout_seconds,
+                burst_enabled,
             )
 
             while True:
@@ -959,7 +961,11 @@ def _start_auto_retrieval_cache_backfill():
                         summary.get('failed', 0),
                         remaining_count,
                     )
-                    if should_continue_auto_backfill_burst(summary, remaining_count):
+                    if should_continue_auto_backfill_burst(
+                        summary,
+                        remaining_count,
+                        burst_enabled=burst_enabled,
+                    ):
                         time.sleep(batch_cooldown_seconds)
                         continue
                     if remaining_count > 0 and processed <= 0:

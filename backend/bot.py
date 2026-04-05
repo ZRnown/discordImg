@@ -548,6 +548,21 @@ MESSAGE_STAGE_SLOW_SECONDS = 5.0
 KEYWORD_SEARCH_LIMIT = 600
 
 
+def _get_image_recognition_request_timeout_seconds(stage_timeout_seconds) -> float:
+    try:
+        stage_timeout = float(stage_timeout_seconds)
+    except (TypeError, ValueError):
+        return 30.0
+    if stage_timeout <= 0:
+        return 30.0
+    return max(30.0, stage_timeout - 5.0)
+
+
+IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS = _get_image_recognition_request_timeout_seconds(
+    MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS
+)
+
+
 def get_all_cooldowns():
     """获取所有活跃的冷却状态（供 API 查询）"""
     current_time = time.time()
@@ -3733,8 +3748,8 @@ class DiscordBotClient(discord.Client):
 
     async def recognize_image(self, image_data, user_shops=None):
         try:
-            # 增加超时时间，首轮商品缓存预热或大 catalog 检索可能需要更长时间
-            timeout = aiohttp.ClientTimeout(total=30)  # 30秒超时
+            # 与图片消息阶段超时保持一致，避免内部请求先于外层保护提前中断。
+            timeout = aiohttp.ClientTimeout(total=IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 # 准备图片数据
                 form_data = aiohttp.FormData()
@@ -3773,7 +3788,9 @@ class DiscordBotClient(discord.Client):
                         return None
 
         except asyncio.TimeoutError:
-            logger.error('Error recognizing image: Request timeout (30s)')
+            logger.error(
+                f'Error recognizing image: Request timeout ({IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS:.0f}s)'
+            )
             return None
         except aiohttp.ClientError as e:
             logger.error(f'Error recognizing image: Network error - {type(e).__name__}: {e}')
