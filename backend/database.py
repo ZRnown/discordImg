@@ -1382,6 +1382,62 @@ class Database:
             logger.error(f"统计缺失商品检索缓存数量失败: {e}")
             return 0
 
+    def compact_product_image_retrieval_cache(self, strategy_name: str) -> Dict[str, int]:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                cursor.execute(
+                    '''
+                    UPDATE product_image_retrieval_cache
+                    SET color_hist_json = NULL
+                    WHERE strategy_name = ?
+                      AND color_hist_json IS NOT NULL
+                      AND LENGTH(color_hist_json) > ?
+                    ''',
+                    (strategy_name, MAX_USABLE_RETRIEVAL_COLOR_HIST_JSON_LENGTH),
+                )
+                trimmed_hist = max(int(cursor.rowcount or 0), 0)
+
+                cursor.execute(
+                    '''
+                    UPDATE product_image_retrieval_cache
+                    SET tokens_json = NULL
+                    WHERE strategy_name = ?
+                      AND tokens_json IS NOT NULL
+                      AND LENGTH(tokens_json) > ?
+                    ''',
+                    (strategy_name, MAX_USABLE_RETRIEVAL_TOKENS_JSON_LENGTH),
+                )
+                trimmed_tokens = max(int(cursor.rowcount or 0), 0)
+
+                cursor.execute(
+                    '''
+                    DELETE FROM product_image_retrieval_cache
+                    WHERE strategy_name = ?
+                      AND (
+                        embedding_json IS NULL
+                        OR LENGTH(embedding_json) > ?
+                      )
+                    ''',
+                    (strategy_name, MAX_USABLE_RETRIEVAL_EMBEDDING_JSON_LENGTH),
+                )
+                deleted_rows = max(int(cursor.rowcount or 0), 0)
+                conn.commit()
+
+                return {
+                    'trimmed_hist': trimmed_hist,
+                    'trimmed_tokens': trimmed_tokens,
+                    'deleted_rows': deleted_rows,
+                }
+        except Exception as e:
+            logger.error(f"压缩商品检索缓存失败: {e}")
+            return {
+                'trimmed_hist': 0,
+                'trimmed_tokens': 0,
+                'deleted_rows': 0,
+            }
+
     def delete_product_images(self, product_id: int) -> bool:
         """删除商品的所有图像和物理文件"""
         try:

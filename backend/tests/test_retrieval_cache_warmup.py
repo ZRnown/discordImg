@@ -4,10 +4,12 @@ from types import SimpleNamespace
 from backend.live_retrieval import backfill_product_image_retrieval_cache
 from backend.retrieval_cache_warmup import (
     get_auto_backfill_limit,
+    get_auto_backfill_max_missing,
     get_backfill_cooldown_seconds,
     get_backfill_limit,
     get_backfill_interval_seconds,
     reduce_backfill_limit_after_failure,
+    should_pause_auto_backfill,
     should_continue_auto_backfill_burst,
     should_run_auto_backfill,
     should_run_startup_cache_warmup,
@@ -104,6 +106,12 @@ class RetrievalCacheWarmupTestCase(unittest.TestCase):
         self.assertTrue(should_run_auto_backfill(config, "siglip2_rerank"))
         self.assertEqual(get_auto_backfill_limit(config, default=24), 48)
         self.assertEqual(
+            get_auto_backfill_max_missing(
+                SimpleNamespace(RETRIEVAL_CACHE_AUTO_BACKFILL_MAX_MISSING=5000)
+            ),
+            5000,
+        )
+        self.assertEqual(
             get_backfill_interval_seconds(config, "RETRIEVAL_CACHE_AUTO_BACKFILL_INTERVAL", 60),
             120,
         )
@@ -146,6 +154,9 @@ class RetrievalCacheWarmupTestCase(unittest.TestCase):
         self.assertFalse(
             should_continue_auto_backfill_burst({"processed": 24, "failed": 0}, remaining_count=0)
         )
+        self.assertFalse(should_pause_auto_backfill(missing_count=0, max_missing=5000))
+        self.assertFalse(should_pause_auto_backfill(missing_count=5000, max_missing=5000))
+        self.assertTrue(should_pause_auto_backfill(missing_count=5001, max_missing=5000))
 
 
 if __name__ == "__main__":

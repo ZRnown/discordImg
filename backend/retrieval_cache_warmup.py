@@ -37,6 +37,15 @@ def get_auto_backfill_limit(config_obj: Any, default: int = 24) -> int:
     return limit or max(int(default or 1), 1)
 
 
+def get_auto_backfill_max_missing(config_obj: Any, default: int = 5000) -> int:
+    value = getattr(config_obj, "RETRIEVAL_CACHE_AUTO_BACKFILL_MAX_MISSING", default)
+    try:
+        limit = int(value)
+    except (TypeError, ValueError):
+        limit = default
+    return max(0, limit)
+
+
 def should_run_startup_cache_warmup(config_obj: Any, strategy_name: str) -> bool:
     try:
         from .live_retrieval import strategy_requires_persisted_catalog_cache
@@ -114,3 +123,17 @@ def should_continue_auto_backfill_burst(
     except (TypeError, ValueError):
         remaining = 0
     return processed > 0 and remaining > 0
+
+
+def should_pause_auto_backfill(missing_count: Any, max_missing: Any) -> bool:
+    try:
+        missing = int(missing_count or 0)
+    except (TypeError, ValueError):
+        missing = 0
+    try:
+        limit = int(max_missing or 0)
+    except (TypeError, ValueError):
+        limit = 0
+    if limit <= 0:
+        return False
+    return missing > limit

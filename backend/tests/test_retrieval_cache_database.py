@@ -179,6 +179,92 @@ def test_database_drops_oversized_optional_retrieval_payloads_from_searchable_re
     assert rows[0]["retrieval_tokens"] is None
 
 
+def test_database_compacts_unusable_retrieval_cache_rows(tmp_path: Path):
+    db_path = tmp_path / "metadata.db"
+    test_db = Database(db_path=str(db_path))
+
+    kept_product_id = test_db.insert_product(
+        {
+            "product_url": "https://weidian.com/item.html?itemID=1005",
+            "title": "Keep Runner",
+            "description": "",
+            "english_title": "",
+            "cnfans_url": "",
+            "acbuy_url": "",
+            "shop_name": "shop-e",
+            "ruleEnabled": True,
+            "item_id": "1005",
+        }
+    )
+    deleted_product_id = test_db.insert_product(
+        {
+            "product_url": "https://weidian.com/item.html?itemID=1006",
+            "title": "Delete Runner",
+            "description": "",
+            "english_title": "",
+            "cnfans_url": "",
+            "acbuy_url": "",
+            "shop_name": "shop-f",
+            "ruleEnabled": True,
+            "item_id": "1006",
+        }
+    )
+
+    kept_image_id = test_db.insert_image_record(kept_product_id, "/tmp/e-1.jpg", 0)
+    deleted_image_id = test_db.insert_image_record(deleted_product_id, "/tmp/f-1.jpg", 0)
+
+    test_db.upsert_product_image_retrieval_cache(
+        image_db_id=kept_image_id,
+        strategy_name="siglip2_rerank",
+        cache_version="siglip2_rerank_v1",
+        embedding=[0.1, 0.2, 0.3],
+        color_hist=[0.1, 0.2],
+        tokens=["keep"],
+    )
+    test_db.upsert_product_image_retrieval_cache(
+        image_db_id=deleted_image_id,
+        strategy_name="siglip2_rerank",
+        cache_version="siglip2_rerank_v1",
+        embedding=[0.1] * (768 * 196),
+        color_hist=[0.3, 0.4],
+        tokens=["delete"],
+    )
+
+    oversized_hist = json.dumps([0.1] * 10000)
+    oversized_tokens = json.dumps(["keep-runner"] * 5000)
+    with test_db.get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE product_image_retrieval_cache
+            SET color_hist_json = ?, tokens_json = ?
+            WHERE image_db_id = ? AND strategy_name = ?
+            """,
+            (oversized_hist, oversized_tokens, kept_image_id, "siglip2_rerank"),
+        )
+        conn.commit()
+
+    summary = test_db.compact_product_image_retrieval_cache("siglip2_rerank")
+
+    assert summary == {
+        "trimmed_hist": 1,
+        "trimmed_tokens": 1,
+        "deleted_rows": 1,
+    }
+
+    rows = test_db.get_searchable_product_image_records(
+        strategy_name="siglip2_rerank",
+        require_cache=True,
+    )
+    kept_rows = [row for row in rows if row["image_db_id"] == kept_image_id]
+    deleted_rows = [row for row in rows if row["image_db_id"] == deleted_image_id]
+
+    assert len(kept_rows) == 1
+    assert kept_rows[0]["retrieval_embedding"] == "[0.1, 0.2, 0.3]"
+    assert kept_rows[0]["retrieval_color_hist"] is None
+    assert kept_rows[0]["retrieval_tokens"] is None
+    assert deleted_rows == []
+
+
 def test_database_migrates_legacy_product_images_schema(tmp_path: Path):
     db_path = tmp_path / "legacy-metadata.db"
 

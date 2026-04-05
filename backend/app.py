@@ -88,12 +88,14 @@ except ModuleNotFoundError as e:
 try:
     from retrieval_cache_warmup import (
         get_auto_backfill_limit,
+        get_auto_backfill_max_missing,
         get_backfill_cooldown_seconds,
         get_backfill_limit,
         get_backfill_interval_seconds,
         get_backfill_timeout_seconds,
         normalize_backfill_limit,
         reduce_backfill_limit_after_failure,
+        should_pause_auto_backfill,
         should_continue_auto_backfill_burst,
         should_run_auto_backfill,
         should_run_startup_cache_warmup,
@@ -102,12 +104,14 @@ except ModuleNotFoundError as e:
     if e.name == 'retrieval_cache_warmup':
         from .retrieval_cache_warmup import (
             get_auto_backfill_limit,
+            get_auto_backfill_max_missing,
             get_backfill_cooldown_seconds,
             get_backfill_limit,
             get_backfill_interval_seconds,
             get_backfill_timeout_seconds,
             normalize_backfill_limit,
             reduce_backfill_limit_after_failure,
+            should_pause_auto_backfill,
             should_continue_auto_backfill_burst,
             should_run_auto_backfill,
             should_run_startup_cache_warmup,
@@ -729,6 +733,19 @@ def initialize_runtime():
                 elif strategy_requires_persisted_catalog_cache(strategy_name):
                     print(f"⏭️ [后台] 已跳过 {strategy_name} 启动缓存预热")
 
+                cleanup_summary = db.compact_product_image_retrieval_cache(strategy_name)
+                if any(
+                    int(cleanup_summary.get(key) or 0) > 0
+                    for key in ('trimmed_hist', 'trimmed_tokens', 'deleted_rows')
+                ):
+                    logger.warning(
+                        "已清理商品检索缓存异常数据: strategy=%s trimmed_hist=%s trimmed_tokens=%s deleted_rows=%s",
+                        strategy_name,
+                        cleanup_summary.get('trimmed_hist', 0),
+                        cleanup_summary.get('trimmed_tokens', 0),
+                        cleanup_summary.get('deleted_rows', 0),
+                    )
+
                 _start_auto_retrieval_cache_backfill()
             except Exception as cache_error:
                 logger.warning("商品检索缓存预热失败: %s", cache_error)
@@ -916,24 +933,36 @@ def _start_auto_retrieval_cache_backfill():
         def auto_backfill_loop():
             configured_limit = get_auto_backfill_limit(config, default=24)
             current_limit = configured_limit
+            max_missing_for_auto = get_auto_backfill_max_missing(config, default=5000)
             burst_enabled = bool(getattr(config, 'RETRIEVAL_CACHE_AUTO_BACKFILL_BURST', False))
             interval_seconds = get_backfill_interval_seconds(config, 'RETRIEVAL_CACHE_AUTO_BACKFILL_INTERVAL', 180)
             batch_cooldown_seconds = get_backfill_cooldown_seconds(config, 'RETRIEVAL_CACHE_AUTO_BATCH_COOLDOWN', 3)
             timeout_seconds = get_backfill_timeout_seconds(config, 'RETRIEVAL_CACHE_AUTO_BACKFILL_TIMEOUT', 1200)
             logger.info(
-                "已启动商品检索缓存自动补全: strategy=%s batch_limit=%s interval=%ss batch_cooldown=%ss timeout=%ss burst=%s",
+                "已启动商品检索缓存自动补全: strategy=%s batch_limit=%s interval=%ss batch_cooldown=%ss timeout=%ss burst=%s max_missing=%s",
                 strategy_name,
                 configured_limit,
                 interval_seconds,
                 batch_cooldown_seconds,
                 timeout_seconds,
                 burst_enabled,
+                max_missing_for_auto,
             )
 
             while True:
                 try:
                     missing_count = db.count_missing_product_image_retrieval_cache(strategy_name)
                     if missing_count <= 0:
+                        time.sleep(interval_seconds)
+                        continue
+
+                    if should_pause_auto_backfill(missing_count, max_missing_for_auto):
+                        logger.warning(
+                            "缺失商品检索缓存过多，已暂停自动补全避免占满CPU: strategy=%s missing=%s max_missing=%s",
+                            strategy_name,
+                            missing_count,
+                            max_missing_for_auto,
+                        )
                         time.sleep(interval_seconds)
                         continue
 
