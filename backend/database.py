@@ -30,6 +30,8 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+MAX_USABLE_RETRIEVAL_EMBEDDING_JSON_LENGTH = 200000
+
 class Database:
     def __init__(self, db_path: Optional[str] = None):
         # SQLite 数据库路径 (用于存储商品元数据和Discord账号信息)
@@ -1119,6 +1121,14 @@ class Database:
             logger.error(f"写入商品检索缓存失败: {e}")
             return False
 
+    @staticmethod
+    def _usable_retrieval_cache_sql(alias: str = 'rc') -> str:
+        return (
+            f"{alias}.image_db_id IS NOT NULL "
+            f"AND {alias}.embedding_json IS NOT NULL "
+            f"AND LENGTH({alias}.embedding_json) <= {MAX_USABLE_RETRIEVAL_EMBEDDING_JSON_LENGTH}"
+        )
+
     def get_searchable_product_image_records(
         self,
         strategy_name: Optional[str] = None,
@@ -1134,9 +1144,9 @@ class Database:
                     where_clauses = []
                     params: List[Any] = [strategy_name]
                     if require_cache:
-                        where_clauses.append("rc.image_db_id IS NOT NULL")
+                        where_clauses.append(self._usable_retrieval_cache_sql('rc'))
                     if only_missing_cache:
-                        where_clauses.append("rc.image_db_id IS NULL")
+                        where_clauses.append(f"NOT ({self._usable_retrieval_cache_sql('rc')})")
 
                     where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
                     query = f'''
@@ -1304,7 +1314,7 @@ class Database:
                     SELECT rc.embedding_json
                     FROM product_image_retrieval_cache rc
                     JOIN product_images pi ON pi.id = rc.image_db_id
-                    WHERE pi.product_id = ? AND rc.strategy_name = ? AND rc.embedding_json IS NOT NULL
+                    WHERE pi.product_id = ? AND rc.strategy_name = ? AND ''' + self._usable_retrieval_cache_sql('rc') + '''
                     ORDER BY pi.image_index ASC
                     ''',
                     (product_id, strategy_name),
@@ -1327,8 +1337,8 @@ class Database:
                 cursor.execute(
                     '''
                     SELECT COUNT(*)
-                    FROM product_image_retrieval_cache
-                    WHERE strategy_name = ?
+                    FROM product_image_retrieval_cache rc
+                    WHERE rc.strategy_name = ? AND ''' + self._usable_retrieval_cache_sql('rc') + '''
                     ''',
                     (strategy_name,),
                 )
@@ -1348,7 +1358,7 @@ class Database:
                     LEFT JOIN product_image_retrieval_cache rc
                         ON rc.image_db_id = pi.id
                        AND rc.strategy_name = ?
-                    WHERE rc.image_db_id IS NULL
+                    WHERE NOT (''' + self._usable_retrieval_cache_sql('rc') + ''')
                     ''',
                     (strategy_name,),
                 )
