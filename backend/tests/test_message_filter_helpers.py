@@ -119,7 +119,7 @@ class ManagedAccountMessageGuardTestCase(unittest.IsolatedAsyncioTestCase):
             await DiscordBotClient.on_message(client, message)
 
         client._notify_direct_interaction_if_needed.assert_awaited_once()
-        client._is_account_bound_in_channel.assert_awaited_once_with(message.channel.id)
+        client._is_account_bound_in_channel.assert_awaited_once_with(message.channel)
         mark_processed.assert_called_once_with(message.id, client.user_id)
 
 

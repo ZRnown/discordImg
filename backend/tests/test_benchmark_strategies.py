@@ -106,6 +106,39 @@ def test_siglip2_rerank_prepare_catalog_image_reshapes_cached_histogram():
     assert context["hist"].shape == (18, 4)
 
 
+def test_siglip2_rerank_prepare_catalog_image_compacts_oversized_flattened_cache_embedding():
+    strategy = object.__new__(Siglip2RerankStrategy)
+
+    class GuardEncoder:
+        output_dim = 768
+
+        def encode_image(self, *_args, **_kwargs):
+            raise AssertionError("should not encode catalog image when cache is present")
+
+    strategy.encoder = GuardEncoder()
+    strategy._build_color_hist = lambda *_args, **_kwargs: None
+    strategy._tokenize = lambda *_args, **_kwargs: {"pony", "sweatpants"}
+
+    oversized_embedding = ([1.0] * 768) + ([3.0] * 768)
+    record = LiveCatalogImageRecord(
+        product_id="1001",
+        title="Pony sweatpants",
+        english_title="",
+        description="",
+        shop_name="shop-a",
+        image_path="/tmp/a-1.jpg",
+        image_index=0,
+        cache_embedding=oversized_embedding,
+        cache_color_hist=None,
+        cache_tokens=["pony", "sweatpants"],
+    )
+
+    context = strategy.prepare_catalog_image(record)
+
+    assert context["embedding"].shape == (768,)
+    assert np.linalg.norm(context["embedding"]) == pytest.approx(1.0, abs=1e-6)
+
+
 def test_siglip2_rerank_score_without_text_renormalizes_available_modalities():
     strategy = object.__new__(Siglip2RerankStrategy)
     hist = np.ones((18, 4), dtype=np.float32)

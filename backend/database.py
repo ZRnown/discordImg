@@ -2492,44 +2492,62 @@ class Database:
             logger.error(f"管理员移除网站频道绑定失败: {e}")
             return False
 
-    def get_website_configs_by_channel(self, channel_id: str, user_id: int = None) -> List[Dict]:
-        """根据频道ID获取所有绑定的网站配置"""
+    def get_website_configs_by_channel(self, channel_id: Any, user_id: int = None) -> List[Dict]:
+        """根据频道ID获取所有绑定的网站配置，支持线程回退到父频道"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                if user_id:
-                    cursor.execute('''
-                        SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern,
-                               wc.badge_color, wc.reply_template, wc.reply_language,
-                               COALESCE(uws.image_similarity_threshold, wc.image_similarity_threshold) as image_similarity_threshold,
-                               COALESCE(uws.keyword_match_limit, NULL) as keyword_match_limit,
-                               wc.blocked_role_ids, wc.rotation_interval, wc.rotation_enabled, wc.message_filters
-                        FROM website_configs wc
-                        JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
-                        LEFT JOIN user_website_settings uws
-                            ON uws.website_id = wc.id AND uws.user_id = wcb.user_id
-                        WHERE wcb.channel_id = ? AND wcb.user_id = ?
-                        ORDER BY wcb.created_at, wc.created_at
-                    ''', (str(channel_id), user_id))
+                if isinstance(channel_id, (list, tuple, set)):
+                    lookup_ids = []
+                    for item in channel_id:
+                        normalized = str(item or '').strip()
+                        if normalized and normalized not in lookup_ids:
+                            lookup_ids.append(normalized)
                 else:
-                    cursor.execute('''
-                        SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern,
-                               wc.badge_color, wc.reply_template, wc.reply_language, wc.image_similarity_threshold, wc.blocked_role_ids,
-                               wc.rotation_interval, wc.rotation_enabled, wc.message_filters
-                        FROM website_configs wc
-                        JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
-                        WHERE wcb.channel_id = ?
-                        ORDER BY wcb.created_at, wc.created_at
-                    ''', (str(channel_id),))
+                    normalized = str(channel_id or '').strip()
+                    lookup_ids = [normalized] if normalized else []
 
-                configs = []
-                for row in cursor.fetchall():
-                    config = dict(row)
-                    config['reply_language'] = get_effective_reply_languages(
-                        config.get('reply_language')
-                    )
-                    configs.append(config)
-                return configs
+                if not lookup_ids:
+                    return []
+
+                for lookup_id in lookup_ids:
+                    if user_id:
+                        cursor.execute('''
+                            SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern,
+                                   wc.badge_color, wc.reply_template, wc.reply_language,
+                                   COALESCE(uws.image_similarity_threshold, wc.image_similarity_threshold) as image_similarity_threshold,
+                                   COALESCE(uws.keyword_match_limit, NULL) as keyword_match_limit,
+                                   wc.blocked_role_ids, wc.rotation_interval, wc.rotation_enabled, wc.message_filters
+                            FROM website_configs wc
+                            JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
+                            LEFT JOIN user_website_settings uws
+                                ON uws.website_id = wc.id AND uws.user_id = wcb.user_id
+                            WHERE wcb.channel_id = ? AND wcb.user_id = ?
+                            ORDER BY wcb.created_at, wc.created_at
+                        ''', (lookup_id, user_id))
+                    else:
+                        cursor.execute('''
+                            SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern,
+                                   wc.badge_color, wc.reply_template, wc.reply_language, wc.image_similarity_threshold, wc.blocked_role_ids,
+                                   wc.rotation_interval, wc.rotation_enabled, wc.message_filters
+                            FROM website_configs wc
+                            JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
+                            WHERE wcb.channel_id = ?
+                            ORDER BY wcb.created_at, wc.created_at
+                        ''', (lookup_id,))
+
+                    configs = []
+                    for row in cursor.fetchall():
+                        config = dict(row)
+                        config['reply_language'] = get_effective_reply_languages(
+                            config.get('reply_language')
+                        )
+                        configs.append(config)
+
+                    if configs:
+                        return configs
+
+                return []
         except Exception as e:
             logger.error(f"根据频道获取网站配置失败: {e}")
             return []

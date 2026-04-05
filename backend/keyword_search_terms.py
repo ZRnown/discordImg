@@ -61,8 +61,6 @@ def build_query_keyword_candidates(value: str) -> dict[str, str]:
             if include_numeric_token:
                 add(token, token)
             continue
-        if len(token) >= 2:
-            add(token, token)
 
     for size in (2, 3):
         if len(tokens) < size:
@@ -71,10 +69,11 @@ def build_query_keyword_candidates(value: str) -> dict[str, str]:
             part_tokens = tokens[idx: idx + size]
             if all(token.isdigit() for token in part_tokens):
                 continue
+            phrase = " ".join(part_tokens)
             compact = "".join(part_tokens)
             if len(compact) < 2:
                 continue
-            add(compact, compact)
+            add(phrase, phrase)
 
     return candidates
 
@@ -83,7 +82,6 @@ def build_product_keyword_variants(raw_value: str) -> set[str]:
     normalized_text = normalize_keyword_search_text(raw_value)
     variants: set[str] = set()
     tokens = tokenize_keyword_search_text(normalized_text)
-    allow_alpha_token_variants = len(tokens) <= 3
 
     def add(raw_text: str):
         normalized = normalize_keyword_search_text(raw_text)
@@ -99,18 +97,17 @@ def build_product_keyword_variants(raw_value: str) -> set[str]:
         if any(ch.isdigit() for ch in token):
             add(token)
             continue
-        if allow_alpha_token_variants and len(token) >= 2:
-            add(token)
 
     for size in (2, 3):
         if len(tokens) < size:
             continue
         for idx in range(len(tokens) - size + 1):
-            compact = "".join(tokens[idx: idx + size])
+            part_tokens = tokens[idx: idx + size]
+            compact = "".join(part_tokens)
             if len(compact) < 2:
                 continue
-            if any(ch.isdigit() for ch in compact):
-                add(compact)
+            if any(any(ch.isdigit() for ch in token) for token in part_tokens):
+                add(" ".join(part_tokens))
 
     return variants
 
@@ -263,24 +260,30 @@ def build_text_search_plan(query: Any) -> dict[str, list[str] | str]:
 
     extra_terms: list[str] = []
     if len(tokens) >= 2 and not _is_split_numeric_only_query(tokens):
-        for i in range(len(tokens) - 1):
-            term = f"{tokens[i]} {tokens[i + 1]}"
-            if term not in extra_terms:
-                extra_terms.append(term)
+        if query_normalized:
+            extra_terms.append(query_normalized)
+        for size in (2, 3):
+            if len(tokens) < size or size == len(tokens):
+                continue
+            for i in range(len(tokens) - size + 1):
+                term = " ".join(tokens[i: i + size])
+                if term not in extra_terms:
+                    extra_terms.append(term)
 
-    if include_numeric_token:
+    if include_numeric_token and len(tokens) == 1:
         for token in tokens:
             if any(ch.isdigit() for ch in token) and len(token) >= 2 and token not in extra_terms:
                 extra_terms.append(token)
 
     fallback_tokens: list[str] = []
-    for token in tokens:
-        if token.isdigit():
-            if include_numeric_token:
+    if len(tokens) == 1:
+        for token in tokens:
+            if token.isdigit():
+                if include_numeric_token:
+                    fallback_tokens.append(token)
+                continue
+            if len(token) >= 2:
                 fallback_tokens.append(token)
-            continue
-        if len(token) >= 2:
-            fallback_tokens.append(token)
 
     return {
         "query_normalized": query_normalized,

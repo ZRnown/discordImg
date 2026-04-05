@@ -75,6 +75,55 @@ def _normalize_embedding(embedding) -> Optional[np.ndarray]:
     return vector
 
 
+def _unwrap_siglip_feature_tensor(features):
+    if features is None:
+        return None
+
+    for attr_name in ("image_embeds", "pooler_output", "last_hidden_state"):
+        value = getattr(features, attr_name, None)
+        if value is not None:
+            return value
+
+    if isinstance(features, (list, tuple)):
+        if not features:
+            return None
+        first = features[0]
+        if isinstance(first, (int, float, np.integer, np.floating)):
+            return features
+        for item in features:
+            if item is not None:
+                return item
+        return None
+
+    return features
+
+
+def _coerce_siglip_embedding(features, expected_dim: Optional[int] = None) -> Optional[np.ndarray]:
+    resolved = _unwrap_siglip_feature_tensor(features)
+    if resolved is None:
+        return None
+
+    if hasattr(resolved, "detach"):
+        resolved = resolved.detach().cpu().numpy()
+
+    vector = np.array(resolved, dtype=np.float32)
+    if vector.size == 0:
+        return None
+
+    vector = np.squeeze(vector)
+    if vector.ndim >= 2:
+        trailing_dim = int(vector.shape[-1]) if vector.shape[-1] else 0
+        vector = vector.reshape(-1, trailing_dim).mean(axis=0) if trailing_dim > 0 else vector.flatten()
+    else:
+        vector = vector.flatten()
+
+    effective_dim = int(expected_dim or 0)
+    if effective_dim > 0 and vector.size > effective_dim and vector.size % effective_dim == 0:
+        vector = vector.reshape(-1, effective_dim).mean(axis=0)
+
+    return _normalize_embedding(vector)
+
+
 def _blend_embeddings(
     left,
     right,
@@ -264,6 +313,12 @@ class _Siglip2Encoder:
         self.model = AutoModel.from_pretrained(self.model_id)
         self.model.to(self.device)
         self.model.eval()
+        model_config = getattr(self.model, "config", None)
+        self.output_dim = int(
+            getattr(model_config, "projection_dim", 0)
+            or getattr(model_config, "hidden_size", 0)
+            or 768
+        )
 
         try:
             self.cropper = get_feature_extractor()
@@ -311,10 +366,12 @@ class _Siglip2Encoder:
                     features = self.model.get_image_features(**inputs)
                 else:
                     outputs = self.model(**inputs)
-                    features = getattr(outputs, "pooler_output", None)
+                    features = getattr(outputs, "image_embeds", None)
                     if features is None:
-                        features = outputs.last_hidden_state.mean(dim=1)
-            return _normalize_embedding(features[0].detach().cpu().numpy())
+                        features = getattr(outputs, "pooler_output", None)
+                    if features is None:
+                        features = getattr(outputs, "last_hidden_state", None)
+            return _coerce_siglip_embedding(features, expected_dim=self.output_dim)
         except Exception as exc:
             logger.warning("SigLIP2 encode failed for %s (%s): %s", image_path, crop_mode, exc)
             return None
@@ -613,7 +670,12 @@ class GroundingSiglip2Strategy:
             inputs = {key: value.to(self.device) for key, value in inputs.items()}
             with self.torch.no_grad():
                 features = self.siglip_model.get_image_features(**inputs)
-            return _normalize_embedding(features[0].detach().cpu().numpy())
+            output_dim = int(
+                getattr(getattr(self.siglip_model, "config", None), "projection_dim", 0)
+                or getattr(getattr(self.siglip_model, "config", None), "hidden_size", 0)
+                or 768
+            )
+            return _coerce_siglip_embedding(features, expected_dim=output_dim)
         except Exception as exc:
             logger.warning("Grounding+SigLIP2 encode failed for %s: %s", image_path, exc)
             return None
@@ -1191,7 +1253,10 @@ class Siglip2RerankStrategy:
         )
 
         cached_embedding = (
-            _normalize_embedding(getattr(record, "cache_embedding", None))
+            _coerce_siglip_embedding(
+                getattr(record, "cache_embedding", None),
+                expected_dim=int(getattr(getattr(self, "encoder", None), "output_dim", 0) or 768),
+            )
             if can_use_cache
             else None
         )

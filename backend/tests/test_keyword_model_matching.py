@@ -30,6 +30,14 @@ class KeywordModelMatchingTestCase(unittest.TestCase):
 
         self.assertIsNone(reason)
 
+    def test_multi_word_phrase_does_not_match_other_phrase_via_shared_single_word(self):
+        reason = find_query_keyword_match(
+            build_query_keyword_candidates("Pony sweatpants"),
+            "Pony jacket, Pony jacket black",
+        )
+
+        self.assertIsNone(reason)
+
     def test_exact_match_helper_rejects_substring_only_match(self):
         reason = find_query_keyword_match(
             build_query_keyword_candidates("jack"),

@@ -825,6 +825,28 @@ class DiscordBotClient(discord.Client):
             return False
         return (time.time() - ts) < window_seconds
 
+    @staticmethod
+    def _resolve_channel_lookup_ids(channel_or_id):
+        if channel_or_id is None:
+            return []
+
+        if hasattr(channel_or_id, 'id'):
+            current_id = getattr(channel_or_id, 'id', None)
+            parent_id = getattr(channel_or_id, 'parent_id', None)
+            if parent_id is None:
+                parent = getattr(channel_or_id, 'parent', None)
+                parent_id = getattr(parent, 'id', None)
+
+            lookup_ids = []
+            for candidate in (current_id, parent_id):
+                normalized = str(candidate or '').strip()
+                if normalized and normalized not in lookup_ids:
+                    lookup_ids.append(normalized)
+            return lookup_ids
+
+        normalized = str(channel_or_id or '').strip()
+        return [normalized] if normalized else []
+
     async def _run_message_stage_with_timeout(self, message, stage_name, coro, timeout_seconds):
         start_time = time.monotonic()
         try:
@@ -1138,7 +1160,7 @@ class DiscordBotClient(discord.Client):
         website_id = jobs[0].get('website_id')
         website_config = jobs[0].get('website_config') or {}
         try:
-            current_configs = await listener_client.get_website_configs_by_channel_async(message.channel.id)
+            current_configs = await listener_client.get_website_configs_by_channel_async(message.channel)
             matched_config = next((cfg for cfg in current_configs if cfg.get('id') == website_id), None)
             if not matched_config:
                 logger.info(
@@ -1814,7 +1836,7 @@ class DiscordBotClient(discord.Client):
             global_min_delay = user_settings.get('global_reply_min_delay', 1.0)
             global_max_delay = user_settings.get('global_reply_max_delay', 3.0)
 
-            website_configs = website_configs_override or await self.get_website_configs_by_channel_async(message.channel.id)
+            website_configs = website_configs_override or await self.get_website_configs_by_channel_async(message.channel)
             if not website_configs:
                 logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过回复")
                 return False
@@ -2550,7 +2572,8 @@ class DiscordBotClient(discord.Client):
             except ImportError:
                 from .database import db
 
-            return db.get_website_configs_by_channel(str(channel_id), self.user_id)
+            lookup_ids = self._resolve_channel_lookup_ids(channel_id)
+            return db.get_website_configs_by_channel(lookup_ids, self.user_id)
         except Exception as e:
             logger.error(f"获取频道网站配置失败: {e}")
             return []
@@ -2572,8 +2595,9 @@ class DiscordBotClient(discord.Client):
             except ImportError:
                 from .database import db
 
+            lookup_ids = self._resolve_channel_lookup_ids(channel_id)
             return await asyncio.get_event_loop().run_in_executor(
-                None, db.get_website_configs_by_channel, str(channel_id), self.user_id
+                None, db.get_website_configs_by_channel, lookup_ids, self.user_id
             )
         except Exception as e:
             logger.error(f"异步获取频道网站配置失败: {e}")
@@ -2848,7 +2872,7 @@ class DiscordBotClient(discord.Client):
 
         # 3. 仅监听角色进入自动回复链路（sender-only 绑定不会进入）
         try:
-            listener_allowed, _ = await self._is_account_bound_in_channel(message.channel.id)
+            listener_allowed, _ = await self._is_account_bound_in_channel(message.channel)
             if not listener_allowed:
                 return
         except Exception as e:
@@ -3361,7 +3385,7 @@ class DiscordBotClient(discord.Client):
             query_keyword_candidates = _build_query_keyword_candidates(query_normalized)
 
             # 检查频道是否绑定了网站配置（必须绑定才能回复）
-            website_configs = await self.get_website_configs_by_channel_async(message.channel.id)
+            website_configs = await self.get_website_configs_by_channel_async(message.channel)
             if not website_configs:
                 logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过关键词回复")
                 return

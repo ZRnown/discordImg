@@ -45,6 +45,13 @@ class KeywordSearchTermsTestCase(unittest.TestCase):
 
         self.assertEqual(candidates, {"530": "530"})
 
+    def test_multi_word_phrase_does_not_expand_into_single_word_candidates(self):
+        candidates = build_query_keyword_candidates("Pony sweatpants")
+
+        self.assertIn("ponysweatpants", candidates)
+        self.assertNotIn("pony", candidates)
+        self.assertNotIn("sweatpants", candidates)
+
     def test_alpha_numeric_query_does_not_expand_standalone_numeric_search_term(self):
         plan = build_text_search_plan("b 30")
 
@@ -56,6 +63,13 @@ class KeywordSearchTermsTestCase(unittest.TestCase):
         plan = build_text_search_plan("530")
 
         self.assertIn("530", plan["fallback_tokens"])
+
+    def test_multi_word_phrase_search_plan_does_not_fallback_to_single_words(self):
+        plan = build_text_search_plan("Pony sweatpants")
+
+        self.assertEqual(plan["query_normalized"], "pony sweatpants")
+        self.assertEqual(plan["fallback_tokens"], [])
+        self.assertEqual(plan["extra_terms"], ["pony sweatpants"])
 
     def test_split_numeric_expression_does_not_collapse_into_model_candidate(self):
         self.assertEqual(build_query_keyword_candidates("1+1"), {})
