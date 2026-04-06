@@ -7392,6 +7392,7 @@ if __name__ == '__main__':
     multiprocessing.freeze_support()
 
     import atexit
+    import faulthandler
     import signal
     import time
 
@@ -7439,6 +7440,13 @@ if __name__ == '__main__':
     # 注册信号处理器
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
+
+    def debug_stack_dump_handler(signum, frame):
+        print(f"\n🧵 Received debug signal {signum}, dumping Python thread stacks...", file=sys.stderr, flush=True)
+        faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+
+    if hasattr(signal, 'SIGUSR1'):
+        signal.signal(signal.SIGUSR1, debug_stack_dump_handler)
 
     # 注册退出时停止机器人的函数
     atexit.register(stop_discord_bot)
