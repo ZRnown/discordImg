@@ -1359,6 +1359,9 @@ def search_similar():
 
             # 严格执行阈值：如果没有满足阈值的结果，则返回空结果
             # 不再使用任何硬编码阈值兜底（例如 >0.8）
+            total_indexed_images = retrieval_result.get('catalog_size')
+            if total_indexed_images is None:
+                total_indexed_images = db.get_total_indexed_images()
 
             response_data = {
                 'success': True,
@@ -1369,7 +1372,7 @@ def search_similar():
                 'blocked_filter_match': blocked_filter_match,
                 'blocked_website_filter_matches': blocked_website_filter_matches,
                 'debugInfo': {
-                    'totalIndexedImages': retrieval_result.get('catalog_size', db.get_total_indexed_images()),
+                    'totalIndexedImages': total_indexed_images,
                     'threshold': threshold,
                     'strategy': retrieval_result.get('strategy'),
                     'queryTextUsed': bool(query_text),
@@ -1479,7 +1482,7 @@ def search_similar():
                     'blocked_filter_match': blocked_filter_match,
                     'blocked_website_filter_matches': blocked_website_filter_matches,
                     'debugInfo': {
-                        'totalIndexedImages': retrieval_result.get('catalog_size', db.get_total_indexed_images()),
+                        'totalIndexedImages': total_indexed_images,
                         'threshold': threshold,
                         'limit': limit,
                         'strategy': retrieval_result.get('strategy'),
