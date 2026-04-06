@@ -3,6 +3,7 @@ import numpy as np
 import os
 import logging
 import json
+from time import perf_counter
 from typing import List, Dict, Any, Optional, Sequence, Tuple
 from contextlib import contextmanager
 try:
@@ -1387,11 +1388,28 @@ class Database:
             cursor = conn.cursor()
             cursor.execute(query, params)
             fetch_batch_size = max(int(batch_size or 0), 1)
+            yielded_rows = 0
             while True:
+                fetch_started_at = perf_counter()
                 rows = cursor.fetchmany(fetch_batch_size)
+                fetch_elapsed = perf_counter() - fetch_started_at
+                if fetch_elapsed >= 1.0:
+                    logger.warning(
+                        "Slow searchable record batch fetch: strategy=%s require_cache=%s only_missing_cache=%s ordered=%s batch_size=%s rows=%s yielded=%s shops=%s elapsed=%.2fs",
+                        strategy_name,
+                        require_cache,
+                        only_missing_cache,
+                        ordered,
+                        fetch_batch_size,
+                        len(rows),
+                        yielded_rows,
+                        list(shop_names or []),
+                        fetch_elapsed,
+                    )
                 if not rows:
                     break
                 for row in rows:
+                    yielded_rows += 1
                     yield dict(row)
 
     def count_searchable_product_image_records(
@@ -1590,20 +1608,41 @@ class Database:
             logger.error(f"统计商品检索缓存数量失败: {e}")
             return 0
 
-    def count_missing_product_image_retrieval_cache(self, strategy_name: str) -> int:
+    def count_missing_product_image_retrieval_cache(
+        self,
+        strategy_name: str,
+        max_count: Optional[int] = None,
+    ) -> int:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    '''
-                    SELECT COUNT(*)
-                    FROM product_images pi
-                    LEFT JOIN product_image_retrieval_cache rc
-                        ON ''' + self._retrieval_cache_join_sql('pi', 'rc', include_usable_embedding=True) + '''
-                    WHERE rc.image_db_id IS NULL
-                    ''',
-                    (strategy_name,),
-                )
+                effective_limit = max(int(max_count or 0), 0)
+                if effective_limit > 0:
+                    cursor.execute(
+                        '''
+                        SELECT COUNT(*)
+                        FROM (
+                            SELECT 1
+                            FROM product_images pi
+                            LEFT JOIN product_image_retrieval_cache rc
+                                ON ''' + self._retrieval_cache_join_sql('pi', 'rc', include_usable_embedding=True) + '''
+                            WHERE rc.image_db_id IS NULL
+                            LIMIT ?
+                        ) missing_rows
+                        ''',
+                        (strategy_name, effective_limit),
+                    )
+                else:
+                    cursor.execute(
+                        '''
+                        SELECT COUNT(*)
+                        FROM product_images pi
+                        LEFT JOIN product_image_retrieval_cache rc
+                            ON ''' + self._retrieval_cache_join_sql('pi', 'rc', include_usable_embedding=True) + '''
+                        WHERE rc.image_db_id IS NULL
+                        ''',
+                        (strategy_name,),
+                    )
                 return cursor.fetchone()[0] or 0
         except Exception as e:
             logger.error(f"统计缺失商品检索缓存数量失败: {e}")

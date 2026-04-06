@@ -29,6 +29,8 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+_STREAMING_PROGRESS_LOG_INTERVAL_SECONDS = 5.0
+
 
 @dataclass(frozen=True)
 class LiveCatalogImageRecord:
@@ -1387,6 +1389,7 @@ class LiveImageRetriever:
         record_build_elapsed = 0.0
         catalog_prepare_elapsed = 0.0
         score_elapsed = 0.0
+        next_progress_log_after = float(_STREAMING_PROGRESS_LOG_INTERVAL_SECONDS)
 
         for row in self.db.iter_searchable_product_image_records(
             strategy_name=self.strategy_name,
@@ -1419,6 +1422,20 @@ class LiveImageRetriever:
                 record,
                 score,
             )
+            total_elapsed = perf_counter() - started_at
+            if total_elapsed >= next_progress_log_after:
+                logger.warning(
+                    "Live retrieval streaming progress: strategy=%s elapsed=%.2fs query_prepare=%.2fs record_build=%.2fs catalog_prepare=%.2fs score=%.2fs catalog_size=%s shops=%s",
+                    self.strategy_name,
+                    total_elapsed,
+                    query_prepare_elapsed,
+                    record_build_elapsed,
+                    catalog_prepare_elapsed,
+                    score_elapsed,
+                    catalog_size,
+                    normalized_user_shops,
+                )
+                next_progress_log_after += float(_STREAMING_PROGRESS_LOG_INTERVAL_SECONDS)
 
         ranked_products = _finalize_streaming_product_rankings(
             ranking_state_by_product,

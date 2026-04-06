@@ -91,6 +91,30 @@ def test_database_counts_missing_retrieval_cache_rows(tmp_path: Path):
     assert test_db.count_missing_product_image_retrieval_cache("siglip2_rerank") == 1
 
 
+def test_database_caps_missing_retrieval_cache_count_when_max_count_is_provided(tmp_path: Path):
+    db_path = tmp_path / "metadata.db"
+    test_db = Database(db_path=str(db_path))
+
+    for item_id in ("2001", "2002", "2003"):
+        product_id = test_db.insert_product(
+            {
+                "product_url": f"https://weidian.com/item.html?itemID={item_id}",
+                "title": f"Runner {item_id}",
+                "description": "",
+                "english_title": "",
+                "cnfans_url": "",
+                "acbuy_url": "",
+                "shop_name": "shop-a",
+                "ruleEnabled": True,
+                "item_id": item_id,
+            }
+        )
+        test_db.insert_image_record(product_id, f"/tmp/{item_id}.jpg", 0)
+
+    assert test_db.count_missing_product_image_retrieval_cache("siglip2_rerank") == 3
+    assert test_db.count_missing_product_image_retrieval_cache("siglip2_rerank", max_count=2) == 2
+
+
 def test_streaming_searchable_record_query_can_skip_global_ordering(tmp_path: Path):
     db_path = tmp_path / "metadata.db"
     test_db = Database(db_path=str(db_path))

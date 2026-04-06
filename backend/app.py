@@ -956,10 +956,18 @@ def _start_auto_retrieval_cache_backfill():
             configured_limit = get_auto_backfill_limit(config, default=24)
             current_limit = configured_limit
             max_missing_for_auto = get_auto_backfill_max_missing(config, default=5000)
+            missing_scan_limit = max_missing_for_auto + 1 if max_missing_for_auto > 0 else None
             burst_enabled = bool(getattr(config, 'RETRIEVAL_CACHE_AUTO_BACKFILL_BURST', False))
             interval_seconds = get_backfill_interval_seconds(config, 'RETRIEVAL_CACHE_AUTO_BACKFILL_INTERVAL', 180)
             batch_cooldown_seconds = get_backfill_cooldown_seconds(config, 'RETRIEVAL_CACHE_AUTO_BATCH_COOLDOWN', 3)
             timeout_seconds = get_backfill_timeout_seconds(config, 'RETRIEVAL_CACHE_AUTO_BACKFILL_TIMEOUT', 1200)
+
+            def _format_missing_count(value):
+                normalized_value = int(value or 0)
+                if missing_scan_limit and normalized_value >= int(missing_scan_limit):
+                    return f">={missing_scan_limit}"
+                return str(normalized_value)
+
             logger.info(
                 "已启动商品检索缓存自动补全: strategy=%s batch_limit=%s interval=%ss batch_cooldown=%ss timeout=%ss burst=%s max_missing=%s",
                 strategy_name,
@@ -973,7 +981,10 @@ def _start_auto_retrieval_cache_backfill():
 
             while True:
                 try:
-                    missing_count = db.count_missing_product_image_retrieval_cache(strategy_name)
+                    missing_count = db.count_missing_product_image_retrieval_cache(
+                        strategy_name,
+                        max_count=missing_scan_limit,
+                    )
                     if missing_count <= 0:
                         time.sleep(interval_seconds)
                         continue
@@ -982,7 +993,7 @@ def _start_auto_retrieval_cache_backfill():
                         logger.warning(
                             "缺失商品检索缓存过多，已暂停自动补全避免占满CPU: strategy=%s missing=%s max_missing=%s",
                             strategy_name,
-                            missing_count,
+                            _format_missing_count(missing_count),
                             max_missing_for_auto,
                         )
                         time.sleep(interval_seconds)
@@ -990,7 +1001,7 @@ def _start_auto_retrieval_cache_backfill():
 
                     logger.info(
                         "检测到 %s 条缺失商品检索缓存，开始执行自动补全批次: strategy=%s limit=%s",
-                        missing_count,
+                        _format_missing_count(missing_count),
                         strategy_name,
                         current_limit,
                     )
@@ -1003,14 +1014,17 @@ def _start_auto_retrieval_cache_backfill():
                     if processed > 0:
                         invalidate_product_retrieval_runtime(strategy_name)
                         current_limit = configured_limit
-                    remaining_count = db.count_missing_product_image_retrieval_cache(strategy_name)
+                    remaining_count = db.count_missing_product_image_retrieval_cache(
+                        strategy_name,
+                        max_count=missing_scan_limit,
+                    )
                     logger.info(
                         "自动补全批次完成: strategy=%s processed=%s skipped=%s failed=%s remaining=%s",
                         strategy_name,
                         summary.get('processed', 0),
                         summary.get('skipped', 0),
                         summary.get('failed', 0),
-                        remaining_count,
+                        _format_missing_count(remaining_count),
                     )
                     if should_continue_auto_backfill_burst(
                         summary,
