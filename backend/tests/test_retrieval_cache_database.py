@@ -128,6 +128,74 @@ def test_database_treats_oversized_legacy_cache_rows_as_missing(tmp_path: Path):
     ) == []
 
 
+def test_update_account_status_skips_recent_redundant_status_write(tmp_path: Path):
+    db_path = tmp_path / "metadata.db"
+    test_db = Database(db_path=str(db_path))
+
+    with test_db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO discord_accounts (username, token, user_id, status, last_active)
+            VALUES (?, ?, ?, ?, datetime('now'))
+            """,
+            ("alpha", "token-alpha", 1, "online"),
+        )
+        account_id = cursor.lastrowid
+        conn.commit()
+
+    assert (
+        test_db.update_account_status(
+            account_id,
+            "online",
+            min_update_interval_seconds=60,
+        )
+        is False
+    )
+
+    with test_db.get_connection() as conn:
+        row = conn.execute(
+            "SELECT status FROM discord_accounts WHERE id = ?",
+            (account_id,),
+        ).fetchone()
+
+    assert row["status"] == "online"
+
+
+def test_update_account_status_updates_when_status_changes_even_if_recent(tmp_path: Path):
+    db_path = tmp_path / "metadata.db"
+    test_db = Database(db_path=str(db_path))
+
+    with test_db.get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            INSERT INTO discord_accounts (username, token, user_id, status, last_active)
+            VALUES (?, ?, ?, ?, datetime('now'))
+            """,
+            ("beta", "token-beta", 1, "offline"),
+        )
+        account_id = cursor.lastrowid
+        conn.commit()
+
+    assert (
+        test_db.update_account_status(
+            account_id,
+            "online",
+            min_update_interval_seconds=60,
+        )
+        is True
+    )
+
+    with test_db.get_connection() as conn:
+        row = conn.execute(
+            "SELECT status FROM discord_accounts WHERE id = ?",
+            (account_id,),
+        ).fetchone()
+
+    assert row["status"] == "online"
+
+
 def test_database_drops_oversized_optional_retrieval_payloads_from_searchable_records(tmp_path: Path):
     db_path = tmp_path / "metadata.db"
     test_db = Database(db_path=str(db_path))

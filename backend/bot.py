@@ -2842,8 +2842,13 @@ class DiscordBotClient(discord.Client):
             except ImportError:
                 from .database import db
             if hasattr(self, 'account_id'):
-                db.update_account_status(self.account_id, 'online')
-                logger.info(f'账号 {self.account_id} 状态已更新为在线')
+                updated = db.update_account_status(
+                    self.account_id,
+                    'online',
+                    min_update_interval_seconds=60,
+                )
+                if updated:
+                    logger.info(f'账号 {self.account_id} 状态已更新为在线')
         except Exception as e:
             logger.error(f'更新账号状态失败: {e}')
 

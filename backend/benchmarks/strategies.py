@@ -1311,7 +1311,11 @@ class Siglip2RerankStrategy:
     def set_query_support_records(self, query_records: list[Any]) -> None:
         self.set_product_support_records(query_records)
 
-    def set_product_support_records(self, support_records: list[Any]) -> None:
+    def set_product_support_records(
+        self,
+        support_records: list[Any],
+        prepared_catalog: Optional[list[Dict[str, Any]]] = None,
+    ) -> None:
         if not self.product_support_enabled:
             self._product_support_signature = None
             self._product_support_by_product = {}
@@ -1339,6 +1343,14 @@ class Siglip2RerankStrategy:
         if signature == self._product_support_signature:
             return
 
+        catalog_context_by_path: Dict[str, Dict[str, Any]] = {}
+        for entry in prepared_catalog or []:
+            record = entry.get("record")
+            context = entry.get("context")
+            image_path = str(getattr(record, "image_path", "") or "").strip()
+            if image_path and context is not None and image_path not in catalog_context_by_path:
+                catalog_context_by_path[image_path] = context
+
         support_by_product: Dict[str, list[Dict[str, Any]]] = {}
         for record in support_records:
             product_id = str(
@@ -1364,7 +1376,9 @@ class Siglip2RerankStrategy:
                 cache_color_hist=None,
                 cache_tokens=[],
             )
-            support_context = self.prepare_catalog_image(pseudo_catalog_record)
+            support_context = catalog_context_by_path.get(image_path)
+            if support_context is None:
+                support_context = self.prepare_catalog_image(pseudo_catalog_record)
             support_by_product.setdefault(product_id, []).append(
                 {
                     "product_id": product_id,

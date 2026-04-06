@@ -402,6 +402,43 @@ def _materialize_auto_support_variant(
     return output_path
 
 
+def _resolve_auto_support_variant_path(
+    source_path: str,
+    variant_name: str,
+    output_dir: str,
+    image_factory,
+    *,
+    materialize_missing: bool,
+) -> str:
+    absolute_source_path = os.path.abspath(source_path)
+    try:
+        stat_result = os.stat(absolute_source_path)
+    except OSError:
+        return ""
+
+    source_signature = "|".join(
+        [
+            absolute_source_path,
+            variant_name,
+            str(int(stat_result.st_mtime_ns)),
+            str(int(stat_result.st_size)),
+        ]
+    )
+    digest = hashlib.sha1(source_signature.encode("utf-8")).hexdigest()[:16]
+    stem = os.path.splitext(os.path.basename(absolute_source_path))[0]
+    output_path = os.path.join(output_dir, f"{stem}-{variant_name}-{digest}.jpg")
+    if os.path.exists(output_path):
+        return output_path
+    if not materialize_missing:
+        return ""
+    return _materialize_auto_support_variant(
+        source_path,
+        variant_name=variant_name,
+        output_dir=output_dir,
+        image_factory=image_factory,
+    )
+
+
 def build_auto_product_support_records(
     catalog_records: Sequence[LiveCatalogImageRecord],
     *,
@@ -413,6 +450,7 @@ def build_auto_product_support_records(
     enable_compressed: bool = True,
     enable_perspective: bool = True,
     enable_background_perturb: bool = True,
+    materialize_missing_variants: bool = True,
 ) -> List[LiveProductSupportRecord]:
     grouped_records: Dict[str, List[LiveCatalogImageRecord]] = {}
     for record in catalog_records:
@@ -479,11 +517,12 @@ def build_auto_product_support_records(
                 for variant_name, image_factory, enabled in variant_builders:
                     if not enabled or len(product_support_records) >= record_limit:
                         continue
-                    variant_path = _materialize_auto_support_variant(
+                    variant_path = _resolve_auto_support_variant_path(
                         record.image_path,
                         variant_name=variant_name,
                         output_dir=resolved_output_dir,
                         image_factory=image_factory,
+                        materialize_missing=bool(materialize_missing_variants),
                     )
                     _append_support_record(variant_path)
                 if len(product_support_records) >= record_limit:
@@ -530,6 +569,10 @@ def _load_auto_product_support_records_from_env(
         enable_background_perturb=_env_bool(
             "LIVE_IMAGE_SEARCH_AUTO_PRODUCT_SUPPORT_BACKGROUND",
             True,
+        ),
+        materialize_missing_variants=_env_bool(
+            "LIVE_IMAGE_SEARCH_AUTO_PRODUCT_SUPPORT_MATERIALIZE_MISSING",
+            False,
         ),
     )
 
@@ -809,10 +852,6 @@ def prepare_catalog_entries(
             )
         )
 
-    set_support_records = getattr(strategy, "set_product_support_records", None)
-    if callable(set_support_records):
-        set_support_records(resolved_support_records)
-
     prepared = []
     for record in catalog_records:
         prepared.append(
@@ -821,6 +860,15 @@ def prepare_catalog_entries(
                 "context": strategy.prepare_catalog_image(record),
             }
         )
+
+    set_support_records = getattr(strategy, "set_product_support_records", None)
+    if callable(set_support_records):
+        try:
+            set_support_records(resolved_support_records, prepared_catalog=prepared)
+        except TypeError as exc:
+            if "prepared_catalog" not in str(exc):
+                raise
+            set_support_records(resolved_support_records)
     return prepared
 
 

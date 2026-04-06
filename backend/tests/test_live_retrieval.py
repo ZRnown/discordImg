@@ -6,6 +6,7 @@ from PIL import Image
 from backend.live_retrieval import (
     LiveCatalogImageRecord,
     LiveImageRetriever,
+    LiveProductSupportRecord,
     LiveQueryRecord,
     backfill_product_image_retrieval_cache,
     build_query_record,
@@ -270,6 +271,105 @@ def test_load_runtime_product_support_records_includes_external_support_in_auto_
     assert len(records) == 1
     assert records[0].expected_product_id == "916"
     assert Path(records[0].image_path) == support_image_path
+
+
+def test_load_runtime_product_support_records_skips_materializing_missing_auto_variants_by_default(
+    tmp_path,
+    monkeypatch,
+):
+    output_dir = tmp_path / "auto-support"
+    catalog_image_path = tmp_path / "catalog.jpg"
+    Image.new("RGB", (96, 96), color=(0, 255, 0)).save(catalog_image_path, format="JPEG")
+
+    monkeypatch.setenv("LIVE_IMAGE_SEARCH_PRODUCT_SUPPORT_MODE", "auto")
+    monkeypatch.setenv("LIVE_IMAGE_SEARCH_EXTERNAL_PRODUCT_SUPPORT_ENABLED", "0")
+    monkeypatch.setenv("LIVE_IMAGE_SEARCH_AUTO_PRODUCT_SUPPORT_ENABLED", "1")
+    monkeypatch.setenv("LIVE_IMAGE_SEARCH_AUTO_PRODUCT_SUPPORT_DIR", str(output_dir))
+    monkeypatch.delenv("LIVE_IMAGE_SEARCH_PRODUCT_SUPPORT_MANIFEST", raising=False)
+
+    records = load_runtime_product_support_records(
+        [
+            LiveCatalogImageRecord(
+                product_id="916",
+                item_id="7713998250",
+                title="Alpha Runner",
+                english_title="",
+                description="",
+                shop_name="shop-a",
+                image_path=str(catalog_image_path),
+                image_index=0,
+            )
+        ]
+    )
+
+    assert len(records) == 1
+    assert Path(records[0].image_path) == catalog_image_path
+    assert list(output_dir.rglob("*")) == []
+
+
+def test_prepare_catalog_entries_reuses_catalog_context_for_matching_support_images():
+    class SupportReuseStrategy:
+        def __init__(self):
+            self.prepare_calls = []
+            self.support_contexts = []
+
+        def prepare_catalog_image(self, record):
+            context = {
+                "image_path": record.image_path,
+                "call_index": len(self.prepare_calls),
+            }
+            self.prepare_calls.append(record.image_path)
+            return context
+
+        def set_product_support_records(self, support_records, prepared_catalog=None):
+            prepared_by_path = {
+                entry["record"].image_path: entry["context"]
+                for entry in (prepared_catalog or [])
+            }
+            self.support_contexts = []
+            for record in support_records:
+                context = prepared_by_path.get(record.image_path)
+                if context is None:
+                    context = self.prepare_catalog_image(record)
+                self.support_contexts.append(context)
+
+        def prepare_query_image(self, record):
+            return {"query": record.query}
+
+        def score(self, query_context, catalog_context):
+            return 1.0
+
+    catalog = [
+        LiveCatalogImageRecord(
+            product_id="1001",
+            title="Alpha Runner",
+            english_title="",
+            description="",
+            shop_name="shop-a",
+            image_path="/tmp/a-1.jpg",
+            image_index=0,
+            product_url="https://weidian.com/item.html?itemID=1001",
+            queries=["alpha runner"],
+        ),
+    ]
+    support_records = [
+        LiveProductSupportRecord(
+            expected_product_id="1001",
+            image_path="/tmp/a-1.jpg",
+            title="Alpha Runner",
+            product_queries=["alpha runner"],
+        )
+    ]
+    strategy = SupportReuseStrategy()
+
+    prepared = prepare_catalog_entries(
+        strategy,
+        catalog,
+        support_records=support_records,
+    )
+
+    assert strategy.prepare_calls == ["/tmp/a-1.jpg"]
+    assert strategy.support_contexts == [prepared[0]["context"]]
 
 
 def test_backfill_product_image_retrieval_cache_only_persists_missing_rows():
