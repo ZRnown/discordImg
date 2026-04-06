@@ -132,6 +132,26 @@ def test_streaming_searchable_record_query_can_skip_global_ordering(tmp_path: Pa
     assert params == ["siglip2_rerank", "shop-a"]
 
 
+def test_cached_searchable_record_query_prefers_shop_filtered_catalog_path(tmp_path: Path):
+    db_path = tmp_path / "metadata.db"
+    test_db = Database(db_path=str(db_path))
+
+    query, params = test_db._build_searchable_product_image_records_query(
+        strategy_name="siglip2_rerank",
+        require_cache=True,
+        only_missing_cache=False,
+        limit=None,
+        shop_names=["shop-a"],
+        ordered=False,
+    )
+
+    assert "FROM products p" in query
+    assert "JOIN product_images pi ON pi.product_id = p.id" in query
+    assert "JOIN product_image_retrieval_cache rc" in query
+    assert "rc.image_db_id = pi.id" in query
+    assert params == ["siglip2_rerank", "shop-a"]
+
+
 def test_database_treats_oversized_legacy_cache_rows_as_missing(tmp_path: Path):
     db_path = tmp_path / "metadata.db"
     test_db = Database(db_path=str(db_path))

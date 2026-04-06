@@ -1232,49 +1232,78 @@ class Database:
             params.append(strategy_name)
 
             if require_cache and not only_missing_cache:
-                where_clauses = [
-                    'rc.strategy_name = ?',
-                    self._usable_retrieval_cache_sql('rc'),
-                ]
+                order_sql = "ORDER BY p.id ASC, pi.image_index ASC" if ordered else ""
                 if normalized_shop_names:
                     placeholders = ','.join('?' for _ in normalized_shop_names)
-                    where_clauses.append(f'p.shop_name IN ({placeholders})')
                     params.extend(normalized_shop_names)
-
-                order_sql = "ORDER BY p.id ASC, pi.image_index ASC" if ordered else ""
-                query = f'''
-                    SELECT
-                        p.id AS product_id,
-                        p.item_id,
-                        p.title,
-                        p.english_title,
-                        p.description,
-                        p.product_url,
-                        p.cnfans_url,
-                        p.acbuy_url,
-                        p.shop_name,
-                        p.ruleEnabled,
-                        p.reply_scope,
-                        p.image_source,
-                        p.custom_reply_text,
-                        p.custom_reply_images,
-                        p.custom_image_urls,
-                        p.uploaded_reply_images,
-                        p.per_website_reply_settings,
-                        pi.id AS image_db_id,
-                        pi.image_path,
-                        pi.image_index,
-                        rc.strategy_name AS retrieval_cache_strategy,
-                        rc.cache_version AS retrieval_cache_version,
-                        rc.embedding_json AS retrieval_embedding,
-                        {self._safe_retrieval_cache_field_sql('rc', 'color_hist_json', MAX_USABLE_RETRIEVAL_COLOR_HIST_JSON_LENGTH)} AS retrieval_color_hist,
-                        {self._safe_retrieval_cache_field_sql('rc', 'tokens_json', MAX_USABLE_RETRIEVAL_TOKENS_JSON_LENGTH)} AS retrieval_tokens
-                    FROM product_image_retrieval_cache rc
-                    JOIN product_images pi ON pi.id = rc.image_db_id
-                    JOIN products p ON p.id = pi.product_id
-                    WHERE {' AND '.join(where_clauses)}
-                    {order_sql}
-                '''
+                    query = f'''
+                        SELECT
+                            p.id AS product_id,
+                            p.item_id,
+                            p.title,
+                            p.english_title,
+                            p.description,
+                            p.product_url,
+                            p.cnfans_url,
+                            p.acbuy_url,
+                            p.shop_name,
+                            p.ruleEnabled,
+                            p.reply_scope,
+                            p.image_source,
+                            p.custom_reply_text,
+                            p.custom_reply_images,
+                            p.custom_image_urls,
+                            p.uploaded_reply_images,
+                            p.per_website_reply_settings,
+                            pi.id AS image_db_id,
+                            pi.image_path,
+                            pi.image_index,
+                            rc.strategy_name AS retrieval_cache_strategy,
+                            rc.cache_version AS retrieval_cache_version,
+                            rc.embedding_json AS retrieval_embedding,
+                            {self._safe_retrieval_cache_field_sql('rc', 'color_hist_json', MAX_USABLE_RETRIEVAL_COLOR_HIST_JSON_LENGTH)} AS retrieval_color_hist,
+                            {self._safe_retrieval_cache_field_sql('rc', 'tokens_json', MAX_USABLE_RETRIEVAL_TOKENS_JSON_LENGTH)} AS retrieval_tokens
+                        FROM products p
+                        JOIN product_images pi ON pi.product_id = p.id
+                        JOIN product_image_retrieval_cache rc
+                            ON {self._retrieval_cache_join_sql('pi', 'rc', include_usable_embedding=True)}
+                        WHERE p.shop_name IN ({placeholders})
+                        {order_sql}
+                    '''
+                else:
+                    query = f'''
+                        SELECT
+                            p.id AS product_id,
+                            p.item_id,
+                            p.title,
+                            p.english_title,
+                            p.description,
+                            p.product_url,
+                            p.cnfans_url,
+                            p.acbuy_url,
+                            p.shop_name,
+                            p.ruleEnabled,
+                            p.reply_scope,
+                            p.image_source,
+                            p.custom_reply_text,
+                            p.custom_reply_images,
+                            p.custom_image_urls,
+                            p.uploaded_reply_images,
+                            p.per_website_reply_settings,
+                            pi.id AS image_db_id,
+                            pi.image_path,
+                            pi.image_index,
+                            rc.strategy_name AS retrieval_cache_strategy,
+                            rc.cache_version AS retrieval_cache_version,
+                            rc.embedding_json AS retrieval_embedding,
+                            {self._safe_retrieval_cache_field_sql('rc', 'color_hist_json', MAX_USABLE_RETRIEVAL_COLOR_HIST_JSON_LENGTH)} AS retrieval_color_hist,
+                            {self._safe_retrieval_cache_field_sql('rc', 'tokens_json', MAX_USABLE_RETRIEVAL_TOKENS_JSON_LENGTH)} AS retrieval_tokens
+                        FROM product_image_retrieval_cache rc
+                        JOIN product_images pi ON pi.id = rc.image_db_id
+                        JOIN products p ON p.id = pi.product_id
+                        WHERE rc.strategy_name = ? AND {self._usable_retrieval_cache_sql('rc')}
+                        {order_sql}
+                    '''
             else:
                 where_clauses = []
                 if only_missing_cache:
