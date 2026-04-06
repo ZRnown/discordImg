@@ -1,14 +1,20 @@
 import json
 from pathlib import Path
 
+import numpy as np
 from PIL import Image
 
+from backend.benchmarks.strategies import (
+    Siglip2RerankStrategy,
+    _coerce_siglip_embedding,
+)
 from backend.live_retrieval import (
     LiveCatalogImageRecord,
     LiveImageRetriever,
     LiveProductSupportRecord,
     LiveQueryRecord,
     backfill_product_image_retrieval_cache,
+    build_catalog_record,
     build_query_record,
     build_catalog_records,
     load_runtime_product_support_records,
@@ -214,6 +220,43 @@ def test_build_catalog_records_deserializes_siglip2_cache_fields():
     assert records[0].cache_embedding == [0.1, 0.2, 0.3]
     assert records[0].cache_color_hist == [0.4, 0.5, 0.6, 0.7]
     assert records[0].cache_tokens == ["alpha", "runner"]
+
+
+def test_build_catalog_record_preserves_cached_arrays_for_streaming_search():
+    row = {
+        "product_id": "1001",
+        "title": "Alpha Runner",
+        "english_title": "",
+        "description": "",
+        "shop_name": "shop-a",
+        "image_path": "/tmp/a-1.jpg",
+        "image_index": 0,
+        "product_url": "https://weidian.com/item.html?itemID=1001",
+        "retrieval_cache_strategy": "siglip2_rerank",
+        "retrieval_cache_version": "siglip2_rerank_v1",
+        "retrieval_embedding": "[0.1, 0.2, 0.3]",
+        "retrieval_color_hist": "[0.4, 0.5, 0.6, 0.7]",
+        "retrieval_tokens": "[\"alpha\", \"runner\"]",
+    }
+
+    record = build_catalog_record(row, preserve_cached_arrays=True)
+
+    assert record is not None
+    assert record.cache_embedding == "[0.1, 0.2, 0.3]"
+    assert record.cache_color_hist == "[0.4, 0.5, 0.6, 0.7]"
+    assert record.cache_tokens == ["alpha", "runner"]
+
+
+def test_siglip2_cache_deserializers_accept_serialized_float_strings():
+    embedding = _coerce_siglip_embedding("[3.0, 4.0]")
+    hist = Siglip2RerankStrategy._deserialize_cached_hist("[0.1, 0.2, 0.3, 0.4]")
+
+    assert embedding is not None
+    assert np.allclose(embedding, np.array([0.6, 0.8], dtype=np.float32))
+    assert hist is not None
+    assert hist.dtype == np.float32
+    assert hist.shape == (4,)
+    assert np.allclose(hist, np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32))
 
 
 def test_build_query_record_ignores_query_text_for_live_image_search():
@@ -646,6 +689,8 @@ def test_live_image_retriever_streaming_search_avoids_catalog_materialization(mo
             return {"query": record.query}
 
         def prepare_catalog_image(self, record):
+            if record.product_id == "2001":
+                assert record.cache_embedding == "[0.1, 0.2, 0.3]"
             return {"score": 0.93 if record.product_id == "2001" else 0.11}
 
         def score(self, query_context, catalog_context):

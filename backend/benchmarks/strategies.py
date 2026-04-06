@@ -98,6 +98,37 @@ def _unwrap_siglip_feature_tensor(features):
     return features
 
 
+def _coerce_serialized_float_array(raw_value) -> Optional[np.ndarray]:
+    if raw_value is None:
+        return None
+
+    if isinstance(raw_value, np.ndarray):
+        vector = raw_value.astype(np.float32, copy=False).flatten()
+        return vector if vector.size > 0 else None
+
+    if isinstance(raw_value, str):
+        stripped = raw_value.strip()
+        if not stripped:
+            return None
+        if stripped.startswith("[") and stripped.endswith("]"):
+            stripped = stripped[1:-1].strip()
+        if not stripped:
+            return None
+        if all(char not in stripped for char in "[]{}"):
+            vector = np.fromstring(stripped, sep=",", dtype=np.float32)
+            if vector.size > 0:
+                return vector
+        try:
+            parsed = json.loads(raw_value)
+        except Exception:
+            return None
+        vector = np.array(parsed, dtype=np.float32).flatten()
+        return vector if vector.size > 0 else None
+
+    vector = np.array(raw_value, dtype=np.float32).flatten()
+    return vector if vector.size > 0 else None
+
+
 def _coerce_siglip_embedding(features, expected_dim: Optional[int] = None) -> Optional[np.ndarray]:
     resolved = _unwrap_siglip_feature_tensor(features)
     if resolved is None:
@@ -106,16 +137,21 @@ def _coerce_siglip_embedding(features, expected_dim: Optional[int] = None) -> Op
     if hasattr(resolved, "detach"):
         resolved = resolved.detach().cpu().numpy()
 
-    vector = np.array(resolved, dtype=np.float32)
-    if vector.size == 0:
-        return None
-
-    vector = np.squeeze(vector)
-    if vector.ndim >= 2:
-        trailing_dim = int(vector.shape[-1]) if vector.shape[-1] else 0
-        vector = vector.reshape(-1, trailing_dim).mean(axis=0) if trailing_dim > 0 else vector.flatten()
+    if isinstance(resolved, str):
+        vector = _coerce_serialized_float_array(resolved)
+        if vector is None:
+            return None
     else:
-        vector = vector.flatten()
+        vector = np.array(resolved, dtype=np.float32)
+        if vector.size == 0:
+            return None
+
+        vector = np.squeeze(vector)
+        if vector.ndim >= 2:
+            trailing_dim = int(vector.shape[-1]) if vector.shape[-1] else 0
+            vector = vector.reshape(-1, trailing_dim).mean(axis=0) if trailing_dim > 0 else vector.flatten()
+        else:
+            vector = vector.flatten()
 
     effective_dim = int(expected_dim or 0)
     if effective_dim > 0 and vector.size > effective_dim and vector.size % effective_dim == 0:
@@ -1230,10 +1266,8 @@ class Siglip2RerankStrategy:
 
     @staticmethod
     def _deserialize_cached_hist(raw_hist) -> Optional[np.ndarray]:
-        if raw_hist is None:
-            return None
-        hist = np.array(raw_hist, dtype=np.float32).flatten()
-        if hist.size == 0:
+        hist = _coerce_serialized_float_array(raw_hist)
+        if hist is None:
             return None
         if hist.size == 72:
             hist = hist.reshape((18, 4))

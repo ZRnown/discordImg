@@ -50,8 +50,8 @@ class LiveCatalogImageRecord:
     image_db_id: int = 0
     cache_strategy_name: str = ""
     cache_version: str = ""
-    cache_embedding: Optional[List[float]] = None
-    cache_color_hist: Optional[List[float]] = None
+    cache_embedding: Optional[Any] = None
+    cache_color_hist: Optional[Any] = None
     cache_tokens: List[str] = field(default_factory=list)
 
 
@@ -753,10 +753,16 @@ def build_catalog_records(rows: Sequence[Dict[str, Any]]) -> List[LiveCatalogIma
     return records
 
 
-def build_catalog_record(row: Dict[str, Any]) -> Optional[LiveCatalogImageRecord]:
+def build_catalog_record(
+    row: Dict[str, Any],
+    *,
+    preserve_cached_arrays: bool = False,
+) -> Optional[LiveCatalogImageRecord]:
     image_path = str(row.get("image_path") or "").strip()
     if not image_path:
         return None
+    retrieval_embedding = row.get("retrieval_embedding")
+    retrieval_color_hist = row.get("retrieval_color_hist")
     return LiveCatalogImageRecord(
         product_id=str(row.get("product_id") or row.get("id") or ""),
         item_id=str(row.get("item_id") or ""),
@@ -780,8 +786,16 @@ def build_catalog_record(row: Dict[str, Any]) -> Optional[LiveCatalogImageRecord
         image_db_id=int(row.get("image_db_id") or 0),
         cache_strategy_name=str(row.get("retrieval_cache_strategy") or ""),
         cache_version=str(row.get("retrieval_cache_version") or ""),
-        cache_embedding=_parse_json_list(row.get("retrieval_embedding")),
-        cache_color_hist=_parse_json_list(row.get("retrieval_color_hist")),
+        cache_embedding=(
+            retrieval_embedding
+            if preserve_cached_arrays and retrieval_embedding not in (None, "", [])
+            else _parse_json_list(retrieval_embedding)
+        ),
+        cache_color_hist=(
+            retrieval_color_hist
+            if preserve_cached_arrays and retrieval_color_hist not in (None, "", [])
+            else _parse_json_list(retrieval_color_hist)
+        ),
         cache_tokens=_parse_json_list(row.get("retrieval_tokens")) or [],
     )
 
@@ -1375,7 +1389,7 @@ class LiveImageRetriever:
             if allowed_shops is not None and raw_shop_name not in allowed_shops:
                 continue
 
-            record = build_catalog_record(row)
+            record = build_catalog_record(row, preserve_cached_arrays=True)
             if record is None:
                 continue
 
