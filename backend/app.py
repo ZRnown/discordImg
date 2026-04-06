@@ -1090,6 +1090,10 @@ def search_similar():
                 user_shops = None
         if user_shops is None and user_id:
             user_shops = build_user_shop_scope(user_id)
+        if user_shops is None:
+            current_user = get_current_user()
+            if current_user and current_user.get('id'):
+                user_shops = build_user_shop_scope(current_user['id'])
 
         if debug_enabled:
             logger.debug(f"Received threshold: {threshold}")
