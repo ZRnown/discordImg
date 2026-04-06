@@ -720,11 +720,12 @@ def test_live_image_retriever_streaming_search_avoids_catalog_materialization(mo
             "only_missing_cache": False,
             "limit": None,
             "shop_names": ["shop-allowed"],
+            "ordered": False,
         }
     ]
 
 
-def test_live_image_retriever_warm_uses_streaming_count_when_supported(monkeypatch):
+def test_live_image_retriever_warm_skips_streaming_catalog_count(monkeypatch):
     class FakeDB:
         def __init__(self):
             self.count_calls = []
@@ -751,14 +752,8 @@ def test_live_image_retriever_warm_uses_streaming_count_when_supported(monkeypat
 
     assert warm_summary == {
         "strategy": "siglip2_rerank",
-        "catalog_size": 42,
+        "catalog_size": 0,
         "streaming": True,
+        "skipped_count": True,
     }
-    assert retriever.db.count_calls == [
-        {
-            "strategy_name": "siglip2_rerank",
-            "require_cache": True,
-            "only_missing_cache": False,
-            "shop_names": None,
-        }
-    ]
+    assert retriever.db.count_calls == []

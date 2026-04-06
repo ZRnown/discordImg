@@ -91,6 +91,23 @@ def test_database_counts_missing_retrieval_cache_rows(tmp_path: Path):
     assert test_db.count_missing_product_image_retrieval_cache("siglip2_rerank") == 1
 
 
+def test_streaming_searchable_record_query_can_skip_global_ordering(tmp_path: Path):
+    db_path = tmp_path / "metadata.db"
+    test_db = Database(db_path=str(db_path))
+
+    query, params = test_db._build_searchable_product_image_records_query(
+        strategy_name="siglip2_rerank",
+        require_cache=True,
+        only_missing_cache=False,
+        limit=None,
+        shop_names=["shop-a"],
+        ordered=False,
+    )
+
+    assert "ORDER BY p.id ASC, pi.image_index ASC" not in query
+    assert params == ["siglip2_rerank", "shop-a"]
+
+
 def test_database_treats_oversized_legacy_cache_rows_as_missing(tmp_path: Path):
     db_path = tmp_path / "metadata.db"
     test_db = Database(db_path=str(db_path))

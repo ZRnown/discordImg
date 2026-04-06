@@ -1181,6 +1181,7 @@ class Database:
         only_missing_cache: bool = False,
         limit: Optional[int] = None,
         shop_names: Optional[Sequence[str]] = None,
+        ordered: bool = True,
     ) -> List[Dict]:
         """获取实时图片检索需要的商品图片与商品元数据"""
         try:
@@ -1191,6 +1192,7 @@ class Database:
                     only_missing_cache=only_missing_cache,
                     limit=limit,
                     shop_names=shop_names,
+                    ordered=ordered,
                 )
             )
         except Exception as e:
@@ -1217,6 +1219,7 @@ class Database:
         only_missing_cache: bool = False,
         limit: Optional[int] = None,
         shop_names: Optional[Sequence[str]] = None,
+        ordered: bool = True,
     ) -> tuple[Optional[str], List[Any]]:
         effective_limit = int(limit) if limit is not None else None
         normalized_shop_names = self._normalize_searchable_product_shop_names(shop_names)
@@ -1237,6 +1240,7 @@ class Database:
                     where_clauses.append(f'p.shop_name IN ({placeholders})')
                     params.extend(normalized_shop_names)
 
+                order_sql = "ORDER BY p.id ASC, pi.image_index ASC" if ordered else ""
                 query = f'''
                     SELECT
                         p.id AS product_id,
@@ -1268,7 +1272,7 @@ class Database:
                     JOIN product_images pi ON pi.id = rc.image_db_id
                     JOIN products p ON p.id = pi.product_id
                     WHERE {' AND '.join(where_clauses)}
-                    ORDER BY p.id ASC, pi.image_index ASC
+                    {order_sql}
                 '''
             else:
                 where_clauses = []
@@ -1280,6 +1284,7 @@ class Database:
                     params.extend(normalized_shop_names)
 
                 where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ''
+                order_sql = "ORDER BY p.id ASC, pi.image_index ASC" if ordered else ""
                 query = f'''
                     SELECT
                         p.id AS product_id,
@@ -1312,7 +1317,7 @@ class Database:
                     LEFT JOIN product_image_retrieval_cache rc
                         ON {self._retrieval_cache_join_sql('pi', 'rc', include_usable_embedding=only_missing_cache)}
                     {where_sql}
-                    ORDER BY p.id ASC, pi.image_index ASC
+                    {order_sql}
                 '''
         else:
             where_clauses = []
@@ -1322,6 +1327,7 @@ class Database:
                 params.extend(normalized_shop_names)
 
             where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ''
+            order_sql = "ORDER BY p.id ASC, pi.image_index ASC" if ordered else ""
             query = f'''
                 SELECT
                     p.id AS product_id,
@@ -1347,7 +1353,7 @@ class Database:
                 FROM products p
                 JOIN product_images pi ON pi.product_id = p.id
                 {where_sql}
-                ORDER BY p.id ASC, pi.image_index ASC
+                {order_sql}
             '''
 
         if effective_limit and effective_limit > 0:
@@ -1364,6 +1370,7 @@ class Database:
         limit: Optional[int] = None,
         shop_names: Optional[Sequence[str]] = None,
         batch_size: int = 256,
+        ordered: bool = True,
     ):
         query, params = self._build_searchable_product_image_records_query(
             strategy_name=strategy_name,
@@ -1371,6 +1378,7 @@ class Database:
             only_missing_cache=only_missing_cache,
             limit=limit,
             shop_names=shop_names,
+            ordered=ordered,
         )
         if not query:
             return

@@ -1394,6 +1394,7 @@ class LiveImageRetriever:
             only_missing_cache=False,
             limit=None,
             shop_names=normalized_user_shops,
+            ordered=False,
         ):
             raw_shop_name = str(row.get("shop_name") or "")
             if allowed_shops is not None and raw_shop_name not in allowed_shops:
@@ -1507,22 +1508,11 @@ class LiveImageRetriever:
             and callable(supports_streaming)
             and supports_streaming()
         ):
-            count_method = getattr(self.db, 'count_searchable_product_image_records', None)
-            catalog_size = 0
-            if callable(count_method):
-                catalog_size = int(
-                    count_method(
-                        strategy_name=self.strategy_name,
-                        require_cache=True,
-                        only_missing_cache=False,
-                        shop_names=None,
-                    )
-                    or 0
-                )
             return {
                 "strategy": self.strategy_name,
-                "catalog_size": catalog_size,
+                "catalog_size": 0,
                 "streaming": True,
+                "skipped_count": True,
             }
 
         _strategy, prepared_catalog = self._ensure_prepared_catalog()
