@@ -3727,6 +3727,26 @@ class Database:
             logger.error(f"获取过滤图片失败: {e}")
             return []
 
+    def has_global_image_filter_images(self) -> bool:
+        """是否存在启用中的全局图片过滤图"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    SELECT 1
+                    FROM message_filter_images mfi
+                    JOIN message_filters mf ON mf.id = mfi.filter_id
+                    WHERE mf.is_active = 1
+                      AND mf.filter_type = 'image_filter'
+                    LIMIT 1
+                    '''
+                )
+                return cursor.fetchone() is not None
+        except Exception as e:
+            logger.error(f"检查全局图片过滤图失败: {e}")
+            return False
+
     def get_message_filter_image_by_id(self, image_id: int) -> Optional[Dict]:
         """获取单条过滤图片记录"""
         try:
@@ -3789,6 +3809,25 @@ class Database:
         except Exception as e:
             logger.error(f"获取用户网站过滤失败: {e}")
             return []
+
+    def has_user_website_filter_images(self, user_id: int) -> bool:
+        """指定用户是否存在网站级图片过滤图"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    SELECT 1
+                    FROM website_filter_images
+                    WHERE user_id = ?
+                    LIMIT 1
+                    ''',
+                    (user_id,),
+                )
+                return cursor.fetchone() is not None
+        except Exception as e:
+            logger.error(f"检查网站图片过滤图失败: {e}")
+            return False
 
     def add_website_filter_image(self, user_id: int, website_id: int, filter_id: str, image_path: str, features: np.ndarray) -> int:
         """添加网站过滤图片，返回记录ID"""

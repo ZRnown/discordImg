@@ -1,3 +1,4 @@
+import io
 import json
 import sqlite3
 import unittest
@@ -171,6 +172,62 @@ class SearchSimilarTextApiTestCase(unittest.TestCase):
         self.assertTrue(data["success"])
         self.assertEqual(data["total"], 1)
         self.assertEqual(data["products"][0]["id"], 2)
+
+    def test_search_similar_skips_query_feature_extraction_without_any_filter_images(self):
+        class DummyRetriever:
+            def search(self, image_path, query_text="", top_k=5, threshold=0.0, user_shops=None):
+                return {
+                    "strategy": "dummy",
+                    "catalog_size": 0,
+                    "ranked_products": [],
+                    "top1_score": 0.0,
+                    "top1_margin": 0.0,
+                }
+
+        with patch.object(
+            app_module,
+            "extract_features",
+            side_effect=AssertionError(
+                "extract_features should be skipped when there are no filter images"
+            ),
+        ), patch.object(
+            app_module,
+            "get_current_user",
+            return_value=None,
+        ), patch.object(
+            app_module,
+            "build_user_shop_scope",
+            return_value=["Vibeo"],
+        ), patch.object(
+            app_module.db,
+            "has_global_image_filter_images",
+            return_value=False,
+            create=True,
+        ), patch.object(
+            app_module.db,
+            "has_user_website_filter_images",
+            return_value=False,
+            create=True,
+        ), patch.object(
+            app_module.db,
+            "get_total_indexed_images",
+            return_value=0,
+        ), patch(
+            "live_retrieval.get_live_image_retriever",
+            return_value=DummyRetriever(),
+        ):
+            response = self.client.post(
+                "/search_similar",
+                data={
+                    "threshold": "0.2",
+                    "limit": "5",
+                    "user_id": "123",
+                    "image": (io.BytesIO(b"fake-image-bytes"), "query.jpg"),
+                },
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 200)
 
 
 if __name__ == "__main__":

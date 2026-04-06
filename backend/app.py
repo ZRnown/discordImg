@@ -1160,23 +1160,39 @@ def search_similar():
             return jsonify({'error': 'No image provided (url or file)'}), 400
 
         try:
-            # 仅用于图片过滤规则匹配，实时商品检索改由 live_retrieval 负责。
-            query_features = extract_features(image_path)
-
-            if query_features is None:
-                return jsonify({'error': 'Feature extraction failed'}), 500
-
-            query_vec = np.array(query_features, dtype='float32')
-            q_norm = np.linalg.norm(query_vec)
-            if q_norm > 0:
-                query_vec = query_vec / q_norm
-
-            # === 图片过滤规则匹配（基于上传图片） ===
             blocked_filter_match = None
             blocked_website_filter_matches = []
+            query_vec = None
+
+            def ensure_query_vec():
+                nonlocal query_vec
+                if query_vec is not None:
+                    return query_vec
+
+                query_features = extract_features(image_path)
+                if query_features is None:
+                    raise ValueError('Feature extraction failed')
+
+                query_vec = np.array(query_features, dtype='float32')
+                q_norm = np.linalg.norm(query_vec)
+                if q_norm > 0:
+                    query_vec = query_vec / q_norm
+                return query_vec
+
+            has_global_filter_images = bool(getattr(db, 'has_global_image_filter_images', lambda: True)())
+            has_user_website_filter_images = bool(
+                user_id
+                and getattr(db, 'has_user_website_filter_images', lambda _user_id: True)(user_id)
+            )
+
+            # === 图片过滤规则匹配（基于上传图片） ===
             try:
-                image_filters = db.get_message_filters()
-                image_filters = [f for f in (image_filters or []) if f.get('filter_type') == 'image_filter']
+                if has_global_filter_images:
+                    query_vec_for_filters = ensure_query_vec()
+                    image_filters = db.get_message_filters()
+                    image_filters = [f for f in (image_filters or []) if f.get('filter_type') == 'image_filter']
+                else:
+                    image_filters = []
                 if image_filters:
                     best_match = None
                     best_similarity = -1.0
@@ -1198,7 +1214,7 @@ def search_similar():
                             v_norm = np.linalg.norm(vec)
                             if v_norm > 0:
                                 vec = vec / v_norm
-                            sim = float(np.dot(query_vec, vec))
+                            sim = float(np.dot(query_vec_for_filters, vec))
                             if sim > local_best_sim:
                                 local_best_sim = sim
                                 local_best = item
@@ -1217,7 +1233,8 @@ def search_similar():
 
             # === 网站级图片过滤规则匹配 ===
             try:
-                if user_id:
+                if user_id and has_user_website_filter_images:
+                    query_vec_for_filters = ensure_query_vec()
                     website_settings = db.get_all_user_website_filters(user_id)
                     best_by_website = {}
                     for setting in website_settings or []:
@@ -1259,7 +1276,7 @@ def search_similar():
                                 v_norm = np.linalg.norm(vec)
                                 if v_norm > 0:
                                     vec = vec / v_norm
-                                sim = float(np.dot(query_vec, vec))
+                                sim = float(np.dot(query_vec_for_filters, vec))
                                 if sim > local_best_sim:
                                     local_best_sim = sim
                                     local_best = item
