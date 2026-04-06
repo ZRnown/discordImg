@@ -1229,13 +1229,12 @@ class Database:
 
         params: List[Any] = []
         if strategy_name:
-            params.append(strategy_name)
-
             if require_cache and not only_missing_cache:
                 order_sql = "ORDER BY p.id ASC, pi.image_index ASC" if ordered else ""
                 if normalized_shop_names:
                     placeholders = ','.join('?' for _ in normalized_shop_names)
                     params.extend(normalized_shop_names)
+                    params.append(strategy_name)
                     query = f'''
                         SELECT
                             p.id AS product_id,
@@ -1271,6 +1270,7 @@ class Database:
                         {order_sql}
                     '''
                 else:
+                    params.append(strategy_name)
                     query = f'''
                         SELECT
                             p.id AS product_id,
@@ -1305,6 +1305,7 @@ class Database:
                         {order_sql}
                     '''
             else:
+                params.append(strategy_name)
                 where_clauses = []
                 if only_missing_cache:
                     where_clauses.append('rc.image_db_id IS NULL')

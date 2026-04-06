@@ -129,7 +129,7 @@ def test_streaming_searchable_record_query_can_skip_global_ordering(tmp_path: Pa
     )
 
     assert "ORDER BY p.id ASC, pi.image_index ASC" not in query
-    assert params == ["siglip2_rerank", "shop-a"]
+    assert params == ["shop-a", "siglip2_rerank"]
 
 
 def test_cached_searchable_record_query_prefers_shop_filtered_catalog_path(tmp_path: Path):
@@ -149,7 +149,7 @@ def test_cached_searchable_record_query_prefers_shop_filtered_catalog_path(tmp_p
     assert "JOIN product_images pi ON pi.product_id = p.id" in query
     assert "JOIN product_image_retrieval_cache rc" in query
     assert "rc.image_db_id = pi.id" in query
-    assert params == ["siglip2_rerank", "shop-a"]
+    assert params == ["shop-a", "siglip2_rerank"]
 
 
 def test_database_treats_oversized_legacy_cache_rows_as_missing(tmp_path: Path):
