@@ -733,19 +733,6 @@ def initialize_runtime():
                 elif strategy_requires_persisted_catalog_cache(strategy_name):
                     print(f"⏭️ [后台] 已跳过 {strategy_name} 启动缓存预热")
 
-                cleanup_summary = db.compact_product_image_retrieval_cache(strategy_name)
-                if any(
-                    int(cleanup_summary.get(key) or 0) > 0
-                    for key in ('trimmed_hist', 'trimmed_tokens', 'deleted_rows')
-                ):
-                    logger.warning(
-                        "已清理商品检索缓存异常数据: strategy=%s trimmed_hist=%s trimmed_tokens=%s deleted_rows=%s",
-                        strategy_name,
-                        cleanup_summary.get('trimmed_hist', 0),
-                        cleanup_summary.get('trimmed_tokens', 0),
-                        cleanup_summary.get('deleted_rows', 0),
-                    )
-
                 if getattr(config, 'LIVE_IMAGE_SEARCH_STARTUP_PREPARE_CATALOG', True):
                     try:
                         from live_retrieval import warm_live_image_retriever
@@ -762,10 +749,24 @@ def initialize_runtime():
                         f"catalog_size={warm_summary.get('catalog_size', 0)}"
                     )
 
+                print("✅ [后台] AI模型预热完成，系统已就绪")
+
+                cleanup_summary = db.compact_product_image_retrieval_cache(strategy_name)
+                if any(
+                    int(cleanup_summary.get(key) or 0) > 0
+                    for key in ('trimmed_hist', 'trimmed_tokens', 'deleted_rows')
+                ):
+                    logger.warning(
+                        "已清理商品检索缓存异常数据: strategy=%s trimmed_hist=%s trimmed_tokens=%s deleted_rows=%s",
+                        strategy_name,
+                        cleanup_summary.get('trimmed_hist', 0),
+                        cleanup_summary.get('trimmed_tokens', 0),
+                        cleanup_summary.get('deleted_rows', 0),
+                    )
+
                 _start_auto_retrieval_cache_backfill()
             except Exception as cache_error:
                 logger.warning("商品检索缓存预热失败: %s", cache_error)
-            print("✅ [后台] AI模型预热完成，系统已就绪")
         except Exception as e:
             print(f"⚠️ [后台] AI预热失败: {e}")
             ai_model_ready = False
