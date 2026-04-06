@@ -4,15 +4,26 @@ from dataclasses import dataclass, field
 import hashlib
 import json
 import os
+from statistics import mean
 from threading import Lock
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from PIL import Image, ImageFilter
 
 try:
-    from .benchmarks.common import aggregate_product_rankings
+    from .benchmarks.common import (
+        _PRODUCT_RANK_SECOND_BEST_WEIGHT,
+        _PRODUCT_RANK_TOP3_MEAN_WEIGHT,
+        _PRODUCT_RANK_TOP5_MEAN_WEIGHT,
+        aggregate_product_rankings,
+    )
 except ImportError:
-    from benchmarks.common import aggregate_product_rankings
+    from benchmarks.common import (
+        _PRODUCT_RANK_SECOND_BEST_WEIGHT,
+        _PRODUCT_RANK_TOP3_MEAN_WEIGHT,
+        _PRODUCT_RANK_TOP5_MEAN_WEIGHT,
+        aggregate_product_rankings,
+    )
 
 
 @dataclass(frozen=True)
@@ -736,38 +747,152 @@ def load_product_support_records_from_manifest(
 def build_catalog_records(rows: Sequence[Dict[str, Any]]) -> List[LiveCatalogImageRecord]:
     records: List[LiveCatalogImageRecord] = []
     for row in rows:
-        image_path = str(row.get("image_path") or "").strip()
-        if not image_path:
+        record = build_catalog_record(row)
+        if record is not None:
+            records.append(record)
+    return records
+
+
+def build_catalog_record(row: Dict[str, Any]) -> Optional[LiveCatalogImageRecord]:
+    image_path = str(row.get("image_path") or "").strip()
+    if not image_path:
+        return None
+    return LiveCatalogImageRecord(
+        product_id=str(row.get("product_id") or row.get("id") or ""),
+        item_id=str(row.get("item_id") or ""),
+        title=str(row.get("title") or ""),
+        english_title=str(row.get("english_title") or ""),
+        description=str(row.get("description") or ""),
+        shop_name=str(row.get("shop_name") or ""),
+        image_path=image_path,
+        image_index=int(row.get("image_index") or 0),
+        product_url=str(row.get("product_url") or ""),
+        cnfans_url=str(row.get("cnfans_url") or ""),
+        acbuy_url=str(row.get("acbuy_url") or ""),
+        rule_enabled=bool(row.get("ruleEnabled", True)),
+        reply_scope=str(row.get("reply_scope") or "all"),
+        image_source=str(row.get("image_source") or "product"),
+        custom_reply_text=str(row.get("custom_reply_text") or ""),
+        custom_reply_images=str(row.get("custom_reply_images") or ""),
+        custom_image_urls=str(row.get("custom_image_urls") or ""),
+        uploaded_reply_images=str(row.get("uploaded_reply_images") or ""),
+        queries=_build_queries(row),
+        image_db_id=int(row.get("image_db_id") or 0),
+        cache_strategy_name=str(row.get("retrieval_cache_strategy") or ""),
+        cache_version=str(row.get("retrieval_cache_version") or ""),
+        cache_embedding=_parse_json_list(row.get("retrieval_embedding")),
+        cache_color_hist=_parse_json_list(row.get("retrieval_color_hist")),
+        cache_tokens=_parse_json_list(row.get("retrieval_tokens")) or [],
+    )
+
+
+def _build_product_metadata(record: LiveCatalogImageRecord) -> Dict[str, Any]:
+    return {
+        "english_title": record.english_title,
+        "description": record.description,
+        "shop_name": record.shop_name,
+        "product_url": record.product_url,
+        "cnfans_url": record.cnfans_url,
+        "acbuy_url": record.acbuy_url,
+        "ruleEnabled": record.rule_enabled,
+        "reply_scope": record.reply_scope,
+        "image_source": record.image_source,
+        "custom_reply_text": record.custom_reply_text,
+        "custom_reply_images": record.custom_reply_images,
+        "custom_image_urls": record.custom_image_urls,
+        "uploaded_reply_images": record.uploaded_reply_images,
+        "queries": list(record.queries),
+    }
+
+
+def _update_streaming_product_ranking_state(
+    ranking_state_by_product: Dict[str, Dict[str, Any]],
+    record: LiveCatalogImageRecord,
+    score: float,
+) -> None:
+    product_id = str(record.product_id)
+    state = ranking_state_by_product.setdefault(
+        product_id,
+        {
+            "scores": [],
+            "best_score": float("-inf"),
+            "best_row": {
+                "product_id": product_id,
+                "title": record.title,
+                "image_path": record.image_path,
+                "image_index": record.image_index,
+            },
+        },
+    )
+
+    scores = state["scores"]
+    scores.append(float(score))
+    scores.sort(reverse=True)
+    if len(scores) > 5:
+        del scores[5:]
+
+    if float(score) > float(state["best_score"]):
+        state["best_score"] = float(score)
+        state["best_row"] = {
+            "product_id": product_id,
+            "title": record.title,
+            "image_path": record.image_path,
+            "image_index": record.image_index,
+        }
+
+
+def _finalize_streaming_product_rankings(
+    ranking_state_by_product: Dict[str, Dict[str, Any]],
+    top_k: int,
+) -> List[Dict[str, Any]]:
+    ranked_with_signal = []
+    for state in ranking_state_by_product.values():
+        scores = list(state.get("scores") or [])
+        if not scores:
             continue
-        records.append(
-            LiveCatalogImageRecord(
-                product_id=str(row.get("product_id") or row.get("id") or ""),
-                item_id=str(row.get("item_id") or ""),
-                title=str(row.get("title") or ""),
-                english_title=str(row.get("english_title") or ""),
-                description=str(row.get("description") or ""),
-                shop_name=str(row.get("shop_name") or ""),
-                image_path=image_path,
-                image_index=int(row.get("image_index") or 0),
-                product_url=str(row.get("product_url") or ""),
-                cnfans_url=str(row.get("cnfans_url") or ""),
-                acbuy_url=str(row.get("acbuy_url") or ""),
-                rule_enabled=bool(row.get("ruleEnabled", True)),
-                reply_scope=str(row.get("reply_scope") or "all"),
-                image_source=str(row.get("image_source") or "product"),
-                custom_reply_text=str(row.get("custom_reply_text") or ""),
-                custom_reply_images=str(row.get("custom_reply_images") or ""),
-                custom_image_urls=str(row.get("custom_image_urls") or ""),
-                uploaded_reply_images=str(row.get("uploaded_reply_images") or ""),
-                queries=_build_queries(row),
-                image_db_id=int(row.get("image_db_id") or 0),
-                cache_strategy_name=str(row.get("retrieval_cache_strategy") or ""),
-                cache_version=str(row.get("retrieval_cache_version") or ""),
-                cache_embedding=_parse_json_list(row.get("retrieval_embedding")),
-                cache_color_hist=_parse_json_list(row.get("retrieval_color_hist")),
-                cache_tokens=_parse_json_list(row.get("retrieval_tokens")) or [],
+
+        best_score = float(scores[0])
+        second_best_score = float(scores[1]) if len(scores) > 1 else 0.0
+        top3_mean_score = mean(scores[:3])
+        top5_mean_score = mean(scores[:5])
+        rank_score = (
+            best_score
+            + _PRODUCT_RANK_SECOND_BEST_WEIGHT * second_best_score
+            + _PRODUCT_RANK_TOP3_MEAN_WEIGHT * top3_mean_score
+            + _PRODUCT_RANK_TOP5_MEAN_WEIGHT * top5_mean_score
+        )
+        ranked_with_signal.append(
+            (
+                rank_score,
+                {
+                    **state["best_row"],
+                    "score": best_score,
+                },
             )
         )
+
+    ranked = [
+        item
+        for _rank_score, item in sorted(
+            ranked_with_signal,
+            key=lambda pair: (
+                -float(pair[0]),
+                -float(pair[1].get("score", 0.0)),
+                str(pair[1].get("product_id") or ""),
+                int(pair[1].get("image_index") or 0),
+                str(pair[1].get("image_path") or ""),
+            ),
+        )
+    ]
+    return ranked[: max(int(top_k or 1), 1)]
+
+
+def build_catalog_records(rows: Sequence[Dict[str, Any]]) -> List[LiveCatalogImageRecord]:
+    records: List[LiveCatalogImageRecord] = []
+    for row in rows:
+        record = build_catalog_record(row)
+        if record is not None:
+            records.append(record)
     return records
 
 
@@ -1102,6 +1227,24 @@ class LiveImageRetriever:
             )
         )
 
+    def _get_strategy_instance(self):
+        if self._strategy is not None:
+            return self._strategy
+
+        strategy = get_retrieval_strategy_instance(self.strategy_name)
+        self._strategy = strategy
+        return strategy
+
+    def _supports_streaming_search(self, strategy) -> bool:
+        supports_streaming = getattr(strategy, 'supports_streaming_live_search', None)
+        if not (
+            strategy_requires_persisted_catalog_cache(self.strategy_name)
+            and callable(supports_streaming)
+            and supports_streaming()
+        ):
+            return False
+        return callable(getattr(self.db, 'iter_searchable_product_image_records', None))
+
     @staticmethod
     def _build_signature(rows: Sequence[Dict[str, Any]]) -> Tuple[int, int, str]:
         if not rows:
@@ -1185,6 +1328,95 @@ class LiveImageRetriever:
             self._prepared_catalog = prepared_catalog
             return self._strategy, self._prepared_catalog
 
+    def _search_streaming(
+        self,
+        image_path: str,
+        query_text: str = "",
+        top_k: int = 5,
+        threshold: float = 0.0,
+        user_shops: Optional[Sequence[str]] = None,
+    ) -> Dict[str, Any]:
+        strategy = self._get_strategy_instance()
+        query_record = build_query_record(image_path=image_path, query_text=query_text)
+        query_context = strategy.prepare_query_image(query_record)
+
+        if user_shops is None:
+            allowed_shops: Optional[set[str]] = None
+            normalized_user_shops = None
+        else:
+            normalized_user_shops = [
+                str(shop).strip()
+                for shop in user_shops
+                if str(shop).strip()
+            ]
+            if not normalized_user_shops:
+                return {
+                    "strategy": self.strategy_name,
+                    "catalog_size": 0,
+                    "ranked_products": [],
+                    "top1_score": 0.0,
+                    "top1_margin": 0.0,
+                    "streaming": True,
+                }
+            allowed_shops = set(normalized_user_shops)
+
+        ranking_state_by_product: Dict[str, Dict[str, Any]] = {}
+        product_metadata: Dict[str, Dict[str, Any]] = {}
+        catalog_size = 0
+
+        for row in self.db.iter_searchable_product_image_records(
+            strategy_name=self.strategy_name,
+            require_cache=True,
+            only_missing_cache=False,
+            limit=None,
+            shop_names=normalized_user_shops,
+        ):
+            raw_shop_name = str(row.get("shop_name") or "")
+            if allowed_shops is not None and raw_shop_name not in allowed_shops:
+                continue
+
+            record = build_catalog_record(row)
+            if record is None:
+                continue
+
+            catalog_size += 1
+            product_metadata.setdefault(record.product_id, _build_product_metadata(record))
+            catalog_context = strategy.prepare_catalog_image(record)
+            score = float(strategy.score(query_context, catalog_context))
+            _update_streaming_product_ranking_state(
+                ranking_state_by_product,
+                record,
+                score,
+            )
+
+        ranked_products = _finalize_streaming_product_rankings(
+            ranking_state_by_product,
+            top_k=max(int(top_k or 1), 1),
+        )
+        filtered_ranked_products = [
+            {
+                **item,
+                **product_metadata.get(str(item["product_id"]), {}),
+            }
+            for item in ranked_products
+            if float(item.get("score", 0.0)) >= float(threshold or 0.0)
+        ][: max(int(top_k or 1), 1)]
+
+        top1_score = float(filtered_ranked_products[0]["score"]) if filtered_ranked_products else 0.0
+        top2_score = (
+            float(filtered_ranked_products[1]["score"])
+            if len(filtered_ranked_products) > 1
+            else 0.0
+        )
+        return {
+            "strategy": self.strategy_name,
+            "catalog_size": catalog_size,
+            "ranked_products": filtered_ranked_products,
+            "top1_score": top1_score,
+            "top1_margin": top1_score - top2_score,
+            "streaming": True,
+        }
+
     def search(
         self,
         image_path: str,
@@ -1193,6 +1425,16 @@ class LiveImageRetriever:
         threshold: float = 0.0,
         user_shops: Optional[Sequence[str]] = None,
     ) -> Dict[str, Any]:
+        strategy = self._get_strategy_instance()
+        if self._supports_streaming_search(strategy):
+            return self._search_streaming(
+                image_path=image_path,
+                query_text=query_text,
+                top_k=top_k,
+                threshold=threshold,
+                user_shops=user_shops,
+            )
+
         strategy, prepared_catalog = self._ensure_prepared_catalog()
         query_record = build_query_record(image_path=image_path, query_text=query_text)
         ranked_products = rank_query_products(
@@ -1214,6 +1456,31 @@ class LiveImageRetriever:
         }
 
     def warm(self) -> Dict[str, Any]:
+        strategy = self._get_strategy_instance()
+        supports_streaming = getattr(strategy, 'supports_streaming_live_search', None)
+        if (
+            strategy_requires_persisted_catalog_cache(self.strategy_name)
+            and callable(supports_streaming)
+            and supports_streaming()
+        ):
+            count_method = getattr(self.db, 'count_searchable_product_image_records', None)
+            catalog_size = 0
+            if callable(count_method):
+                catalog_size = int(
+                    count_method(
+                        strategy_name=self.strategy_name,
+                        require_cache=True,
+                        only_missing_cache=False,
+                        shop_names=None,
+                    )
+                    or 0
+                )
+            return {
+                "strategy": self.strategy_name,
+                "catalog_size": catalog_size,
+                "streaming": True,
+            }
+
         _strategy, prepared_catalog = self._ensure_prepared_catalog()
         return {
             "strategy": self.strategy_name,

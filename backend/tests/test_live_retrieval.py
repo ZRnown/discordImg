@@ -595,3 +595,125 @@ def test_live_image_retriever_warm_prepares_catalog_before_search(monkeypatch):
     assert warm_summary["catalog_size"] == 1
     assert result["catalog_size"] == 1
     assert retriever.db.calls == 1
+
+
+def test_live_image_retriever_streaming_search_avoids_catalog_materialization(monkeypatch):
+    class FakeDB:
+        def __init__(self):
+            self.iter_calls = []
+
+        def get_searchable_product_image_records(self, **kwargs):
+            raise AssertionError("streaming search should not materialize the full catalog")
+
+        def iter_searchable_product_image_records(self, **kwargs):
+            self.iter_calls.append(kwargs)
+            yield {
+                "product_id": "skip-me",
+                "title": "Skip Me",
+                "english_title": "",
+                "description": "",
+                "shop_name": "shop-blocked",
+                "image_path": "/tmp/skip.jpg",
+                "image_index": "bad-index",
+                "product_url": "https://weidian.com/item.html?itemID=9999",
+                "retrieval_cache_strategy": "siglip2_rerank",
+                "retrieval_cache_version": "siglip2_rerank_v1",
+                "retrieval_embedding": "[0.1, 0.2, 0.3]",
+                "retrieval_color_hist": None,
+                "retrieval_tokens": "[\"skip\"]",
+            }
+            yield {
+                "product_id": "2001",
+                "title": "Allowed Alpha",
+                "english_title": "Allowed Alpha",
+                "description": "demo",
+                "shop_name": "shop-allowed",
+                "image_path": "/tmp/allowed.jpg",
+                "image_index": 0,
+                "product_url": "https://weidian.com/item.html?itemID=2001",
+                "retrieval_cache_strategy": "siglip2_rerank",
+                "retrieval_cache_version": "siglip2_rerank_v1",
+                "retrieval_embedding": "[0.1, 0.2, 0.3]",
+                "retrieval_color_hist": None,
+                "retrieval_tokens": "[\"alpha\"]",
+            }
+
+    class FakeStrategy:
+        def supports_streaming_live_search(self):
+            return True
+
+        def prepare_query_image(self, record):
+            return {"query": record.query}
+
+        def prepare_catalog_image(self, record):
+            return {"score": 0.93 if record.product_id == "2001" else 0.11}
+
+        def score(self, query_context, catalog_context):
+            return catalog_context["score"]
+
+    monkeypatch.setattr(
+        "backend.live_retrieval.get_retrieval_strategy_instance",
+        lambda *args, **kwargs: FakeStrategy(),
+    )
+
+    retriever = LiveImageRetriever(FakeDB(), "siglip2_rerank")
+
+    result = retriever.search(
+        "/tmp/query.jpg",
+        query_text="ignored",
+        top_k=3,
+        threshold=0.2,
+        user_shops=["shop-allowed"],
+    )
+
+    assert result["catalog_size"] == 1
+    assert [item["product_id"] for item in result["ranked_products"]] == ["2001"]
+    assert retriever.db.iter_calls == [
+        {
+            "strategy_name": "siglip2_rerank",
+            "require_cache": True,
+            "only_missing_cache": False,
+            "limit": None,
+            "shop_names": ["shop-allowed"],
+        }
+    ]
+
+
+def test_live_image_retriever_warm_uses_streaming_count_when_supported(monkeypatch):
+    class FakeDB:
+        def __init__(self):
+            self.count_calls = []
+
+        def get_searchable_product_image_records(self, **kwargs):
+            raise AssertionError("warm should not materialize the full catalog in streaming mode")
+
+        def count_searchable_product_image_records(self, **kwargs):
+            self.count_calls.append(kwargs)
+            return 42
+
+    class FakeStrategy:
+        def supports_streaming_live_search(self):
+            return True
+
+    monkeypatch.setattr(
+        "backend.live_retrieval.get_retrieval_strategy_instance",
+        lambda *args, **kwargs: FakeStrategy(),
+    )
+
+    retriever = LiveImageRetriever(FakeDB(), "siglip2_rerank")
+
+    warm_summary = retriever.warm()
+
+    assert warm_summary == {
+        "strategy": "siglip2_rerank",
+        "catalog_size": 42,
+        "streaming": True,
+    }
+    assert retriever.db.count_calls == [
+        {
+            "strategy_name": "siglip2_rerank",
+            "require_cache": True,
+            "only_missing_cache": False,
+            "shop_names": None,
+        }
+    ]

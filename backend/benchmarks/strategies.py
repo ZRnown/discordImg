@@ -1136,6 +1136,23 @@ class Siglip2RerankStrategy:
         self._product_support_by_product: Dict[str, list[Dict[str, Any]]] = {}
         self.cache_version = self._build_cache_version()
 
+    def supports_streaming_live_search(self) -> bool:
+        return not any(
+            (
+                bool(getattr(self, "product_support_enabled", False)),
+                bool(getattr(self, "adaptive_raw_center_enabled", False)),
+                bool(getattr(self, "stage2_ridge_enabled", False)),
+                bool(getattr(self, "stage2_hard_negative_enabled", False)),
+                bool(getattr(self, "stage2_query_pair_enabled", False)),
+                bool(getattr(self, "stage2_dynamic_cluster_enabled", False)),
+                bool(getattr(self, "stage2_query_cluster_enabled", False)),
+                bool(getattr(self, "stage2_targeted_support_enabled", False)),
+                bool(getattr(self, "stage2_targeted_cluster_enabled", False)),
+                bool(getattr(self, "stage2_targeted_pair_enabled", False)),
+                bool(getattr(self, "stage2_support_stats_enabled", False)),
+            )
+        )
+
     @staticmethod
     def _format_weight_token(value: float) -> str:
         return f"{float(value):.2f}".replace(".", "p")

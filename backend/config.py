@@ -26,6 +26,16 @@ def _env_int(name: str, default: int) -> int:
     except ValueError:
         return default
 
+
+def _env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None or value == '':
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
 class Config:
     # === 基础配置 ===
     HOST = '0.0.0.0'
@@ -50,6 +60,11 @@ class Config:
     DISCORD_CHANNEL_ID = int(os.getenv('DISCORD_CHANNEL_ID', 0)) if os.getenv('DISCORD_CHANNEL_ID') else 0
     DISCORD_SIMILARITY_THRESHOLD = 0.6
     LIVE_IMAGE_SEARCH_STRATEGY = os.getenv('LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank')
+    DISCORD_CHUNK_GUILDS_AT_STARTUP = _env_bool('DISCORD_CHUNK_GUILDS_AT_STARTUP', False)
+    DISCORD_GUILD_SUBSCRIPTIONS = _env_bool('DISCORD_GUILD_SUBSCRIPTIONS', False)
+    DISCORD_HEARTBEAT_TIMEOUT = _env_float('DISCORD_HEARTBEAT_TIMEOUT', 120.0)
+    DISCORD_MAX_MESSAGES = _env_int('DISCORD_MAX_MESSAGES', 200)
+    DISCORD_STARTUP_STAGGER_SECONDS = _env_float('DISCORD_STARTUP_STAGGER_SECONDS', 1.5)
 
     # === 延迟配置 ===
     GLOBAL_REPLY_MIN_DELAY = 1.0

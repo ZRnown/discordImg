@@ -5207,10 +5207,18 @@ def start_discord_bot(user_id=None, accounts=None):
     try:
         import asyncio
         try:
-            from bot import DiscordBotClient
+            from bot import (
+                DiscordBotClient,
+                get_discord_start_delay_seconds,
+                start_discord_client_with_delay,
+            )
         except ModuleNotFoundError as import_error:
             if import_error.name == 'bot':
-                from .bot import DiscordBotClient
+                from .bot import (
+                    DiscordBotClient,
+                    get_discord_start_delay_seconds,
+                    start_discord_client_with_delay,
+                )
             else:
                 raise
 
@@ -5281,14 +5289,27 @@ def start_discord_bot(user_id=None, accounts=None):
 
             # 创建机器人实例，传入角色参数
             client = DiscordBotClient(account_id=account_id, user_id=user_id, user_shops=user_shops, role=role)
+            start_delay_seconds = get_discord_start_delay_seconds(started_count)
 
             # 启动机器人
             try:
-                task = asyncio.run_coroutine_threadsafe(client.start(token, reconnect=True), loop)
+                task = asyncio.run_coroutine_threadsafe(
+                    start_discord_client_with_delay(
+                        client,
+                        token,
+                        reconnect=True,
+                        start_delay_seconds=start_delay_seconds,
+                    ),
+                    loop,
+                )
                 bot_clients.append(client)
                 bot_tasks.append(task)
                 started_count += 1
-                logger.info(f"Discord机器人启动成功: {username}")
+                logger.info(
+                    "Discord机器人启动成功: %s (启动延迟 %.2fs)",
+                    username,
+                    start_delay_seconds,
+                )
             except Exception as e:
                 logger.error(f"启动机器人失败 {username}: {e}")
 

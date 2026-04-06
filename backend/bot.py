@@ -105,6 +105,55 @@ def _coerce_int(value, default):
         return default
 
 
+def build_discord_client_runtime_options(intents=None):
+    options = {
+        'chunk_guilds_at_startup': bool(
+            getattr(config, 'DISCORD_CHUNK_GUILDS_AT_STARTUP', False)
+        ),
+        'guild_subscriptions': bool(
+            getattr(config, 'DISCORD_GUILD_SUBSCRIPTIONS', False)
+        ),
+        'heartbeat_timeout': float(
+            getattr(config, 'DISCORD_HEARTBEAT_TIMEOUT', 120.0) or 120.0
+        ),
+        'max_messages': max(
+            int(getattr(config, 'DISCORD_MAX_MESSAGES', 1000) or 0),
+            0,
+        ),
+    }
+    if intents is not None:
+        options['intents'] = intents
+
+    member_cache_flags_cls = getattr(discord, 'MemberCacheFlags', None)
+    if member_cache_flags_cls is not None:
+        try:
+            options['member_cache_flags'] = member_cache_flags_cls.none()
+        except Exception:
+            pass
+
+    return options
+
+
+def get_discord_start_delay_seconds(start_index: int) -> float:
+    stagger_seconds = float(
+        getattr(config, 'DISCORD_STARTUP_STAGGER_SECONDS', 1.5) or 0.0
+    )
+    normalized_index = max(int(start_index or 0), 0)
+    return max(stagger_seconds, 0.0) * normalized_index
+
+
+async def start_discord_client_with_delay(
+    client,
+    token,
+    reconnect=True,
+    start_delay_seconds=0.0,
+):
+    delay_seconds = max(float(start_delay_seconds or 0.0), 0.0)
+    if delay_seconds > 0:
+        await asyncio.sleep(delay_seconds)
+    await client.start(token, reconnect=reconnect)
+
+
 def _is_managed_account_author_id(author_id):
     normalized_author_id = _coerce_int(author_id, None)
     if normalized_author_id is None:
@@ -809,10 +858,10 @@ class DiscordBotClient(discord.Client):
                 intents.guild_reactions = True
             if hasattr(intents, "dm_reactions"):
                 intents.dm_reactions = True
-            super().__init__(intents=intents)
-        except AttributeError:
+            super().__init__(**build_discord_client_runtime_options(intents=intents))
+        except (AttributeError, TypeError):
             # 如果 Intents 不存在，直接初始化（discord.py-self 可能不需要）
-            super().__init__()
+            super().__init__(**build_discord_client_runtime_options())
         self.current_token = None
         self.running = False
         self.account_id = account_id
@@ -2819,11 +2868,8 @@ class DiscordBotClient(discord.Client):
         logger.info(f'Discord机器人已登录: {self.user} (ID: {self.user.id})')
         logger.info(f'机器人已就绪，开始监听消息')
         try:
-            try:
-                from database import db
-            except ImportError:
-                from .database import db
-            bound_channels = await asyncio.get_event_loop().run_in_executor(None, db.get_all_bound_channel_ids)
+            await self._refresh_channel_cache()
+            bound_channels = DiscordBotClient._bound_channels_cache
             if bound_channels:
                 bound_list = sorted(bound_channels)
                 preview = ", ".join(bound_list[:5])
@@ -3887,6 +3933,7 @@ async def start_multi_bot_loop():
                 if account_id not in existing_account_ids:
                     token = account['token']
                     username = account.get('username', f'account_{account_id}')
+                    start_delay_seconds = get_discord_start_delay_seconds(len(bot_clients))
 
                     logger.info(f'启动新账号机器人: {username}')
 
@@ -3895,10 +3942,19 @@ async def start_multi_bot_loop():
 
                     # 启动机器人
                     try:
-                        task = asyncio.create_task(client.start(token, reconnect=True))
+                        task = asyncio.create_task(
+                            start_discord_client_with_delay(
+                                client,
+                                token,
+                                reconnect=True,
+                                start_delay_seconds=start_delay_seconds,
+                            )
+                        )
                         bot_clients.append(client)
                         bot_tasks.append(task)
-                        logger.info(f'机器人启动成功: {username}')
+                        logger.info(
+                            f'机器人启动成功: {username} (启动延迟 {start_delay_seconds:.2f}s)'
+                        )
                     except Exception as e:
                         logger.error(f'启动机器人失败 {username}: {e}')
 
