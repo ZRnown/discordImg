@@ -147,7 +147,7 @@ def test_cached_searchable_record_query_prefers_shop_filtered_catalog_path(tmp_p
 
     assert "FROM products p" in query
     assert "JOIN product_images pi ON pi.product_id = p.id" in query
-    assert "JOIN product_image_retrieval_cache rc" in query
+    assert f"product_image_retrieval_cache rc INDEXED BY {database_module.USABLE_RETRIEVAL_CACHE_INDEX_NAME}" in query
     assert "rc.image_db_id = pi.id" in query
     assert params == ["shop-a", "siglip2_rerank"]
 
