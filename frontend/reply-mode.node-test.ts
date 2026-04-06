@@ -33,6 +33,11 @@ test('rotation mode never blocks switching', () => {
   assert.equal(getReplyModeSwitchError(3, 'rotation'), null)
 })
 
+test('all mode never blocks switching', () => {
+  assert.equal(getReplyModeSwitchError(0, 'all'), null)
+  assert.equal(getReplyModeSwitchError(5, 'all'), null)
+})
+
 test('default mode never blocks switching', () => {
   assert.equal(getReplyModeSwitchError(0, 'default'), null)
   assert.equal(getReplyModeSwitchError(3, 'default'), null)
@@ -42,12 +47,14 @@ test('reply mode labels cover the new default mode', () => {
   assert.equal(getReplyModeLabel('default'), '默认模式')
   assert.equal(getReplyModeLabel('rotation'), '轮换模式')
   assert.equal(getReplyModeLabel('keyword'), '关键词模式')
+  assert.equal(getReplyModeLabel('all'), '一起回复模式')
 })
 
 test('default mode hides both rotation and keyword settings', () => {
   assert.equal(getReplyModeSettingsSection('default'), 'none')
   assert.equal(getReplyModeSettingsSection('rotation'), 'rotation')
   assert.equal(getReplyModeSettingsSection('keyword'), 'keyword')
+  assert.equal(getReplyModeSettingsSection('all'), 'all')
 })
 
 test('keyword option is disabled unless exactly one sender is bound', () => {
@@ -55,6 +62,7 @@ test('keyword option is disabled unless exactly one sender is bound', () => {
   assert.equal(isReplyModeOptionDisabled(2, 'keyword'), true)
   assert.equal(isReplyModeOptionDisabled(1, 'keyword'), false)
   assert.equal(isReplyModeOptionDisabled(2, 'rotation'), false)
+  assert.equal(isReplyModeOptionDisabled(5, 'all'), false)
   assert.equal(isReplyModeOptionDisabled(0, 'default'), false)
 })
 

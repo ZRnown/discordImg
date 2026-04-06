@@ -104,6 +104,8 @@ export function getDisplayedReplyMode(
 
 export function getReplyModeLabel(replyMode: string): string {
   switch (replyMode) {
+    case 'all':
+      return '一起回复模式'
     case 'default':
       return '默认模式'
     case 'keyword':
@@ -114,7 +116,10 @@ export function getReplyModeLabel(replyMode: string): string {
   }
 }
 
-export function getReplyModeSettingsSection(replyMode: string): 'none' | 'rotation' | 'keyword' {
+export function getReplyModeSettingsSection(replyMode: string): 'none' | 'rotation' | 'keyword' | 'all' {
+  if (replyMode === 'all') {
+    return 'all'
+  }
   if (replyMode === 'rotation') {
     return 'rotation'
   }

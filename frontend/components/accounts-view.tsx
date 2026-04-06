@@ -522,8 +522,8 @@ const formatWebsiteForEdit = (website: any) => ({
       websites.forEach((website: any) => {
         channels[website.id] = website.channels || []
         accounts[website.id] = website.accounts || []
-        replyModes[website.id] = website.reply_mode || 'rotation'
-        rotationInputs[website.id] = (website.rotation_interval || 180).toString()
+        replyModes[website.id] = website.reply_mode ?? 'rotation'
+        rotationInputs[website.id] = String(website.rotation_interval ?? 180)
         keywordIntervalInputs[website.id] = (website.keyword_reply_interval ?? website.rotation_interval ?? 180).toString()
         keywordBatchInputs[website.id] = (website.keyword_reply_batch_size ?? 0).toString()
         keywordDispatchModes[website.id] = website.keyword_batch_dispatch_mode ?? 'immediate'
@@ -795,7 +795,8 @@ const formatWebsiteForEdit = (website: any) => ({
     const website = websites.find(w => w.id === websiteId)
     if (!website) return 0
 
-    const interval = website.rotation_interval || 180
+    const interval = website.rotation_interval ?? 180
+    if (interval <= 0) return 0
     const channels = websiteChannels[websiteId] || []
 
     let maxRemaining = 0
@@ -3577,14 +3578,15 @@ const formatWebsiteForEdit = (website: any) => ({
 
                     {/* 账号轮换设置 - 每个用户独立配置 */}
                     {currentUser && (
-                      <div className="space-y-2">
+                    <div className="space-y-2">
                         <div className="flex items-center gap-2">
                           <Settings className="w-4 h-4" />
-                          <span className="text-sm font-medium">轮换设置</span>
+                          <span className="text-sm font-medium">回复设置</span>
                         </div>
                         {(() => {
                           const senderCount = getWebsiteSenderCount(website.id)
                           const replyMode = getWebsiteReplyMode(website)
+                          const isAllMode = replyMode === 'all'
                           const keywordModeDisabled = isReplyModeOptionDisabled(senderCount, 'keyword')
                           const isReplyModeSaving = Boolean(replyModeSaving[website.id])
                           const isKeywordMode = replyMode === 'keyword'
@@ -3608,6 +3610,7 @@ const formatWebsiteForEdit = (website: any) => ({
                                   <SelectContent>
                                     <SelectItem value="default">默认模式</SelectItem>
                                     <SelectItem value="rotation">轮换模式</SelectItem>
+                                    <SelectItem value="all">一起回复模式</SelectItem>
                                     <SelectItem value="keyword" disabled={keywordModeDisabled}>
                                       关键词模式
                                     </SelectItem>
@@ -3618,9 +3621,11 @@ const formatWebsiteForEdit = (website: any) => ({
                                 ) : null}
                               </div>
 
-                              {settingsSection === 'rotation' ? (
+                              {settingsSection === 'rotation' || settingsSection === 'all' ? (
                                 <div className="flex items-center gap-2">
-                                  <Label className="text-xs">账号轮换间隔(秒):</Label>
+                                  <Label className="text-xs">
+                                    {isAllMode ? '一起回复冷却(秒):' : '账号轮换间隔(秒):'}
+                                  </Label>
                                   <Input
                                     type="number"
                                     value={rotationInputs[website.id] ?? (website.rotation_interval ?? 180).toString()}
@@ -3631,10 +3636,12 @@ const formatWebsiteForEdit = (website: any) => ({
                                     }}
                                     onBlur={() => {
                                       const value = parseInt(rotationInputs[website.id] ?? (website.rotation_interval ?? 180).toString())
-                                      if (value > 0 && value !== website.rotation_interval) {
+                                      const current = website.rotation_interval ?? 180
+                                      const valid = Number.isFinite(value) && (isAllMode ? value >= 0 : value > 0)
+                                      if (valid && value !== current) {
                                         void handleUpdateRotation(website.id, value)
-                                      } else if (value <= 0) {
-                                        toast.error('轮换间隔必须大于0秒')
+                                      } else if (!valid) {
+                                        toast.error(isAllMode ? '一起回复冷却不能小于0秒' : '轮换间隔必须大于0秒')
                                         setRotationInputs(prev => ({ ...prev, [website.id]: (website.rotation_interval ?? 180).toString() }))
                                       }
                                     }}
@@ -3754,6 +3761,8 @@ const formatWebsiteForEdit = (website: any) => ({
                                     ? '请先绑定至少一个发送账号。'
                                     : replyMode === 'default'
                                       ? '默认模式下，命中关键词后会立刻回复原消息，不走轮换冷却，也不使用关键词时间窗。'
+                                      : isAllMode
+                                        ? '一起回复模式下，当前网站绑定的所有发送账号都会对同一条命中消息一起回复；冷却时间为 0 时每次触发都发，大于 0 时整组账号共用同一冷却。'
                                       : isKeywordMode
                                         ? keywordBatchDispatchMode === 'window_end'
                                           ? '关键词模式下，同一 Discord 频道会按整轮时间窗累计命中；达到单轮关键词上限后会停止继续识别本轮新增关键词，等本轮倒计时结束后统一发送。批量 @ 消息会直接发送，不引用原消息。'
@@ -3765,6 +3774,10 @@ const formatWebsiteForEdit = (website: any) => ({
                                 <div>
                                   {replyMode === 'default'
                                     ? '默认模式不显示轮换和关键词窗口设置，行为等同于立即回复。'
+                                    : isAllMode
+                                      ? senderCount === 1
+                                        ? '当前只绑定了 1 个发送账号，一起回复模式会退化为单账号回复；之后再增加发送账号会自动一起回复。'
+                                        : '一起回复模式会按当前网站已绑定的发送账号列表逐个发送。'
                                     : senderCount === 1
                                       ? '关键词模式只在绑定 1 个发送账号时可用；切回其他模式后，已填写的关键词时间和上限会保留，下次切回可继续使用。'
                                       : '当前绑定了多个发送账号，关键词模式不可选；如需使用关键词模式，请先只保留 1 个发送账号。'}

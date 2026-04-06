@@ -8,8 +8,10 @@ def _coerce_int(value: Any, default: int) -> int:
         return default
 
 
-def _normalize_interval(value: Any, default: int) -> int:
+def _normalize_interval(value: Any, default: int, allow_zero: bool = False) -> int:
     interval = _coerce_int(value, default)
+    if allow_zero and interval == 0:
+        return 0
     return interval if interval > 0 else default
 
 
@@ -31,7 +33,7 @@ def _normalize_rotation_enabled(value: Any, default: int = 1) -> int:
 def _normalize_reply_mode(value: Any, default: str = "rotation") -> str:
     if isinstance(value, str):
         normalized = value.strip().lower()
-        if normalized in {"default", "rotation", "keyword"}:
+        if normalized in {"default", "rotation", "keyword", "all"}:
             return normalized
     return default
 
@@ -60,24 +62,6 @@ def resolve_rotation_settings_update(
     keyword_batch_dispatch_mode: str = None,
     keyword_match_limit: int = None,
 ) -> Dict[str, int]:
-    base_rotation_interval = _normalize_interval(
-        (current_settings or {}).get("rotation_interval"),
-        180,
-    )
-    effective_rotation_interval = _normalize_interval(
-        rotation_interval,
-        base_rotation_interval,
-    )
-
-    base_keyword_interval = _normalize_interval(
-        (current_settings or {}).get("keyword_reply_interval"),
-        base_rotation_interval,
-    )
-    effective_keyword_interval = _normalize_interval(
-        keyword_reply_interval,
-        base_keyword_interval if keyword_reply_interval is None else effective_rotation_interval,
-    )
-
     base_batch_size = _normalize_batch_size(
         (current_settings or {}).get("keyword_reply_batch_size"),
         0,
@@ -126,7 +110,36 @@ def resolve_rotation_settings_update(
     if sender_count != 1 and effective_reply_mode == "keyword":
         effective_reply_mode = "rotation"
 
+    raw_base_rotation_interval = _coerce_int(
+        (current_settings or {}).get("rotation_interval"),
+        180,
+    )
+    if effective_reply_mode == "all":
+        base_rotation_interval = raw_base_rotation_interval if raw_base_rotation_interval >= 0 else 0
+        effective_rotation_interval = _normalize_interval(
+            rotation_interval,
+            base_rotation_interval,
+            allow_zero=True,
+        )
+    else:
+        base_rotation_interval = raw_base_rotation_interval if raw_base_rotation_interval > 0 else 180
+        effective_rotation_interval = _normalize_interval(
+            rotation_interval,
+            base_rotation_interval,
+        )
+
+    base_keyword_interval = _normalize_interval(
+        (current_settings or {}).get("keyword_reply_interval"),
+        base_rotation_interval if base_rotation_interval > 0 else 180,
+    )
+    effective_keyword_interval = _normalize_interval(
+        keyword_reply_interval,
+        base_keyword_interval if keyword_reply_interval is None else max(effective_rotation_interval, 180),
+    )
+
     if effective_reply_mode == "keyword":
+        effective_rotation_enabled = 0
+    elif effective_reply_mode == "all":
         effective_rotation_enabled = 0
     elif effective_reply_mode == "default":
         effective_rotation_enabled = 0

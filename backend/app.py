@@ -2266,6 +2266,13 @@ def update_website_rotation(config_id):
         data = request.get_json()
         messages = []
 
+        current_settings = db.get_user_website_settings(current_user['id'], config_id)
+        sender_count = len(db.get_website_senders(config_id, current_user['id']) or [])
+        current_effective_settings = resolve_rotation_settings_update(
+            current_settings=current_settings,
+            sender_count=sender_count,
+        )
+
         rotation_interval = data.get('rotation_interval')
         rotation_enabled = data.get('rotation_enabled')
         reply_mode = data.get('reply_mode')
@@ -2279,14 +2286,19 @@ def update_website_rotation(config_id):
         reply_delay_cleared = reply_delay_requested and reply_min_delay in {'', None} and reply_max_delay in {'', None}
         keyword_match_limit_requested = 'keyword_match_limit' in data
         keyword_match_limit_cleared = keyword_match_limit_requested and keyword_match_limit in {'', None}
+        target_reply_mode = str(reply_mode or current_effective_settings.get('reply_mode', 'rotation')).strip().lower()
 
         # 验证参数
-        if rotation_interval is not None and rotation_interval <= 0:
-            return jsonify({'error': '轮换间隔必须大于0秒'}), 400
+        if rotation_interval is not None:
+            if target_reply_mode == 'all':
+                if rotation_interval < 0:
+                    return jsonify({'error': '一起回复冷却时间不能小于0秒'}), 400
+            elif rotation_interval <= 0:
+                return jsonify({'error': '轮换间隔必须大于0秒'}), 400
         if rotation_enabled is not None and rotation_enabled not in [0, 1]:
             return jsonify({'error': '轮换启用状态必须是0或1'}), 400
-        if reply_mode is not None and reply_mode not in ['default', 'rotation', 'keyword']:
-            return jsonify({'error': '模式必须是 default、rotation 或 keyword'}), 400
+        if reply_mode is not None and reply_mode not in ['default', 'rotation', 'keyword', 'all']:
+            return jsonify({'error': '模式必须是 default、rotation、keyword 或 all'}), 400
         if keyword_reply_interval is not None and keyword_reply_interval <= 0:
             return jsonify({'error': '单轮关键词时间必须大于0秒'}), 400
         if keyword_reply_batch_size is not None and keyword_reply_batch_size < 0:
@@ -2317,13 +2329,6 @@ def update_website_rotation(config_id):
             delay_error = validate_reply_delay_range(reply_min_delay, reply_max_delay)
             if delay_error:
                 return jsonify({'error': delay_error}), 400
-
-        current_settings = db.get_user_website_settings(current_user['id'], config_id)
-        sender_count = len(db.get_website_senders(config_id, current_user['id']) or [])
-        current_effective_settings = resolve_rotation_settings_update(
-            current_settings=current_settings,
-            sender_count=sender_count,
-        )
 
         try:
             effective_settings = resolve_rotation_settings_update(
@@ -2372,10 +2377,14 @@ def update_website_rotation(config_id):
                     'default': '默认模式',
                     'rotation': '轮换模式',
                     'keyword': '关键词模式',
+                    'all': '一起回复模式',
                 }.get(effective_settings['reply_mode'], effective_settings['reply_mode'])
                 messages.append(f'回复模式已切换为{mode_text}')
             if effective_settings['rotation_interval'] != current_effective_settings.get('rotation_interval', 180):
-                messages.append(f"轮换间隔已设置为 {effective_settings['rotation_interval']} 秒")
+                if effective_settings['reply_mode'] == 'all':
+                    messages.append(f"一起回复冷却已设置为 {effective_settings['rotation_interval']} 秒")
+                else:
+                    messages.append(f"轮换间隔已设置为 {effective_settings['rotation_interval']} 秒")
             if effective_settings['rotation_enabled'] != current_effective_settings.get('rotation_enabled', 1):
                 status_text = '启用' if effective_settings['rotation_enabled'] else '禁用'
                 messages.append(f'轮换功能已{status_text}')

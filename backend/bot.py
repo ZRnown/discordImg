@@ -636,16 +636,98 @@ def get_all_cooldowns():
 
     return cooldowns
 
+def get_account_cooldown_remaining(account_id, channel_id, interval):
+    """返回账号在频道中的剩余冷却秒数"""
+    try:
+        normalized_interval = float(interval or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+    if normalized_interval <= 0:
+        return 0.0
+
+    key = (int(account_id), str(channel_id))
+    last = account_last_sent.get(key, 0)
+    remaining = normalized_interval - (time.time() - last)
+    return remaining if remaining > 0 else 0.0
+
+def build_sender_dispatch_plan(
+    db_sender_ids,
+    valid_senders,
+    channel_id,
+    rotation_interval,
+    rotation_enabled,
+    skip_sender_cooldown,
+    reply_mode,
+):
+    """根据回复模式和冷却状态决定本轮应该由哪些发送账号执行"""
+    ordered_valid_senders = []
+    seen = set()
+    valid_sender_set = {uid for uid in valid_senders}
+
+    for raw_uid in db_sender_ids or []:
+        uid = _coerce_int(raw_uid, None)
+        if uid is None or uid not in valid_sender_set or uid in seen:
+            continue
+        ordered_valid_senders.append(uid)
+        seen.add(uid)
+
+    for raw_uid in valid_senders or []:
+        uid = _coerce_int(raw_uid, None)
+        if uid is None or uid in seen:
+            continue
+        ordered_valid_senders.append(uid)
+        seen.add(uid)
+
+    if not ordered_valid_senders:
+        return {'selected_ids': [], 'wait_seconds': 0.0}
+
+    normalized_mode = str(reply_mode or "rotation").strip().lower()
+    if skip_sender_cooldown:
+        if normalized_mode == 'all':
+            return {'selected_ids': ordered_valid_senders, 'wait_seconds': 0.0}
+        should_spread_senders = bool(rotation_enabled) or len(ordered_valid_senders) > 1
+        selected_id = random.choice(ordered_valid_senders) if should_spread_senders else ordered_valid_senders[0]
+        return {'selected_ids': [selected_id], 'wait_seconds': 0.0}
+
+    if normalized_mode == 'all':
+        wait_seconds = 0.0
+        for uid in ordered_valid_senders:
+            wait_seconds = max(
+                wait_seconds,
+                get_account_cooldown_remaining(uid, channel_id, rotation_interval),
+            )
+        if wait_seconds > 0:
+            return {'selected_ids': [], 'wait_seconds': wait_seconds}
+        return {'selected_ids': ordered_valid_senders, 'wait_seconds': 0.0}
+
+    available_senders = [
+        uid for uid in ordered_valid_senders
+        if get_account_cooldown_remaining(uid, channel_id, rotation_interval) <= 0
+    ]
+    if not available_senders:
+        wait_candidates = [
+            get_account_cooldown_remaining(uid, channel_id, rotation_interval)
+            for uid in ordered_valid_senders
+        ]
+        wait_seconds = min((remain for remain in wait_candidates if remain > 0), default=0.0)
+        return {'selected_ids': [], 'wait_seconds': wait_seconds}
+
+    if rotation_enabled:
+        selected_id = random.choice(available_senders)
+    else:
+        available_set = set(available_senders)
+        selected_id = next((uid for uid in ordered_valid_senders if uid in available_set), available_senders[0])
+
+    return {'selected_ids': [selected_id], 'wait_seconds': 0.0}
+
 def is_account_on_cooldown(account_id, channel_id, interval):
     """检查账号在指定频道是否在冷却中"""
-    key = (int(account_id), str(channel_id))
-
-    last = account_last_sent.get(key, 0)
-    time_passed = time.time() - last
-    is_cooldown = time_passed < interval
+    remaining = get_account_cooldown_remaining(account_id, channel_id, interval)
+    is_cooldown = remaining > 0
 
     if is_cooldown:
-        logger.info(f"❄️ [冷却中] 账号ID:{account_id} 频道:{channel_id} | 剩余: {interval - time_passed:.1f}秒")
+        logger.info(f"❄️ [冷却中] 账号ID:{account_id} 频道:{channel_id} | 剩余: {remaining:.1f}秒")
 
     return is_cooldown
 
@@ -654,6 +736,26 @@ def set_account_cooldown(account_id, channel_id):
     key = (int(account_id), str(channel_id))
     account_last_sent[key] = time.time()
     logger.info(f"🔥 [设置冷却] 账号ID:{account_id} 频道:{channel_id} | Key: {key}")
+
+def apply_reply_mode_cooldown(reply_mode, sender_ids, channel_id):
+    """按回复模式应用冷却，all 模式会为整组发送账号统一落冷却"""
+    normalized_mode = str(reply_mode or "rotation").strip().lower()
+    unique_sender_ids = []
+    seen = set()
+    for raw_uid in sender_ids or []:
+        uid = _coerce_int(raw_uid, None)
+        if uid is None or uid in seen:
+            continue
+        unique_sender_ids.append(uid)
+        seen.add(uid)
+
+    if normalized_mode == 'all':
+        for uid in unique_sender_ids:
+            set_account_cooldown(uid, channel_id)
+        return
+
+    if unique_sender_ids:
+        set_account_cooldown(unique_sender_ids[0], channel_id)
 
 def cleanup_expired_cooldowns():
     """清理过期的冷却状态"""
@@ -2117,26 +2219,19 @@ class DiscordBotClient(discord.Client):
                     min_delay = global_min_delay
                     max_delay = global_max_delay
 
-                if skip_sender_cooldown:
-                    available_senders = list(valid_senders)
-                else:
-                    available_senders = [
-                        uid for uid in valid_senders
-                        if not is_account_on_cooldown(uid, message.channel.id, rotation_interval)
-                    ]
+                dispatch_plan = build_sender_dispatch_plan(
+                    db_sender_ids=db_sender_ids,
+                    valid_senders=valid_senders,
+                    channel_id=message.channel.id,
+                    rotation_interval=rotation_interval,
+                    rotation_enabled=rotation_enabled,
+                    skip_sender_cooldown=skip_sender_cooldown,
+                    reply_mode=reply_mode,
+                )
+                selected_sender_ids = list(dispatch_plan.get('selected_ids') or [])
 
-                if not available_senders and not skip_sender_cooldown:
-                    now_ts = time.time()
-                    wait_candidates = []
-                    channel_id_str = str(message.channel.id)
-                    for uid in valid_senders:
-                        key = (int(uid), channel_id_str)
-                        last_sent = account_last_sent.get(key, 0)
-                        remain = rotation_interval - (now_ts - last_sent)
-                        if remain > 0:
-                            wait_candidates.append(remain)
-
-                    wait_seconds = min(wait_candidates) if wait_candidates else 0.0
+                if not selected_sender_ids and not skip_sender_cooldown:
+                    wait_seconds = float(dispatch_plan.get('wait_seconds') or 0.0)
                     if wait_seconds > 0:
                         if wait_seconds > MAX_COOLDOWN_WAIT_SECONDS:
                             logger.info(
@@ -2149,366 +2244,407 @@ class DiscordBotClient(discord.Client):
                             f"等待 {wait_seconds:.1f} 秒后重试"
                         )
                         await asyncio.sleep(wait_seconds + 0.05)
-                        available_senders = [
-                            uid for uid in valid_senders
-                            if not is_account_on_cooldown(uid, message.channel.id, rotation_interval)
-                        ]
+                        dispatch_plan = build_sender_dispatch_plan(
+                            db_sender_ids=db_sender_ids,
+                            valid_senders=valid_senders,
+                            channel_id=message.channel.id,
+                            rotation_interval=rotation_interval,
+                            rotation_enabled=rotation_enabled,
+                            skip_sender_cooldown=skip_sender_cooldown,
+                            reply_mode=reply_mode,
+                        )
+                        selected_sender_ids = list(dispatch_plan.get('selected_ids') or [])
 
-                if not available_senders:
+                if not selected_sender_ids:
                     logger.warning(
                         f"⏳ [重试后仍冷却] 频道 {message.channel.id} 在线账号 ({len(valid_senders)}个) "
                         f"均不可用，跳过当前网站配置"
                     )
                     continue
 
-                should_spread_senders = rotation_enabled or (
-                    skip_sender_cooldown and len(available_senders) > 1
+                target_clients = [
+                    c for c in bot_clients
+                    if c.account_id in set(selected_sender_ids)
+                ]
+                target_clients.sort(
+                    key=lambda client: selected_sender_ids.index(client.account_id)
                 )
 
-                if should_spread_senders:
-                    selected_id = random.choice(available_senders)
-                else:
-                    available_set = set(available_senders)
-                    selected_id = next((uid for uid in db_sender_ids if uid in available_set), None)
-                    if selected_id is None:
-                        selected_id = available_senders[0]
-
-                target_client = next((c for c in bot_clients if c.account_id == selected_id), None)
-                if not target_client:
+                if not target_clients:
                     logger.warning("❌ 逻辑异常：有可用发送账号但无法找到客户端")
                     continue
 
-                logger.info(
-                    f"✅ 本次选中发送账号: {target_client.user.name if target_client else selected_id} (ID: {selected_id})"
-                )
+                if reply_mode == 'all':
+                    selected_labels = ', '.join(
+                        f"{getattr(client.user, 'name', client.account_id)}({client.account_id})"
+                        for client in target_clients
+                    )
+                    logger.info(f"✅ 本次选中全部发送账号: {selected_labels}")
+                else:
+                    target_client = target_clients[0]
+                    logger.info(
+                        f"✅ 本次选中发送账号: {target_client.user.name if target_client else selected_sender_ids[0]} "
+                        f"(ID: {selected_sender_ids[0]})"
+                    )
 
-                try:
-                    target_channel = target_client.get_channel(message.channel.id)
+                broadcast_mode = reply_mode == 'all'
+                successful_sender_ids = []
 
-                    if target_channel:
-                        async with target_channel.typing():
-                            await asyncio.sleep(random.uniform(min_delay, max_delay))
+                for target_index, target_client in enumerate(target_clients):
+                    try:
+                        target_channel = target_client.get_channel(message.channel.id)
 
-                        # 【关键修复】
-                        # 不要使用 message.reply()，因为 message 绑定的是监听者(Listener)客户端
-                        # 必须用 target_channel.send(..., reference=message) 才会使用 target_client(Sender) 的 token
-                        try:
-                            # === 1. 收集所有要发送的图片文件 ===
-                            files = []
-                            image_download_timeout = aiohttp.ClientTimeout(total=10)
+                        if target_channel:
+                            should_apply_delay = not (broadcast_mode and target_index > 0)
+                            if should_apply_delay:
+                                async with target_channel.typing():
+                                    await asyncio.sleep(random.uniform(min_delay, max_delay))
 
-                            # 检查是否是自定义模式，且有图片
-                            skip_images = bool(active_custom_reply and active_custom_reply.get('skip_images'))
-                            reply_type = active_custom_reply.get('reply_type') if isinstance(active_custom_reply, dict) else None
-                            is_custom_mode = bool(active_custom_reply) and reply_type in {
-                                'custom_only',
-                                'text',
-                                'text_and_link',
-                                'image',
-                            }
-                            is_product_custom_mode = bool(
-                                isinstance(active_custom_reply, dict) and active_custom_reply.get('product_data') is not None
-                            )
-                            if is_custom_mode and not _should_send_product_custom_images(
-                                active_custom_reply,
-                                active_product,
-                                message.channel.id,
-                                website_config=website_config,
-                            ):
-                                skip_images = True
+                            # 【关键修复】
+                            # 不要使用 message.reply()，因为 message 绑定的是监听者(Listener)客户端
+                            # 必须用 target_channel.send(..., reference=message) 才会使用 target_client(Sender) 的 token
+                            try:
+                                # === 1. 收集所有要发送的图片文件 ===
+                                files = []
+                                image_download_timeout = aiohttp.ClientTimeout(total=10)
 
-                            if is_custom_mode and not skip_images:
-                                if is_product_custom_mode:
-                                    # 获取图片信息
-                                    # 注意：如果是从 search_similar_text 返回的 product，字段名可能已经格式化
-                                    # 需要兼容处理
-
-                                    # 1. 尝试获取自定义图片链接
-                                    custom_urls = active_product.get('customImageUrls', []) or active_product.get('custom_image_urls', [])
-                                    if isinstance(custom_urls, str):
-                                        try:
-                                            custom_urls = json.loads(custom_urls)
-                                        except Exception:
-                                            custom_urls = []
-
-                                    image_source = active_product.get('imageSource') or active_product.get('image_source') or 'product'
-
-                                    # 收集图片文件（Discord限制最多10个文件）
-                                    if image_source == 'custom' and custom_urls:
-                                        for url in custom_urls[:10]:  # 限制最多10张
-                                            if len(files) >= 10:
-                                                break
+                                # 检查是否是自定义模式，且有图片
+                                skip_images = bool(active_custom_reply and active_custom_reply.get('skip_images'))
+                                reply_type = active_custom_reply.get('reply_type') if isinstance(active_custom_reply, dict) else None
+                                is_custom_mode = bool(active_custom_reply) and reply_type in {
+                                    'custom_only',
+                                    'text',
+                                    'text_and_link',
+                                    'image',
+                                }
+                                is_product_custom_mode = bool(
+                                    isinstance(active_custom_reply, dict) and active_custom_reply.get('product_data') is not None
+                                )
+                                if is_custom_mode and not _should_send_product_custom_images(
+                                    active_custom_reply,
+                                    active_product,
+                                    message.channel.id,
+                                    website_config=website_config,
+                                ):
+                                    skip_images = True
+    
+                                if is_custom_mode and not skip_images:
+                                    if is_product_custom_mode:
+                                        # 获取图片信息
+                                        # 注意：如果是从 search_similar_text 返回的 product，字段名可能已经格式化
+                                        # 需要兼容处理
+    
+                                        # 1. 尝试获取自定义图片链接
+                                        custom_urls = active_product.get('customImageUrls', []) or active_product.get('custom_image_urls', [])
+                                        if isinstance(custom_urls, str):
                                             try:
-                                                async with aiohttp.ClientSession(timeout=image_download_timeout) as session:
-                                                    async with session.get(url) as resp:
-                                                        if resp.status == 200:
-                                                            data = await resp.read()
-                                                            filename = url.split('/')[-1] or 'image.jpg'
-                                                            files.append(discord.File(io.BytesIO(data), filename))
-                                            except Exception as e:
-                                                logger.error(f"下载自定义图片失败: {e}")
-
-                                    elif image_source == 'upload':
-                                        # 处理上传的自定义回复图片
-                                        pid = active_product.get('id')
-
-                                        # 从 uploaded_reply_images 字段获取上传的图片文件名列表
-                                        uploaded_filenames = active_product.get('uploaded_reply_images', [])
-                                        if isinstance(uploaded_filenames, str):
-                                            try:
-                                                uploaded_filenames = json.loads(uploaded_filenames)
+                                                custom_urls = json.loads(custom_urls)
                                             except Exception:
-                                                # 如果解析失败，且它本身就是列表，则保持原样，否则置空
-                                                uploaded_filenames = uploaded_filenames if isinstance(uploaded_filenames, list) else []
-
-                                        if pid and uploaded_filenames:
-                                            # 使用新的API端点获取上传的自定义回复图片
-                                            for filename in uploaded_filenames[:10]:  # 限制最多10张
+                                                custom_urls = []
+    
+                                        image_source = active_product.get('imageSource') or active_product.get('image_source') or 'product'
+    
+                                        # 收集图片文件（Discord限制最多10个文件）
+                                        if image_source == 'custom' and custom_urls:
+                                            for url in custom_urls[:10]:  # 限制最多10张
                                                 if len(files) >= 10:
                                                     break
-                                                img_url = f"{config.BACKEND_API_URL}/api/custom_reply_image/{pid}/{filename}"
                                                 try:
                                                     async with aiohttp.ClientSession(timeout=image_download_timeout) as session:
-                                                        async with session.get(img_url) as resp:
+                                                        async with session.get(url) as resp:
                                                             if resp.status == 200:
                                                                 data = await resp.read()
+                                                                filename = url.split('/')[-1] or 'image.jpg'
                                                                 files.append(discord.File(io.BytesIO(data), filename))
                                                 except Exception as e:
-                                                    logger.error(f"下载上传的自定义回复图片失败: {e}")
-
-                                    elif image_source == 'product':
-                                        # 处理商品图集中的图片
-                                        pid = active_product.get('id')
-                                        indexes = active_product.get('selectedImageIndexes', []) or active_product.get('custom_reply_images', [])
-
-                                        if isinstance(indexes, str):
-                                            try:
-                                                indexes = json.loads(indexes)
-                                            except Exception:
-                                                indexes = []
-
-                                        if pid and indexes:
-                                            image_path_map = {}
-                                            try:
-                                                product_images = db.get_product_images(pid)
-                                                image_path_map = {
-                                                    img.get('image_index'): img.get('image_path')
-                                                    for img in product_images
-                                                }
-                                            except Exception as e:
-                                                logger.error(f"获取商品图片路径失败: {e}")
-
-                                            # 优先使用本地图片路径，失败再回退到HTTP获取
-                                            for idx in indexes[:10]:  # 限制最多10张
-                                                if len(files) >= 10:
-                                                    break
-                                                idx_key = idx
+                                                    logger.error(f"下载自定义图片失败: {e}")
+    
+                                        elif image_source == 'upload':
+                                            # 处理上传的自定义回复图片
+                                            pid = active_product.get('id')
+    
+                                            # 从 uploaded_reply_images 字段获取上传的图片文件名列表
+                                            uploaded_filenames = active_product.get('uploaded_reply_images', [])
+                                            if isinstance(uploaded_filenames, str):
                                                 try:
-                                                    idx_key = int(idx)
-                                                except (TypeError, ValueError):
-                                                    idx_key = idx
-
-                                                image_path = image_path_map.get(idx_key)
-                                                if image_path and os.path.exists(image_path):
-                                                    files.append(discord.File(image_path, f"{pid}_{idx_key}.jpg"))
-                                                    continue
-
-                                                img_url = f"{config.BACKEND_API_URL}/api/image/{pid}/{idx_key}"
+                                                    uploaded_filenames = json.loads(uploaded_filenames)
+                                                except Exception:
+                                                    # 如果解析失败，且它本身就是列表，则保持原样，否则置空
+                                                    uploaded_filenames = uploaded_filenames if isinstance(uploaded_filenames, list) else []
+    
+                                            if pid and uploaded_filenames:
+                                                # 使用新的API端点获取上传的自定义回复图片
+                                                for filename in uploaded_filenames[:10]:  # 限制最多10张
+                                                    if len(files) >= 10:
+                                                        break
+                                                    img_url = f"{config.BACKEND_API_URL}/api/custom_reply_image/{pid}/{filename}"
+                                                    try:
+                                                        async with aiohttp.ClientSession(timeout=image_download_timeout) as session:
+                                                            async with session.get(img_url) as resp:
+                                                                if resp.status == 200:
+                                                                    data = await resp.read()
+                                                                    files.append(discord.File(io.BytesIO(data), filename))
+                                                    except Exception as e:
+                                                        logger.error(f"下载上传的自定义回复图片失败: {e}")
+    
+                                        elif image_source == 'product':
+                                            # 处理商品图集中的图片
+                                            pid = active_product.get('id')
+                                            indexes = active_product.get('selectedImageIndexes', []) or active_product.get('custom_reply_images', [])
+    
+                                            if isinstance(indexes, str):
                                                 try:
-                                                    async with aiohttp.ClientSession(timeout=image_download_timeout) as session:
-                                                        async with session.get(img_url) as resp:
-                                                            if resp.status == 200:
-                                                                data = await resp.read()
-                                                                files.append(discord.File(io.BytesIO(data), f"{pid}_{idx_key}.jpg"))
+                                                    indexes = json.loads(indexes)
+                                                except Exception:
+                                                    indexes = []
+    
+                                            if pid and indexes:
+                                                image_path_map = {}
+                                                try:
+                                                    product_images = db.get_product_images(pid)
+                                                    image_path_map = {
+                                                        img.get('image_index'): img.get('image_path')
+                                                        for img in product_images
+                                                    }
                                                 except Exception as e:
-                                                    logger.error(f"下载商品图片失败: {e}")
-                                else:
-                                    image_url = str(active_custom_reply.get('image_url') or '').strip()
-                                    if image_url:
-                                        try:
-                                            async with aiohttp.ClientSession(timeout=image_download_timeout) as session:
-                                                async with session.get(image_url) as resp:
-                                                    if resp.status == 200:
-                                                        data = await resp.read()
-                                                        filename = image_url.split('/')[-1] or 'image.jpg'
-                                                        files.append(discord.File(io.BytesIO(data), filename))
-                                        except Exception as e:
-                                            logger.error(f"下载全局自定义回复图片失败: {e}")
-
-                            # === 2. 发送文字和所有图片（合并为一条消息） ===
-                            if not response_content and not files:
-                                logger.warning(
-                                    f"⚠️ 无可发送内容: 商品ID={active_product.get('id')}，未生成文字且无图片"
-                                )
-                                continue
-
-                            explicit_mentions = bool(active_custom_reply and active_custom_reply.get('explicit_mentions'))
-                            send_plain_message = _should_send_plain_keyword_message(
-                                prevalidated_batch=prevalidated_batch,
-                                explicit_mentions=explicit_mentions,
-                                reply_mode=reply_mode,
-                            )
-                            if (
-                                send_plain_message
-                                and response_content
-                                and not prevalidated_batch
-                                and author_id
-                            ):
-                                direct_payload = _build_keyword_direct_send_payload(
-                                    author_id,
-                                    response_content,
-                                )
-                                response_content = direct_payload['content']
-
-                            send_kwargs = {
-                                'content': response_content if response_content else None,
-                                'files': files if files else None,
-                            }
-                            if send_plain_message:
-                                send_kwargs['allowed_mentions'] = discord.AllowedMentions(
-                                    users=True,
-                                    roles=False,
-                                    everyone=False,
-                                    replied_user=False,
-                                )
-                            else:
-                                send_kwargs['reference'] = message
-                                send_kwargs['mention_author'] = _should_mention_reply_author(
+                                                    logger.error(f"获取商品图片路径失败: {e}")
+    
+                                                # 优先使用本地图片路径，失败再回退到HTTP获取
+                                                for idx in indexes[:10]:  # 限制最多10张
+                                                    if len(files) >= 10:
+                                                        break
+                                                    idx_key = idx
+                                                    try:
+                                                        idx_key = int(idx)
+                                                    except (TypeError, ValueError):
+                                                        idx_key = idx
+    
+                                                    image_path = image_path_map.get(idx_key)
+                                                    if image_path and os.path.exists(image_path):
+                                                        files.append(discord.File(image_path, f"{pid}_{idx_key}.jpg"))
+                                                        continue
+    
+                                                    img_url = f"{config.BACKEND_API_URL}/api/image/{pid}/{idx_key}"
+                                                    try:
+                                                        async with aiohttp.ClientSession(timeout=image_download_timeout) as session:
+                                                            async with session.get(img_url) as resp:
+                                                                if resp.status == 200:
+                                                                    data = await resp.read()
+                                                                    files.append(discord.File(io.BytesIO(data), f"{pid}_{idx_key}.jpg"))
+                                                    except Exception as e:
+                                                        logger.error(f"下载商品图片失败: {e}")
+                                    else:
+                                        image_url = str(active_custom_reply.get('image_url') or '').strip()
+                                        if image_url:
+                                            try:
+                                                async with aiohttp.ClientSession(timeout=image_download_timeout) as session:
+                                                    async with session.get(image_url) as resp:
+                                                        if resp.status == 200:
+                                                            data = await resp.read()
+                                                            filename = image_url.split('/')[-1] or 'image.jpg'
+                                                            files.append(discord.File(io.BytesIO(data), filename))
+                                            except Exception as e:
+                                                logger.error(f"下载全局自定义回复图片失败: {e}")
+    
+                                # === 2. 发送文字和所有图片（合并为一条消息） ===
+                                if not response_content and not files:
+                                    logger.warning(
+                                        f"⚠️ 无可发送内容: 商品ID={active_product.get('id')}，未生成文字且无图片"
+                                    )
+                                    continue
+    
+                                explicit_mentions = bool(active_custom_reply and active_custom_reply.get('explicit_mentions'))
+                                send_plain_message = _should_send_plain_keyword_message(
+                                    prevalidated_batch=prevalidated_batch,
                                     explicit_mentions=explicit_mentions,
                                     reply_mode=reply_mode,
                                 )
-                                if explicit_mentions:
+                                if (
+                                    send_plain_message
+                                    and response_content
+                                    and not prevalidated_batch
+                                    and author_id
+                                ):
+                                    direct_payload = _build_keyword_direct_send_payload(
+                                        author_id,
+                                        response_content,
+                                    )
+                                    response_content = direct_payload['content']
+    
+                                send_kwargs = {
+                                    'content': response_content if response_content else None,
+                                    'files': files if files else None,
+                                }
+                                if send_plain_message:
                                     send_kwargs['allowed_mentions'] = discord.AllowedMentions(
                                         users=True,
                                         roles=False,
                                         everyone=False,
                                         replied_user=False,
                                     )
-
-                            await target_channel.send(**send_kwargs)
-                            sent_any = True
-
-                            if prevalidated_batch:
-                                for repeat_user_id, repeat_pid in batch_repeat_records:
-                                    await _record_repeat(repeat_user_id, repeat_pid, message.channel.id)
-                            elif author_id and repeat_product_ids:
-                                for pid in repeat_product_ids:
-                                    await _record_repeat(author_id, pid, message.channel.id)
-
-                            if (
-                                not skip_sender_cooldown
-                                and hasattr(target_client, 'account_id')
-                                and target_client.account_id
-                            ):
-                                set_account_cooldown(target_client.account_id, message.channel.id)
-
-                            reply_preview = (response_content or '').replace('\n', ' ').strip()
-                            if not reply_preview and files:
-                                reply_preview = f"[图片 {len(files)}]"
-                            if len(reply_preview) > 120:
-                                reply_preview = f"{reply_preview[:120]}..."
-                            author_label = (
-                                f"批量{len(batch_repeat_records)}条"
-                                if prevalidated_batch
-                                else f"{message.author.name}({message.author.id})"
-                            )
-                            logger.info(
-                                f"✅ [回复成功] {target_client.user.name} -> {author_label} | 频道: {message.channel.name}: "
-                                f"{reply_preview} | 商品ID: {active_product.get('id')}"
-                            )
-                            try:
-                                has_text = bool(response_content)
-                                has_image = bool(files)
-                                if website_config and website_config.get('id') and (has_text or has_image):
-                                    await asyncio.get_event_loop().run_in_executor(
-                                        None,
-                                        db.increment_website_stats,
-                                        website_config['id'],
-                                        has_text,
-                                        has_image,
-                                        self.user_id
+                                else:
+                                    send_kwargs['reference'] = message
+                                    send_kwargs['mention_author'] = _should_mention_reply_author(
+                                        explicit_mentions=explicit_mentions,
+                                        reply_mode=reply_mode,
                                     )
-                            except Exception as stat_error:
-                                logger.error(f"统计更新失败: {stat_error}")
-
-                        except Exception as reply_error:
-                            logger.warning(f"回复失败，尝试直接发送: {reply_error}")
-                            fallback_sent = False
-                            if response_content:
-                                try:
-                                    fallback_kwargs = {}
-                                    if send_plain_message:
-                                        fallback_kwargs['allowed_mentions'] = discord.AllowedMentions(
+                                    if explicit_mentions:
+                                        send_kwargs['allowed_mentions'] = discord.AllowedMentions(
                                             users=True,
                                             roles=False,
                                             everyone=False,
                                             replied_user=False,
                                         )
-                                    elif active_custom_reply and active_custom_reply.get('explicit_mentions'):
-                                        fallback_kwargs['allowed_mentions'] = discord.AllowedMentions(
-                                            users=True,
-                                            roles=False,
-                                            everyone=False,
-                                            replied_user=False,
-                                        )
-                                    await target_channel.send(response_content, **fallback_kwargs)
-                                    fallback_sent = True
-                                except Exception as fallback_error:
-                                    logger.error(f"文本兜底发送失败: {fallback_error}")
-                                    continue
-                            elif files:
-                                logger.error(
-                                    f"图片消息发送失败且无法复用附件重试，跳过本次发送。商品ID: {active_product.get('id')}"
+    
+                                await target_channel.send(**send_kwargs)
+                                sent_any = True
+    
+                                if prevalidated_batch:
+                                    for repeat_user_id, repeat_pid in batch_repeat_records:
+                                        await _record_repeat(repeat_user_id, repeat_pid, message.channel.id)
+                                elif author_id and repeat_product_ids:
+                                    for pid in repeat_product_ids:
+                                        await _record_repeat(author_id, pid, message.channel.id)
+    
+                                if hasattr(target_client, 'account_id') and target_client.account_id:
+                                    successful_sender_ids.append(target_client.account_id)
+                                if (
+                                    not skip_sender_cooldown
+                                    and not broadcast_mode
+                                    and hasattr(target_client, 'account_id')
+                                    and target_client.account_id
+                                ):
+                                    apply_reply_mode_cooldown(
+                                        reply_mode,
+                                        [target_client.account_id],
+                                        message.channel.id,
+                                    )
+    
+                                reply_preview = (response_content or '').replace('\n', ' ').strip()
+                                if not reply_preview and files:
+                                    reply_preview = f"[图片 {len(files)}]"
+                                if len(reply_preview) > 120:
+                                    reply_preview = f"{reply_preview[:120]}..."
+                                author_label = (
+                                    f"批量{len(batch_repeat_records)}条"
+                                    if prevalidated_batch
+                                    else f"{message.author.name}({message.author.id})"
                                 )
-                                continue
+                                logger.info(
+                                    f"✅ [回复成功] {target_client.user.name} -> {author_label} | 频道: {message.channel.name}: "
+                                    f"{reply_preview} | 商品ID: {active_product.get('id')}"
+                                )
+                                try:
+                                    has_text = bool(response_content)
+                                    has_image = bool(files)
+                                    if website_config and website_config.get('id') and (has_text or has_image):
+                                        await asyncio.get_event_loop().run_in_executor(
+                                            None,
+                                            db.increment_website_stats,
+                                            website_config['id'],
+                                            has_text,
+                                            has_image,
+                                            self.user_id
+                                        )
+                                except Exception as stat_error:
+                                    logger.error(f"统计更新失败: {stat_error}")
 
-                            if not fallback_sent:
-                                continue
-
-                            if prevalidated_batch:
-                                for repeat_user_id, repeat_pid in batch_repeat_records:
-                                    await _record_repeat(repeat_user_id, repeat_pid, message.channel.id)
-                            elif author_id and repeat_product_ids:
-                                for pid in repeat_product_ids:
-                                    await _record_repeat(author_id, pid, message.channel.id)
-
-                            if hasattr(target_client, 'account_id') and target_client.account_id:
-                                set_account_cooldown(target_client.account_id, message.channel.id)
-                            sent_any = True
-
-                            reply_preview = (response_content or '').replace('\n', ' ').strip()
-                            if len(reply_preview) > 120:
-                                reply_preview = f"{reply_preview[:120]}..."
-                            author_label = (
-                                f"批量{len(batch_repeat_records)}条"
-                                if prevalidated_batch
-                                else f"{message.author.name}({message.author.id})"
-                            )
-                            logger.info(
-                                f"✅ [发送成功] {target_client.user.name} -> {author_label} | 频道: {message.channel.name}: "
-                                f"{reply_preview} | 商品ID: {active_product.get('id')}"
-                            )
-                            try:
-                                if website_config and website_config.get('id') and response_content:
-                                    await asyncio.get_event_loop().run_in_executor(
-                                        None,
-                                        db.increment_website_stats,
-                                        website_config['id'],
-                                        True,
-                                        False,
-                                        self.user_id
+                            except Exception as reply_error:
+                                logger.warning(f"回复失败，尝试直接发送: {reply_error}")
+                                fallback_sent = False
+                                if response_content:
+                                    try:
+                                        fallback_kwargs = {}
+                                        if send_plain_message:
+                                            fallback_kwargs['allowed_mentions'] = discord.AllowedMentions(
+                                                users=True,
+                                                roles=False,
+                                                everyone=False,
+                                                replied_user=False,
+                                            )
+                                        elif active_custom_reply and active_custom_reply.get('explicit_mentions'):
+                                            fallback_kwargs['allowed_mentions'] = discord.AllowedMentions(
+                                                users=True,
+                                                roles=False,
+                                                everyone=False,
+                                                replied_user=False,
+                                            )
+                                        await target_channel.send(response_content, **fallback_kwargs)
+                                        fallback_sent = True
+                                    except Exception as fallback_error:
+                                        logger.error(f"文本兜底发送失败: {fallback_error}")
+                                        continue
+                                elif files:
+                                    logger.error(
+                                        f"图片消息发送失败且无法复用附件重试，跳过本次发送。商品ID: {active_product.get('id')}"
                                     )
-                            except Exception as stat_error:
-                                logger.error(f"统计更新失败: {stat_error}")
+                                    continue
+    
+                                if not fallback_sent:
+                                    continue
+    
+                                if prevalidated_batch:
+                                    for repeat_user_id, repeat_pid in batch_repeat_records:
+                                        await _record_repeat(repeat_user_id, repeat_pid, message.channel.id)
+                                elif author_id and repeat_product_ids:
+                                    for pid in repeat_product_ids:
+                                        await _record_repeat(author_id, pid, message.channel.id)
+    
+                                if hasattr(target_client, 'account_id') and target_client.account_id:
+                                    successful_sender_ids.append(target_client.account_id)
+                                if (
+                                    not skip_sender_cooldown
+                                    and not broadcast_mode
+                                    and hasattr(target_client, 'account_id')
+                                    and target_client.account_id
+                                ):
+                                    apply_reply_mode_cooldown(
+                                        reply_mode,
+                                        [target_client.account_id],
+                                        message.channel.id,
+                                    )
+                                sent_any = True
+    
+                                reply_preview = (response_content or '').replace('\n', ' ').strip()
+                                if len(reply_preview) > 120:
+                                    reply_preview = f"{reply_preview[:120]}..."
+                                author_label = (
+                                    f"批量{len(batch_repeat_records)}条"
+                                    if prevalidated_batch
+                                    else f"{message.author.name}({message.author.id})"
+                                )
+                                logger.info(
+                                    f"✅ [发送成功] {target_client.user.name} -> {author_label} | 频道: {message.channel.name}: "
+                                    f"{reply_preview} | 商品ID: {active_product.get('id')}"
+                                )
+                                try:
+                                    if website_config and website_config.get('id') and response_content:
+                                        await asyncio.get_event_loop().run_in_executor(
+                                            None,
+                                            db.increment_website_stats,
+                                            website_config['id'],
+                                            True,
+                                            False,
+                                            self.user_id
+                                        )
+                                except Exception as stat_error:
+                                    logger.error(f"统计更新失败: {stat_error}")
+    
+                        else:
+                            logger.warning(
+                                f"❌ 选中的账号 {target_client.user.name} 无法访问频道 {message.channel.id} (可能不在该服务器)"
+                            )
+                            continue
+    
+                    except Exception as e:
+                        logger.error(f"❌ 发送异常: {e}")
 
-                    else:
-                        logger.warning(
-                            f"❌ 选中的账号 {target_client.user.name} 无法访问频道 {message.channel.id} (可能不在该服务器)"
-                        )
-                        continue
-
-                except Exception as e:
-                    logger.error(f"❌ 发送异常: {e}")
+                if broadcast_mode and not skip_sender_cooldown and successful_sender_ids:
+                    apply_reply_mode_cooldown(
+                        reply_mode,
+                        selected_sender_ids or successful_sender_ids,
+                        message.channel.id,
+                    )
 
         except Exception as e:
             logger.error(f"❌ 严重错误: {e}")

@@ -3262,11 +3262,31 @@ class Database:
         if not row:
             return self._default_user_website_settings()
 
-        rotation_interval = row['rotation_interval'] or 180
-        keyword_reply_interval = row['keyword_reply_interval'] or rotation_interval
+        raw_rotation_interval = row['rotation_interval']
         reply_mode = row['reply_mode']
-        if reply_mode not in {'default', 'rotation', 'keyword'}:
+        if reply_mode not in {'default', 'rotation', 'keyword', 'all'}:
             reply_mode = 'keyword' if (row['rotation_enabled'] == 0 and (row['keyword_reply_batch_size'] or 0) > 0) else 'rotation'
+        if raw_rotation_interval is None:
+            rotation_interval = 180
+        else:
+            try:
+                rotation_interval = int(raw_rotation_interval)
+            except (TypeError, ValueError):
+                rotation_interval = 180
+        if reply_mode != 'all' and rotation_interval <= 0:
+            rotation_interval = 180
+
+        raw_keyword_reply_interval = row['keyword_reply_interval']
+        if raw_keyword_reply_interval is None:
+            keyword_reply_interval = rotation_interval if rotation_interval > 0 else 180
+        else:
+            try:
+                keyword_reply_interval = int(raw_keyword_reply_interval)
+            except (TypeError, ValueError):
+                keyword_reply_interval = rotation_interval if rotation_interval > 0 else 180
+        if keyword_reply_interval <= 0:
+            keyword_reply_interval = rotation_interval if rotation_interval > 0 else 180
+
         keyword_batch_dispatch_mode = (row['keyword_batch_dispatch_mode'] or 'immediate').strip().lower()
         if keyword_batch_dispatch_mode not in {'immediate', 'window_end'}:
             keyword_batch_dispatch_mode = 'immediate'
@@ -3398,7 +3418,7 @@ class Database:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                normalized_reply_mode = reply_mode if reply_mode in {'default', 'rotation', 'keyword'} else None
+                normalized_reply_mode = reply_mode if reply_mode in {'default', 'rotation', 'keyword', 'all'} else None
                 normalized_keyword_batch_dispatch_mode = (
                     keyword_batch_dispatch_mode
                     if keyword_batch_dispatch_mode in {'immediate', 'window_end'}
@@ -3412,6 +3432,8 @@ class Database:
 
                 normalized_rotation_enabled = rotation_enabled
                 if normalized_reply_mode == 'keyword':
+                    normalized_rotation_enabled = 0
+                elif normalized_reply_mode == 'all':
                     normalized_rotation_enabled = 0
                 elif normalized_reply_mode == 'default':
                     normalized_rotation_enabled = 0
@@ -3475,10 +3497,12 @@ class Database:
                     ''', (
                         user_id,
                         website_id,
-                        rotation_interval or 180,
+                        rotation_interval if rotation_interval is not None else 180,
                         normalized_rotation_enabled if normalized_rotation_enabled is not None else 1,
                         normalized_reply_mode or 'rotation',
-                        keyword_reply_interval if keyword_reply_interval is not None else (rotation_interval or 180),
+                        keyword_reply_interval if keyword_reply_interval is not None else (
+                            rotation_interval if rotation_interval is not None and rotation_interval > 0 else 180
+                        ),
                         keyword_reply_batch_size if keyword_reply_batch_size is not None else 0,
                         normalized_keyword_batch_dispatch_mode or 'immediate',
                         keyword_match_limit,
