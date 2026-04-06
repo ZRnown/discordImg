@@ -10,6 +10,7 @@ from backend.retrieval_cache_warmup import (
     get_backfill_interval_seconds,
     reduce_backfill_limit_after_failure,
     should_pause_auto_backfill,
+    should_run_startup_cache_compaction,
     should_continue_auto_backfill_burst,
     should_run_auto_backfill,
     should_run_startup_cache_warmup,
@@ -89,12 +90,28 @@ class RetrievalCacheWarmupTestCase(unittest.TestCase):
     def test_startup_cache_warmup_disabled_without_flag(self):
         config = SimpleNamespace(
             RETRIEVAL_CACHE_STARTUP_WARMUP=False,
+            RETRIEVAL_CACHE_STARTUP_COMPACTION=False,
             RETRIEVAL_CACHE_STARTUP_LIMIT=200,
         )
 
         self.assertFalse(should_run_startup_cache_warmup(config, "siglip2_rerank"))
+        self.assertFalse(should_run_startup_cache_compaction(config, "siglip2_rerank"))
         self.assertEqual(get_backfill_limit(config, "RETRIEVAL_CACHE_STARTUP_LIMIT"), 200)
         self.assertIsNone(get_backfill_limit(SimpleNamespace(RETRIEVAL_CACHE_STARTUP_LIMIT=0), "RETRIEVAL_CACHE_STARTUP_LIMIT"))
+
+    def test_startup_cache_compaction_requires_explicit_flag(self):
+        self.assertFalse(
+            should_run_startup_cache_compaction(
+                SimpleNamespace(RETRIEVAL_CACHE_STARTUP_COMPACTION=False),
+                "siglip2_rerank",
+            )
+        )
+        self.assertTrue(
+            should_run_startup_cache_compaction(
+                SimpleNamespace(RETRIEVAL_CACHE_STARTUP_COMPACTION=True),
+                "siglip2_rerank",
+            )
+        )
 
     def test_auto_backfill_defaults_to_enabled_for_persisted_cache_strategy(self):
         config = SimpleNamespace(

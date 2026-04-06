@@ -58,6 +58,18 @@ def should_run_startup_cache_warmup(config_obj: Any, strategy_name: str) -> bool
     return _to_bool(getattr(config_obj, "RETRIEVAL_CACHE_STARTUP_WARMUP", False), False)
 
 
+def should_run_startup_cache_compaction(config_obj: Any, strategy_name: str) -> bool:
+    try:
+        from .live_retrieval import strategy_requires_persisted_catalog_cache
+    except ImportError:
+        from live_retrieval import strategy_requires_persisted_catalog_cache
+
+    if not strategy_requires_persisted_catalog_cache(strategy_name):
+        return False
+
+    return _to_bool(getattr(config_obj, "RETRIEVAL_CACHE_STARTUP_COMPACTION", False), False)
+
+
 def should_run_auto_backfill(config_obj: Any, strategy_name: str) -> bool:
     try:
         from .live_retrieval import strategy_requires_persisted_catalog_cache

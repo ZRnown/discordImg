@@ -98,6 +98,7 @@ try:
         should_pause_auto_backfill,
         should_continue_auto_backfill_burst,
         should_run_auto_backfill,
+        should_run_startup_cache_compaction,
         should_run_startup_cache_warmup,
     )
 except ModuleNotFoundError as e:
@@ -114,6 +115,7 @@ except ModuleNotFoundError as e:
             should_pause_auto_backfill,
             should_continue_auto_backfill_burst,
             should_run_auto_backfill,
+            should_run_startup_cache_compaction,
             should_run_startup_cache_warmup,
         )
     else:
@@ -751,18 +753,21 @@ def initialize_runtime():
 
                 print("✅ [后台] AI模型预热完成，系统已就绪")
 
-                cleanup_summary = db.compact_product_image_retrieval_cache(strategy_name)
-                if any(
-                    int(cleanup_summary.get(key) or 0) > 0
-                    for key in ('trimmed_hist', 'trimmed_tokens', 'deleted_rows')
-                ):
-                    logger.warning(
-                        "已清理商品检索缓存异常数据: strategy=%s trimmed_hist=%s trimmed_tokens=%s deleted_rows=%s",
-                        strategy_name,
-                        cleanup_summary.get('trimmed_hist', 0),
-                        cleanup_summary.get('trimmed_tokens', 0),
-                        cleanup_summary.get('deleted_rows', 0),
-                    )
+                if should_run_startup_cache_compaction(config, strategy_name):
+                    cleanup_summary = db.compact_product_image_retrieval_cache(strategy_name)
+                    if any(
+                        int(cleanup_summary.get(key) or 0) > 0
+                        for key in ('trimmed_hist', 'trimmed_tokens', 'deleted_rows')
+                    ):
+                        logger.warning(
+                            "已清理商品检索缓存异常数据: strategy=%s trimmed_hist=%s trimmed_tokens=%s deleted_rows=%s",
+                            strategy_name,
+                            cleanup_summary.get('trimmed_hist', 0),
+                            cleanup_summary.get('trimmed_tokens', 0),
+                            cleanup_summary.get('deleted_rows', 0),
+                        )
+                elif strategy_requires_persisted_catalog_cache(strategy_name):
+                    print(f"⏭️ [后台] 已跳过 {strategy_name} 启动缓存清理")
 
                 _start_auto_retrieval_cache_backfill()
             except Exception as cache_error:
