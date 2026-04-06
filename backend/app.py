@@ -1045,6 +1045,7 @@ def _start_auto_retrieval_cache_backfill():
 @app.route('/search_similar', methods=['POST'])
 def search_similar():
     """搜索相似图像并按商品级别返回排序结果"""
+    request_started_at = time.perf_counter()
     try:
         image_url = request.form.get('image_url')
         threshold = float(request.form.get('threshold', 0.6))
@@ -1163,6 +1164,7 @@ def search_similar():
             blocked_filter_match = None
             blocked_website_filter_matches = []
             query_vec = None
+            filter_stage_started_at = time.perf_counter()
 
             def ensure_query_vec():
                 nonlocal query_vec
@@ -1314,6 +1316,8 @@ def search_similar():
                     raise
 
             retriever = get_live_image_retriever(db, getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank'))
+            filter_stage_elapsed = time.perf_counter() - filter_stage_started_at
+            retrieval_started_at = time.perf_counter()
             retrieval_result = retriever.search(
                 image_path=image_path,
                 query_text=query_text,
@@ -1321,6 +1325,7 @@ def search_similar():
                 threshold=threshold,
                 user_shops=user_shops,
             )
+            retrieval_elapsed = time.perf_counter() - retrieval_started_at
             results = retrieval_result.get('ranked_products', [])
 
             if debug_enabled:
@@ -1465,6 +1470,19 @@ def search_similar():
                     }
                 }
 
+            total_elapsed = time.perf_counter() - request_started_at
+            if total_elapsed >= 5.0:
+                logger.warning(
+                    "search_similar slow request: total=%.2fs filter_stage=%.2fs retrieval=%.2fs has_global_filter_images=%s has_user_website_filter_images=%s result_count=%s user_id=%s shops=%s",
+                    total_elapsed,
+                    filter_stage_elapsed,
+                    retrieval_elapsed,
+                    has_global_filter_images,
+                    has_user_website_filter_images,
+                    len(results),
+                    user_id,
+                    user_shops,
+                )
             return jsonify(response_data)
 
         finally:

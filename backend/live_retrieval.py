@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import hashlib
 import json
+import logging
 import os
 from statistics import mean
 from threading import Lock
+from time import perf_counter
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from PIL import Image, ImageFilter
@@ -24,6 +26,8 @@ except ImportError:
         _PRODUCT_RANK_TOP5_MEAN_WEIGHT,
         aggregate_product_rankings,
     )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -1350,9 +1354,12 @@ class LiveImageRetriever:
         threshold: float = 0.0,
         user_shops: Optional[Sequence[str]] = None,
     ) -> Dict[str, Any]:
+        started_at = perf_counter()
         strategy = self._get_strategy_instance()
         query_record = build_query_record(image_path=image_path, query_text=query_text)
+        query_prepare_started_at = perf_counter()
         query_context = strategy.prepare_query_image(query_record)
+        query_prepare_elapsed = perf_counter() - query_prepare_started_at
 
         if user_shops is None:
             allowed_shops: Optional[set[str]] = None
@@ -1377,6 +1384,9 @@ class LiveImageRetriever:
         ranking_state_by_product: Dict[str, Dict[str, Any]] = {}
         product_metadata: Dict[str, Dict[str, Any]] = {}
         catalog_size = 0
+        record_build_elapsed = 0.0
+        catalog_prepare_elapsed = 0.0
+        score_elapsed = 0.0
 
         for row in self.db.iter_searchable_product_image_records(
             strategy_name=self.strategy_name,
@@ -1389,14 +1399,20 @@ class LiveImageRetriever:
             if allowed_shops is not None and raw_shop_name not in allowed_shops:
                 continue
 
+            record_build_started_at = perf_counter()
             record = build_catalog_record(row, preserve_cached_arrays=True)
+            record_build_elapsed += perf_counter() - record_build_started_at
             if record is None:
                 continue
 
             catalog_size += 1
             product_metadata.setdefault(record.product_id, _build_product_metadata(record))
+            catalog_prepare_started_at = perf_counter()
             catalog_context = strategy.prepare_catalog_image(record)
+            catalog_prepare_elapsed += perf_counter() - catalog_prepare_started_at
+            score_started_at = perf_counter()
             score = float(strategy.score(query_context, catalog_context))
+            score_elapsed += perf_counter() - score_started_at
             _update_streaming_product_ranking_state(
                 ranking_state_by_product,
                 record,
@@ -1422,6 +1438,20 @@ class LiveImageRetriever:
             if len(filtered_ranked_products) > 1
             else 0.0
         )
+        total_elapsed = perf_counter() - started_at
+        if total_elapsed >= 5.0:
+            logger.warning(
+                "Live retrieval slow search: strategy=%s total=%.2fs query_prepare=%.2fs record_build=%.2fs catalog_prepare=%.2fs score=%.2fs catalog_size=%s result_count=%s shops=%s",
+                self.strategy_name,
+                total_elapsed,
+                query_prepare_elapsed,
+                record_build_elapsed,
+                catalog_prepare_elapsed,
+                score_elapsed,
+                catalog_size,
+                len(filtered_ranked_products),
+                normalized_user_shops,
+            )
         return {
             "strategy": self.strategy_name,
             "catalog_size": catalog_size,
