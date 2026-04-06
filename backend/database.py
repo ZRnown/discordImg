@@ -51,6 +51,15 @@ class Database:
         cursor.execute(f"PRAGMA table_info({table_name})")
         return [str(row[1]) for row in cursor.fetchall()]
 
+    @staticmethod
+    def _configure_connection(conn, *, enable_wal: bool = False) -> None:
+        conn.execute('PRAGMA foreign_keys=ON;')
+        if enable_wal:
+            conn.execute('PRAGMA journal_mode=WAL;')
+        conn.execute('PRAGMA busy_timeout=60000;')
+        conn.execute('PRAGMA synchronous=NORMAL;')
+        conn.execute('PRAGMA cache_size=-64000;')
+
     def _migrate_legacy_product_images_schema(self, conn, cursor):
         columns = self._get_table_columns(cursor, 'product_images')
         legacy_columns = {'features', 'milvus_id'}
@@ -82,6 +91,7 @@ class Database:
     def init_sqlite_database(self):
         """初始化 SQLite 数据库 (用于元数据存储)"""
         with sqlite3.connect(self.db_path) as conn:
+            self._configure_connection(conn, enable_wal=True)
             cursor = conn.cursor()
 
             # 创建商品表（移除商品级别延迟，使用全局延迟）
@@ -924,12 +934,7 @@ class Database:
         try:
             conn = sqlite3.connect(self.db_path, timeout=60.0)
             conn.row_factory = sqlite3.Row
-
-            # 关键优化：开启 WAL 模式
-            conn.execute('PRAGMA foreign_keys=ON;')
-            conn.execute('PRAGMA journal_mode=WAL;')
-            conn.execute('PRAGMA synchronous=NORMAL;') # 稍微降低安全性以换取性能
-            conn.execute('PRAGMA cache_size=-64000;') # 64MB cache
+            self._configure_connection(conn, enable_wal=False)
 
             yield conn
         except sqlite3.IntegrityError:

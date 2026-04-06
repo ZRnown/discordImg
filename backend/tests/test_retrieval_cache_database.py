@@ -3,6 +3,7 @@ import sqlite3
 from pathlib import Path
 
 from backend.database import Database
+import backend.database as database_module
 
 
 def test_database_exposes_strategy_cache_in_searchable_records(tmp_path: Path):
@@ -381,3 +382,32 @@ def test_database_creates_partial_usable_retrieval_cache_index(tmp_path: Path):
 
     index_names = {row[0] for row in index_rows}
     assert "idx_retrieval_cache_usable_image_strategy" in index_names
+
+
+def test_get_connection_does_not_reapply_wal_mode(monkeypatch, tmp_path: Path):
+    db_path = tmp_path / "metadata.db"
+    test_db = Database(db_path=str(db_path))
+    real_connect = sqlite3.connect
+    pragma_calls: list[str] = []
+
+    class RecordingConnection:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def execute(self, sql, *args, **kwargs):
+            pragma_calls.append(str(sql))
+            return self._inner.execute(sql, *args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    def recording_connect(*args, **kwargs):
+        return RecordingConnection(real_connect(*args, **kwargs))
+
+    monkeypatch.setattr(database_module.sqlite3, "connect", recording_connect)
+
+    with test_db.get_connection() as conn:
+        conn.execute("SELECT 1")
+
+    assert "PRAGMA journal_mode=WAL;" not in pragma_calls
+    assert "PRAGMA busy_timeout=60000;" in pragma_calls
