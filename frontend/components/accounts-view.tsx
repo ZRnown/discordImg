@@ -858,6 +858,7 @@ const formatWebsiteForEdit = (website: any) => ({
             keyword_reply_interval: nextSettings.keyword_reply_interval,
             keyword_reply_batch_size: nextSettings.keyword_reply_batch_size,
             keyword_batch_dispatch_mode: nextSettings.keyword_batch_dispatch_mode,
+            thread_reply_enabled: nextSettings.thread_reply_enabled,
             keyword_match_limit: nextSettings.keyword_match_limit,
             reply_min_delay: nextSettings.reply_min_delay,
             reply_max_delay: nextSettings.reply_max_delay,
@@ -3756,6 +3757,25 @@ const formatWebsiteForEdit = (website: any) => ({
                               ) : null}
 
                               <div className="text-xs text-muted-foreground space-y-1">
+                                <div className="flex items-center gap-2 text-foreground">
+                                  <Label htmlFor={`thread-reply-${website.id}`} className="text-xs cursor-pointer">
+                                    子分区回复
+                                  </Label>
+                                  <Switch
+                                    id={`thread-reply-${website.id}`}
+                                    checked={toBoolean(website.thread_reply_enabled)}
+                                    onCheckedChange={(checked) => {
+                                      void updateWebsiteRotationSettings(
+                                        website.id,
+                                        { thread_reply_enabled: checked ? 1 : 0 },
+                                        checked ? '子分区回复已开启' : '子分区回复已关闭',
+                                      )
+                                    }}
+                                  />
+                                </div>
+                                <div>
+                                  开启后，命中关键词或图片时会优先回复到对应消息的子分区；如果该消息已经有子分区，会直接复用，不会重复创建。
+                                </div>
                                 <div>
                                   {senderCount === 0
                                     ? '请先绑定至少一个发送账号。'

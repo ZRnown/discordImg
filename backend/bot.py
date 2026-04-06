@@ -475,6 +475,97 @@ def _coerce_float(value):
         return None
 
 
+def _build_auto_reply_thread_name(message):
+    author_name = str(getattr(getattr(message, 'author', None), 'name', '') or '').strip()
+    content = re.sub(r'\s+', ' ', str(getattr(message, 'content', '') or '')).strip()
+    if content:
+        base_name = content[:80]
+    elif author_name:
+        base_name = f"{author_name} 的消息"
+    else:
+        base_name = f"自动回复-{getattr(message, 'id', 'thread')}"
+
+    base_name = base_name.strip()[:95].strip()
+    return base_name or f"自动回复-{getattr(message, 'id', 'thread')}"
+
+
+async def _resolve_client_channel(target_client, channel_id):
+    normalized_channel_id = _coerce_int(channel_id, None)
+    if normalized_channel_id is None or target_client is None:
+        return None
+
+    try:
+        channel = target_client.get_channel(normalized_channel_id)
+    except Exception:
+        channel = None
+    if channel is not None:
+        return channel
+
+    fetch_channel = getattr(target_client, 'fetch_channel', None)
+    if callable(fetch_channel):
+        try:
+            return await fetch_channel(normalized_channel_id)
+        except Exception as exc:
+            logger.warning(f"获取子分区频道失败: {normalized_channel_id} | {exc}")
+    return None
+
+
+async def resolve_reply_target_channel(
+    target_client,
+    target_channel,
+    message,
+    thread_reply_enabled=False,
+):
+    if not thread_reply_enabled or target_channel is None or message is None:
+        return target_channel, False
+
+    if getattr(target_channel, 'parent_id', None) is not None:
+        target_thread_id = getattr(target_channel, 'id', None)
+        if target_thread_id is not None:
+            setattr(message, '_auto_reply_thread_id', target_thread_id)
+        return target_channel, True
+
+    cached_thread_id = getattr(message, '_auto_reply_thread_id', None)
+    if cached_thread_id is not None:
+        cached_thread = await _resolve_client_channel(target_client, cached_thread_id)
+        if cached_thread is not None:
+            return cached_thread, True
+
+    current_channel = getattr(message, 'channel', None)
+    current_channel_parent_id = getattr(current_channel, 'parent_id', None)
+    if current_channel_parent_id is not None:
+        current_thread = await _resolve_client_channel(target_client, getattr(current_channel, 'id', None))
+        if current_thread is not None:
+            current_thread_id = getattr(current_thread, 'id', None)
+            if current_thread_id is not None:
+                setattr(message, '_auto_reply_thread_id', current_thread_id)
+            return current_thread, True
+
+    message_thread_id = getattr(getattr(message, 'thread', None), 'id', None)
+    if message_thread_id is not None:
+        existing_thread = await _resolve_client_channel(target_client, message_thread_id)
+        if existing_thread is not None:
+            setattr(message, '_auto_reply_thread_id', message_thread_id)
+            return existing_thread, True
+
+    create_thread = getattr(target_channel, 'create_thread', None)
+    if not callable(create_thread):
+        return target_channel, False
+
+    try:
+        created_thread = await create_thread(
+            name=_build_auto_reply_thread_name(message),
+            message=message,
+        )
+        created_thread_id = getattr(created_thread, 'id', None)
+        if created_thread_id is not None:
+            setattr(message, '_auto_reply_thread_id', created_thread_id)
+        return created_thread, True
+    except Exception as exc:
+        logger.warning(f"创建子分区失败，回退频道直发: {exc}")
+        return target_channel, False
+
+
 def _build_keyword_window_key(user_id, website_id, guild_id):
     return (
         _coerce_int(user_id, 0),
@@ -2190,6 +2281,10 @@ class DiscordBotClient(discord.Client):
                 )
                 reply_mode = str(effective_settings.get('reply_mode', 'rotation')).strip().lower()
                 rotation_enabled = _coerce_bool(effective_settings.get('rotation_enabled', 0), False)
+                thread_reply_enabled = _coerce_bool(
+                    (user_website_settings or {}).get('thread_reply_enabled', 0),
+                    False,
+                )
                 rotation_interval = _coerce_int(
                     effective_settings.get('rotation_interval', website_config.get('rotation_interval', 180)),
                     _coerce_int(website_config.get('rotation_interval', 180), 180),
@@ -2198,7 +2293,8 @@ class DiscordBotClient(discord.Client):
                 if user_website_settings:
                     logger.info(
                         f"📋 使用用户级别设置: rotation_interval={rotation_interval}秒, "
-                        f"rotation_enabled={rotation_enabled}, reply_mode={reply_mode}"
+                        f"rotation_enabled={rotation_enabled}, reply_mode={reply_mode}, "
+                        f"thread_reply_enabled={1 if thread_reply_enabled else 0}"
                     )
                     if (
                         not prevalidated_batch
@@ -2295,9 +2391,16 @@ class DiscordBotClient(discord.Client):
                         target_channel = target_client.get_channel(message.channel.id)
 
                         if target_channel:
+                            reply_target_channel, used_thread_reply = await resolve_reply_target_channel(
+                                target_client=target_client,
+                                target_channel=target_channel,
+                                message=message,
+                                thread_reply_enabled=thread_reply_enabled,
+                            )
+                            reply_target_channel = reply_target_channel or target_channel
                             should_apply_delay = not (broadcast_mode and target_index > 0)
                             if should_apply_delay:
-                                async with target_channel.typing():
+                                async with reply_target_channel.typing():
                                     await asyncio.sleep(random.uniform(min_delay, max_delay))
 
                             # 【关键修复】
@@ -2483,11 +2586,12 @@ class DiscordBotClient(discord.Client):
                                         replied_user=False,
                                     )
                                 else:
-                                    send_kwargs['reference'] = message
-                                    send_kwargs['mention_author'] = _should_mention_reply_author(
-                                        explicit_mentions=explicit_mentions,
-                                        reply_mode=reply_mode,
-                                    )
+                                    if not used_thread_reply:
+                                        send_kwargs['reference'] = message
+                                        send_kwargs['mention_author'] = _should_mention_reply_author(
+                                            explicit_mentions=explicit_mentions,
+                                            reply_mode=reply_mode,
+                                        )
                                     if explicit_mentions:
                                         send_kwargs['allowed_mentions'] = discord.AllowedMentions(
                                             users=True,
@@ -2495,8 +2599,8 @@ class DiscordBotClient(discord.Client):
                                             everyone=False,
                                             replied_user=False,
                                         )
-    
-                                await target_channel.send(**send_kwargs)
+
+                                await reply_target_channel.send(**send_kwargs)
                                 sent_any = True
     
                                 if prevalidated_batch:
@@ -2531,7 +2635,8 @@ class DiscordBotClient(discord.Client):
                                     else f"{message.author.name}({message.author.id})"
                                 )
                                 logger.info(
-                                    f"✅ [回复成功] {target_client.user.name} -> {author_label} | 频道: {message.channel.name}: "
+                                    f"✅ [回复成功] {target_client.user.name} -> {author_label} | 频道: "
+                                    f"{getattr(reply_target_channel, 'name', message.channel.name)}: "
                                     f"{reply_preview} | 商品ID: {active_product.get('id')}"
                                 )
                                 try:
@@ -2569,7 +2674,7 @@ class DiscordBotClient(discord.Client):
                                                 everyone=False,
                                                 replied_user=False,
                                             )
-                                        await target_channel.send(response_content, **fallback_kwargs)
+                                        await reply_target_channel.send(response_content, **fallback_kwargs)
                                         fallback_sent = True
                                     except Exception as fallback_error:
                                         logger.error(f"文本兜底发送失败: {fallback_error}")
@@ -2614,7 +2719,8 @@ class DiscordBotClient(discord.Client):
                                     else f"{message.author.name}({message.author.id})"
                                 )
                                 logger.info(
-                                    f"✅ [发送成功] {target_client.user.name} -> {author_label} | 频道: {message.channel.name}: "
+                                    f"✅ [发送成功] {target_client.user.name} -> {author_label} | 频道: "
+                                    f"{getattr(reply_target_channel, 'name', message.channel.name)}: "
                                     f"{reply_preview} | 商品ID: {active_product.get('id')}"
                                 )
                                 try:
