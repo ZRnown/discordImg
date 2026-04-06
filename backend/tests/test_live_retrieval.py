@@ -545,3 +545,53 @@ def test_live_image_retriever_reuses_prepared_catalog_without_reloading_rows(mon
     assert first["catalog_size"] == 1
     assert second["catalog_size"] == 1
     assert retriever.db.calls == 1
+
+
+def test_live_image_retriever_warm_prepares_catalog_before_search(monkeypatch):
+    class FakeDB:
+        def __init__(self):
+            self.calls = 0
+
+        def get_searchable_product_image_records(self, **kwargs):
+            self.calls += 1
+            return [
+                {
+                    "product_id": "1001",
+                    "title": "Alpha Runner",
+                    "english_title": "Alpha Runner",
+                    "description": "",
+                    "shop_name": "shop-a",
+                    "image_path": "/tmp/a-1.jpg",
+                    "image_index": 0,
+                    "product_url": "https://weidian.com/item.html?itemID=1001",
+                    "retrieval_cache_strategy": "siglip2_rerank",
+                    "retrieval_cache_version": "siglip2_rerank_v1",
+                    "retrieval_embedding": "[0.1, 0.2, 0.3]",
+                    "retrieval_color_hist": None,
+                    "retrieval_tokens": "[\"alpha\", \"runner\"]",
+                }
+            ]
+
+    class FakeStrategy:
+        def prepare_catalog_image(self, record):
+            return {"image_path": record.image_path}
+
+        def prepare_query_image(self, record):
+            return {"query": record.query}
+
+        def score(self, query_context, catalog_context):
+            return 0.95
+
+    monkeypatch.setattr(
+        "backend.benchmarks.strategies.create_strategy",
+        lambda _name: FakeStrategy(),
+    )
+
+    retriever = LiveImageRetriever(FakeDB(), "siglip2_rerank")
+
+    warm_summary = retriever.warm()
+    result = retriever.search("/tmp/query-a.jpg", query_text="alpha", top_k=1, threshold=0.0)
+
+    assert warm_summary["catalog_size"] == 1
+    assert result["catalog_size"] == 1
+    assert retriever.db.calls == 1

@@ -1213,6 +1213,13 @@ class LiveImageRetriever:
             "top1_margin": top1_score - top2_score,
         }
 
+    def warm(self) -> Dict[str, Any]:
+        _strategy, prepared_catalog = self._ensure_prepared_catalog()
+        return {
+            "strategy": self.strategy_name,
+            "catalog_size": len(prepared_catalog),
+        }
+
 
 _retriever_registry: Dict[str, LiveImageRetriever] = {}
 _retriever_registry_lock = Lock()
@@ -1225,6 +1232,10 @@ def get_live_image_retriever(db_handle, strategy_name: str):
             retriever = LiveImageRetriever(db_handle=db_handle, strategy_name=strategy_name)
             _retriever_registry[strategy_name] = retriever
         return retriever
+
+
+def warm_live_image_retriever(db_handle, strategy_name: str) -> Dict[str, Any]:
+    return get_live_image_retriever(db_handle, strategy_name).warm()
 
 
 def invalidate_live_image_retriever(strategy_name: Optional[str] = None):

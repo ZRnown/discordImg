@@ -746,6 +746,22 @@ def initialize_runtime():
                         cleanup_summary.get('deleted_rows', 0),
                     )
 
+                if getattr(config, 'LIVE_IMAGE_SEARCH_STARTUP_PREPARE_CATALOG', True):
+                    try:
+                        from live_retrieval import warm_live_image_retriever
+                    except ModuleNotFoundError as import_error:
+                        if import_error.name == 'live_retrieval':
+                            from .live_retrieval import warm_live_image_retriever
+                        else:
+                            raise
+
+                    print(f"🧠 [后台] 正在预热 {strategy_name} 实时检索目录...")
+                    warm_summary = warm_live_image_retriever(db, strategy_name)
+                    print(
+                        f"✅ [后台] {strategy_name} 实时检索目录预热完成: "
+                        f"catalog_size={warm_summary.get('catalog_size', 0)}"
+                    )
+
                 _start_auto_retrieval_cache_backfill()
             except Exception as cache_error:
                 logger.warning("商品检索缓存预热失败: %s", cache_error)
