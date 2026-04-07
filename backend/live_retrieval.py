@@ -1561,6 +1561,8 @@ class LiveImageRetriever:
     def _supports_streaming_search(self, strategy) -> bool:
         supports_streaming = getattr(strategy, 'supports_streaming_live_search', None)
         if not (
+            _env_bool("LIVE_IMAGE_SEARCH_STREAMING_ENABLED", False)
+            and
             strategy_requires_persisted_catalog_cache(self.strategy_name)
             and callable(supports_streaming)
             and supports_streaming()
@@ -1824,6 +1826,8 @@ class LiveImageRetriever:
         strategy = self._get_strategy_instance()
         supports_streaming = getattr(strategy, 'supports_streaming_live_search', None)
         if (
+            _env_bool("LIVE_IMAGE_SEARCH_STREAMING_ENABLED", False)
+            and
             strategy_requires_persisted_catalog_cache(self.strategy_name)
             and callable(supports_streaming)
             and supports_streaming()

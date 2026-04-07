@@ -712,31 +712,119 @@ def test_live_image_retriever_warm_prepares_catalog_before_search(monkeypatch):
     assert retriever.db.calls == 1
 
 
-def test_live_image_retriever_streaming_search_avoids_catalog_materialization(monkeypatch):
+def test_live_image_retriever_search_prefers_prepared_catalog_by_default(monkeypatch):
+    class FakeDB:
+        def __init__(self):
+            self.materialized_calls = []
+
+        def get_searchable_product_image_records(self, **kwargs):
+            self.materialized_calls.append(kwargs)
+            return [
+                {
+                    "product_id": "2001",
+                    "title": "Allowed Alpha",
+                    "english_title": "Allowed Alpha",
+                    "description": "demo",
+                    "shop_name": "shop-allowed",
+                    "image_path": "/tmp/allowed.jpg",
+                    "image_index": 0,
+                    "product_url": "https://weidian.com/item.html?itemID=2001",
+                    "retrieval_cache_strategy": "siglip2_rerank",
+                    "retrieval_cache_version": "siglip2_rerank_v1",
+                    "retrieval_embedding": "[0.1, 0.2, 0.3]",
+                    "retrieval_color_hist": None,
+                    "retrieval_tokens": "[\"alpha\"]",
+                }
+            ]
+
+        def iter_searchable_product_image_records(self, **kwargs):
+            raise AssertionError("default live search should not stream-scan the catalog")
+
+    class FakeStrategy:
+        def supports_streaming_live_search(self):
+            return True
+
+        def prepare_query_image(self, record):
+            return {"query": record.query}
+
+        def prepare_catalog_image(self, record):
+            if record.product_id == "2001":
+                assert record.cache_embedding == [0.1, 0.2, 0.3]
+            return {"score": 0.93 if record.product_id == "2001" else 0.11}
+
+        def score(self, query_context, catalog_context):
+            return catalog_context["score"]
+
+    monkeypatch.setattr(
+        "backend.benchmarks.strategies.create_strategy",
+        lambda _name: FakeStrategy(),
+    )
+
+    retriever = LiveImageRetriever(FakeDB(), "siglip2_rerank")
+
+    result = retriever.search(
+        "/tmp/query.jpg",
+        query_text="ignored",
+        top_k=3,
+        threshold=0.2,
+        user_shops=["shop-allowed"],
+    )
+
+    assert result["catalog_size"] == 1
+    assert [item["product_id"] for item in result["ranked_products"]] == ["2001"]
+    assert retriever.db.materialized_calls == [
+        {
+            "strategy_name": "siglip2_rerank",
+            "require_cache": True,
+        }
+    ]
+
+
+def test_live_image_retriever_warm_skips_streaming_catalog_count(monkeypatch):
+    class FakeDB:
+        def __init__(self):
+            self.count_calls = []
+
+        def get_searchable_product_image_records(self, **kwargs):
+            raise AssertionError("warm should not materialize the full catalog in streaming mode")
+
+        def count_searchable_product_image_records(self, **kwargs):
+            self.count_calls.append(kwargs)
+            return 42
+
+    class FakeStrategy:
+        def supports_streaming_live_search(self):
+            return True
+
+    monkeypatch.setenv("LIVE_IMAGE_SEARCH_STREAMING_ENABLED", "1")
+    monkeypatch.setattr(
+        "backend.live_retrieval.get_retrieval_strategy_instance",
+        lambda *args, **kwargs: FakeStrategy(),
+    )
+
+    retriever = LiveImageRetriever(FakeDB(), "siglip2_rerank")
+
+    warm_summary = retriever.warm()
+
+    assert warm_summary == {
+        "strategy": "siglip2_rerank",
+        "catalog_size": 0,
+        "streaming": True,
+        "skipped_count": True,
+    }
+    assert retriever.db.count_calls == []
+
+
+def test_live_image_retriever_streaming_search_requires_explicit_enable(monkeypatch):
     class FakeDB:
         def __init__(self):
             self.iter_calls = []
 
         def get_searchable_product_image_records(self, **kwargs):
-            raise AssertionError("streaming search should not materialize the full catalog")
+            raise AssertionError("streaming mode should avoid materializing the full catalog")
 
         def iter_searchable_product_image_records(self, **kwargs):
             self.iter_calls.append(kwargs)
-            yield {
-                "product_id": "skip-me",
-                "title": "Skip Me",
-                "english_title": "",
-                "description": "",
-                "shop_name": "shop-blocked",
-                "image_path": "/tmp/skip.jpg",
-                "image_index": "bad-index",
-                "product_url": "https://weidian.com/item.html?itemID=9999",
-                "retrieval_cache_strategy": "siglip2_rerank",
-                "retrieval_cache_version": "siglip2_rerank_v1",
-                "retrieval_embedding": "[0.1, 0.2, 0.3]",
-                "retrieval_color_hist": None,
-                "retrieval_tokens": "[\"skip\"]",
-            }
             yield {
                 "product_id": "2001",
                 "title": "Allowed Alpha",
@@ -761,13 +849,12 @@ def test_live_image_retriever_streaming_search_avoids_catalog_materialization(mo
             return {"query": record.query}
 
         def prepare_catalog_image(self, record):
-            if record.product_id == "2001":
-                assert record.cache_embedding == "[0.1, 0.2, 0.3]"
-            return {"score": 0.93 if record.product_id == "2001" else 0.11}
+            return {"score": 0.93}
 
         def score(self, query_context, catalog_context):
             return catalog_context["score"]
 
+    monkeypatch.setenv("LIVE_IMAGE_SEARCH_STREAMING_ENABLED", "1")
     monkeypatch.setattr(
         "backend.live_retrieval.get_retrieval_strategy_instance",
         lambda *args, **kwargs: FakeStrategy(),
@@ -795,37 +882,3 @@ def test_live_image_retriever_streaming_search_avoids_catalog_materialization(mo
             "ordered": False,
         }
     ]
-
-
-def test_live_image_retriever_warm_skips_streaming_catalog_count(monkeypatch):
-    class FakeDB:
-        def __init__(self):
-            self.count_calls = []
-
-        def get_searchable_product_image_records(self, **kwargs):
-            raise AssertionError("warm should not materialize the full catalog in streaming mode")
-
-        def count_searchable_product_image_records(self, **kwargs):
-            self.count_calls.append(kwargs)
-            return 42
-
-    class FakeStrategy:
-        def supports_streaming_live_search(self):
-            return True
-
-    monkeypatch.setattr(
-        "backend.live_retrieval.get_retrieval_strategy_instance",
-        lambda *args, **kwargs: FakeStrategy(),
-    )
-
-    retriever = LiveImageRetriever(FakeDB(), "siglip2_rerank")
-
-    warm_summary = retriever.warm()
-
-    assert warm_summary == {
-        "strategy": "siglip2_rerank",
-        "catalog_size": 0,
-        "streaming": True,
-        "skipped_count": True,
-    }
-    assert retriever.db.count_calls == []

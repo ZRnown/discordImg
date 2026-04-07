@@ -3040,20 +3040,20 @@ class DiscordBotClient(discord.Client):
 
                 if filter_type == 'contains':
                     if filter_value in message_content:
-                        logger.info(f'消息被过滤: 包含 "{filter_value}"')
+                        logger.debug(f'消息被过滤: 包含 "{filter_value}"')
                         return True
                 elif filter_type == 'starts_with':
                     if message_content.startswith(filter_value):
-                        logger.info(f'消息被过滤: 以 "{filter_value}" 开头')
+                        logger.debug(f'消息被过滤: 以 "{filter_value}" 开头')
                         return True
                 elif filter_type == 'ends_with':
                     if message_content.endswith(filter_value):
-                        logger.info(f'消息被过滤: 以 "{filter_value}" 结尾')
+                        logger.debug(f'消息被过滤: 以 "{filter_value}" 结尾')
                         return True
                 elif filter_type == 'regex':
                     try:
                         if re.search(filter_value, message_content, re.IGNORECASE):
-                            logger.info(f'消息被过滤: 匹配正则 "{filter_value}"')
+                            logger.debug(f'消息被过滤: 匹配正则 "{filter_value}"')
                             return True
                     except re.error:
                         logger.warning(f'无效的正则表达式: {filter_value}')
