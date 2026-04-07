@@ -1658,7 +1658,8 @@ class Database:
                         SELECT COUNT(*)
                         FROM (
                             SELECT 1
-                            FROM product_images pi
+                            FROM products p
+                            JOIN product_images pi ON pi.product_id = p.id
                             LEFT JOIN product_image_retrieval_cache rc
                                 ON ''' + self._retrieval_cache_join_sql('pi', 'rc', include_usable_embedding=True) + '''
                             WHERE rc.image_db_id IS NULL
@@ -1671,7 +1672,8 @@ class Database:
                     cursor.execute(
                         '''
                         SELECT COUNT(*)
-                        FROM product_images pi
+                        FROM products p
+                        JOIN product_images pi ON pi.product_id = p.id
                         LEFT JOIN product_image_retrieval_cache rc
                             ON ''' + self._retrieval_cache_join_sql('pi', 'rc', include_usable_embedding=True) + '''
                         WHERE rc.image_db_id IS NULL
