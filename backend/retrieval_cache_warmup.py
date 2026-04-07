@@ -46,6 +46,19 @@ def get_auto_backfill_max_missing(config_obj: Any, default: int = 5000) -> int:
     return max(0, limit)
 
 
+def get_auto_backfill_emergency_limit(config_obj: Any, default: int = 2) -> int:
+    value = getattr(
+        config_obj,
+        "RETRIEVAL_CACHE_AUTO_BACKFILL_EMERGENCY_BATCH_LIMIT",
+        default,
+    )
+    try:
+        limit = int(value)
+    except (TypeError, ValueError):
+        limit = default
+    return max(0, limit)
+
+
 def should_run_startup_cache_warmup(config_obj: Any, strategy_name: str) -> bool:
     try:
         from .live_retrieval import strategy_requires_persisted_catalog_cache
@@ -149,3 +162,25 @@ def should_pause_auto_backfill(missing_count: Any, max_missing: Any) -> bool:
     if limit <= 0:
         return False
     return missing > limit
+
+
+def resolve_auto_backfill_batch_limit(
+    *,
+    missing_count: Any,
+    configured_limit: Any,
+    max_missing: Any,
+    emergency_limit: Any,
+) -> tuple[Optional[int], bool]:
+    limit = normalize_backfill_limit(configured_limit)
+    if limit is None:
+        limit = 1
+
+    degraded = should_pause_auto_backfill(missing_count, max_missing)
+    if not degraded:
+        return limit, False
+
+    emergency = normalize_backfill_limit(emergency_limit)
+    if emergency is None:
+        return None, True
+
+    return min(limit, emergency), True

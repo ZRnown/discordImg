@@ -3,12 +3,14 @@ from types import SimpleNamespace
 
 from backend.live_retrieval import backfill_product_image_retrieval_cache
 from backend.retrieval_cache_warmup import (
+    get_auto_backfill_emergency_limit,
     get_auto_backfill_limit,
     get_auto_backfill_max_missing,
     get_backfill_cooldown_seconds,
     get_backfill_limit,
     get_backfill_interval_seconds,
     reduce_backfill_limit_after_failure,
+    resolve_auto_backfill_batch_limit,
     should_pause_auto_backfill,
     should_run_startup_cache_compaction,
     should_continue_auto_backfill_burst,
@@ -174,6 +176,53 @@ class RetrievalCacheWarmupTestCase(unittest.TestCase):
         self.assertFalse(should_pause_auto_backfill(missing_count=0, max_missing=5000))
         self.assertFalse(should_pause_auto_backfill(missing_count=5000, max_missing=5000))
         self.assertTrue(should_pause_auto_backfill(missing_count=5001, max_missing=5000))
+
+    def test_resolve_auto_backfill_batch_limit_uses_configured_limit_when_missing_is_safe(self):
+        limit, degraded = resolve_auto_backfill_batch_limit(
+            missing_count=120,
+            configured_limit=24,
+            max_missing=5000,
+            emergency_limit=2,
+        )
+
+        self.assertEqual(limit, 24)
+        self.assertFalse(degraded)
+
+    def test_resolve_auto_backfill_batch_limit_switches_to_emergency_limit_when_missing_is_huge(self):
+        limit, degraded = resolve_auto_backfill_batch_limit(
+            missing_count=61253,
+            configured_limit=24,
+            max_missing=5000,
+            emergency_limit=2,
+        )
+
+        self.assertEqual(limit, 2)
+        self.assertTrue(degraded)
+
+    def test_resolve_auto_backfill_batch_limit_can_disable_emergency_mode(self):
+        limit, degraded = resolve_auto_backfill_batch_limit(
+            missing_count=61253,
+            configured_limit=24,
+            max_missing=5000,
+            emergency_limit=0,
+        )
+
+        self.assertIsNone(limit)
+        self.assertTrue(degraded)
+
+    def test_get_auto_backfill_emergency_limit_clamps_invalid_values(self):
+        self.assertEqual(
+            get_auto_backfill_emergency_limit(
+                SimpleNamespace(RETRIEVAL_CACHE_AUTO_BACKFILL_EMERGENCY_BATCH_LIMIT="bad")
+            ),
+            2,
+        )
+        self.assertEqual(
+            get_auto_backfill_emergency_limit(
+                SimpleNamespace(RETRIEVAL_CACHE_AUTO_BACKFILL_EMERGENCY_BATCH_LIMIT=0)
+            ),
+            0,
+        )
 
 
 if __name__ == "__main__":

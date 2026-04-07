@@ -87,6 +87,7 @@ except ModuleNotFoundError as e:
         raise
 try:
     from retrieval_cache_warmup import (
+        get_auto_backfill_emergency_limit,
         get_auto_backfill_limit,
         get_auto_backfill_max_missing,
         get_backfill_cooldown_seconds,
@@ -95,6 +96,7 @@ try:
         get_backfill_timeout_seconds,
         normalize_backfill_limit,
         reduce_backfill_limit_after_failure,
+        resolve_auto_backfill_batch_limit,
         should_pause_auto_backfill,
         should_continue_auto_backfill_burst,
         should_run_auto_backfill,
@@ -104,6 +106,7 @@ try:
 except ModuleNotFoundError as e:
     if e.name == 'retrieval_cache_warmup':
         from .retrieval_cache_warmup import (
+            get_auto_backfill_emergency_limit,
             get_auto_backfill_limit,
             get_auto_backfill_max_missing,
             get_backfill_cooldown_seconds,
@@ -112,6 +115,7 @@ except ModuleNotFoundError as e:
             get_backfill_timeout_seconds,
             normalize_backfill_limit,
             reduce_backfill_limit_after_failure,
+            resolve_auto_backfill_batch_limit,
             should_pause_auto_backfill,
             should_continue_auto_backfill_burst,
             should_run_auto_backfill,
@@ -956,6 +960,7 @@ def _start_auto_retrieval_cache_backfill():
             configured_limit = get_auto_backfill_limit(config, default=24)
             current_limit = configured_limit
             max_missing_for_auto = get_auto_backfill_max_missing(config, default=5000)
+            emergency_limit = get_auto_backfill_emergency_limit(config, default=2)
             missing_scan_limit = max_missing_for_auto + 1 if max_missing_for_auto > 0 else None
             burst_enabled = bool(getattr(config, 'RETRIEVAL_CACHE_AUTO_BACKFILL_BURST', False))
             interval_seconds = get_backfill_interval_seconds(config, 'RETRIEVAL_CACHE_AUTO_BACKFILL_INTERVAL', 180)
@@ -989,7 +994,13 @@ def _start_auto_retrieval_cache_backfill():
                         time.sleep(interval_seconds)
                         continue
 
-                    if should_pause_auto_backfill(missing_count, max_missing_for_auto):
+                    batch_limit, degraded_mode = resolve_auto_backfill_batch_limit(
+                        missing_count=missing_count,
+                        configured_limit=current_limit,
+                        max_missing=max_missing_for_auto,
+                        emergency_limit=emergency_limit,
+                    )
+                    if batch_limit is None:
                         logger.warning(
                             "缺失商品检索缓存过多，已暂停自动补全避免占满CPU: strategy=%s missing=%s max_missing=%s",
                             strategy_name,
@@ -998,22 +1009,31 @@ def _start_auto_retrieval_cache_backfill():
                         )
                         time.sleep(interval_seconds)
                         continue
+                    if degraded_mode:
+                        logger.warning(
+                            "缺失商品检索缓存过多，切换到低速补全模式避免占满CPU: strategy=%s missing=%s max_missing=%s emergency_limit=%s",
+                            strategy_name,
+                            _format_missing_count(missing_count),
+                            max_missing_for_auto,
+                            batch_limit,
+                        )
 
                     logger.info(
                         "检测到 %s 条缺失商品检索缓存，开始执行自动补全批次: strategy=%s limit=%s",
                         _format_missing_count(missing_count),
                         strategy_name,
-                        current_limit,
+                        batch_limit,
                     )
                     summary = _run_retrieval_cache_backfill_worker(
                         strategy_name=strategy_name,
-                        limit=current_limit,
+                        limit=batch_limit,
                         timeout_seconds=timeout_seconds,
                     )
                     processed = int(summary.get('processed') or 0)
                     if processed > 0:
                         invalidate_product_retrieval_runtime(strategy_name)
-                        current_limit = configured_limit
+                        if not degraded_mode:
+                            current_limit = configured_limit
                     remaining_count = db.count_missing_product_image_retrieval_cache(
                         strategy_name,
                         max_count=missing_scan_limit,

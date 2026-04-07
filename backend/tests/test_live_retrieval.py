@@ -14,12 +14,14 @@ from backend.live_retrieval import (
     LiveProductSupportRecord,
     LiveQueryRecord,
     backfill_product_image_retrieval_cache,
+    build_external_product_support_queries,
     build_catalog_record,
     build_query_record,
     build_catalog_records,
     load_runtime_product_support_records,
     prepare_catalog_entries,
     rank_query_products,
+    refresh_external_product_support_assets,
 )
 
 
@@ -46,6 +48,76 @@ class DummyLiveStrategy:
             ("alpha runner", "/tmp/c-1.jpg"): 0.44,
         }
         return score_map.get((query, image_path), 0.0)
+
+
+def test_build_external_product_support_queries_prefers_title_english_and_item_id():
+    queries = build_external_product_support_queries(
+        {
+            "title": "Alpha Runner",
+            "english_title": "Runner Alpha",
+            "item_id": "w1001",
+        },
+        max_queries=4,
+    )
+
+    assert queries == [
+        "Alpha Runner",
+        "Runner Alpha",
+        "Alpha Runner w1001",
+        "Runner Alpha w1001",
+    ]
+
+
+def test_refresh_external_product_support_assets_reuses_existing_metadata_without_network(tmp_path):
+    support_root = tmp_path / "support"
+    product_dir = support_root / "1001"
+    product_dir.mkdir(parents=True, exist_ok=True)
+    support_image = product_dir / "support-a.jpg"
+    Image.new("RGB", (96, 96), color=(80, 120, 160)).save(support_image)
+    (product_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "product_id": "1001",
+                "item_id": "w1001",
+                "title": "Product A",
+                "queries": ["alpha", "runner"],
+                "images": [
+                    {
+                        "path": "support-a.jpg",
+                        "source_url": "https://example.com/support-a.jpg",
+                        "query": "alpha",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    class NoNetworkSession:
+        def get(self, *_args, **_kwargs):
+            raise AssertionError("should not fetch network when existing metadata already satisfies max_records")
+
+    result = refresh_external_product_support_assets(
+        {
+            "id": "1001",
+            "item_id": "w1001",
+            "title": "Product A",
+            "english_title": "Alpha Runner",
+        },
+        support_dir=support_root,
+        session=NoNetworkSession(),
+        max_queries=4,
+        max_records=1,
+        search_limit=4,
+        per_query_limit=1,
+    )
+
+    assert result["product_id"] == "1001"
+    assert result["saved"] == 0
+    assert result["reused"] == 1
+    assert result["total_images"] == 1
+    assert result["queries"] == ["Product A", "Alpha Runner", "Product A w1001", "Alpha Runner w1001"]
 
 
 def test_rank_query_products_aggregates_by_product_best_image():

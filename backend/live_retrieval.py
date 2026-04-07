@@ -5,10 +5,12 @@ import hashlib
 import json
 import logging
 import os
+import re
 from statistics import mean
 from threading import Lock
 from time import perf_counter
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+from urllib.parse import quote
 
 from PIL import Image, ImageFilter
 
@@ -18,6 +20,7 @@ try:
         _PRODUCT_RANK_TOP3_MEAN_WEIGHT,
         _PRODUCT_RANK_TOP5_MEAN_WEIGHT,
         aggregate_product_rankings,
+        parse_bing_image_urls,
     )
 except ImportError:
     from benchmarks.common import (
@@ -25,6 +28,7 @@ except ImportError:
         _PRODUCT_RANK_TOP3_MEAN_WEIGHT,
         _PRODUCT_RANK_TOP5_MEAN_WEIGHT,
         aggregate_product_rankings,
+        parse_bing_image_urls,
     )
 
 logger = logging.getLogger(__name__)
@@ -165,6 +169,25 @@ def _build_runtime_env_signature(strategy_name: str) -> Tuple[Tuple[str, str], .
     return tuple(sorted(pairs))
 
 
+def _append_unique_values(
+    target: List[str],
+    values: Sequence[Any],
+    *,
+    limit: int = 0,
+) -> List[str]:
+    seen = set(target)
+    max_items = max(int(limit or 0), 0)
+    for raw_value in values:
+        normalized = " ".join(str(raw_value or "").strip().split())
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        target.append(normalized)
+        if max_items > 0 and len(target) >= max_items:
+            break
+    return target
+
+
 def _collect_unique_product_queries(records: Sequence[LiveCatalogImageRecord]) -> List[str]:
     seen: set[str] = set()
     ordered: List[str] = []
@@ -192,6 +215,98 @@ def _verify_support_image(image_path: str) -> bool:
         return os.path.getsize(image_path) > 256
     except Exception:
         return False
+
+
+def _resolve_external_support_image_suffix(url: str) -> str:
+    normalized = str(url or "").split("?", 1)[0].lower()
+    match = re.search(
+        r"\.(jpe?g|png|webp|bmp|gif|tiff?|heic|avif)(?:$|[^a-z0-9])",
+        normalized,
+    )
+    if not match:
+        return ".jpg"
+    ext = match.group(1)
+    if ext in {"jpg", "jpeg"}:
+        return ".jpg"
+    if ext in {"tif", "tiff"}:
+        return ".tiff"
+    return f".{ext}"
+
+
+def build_external_product_support_queries(
+    product_row: Dict[str, Any],
+    *,
+    max_queries: int = 4,
+) -> List[str]:
+    title = str(
+        product_row.get("title")
+        or product_row.get("name")
+        or ""
+    ).strip()
+    english_title = str(product_row.get("english_title") or "").strip()
+    item_id = str(product_row.get("item_id") or "").strip()
+
+    queries: List[str] = []
+    _append_unique_values(
+        queries,
+        [
+            title,
+            english_title,
+            f"{title} {item_id}" if title and item_id else "",
+            f"{english_title} {item_id}" if english_title and item_id else "",
+            item_id,
+        ],
+        limit=max_queries,
+    )
+    return queries
+
+
+def _fetch_bing_search_image_urls(session: Any, query: str, limit: int = 12) -> List[str]:
+    response = session.get(
+        "https://www.bing.com/images/search?q=" + quote(query),
+        headers={"User-Agent": "Mozilla/5.0"},
+        timeout=(10, 20),
+    )
+    response.raise_for_status()
+    return parse_bing_image_urls(response.text, limit=limit)
+
+
+def _download_external_support_image(
+    session: Any,
+    url: str,
+    out_path: str | os.PathLike[str],
+) -> Optional[str]:
+    resolved_path = os.fspath(out_path)
+    if os.path.exists(resolved_path) and _verify_support_image(resolved_path):
+        return resolved_path
+
+    os.makedirs(os.path.dirname(resolved_path), exist_ok=True)
+    try:
+        response = session.get(
+            url,
+            timeout=(10, 20),
+            headers={"User-Agent": "Mozilla/5.0"},
+            stream=True,
+        )
+        response.raise_for_status()
+        with open(resolved_path, "wb") as handle:
+            for chunk in response.iter_content(chunk_size=8192):
+                if chunk:
+                    handle.write(chunk)
+    except Exception:
+        try:
+            os.remove(resolved_path)
+        except OSError:
+            pass
+        return None
+
+    if not _verify_support_image(resolved_path):
+        try:
+            os.remove(resolved_path)
+        except OSError:
+            pass
+        return None
+    return resolved_path
 
 
 def _load_external_support_metadata(
@@ -309,6 +424,194 @@ def load_external_product_support_records(
             added += 1
 
     return records
+
+
+def refresh_external_product_support_assets(
+    product_row: Dict[str, Any],
+    *,
+    support_dir: str | os.PathLike[str] | None = None,
+    session: Any = None,
+    max_queries: int = 0,
+    search_limit: int = 0,
+    max_records: int = 0,
+    per_query_limit: int = 0,
+) -> Dict[str, Any]:
+    product_id = str(
+        product_row.get("id")
+        or product_row.get("product_id")
+        or ""
+    ).strip()
+    item_id = str(product_row.get("item_id") or "").strip()
+    if not product_id:
+        return {
+            "product_id": "",
+            "saved": 0,
+            "reused": 0,
+            "total_images": 0,
+            "queries": [],
+            "metadata_path": "",
+        }
+
+    resolved_support_dir = _resolve_external_support_output_dir(
+        str(
+            os.fspath(support_dir)
+            if support_dir is not None
+            else os.getenv("LIVE_IMAGE_SEARCH_EXTERNAL_PRODUCT_SUPPORT_DIR", "")
+        )
+    )
+    resolved_max_queries = max(
+        int(max_queries or _env_int("LIVE_IMAGE_SEARCH_EXTERNAL_PRODUCT_SUPPORT_MAX_QUERIES", 4)),
+        1,
+    )
+    resolved_search_limit = max(
+        int(search_limit or _env_int("LIVE_IMAGE_SEARCH_EXTERNAL_PRODUCT_SUPPORT_SEARCH_LIMIT", 12)),
+        1,
+    )
+    resolved_max_records = max(
+        int(max_records or _env_int("LIVE_IMAGE_SEARCH_EXTERNAL_PRODUCT_SUPPORT_MAX_RECORDS", 4)),
+        1,
+    )
+    resolved_per_query_limit = max(
+        int(per_query_limit or _env_int("LIVE_IMAGE_SEARCH_EXTERNAL_PRODUCT_SUPPORT_PER_QUERY_LIMIT", 2)),
+        1,
+    )
+    queries = build_external_product_support_queries(
+        product_row,
+        max_queries=resolved_max_queries,
+    )
+
+    product_dir = os.path.join(resolved_support_dir, product_id)
+    metadata_path = os.path.join(product_dir, _EXTERNAL_SUPPORT_METADATA_FILENAME)
+    os.makedirs(product_dir, exist_ok=True)
+    existing_payload = _load_external_support_metadata(metadata_path)
+
+    image_entries: List[Dict[str, str]] = []
+    seen_urls: set[str] = set()
+    seen_paths: set[str] = set()
+    reused = 0
+    saved = 0
+
+    def _append_entry(image_path: str, source_url: str, query: str) -> bool:
+        normalized_path = str(image_path or "").strip()
+        normalized_url = str(source_url or "").strip()
+        relative_path = os.path.relpath(normalized_path, product_dir)
+        if (
+            not normalized_path
+            or normalized_path in seen_paths
+            or len(image_entries) >= resolved_max_records
+            or not os.path.exists(normalized_path)
+            or not _verify_support_image(normalized_path)
+        ):
+            return False
+        seen_paths.add(normalized_path)
+        if normalized_url:
+            seen_urls.add(normalized_url)
+        image_entries.append(
+            {
+                "path": relative_path,
+                "source_url": normalized_url,
+                "query": str(query or "").strip(),
+            }
+        )
+        return True
+
+    for existing_entry in list(existing_payload.get("images") or []):
+        existing_path = str(
+            existing_entry.get("path")
+            or existing_entry.get("local_path")
+            or existing_entry.get("image_path")
+            or ""
+        ).strip()
+        if not existing_path:
+            continue
+        absolute_existing_path = existing_path
+        if not os.path.isabs(absolute_existing_path):
+            absolute_existing_path = os.path.abspath(os.path.join(product_dir, absolute_existing_path))
+        if _append_entry(
+            absolute_existing_path,
+            str(existing_entry.get("source_url") or "").strip(),
+            str(existing_entry.get("query") or "").strip(),
+        ):
+            reused += 1
+        if len(image_entries) >= resolved_max_records:
+            break
+
+    session_created = False
+    if session is None:
+        import requests
+
+        session = requests.Session()
+        session.trust_env = False
+        session_created = True
+
+    try:
+        if len(image_entries) < resolved_max_records:
+            for query in queries:
+                if len(image_entries) >= resolved_max_records:
+                    break
+                try:
+                    query_urls = _fetch_bing_search_image_urls(
+                        session,
+                        query,
+                        limit=resolved_search_limit,
+                    )
+                except Exception:
+                    continue
+
+                query_saved = 0
+                for url in query_urls:
+                    normalized_url = str(url or "").strip()
+                    if (
+                        not normalized_url
+                        or normalized_url in seen_urls
+                        or len(image_entries) >= resolved_max_records
+                        or query_saved >= resolved_per_query_limit
+                    ):
+                        continue
+                    suffix = _resolve_external_support_image_suffix(normalized_url)
+                    out_path = os.path.join(
+                        product_dir,
+                        f"{hashlib.sha1(normalized_url.encode('utf-8')).hexdigest()[:16]}{suffix}",
+                    )
+                    saved_path = _download_external_support_image(session, normalized_url, out_path)
+                    if not saved_path:
+                        continue
+                    if _append_entry(saved_path, normalized_url, query):
+                        saved += 1
+                        query_saved += 1
+    finally:
+        if session_created and session is not None:
+            try:
+                session.close()
+            except Exception:
+                pass
+
+    merged_queries: List[str] = []
+    _append_unique_values(
+        merged_queries,
+        list(queries) + list(existing_payload.get("queries") or []),
+        limit=resolved_max_queries,
+    )
+
+    metadata_payload = {
+        "product_id": product_id,
+        "item_id": item_id,
+        "title": str(product_row.get("title") or ""),
+        "english_title": str(product_row.get("english_title") or ""),
+        "queries": merged_queries,
+        "images": image_entries,
+    }
+    with open(metadata_path, "w", encoding="utf-8") as handle:
+        json.dump(metadata_payload, handle, ensure_ascii=False, indent=2)
+
+    return {
+        "product_id": product_id,
+        "saved": saved,
+        "reused": reused,
+        "total_images": len(image_entries),
+        "queries": merged_queries,
+        "metadata_path": metadata_path,
+    }
 
 
 def _center_crop_image(image: Image.Image, crop_ratio: float = 0.88) -> Image.Image:
