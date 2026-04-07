@@ -510,6 +510,29 @@ async def _resolve_client_channel(target_client, channel_id):
     return None
 
 
+async def _resolve_message_thread_id(message):
+    if message is None:
+        return None
+
+    message_thread_id = getattr(getattr(message, 'thread', None), 'id', None)
+    if message_thread_id is not None:
+        return message_thread_id
+
+    message_flags = getattr(message, 'flags', None)
+    has_thread = bool(getattr(message_flags, 'has_thread', False))
+    fetch_thread = getattr(message, 'fetch_thread', None)
+    if not has_thread or not callable(fetch_thread):
+        return None
+
+    try:
+        fetched_thread = await fetch_thread()
+    except Exception as exc:
+        logger.warning(f"获取消息关联子分区失败: {getattr(message, 'id', None)} | {exc}")
+        return None
+
+    return getattr(fetched_thread, 'id', None)
+
+
 async def resolve_reply_target_channel(
     target_client,
     target_channel,
@@ -541,7 +564,7 @@ async def resolve_reply_target_channel(
                 setattr(message, '_auto_reply_thread_id', current_thread_id)
             return current_thread, True
 
-    message_thread_id = getattr(getattr(message, 'thread', None), 'id', None)
+    message_thread_id = await _resolve_message_thread_id(message)
     if message_thread_id is not None:
         existing_thread = await _resolve_client_channel(target_client, message_thread_id)
         if existing_thread is not None:
