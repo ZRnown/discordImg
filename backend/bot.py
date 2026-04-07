@@ -96,6 +96,8 @@ _keyword_reply_window_lock = asyncio.Lock()
 _keyword_reply_flush_tasks = {}
 _keyword_reply_window_configs = {}
 _keyword_reply_background_tasks = set()
+_auto_reply_thread_ids = {}
+_AUTO_REPLY_THREAD_CACHE_LIMIT = 2048
 
 
 def _coerce_int(value, default):
@@ -103,6 +105,36 @@ def _coerce_int(value, default):
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _get_auto_reply_thread_cache_key(message):
+    return _coerce_int(getattr(message, 'id', None), None)
+
+
+def _get_cached_auto_reply_thread_id(message):
+    cache_key = _get_auto_reply_thread_cache_key(message)
+    if cache_key is None:
+        return None
+    return _auto_reply_thread_ids.get(cache_key)
+
+
+def _store_cached_auto_reply_thread_id(message, thread_id):
+    cache_key = _get_auto_reply_thread_cache_key(message)
+    normalized_thread_id = _coerce_int(thread_id, None)
+    if cache_key is None or normalized_thread_id is None:
+        return
+
+    _auto_reply_thread_ids[cache_key] = normalized_thread_id
+    while len(_auto_reply_thread_ids) > _AUTO_REPLY_THREAD_CACHE_LIMIT:
+        oldest_key = next(iter(_auto_reply_thread_ids))
+        _auto_reply_thread_ids.pop(oldest_key, None)
+
+
+def _clear_cached_auto_reply_thread_id(message):
+    cache_key = _get_auto_reply_thread_cache_key(message)
+    if cache_key is None:
+        return
+    _auto_reply_thread_ids.pop(cache_key, None)
 
 
 def build_discord_client_runtime_options(intents=None):
@@ -545,14 +577,15 @@ async def resolve_reply_target_channel(
     if getattr(target_channel, 'parent_id', None) is not None:
         target_thread_id = getattr(target_channel, 'id', None)
         if target_thread_id is not None:
-            setattr(message, '_auto_reply_thread_id', target_thread_id)
+            _store_cached_auto_reply_thread_id(message, target_thread_id)
         return target_channel, True
 
-    cached_thread_id = getattr(message, '_auto_reply_thread_id', None)
+    cached_thread_id = _get_cached_auto_reply_thread_id(message)
     if cached_thread_id is not None:
         cached_thread = await _resolve_client_channel(target_client, cached_thread_id)
         if cached_thread is not None:
             return cached_thread, True
+        _clear_cached_auto_reply_thread_id(message)
 
     current_channel = getattr(message, 'channel', None)
     current_channel_parent_id = getattr(current_channel, 'parent_id', None)
@@ -561,14 +594,14 @@ async def resolve_reply_target_channel(
         if current_thread is not None:
             current_thread_id = getattr(current_thread, 'id', None)
             if current_thread_id is not None:
-                setattr(message, '_auto_reply_thread_id', current_thread_id)
+                _store_cached_auto_reply_thread_id(message, current_thread_id)
             return current_thread, True
 
     message_thread_id = await _resolve_message_thread_id(message)
     if message_thread_id is not None:
         existing_thread = await _resolve_client_channel(target_client, message_thread_id)
         if existing_thread is not None:
-            setattr(message, '_auto_reply_thread_id', message_thread_id)
+            _store_cached_auto_reply_thread_id(message, message_thread_id)
             return existing_thread, True
 
     create_thread = getattr(target_channel, 'create_thread', None)
@@ -582,7 +615,7 @@ async def resolve_reply_target_channel(
         )
         created_thread_id = getattr(created_thread, 'id', None)
         if created_thread_id is not None:
-            setattr(message, '_auto_reply_thread_id', created_thread_id)
+            _store_cached_auto_reply_thread_id(message, created_thread_id)
         return created_thread, True
     except Exception as exc:
         logger.warning(f"创建子分区失败，回退频道直发: {exc}")
