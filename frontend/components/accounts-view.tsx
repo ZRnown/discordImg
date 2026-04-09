@@ -10,6 +10,7 @@ import {
   getReplyModeSettingsSection,
   getReplyModeSwitchError,
   isReplyModeOptionDisabled,
+  shouldShowCooldownForReplyMode,
 } from "@/lib/utils"
 import {
   getMinimumReplyMaxDelay,
@@ -794,6 +795,9 @@ const formatWebsiteForEdit = (website: any) => ({
   const getCooldownRemaining = (accountId: number, websiteId: number) => {
     const website = websites.find(w => w.id === websiteId)
     if (!website) return 0
+
+    const replyMode = getWebsiteReplyMode(website)
+    if (!shouldShowCooldownForReplyMode(replyMode)) return 0
 
     const interval = website.rotation_interval ?? 180
     if (interval <= 0) return 0

@@ -8,6 +8,7 @@ import {
   getReplyModeSettingsSection,
   getReplyModeSwitchError,
   isReplyModeOptionDisabled,
+  shouldShowCooldownForReplyMode,
 } from './lib/utils.ts'
 
 test('allows switching to keyword mode when exactly one sender is bound', () => {
@@ -76,4 +77,11 @@ test('displayed reply mode prefers pending value for immediate UI feedback', () 
 test('keyword batch dispatch labels cover both policies', () => {
   assert.equal(getKeywordBatchDispatchModeLabel('immediate'), '满额立即发送')
   assert.equal(getKeywordBatchDispatchModeLabel('window_end'), '满额后窗口结束发送')
+})
+
+test('default mode hides cooldown display while other modes keep it', () => {
+  assert.equal(shouldShowCooldownForReplyMode('default'), false)
+  assert.equal(shouldShowCooldownForReplyMode('rotation'), true)
+  assert.equal(shouldShowCooldownForReplyMode('all'), true)
+  assert.equal(shouldShowCooldownForReplyMode('keyword'), true)
 })

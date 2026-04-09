@@ -116,6 +116,10 @@ export function getReplyModeLabel(replyMode: string): string {
   }
 }
 
+export function shouldShowCooldownForReplyMode(replyMode: string): boolean {
+  return replyMode !== 'default'
+}
+
 export function getReplyModeSettingsSection(replyMode: string): 'none' | 'rotation' | 'keyword' | 'all' {
   if (replyMode === 'all') {
     return 'all'
