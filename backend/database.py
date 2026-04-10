@@ -104,6 +104,8 @@ class Database:
                     description TEXT,
                     english_title TEXT,
                     title_translations TEXT,
+                    partition_match_enabled BOOLEAN DEFAULT 0,
+                    partition_match_rules TEXT,
                     cnfans_url TEXT,
                     acbuy_url TEXT,
                     shop_name TEXT,
@@ -118,6 +120,7 @@ class Database:
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_products_created_at ON products(created_at)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_products_shop_name ON products(shop_name)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_products_rule_enabled ON products(ruleEnabled)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_products_partition_match_enabled ON products(partition_match_enabled)')
             except sqlite3.OperationalError:
                 pass
 
@@ -157,6 +160,16 @@ class Database:
 
             try:
                 cursor.execute('ALTER TABLE products ADD COLUMN title_translations TEXT')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE products ADD COLUMN partition_match_enabled BOOLEAN DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE products ADD COLUMN partition_match_rules TEXT')
             except sqlite3.OperationalError:
                 pass
 
@@ -2453,7 +2466,9 @@ class Database:
                 set_parts = []
                 params = []
                 allowed_fields = [
-                    'title', 'english_title', 'title_translations', 'ruleEnabled',
+                    'title', 'english_title', 'title_translations',
+                    'partition_match_enabled', 'partition_match_rules',
+                    'ruleEnabled',
                     'custom_reply_text', 'custom_reply_images', 'custom_image_urls',
                     'image_source', 'uploaded_reply_images', 'reply_scope',
                     'per_website_reply_settings'
@@ -3068,6 +3083,118 @@ class Database:
         except Exception as e:
             logger.error(f"添加网站账号绑定失败: {e}")
             return False
+
+    @staticmethod
+    def _normalize_account_binding_ids(account_ids: Sequence[Any]) -> List[int]:
+        normalized_ids: List[int] = []
+        for raw_id in account_ids or []:
+            try:
+                account_id = int(raw_id)
+            except (TypeError, ValueError):
+                continue
+            if account_id <= 0 or account_id in normalized_ids:
+                continue
+            normalized_ids.append(account_id)
+        return normalized_ids
+
+    def add_website_account_bindings_auto(self, website_id: int, account_ids: Sequence[Any], user_id: int) -> List[Dict]:
+        """自动为网站绑定账号。
+
+        策略保持一个可监听账号，其余账号作为发送账号，以兼容现有监听/发送链路。
+        """
+        normalized_ids = self._normalize_account_binding_ids(account_ids)
+        if not normalized_ids:
+            return []
+
+        try:
+            existing_bindings = self.get_website_account_bindings(website_id, user_id)
+            existing_by_account = {
+                int(binding['account_id']): binding
+                for binding in existing_bindings
+            }
+            has_listener = any(
+                str(binding.get('role') or '').strip() in {'listener', 'both'}
+                for binding in existing_bindings
+            )
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                for account_id in normalized_ids:
+                    existing_binding = existing_by_account.get(account_id)
+                    assigned_role = (
+                        str(existing_binding.get('role') or '').strip()
+                        if existing_binding
+                        else ''
+                    )
+                    if assigned_role not in {'listener', 'sender', 'both'}:
+                        assigned_role = 'sender' if has_listener else 'both'
+
+                    cursor.execute('''
+                        INSERT INTO website_account_bindings
+                        (website_id, account_id, role, user_id)
+                        VALUES (?, ?, ?, ?)
+                        ON CONFLICT(website_id, account_id) DO UPDATE SET
+                            role = excluded.role,
+                            user_id = excluded.user_id
+                    ''', (website_id, account_id, assigned_role, user_id))
+
+                    if assigned_role in {'listener', 'both'}:
+                        has_listener = True
+
+                conn.commit()
+
+            self.ensure_website_has_listener_binding(website_id, user_id)
+            binding_map = {
+                int(binding['account_id']): binding
+                for binding in self.get_website_account_bindings(website_id, user_id)
+            }
+            return [
+                binding_map[account_id]
+                for account_id in normalized_ids
+                if account_id in binding_map
+            ]
+        except Exception as e:
+            logger.error(f"自动绑定网站账号失败: {e}")
+            return []
+
+    def ensure_website_has_listener_binding(self, website_id: int, user_id: int = None) -> Optional[int]:
+        """确保网站至少存在一个可监听账号。
+
+        当监听位为空时，自动提升最早绑定的 sender 为 both。
+        """
+        try:
+            bindings = self.get_website_account_bindings(website_id, user_id)
+            if not bindings:
+                return None
+
+            for binding in bindings:
+                role = str(binding.get('role') or '').strip()
+                if role in {'listener', 'both'}:
+                    return int(binding['account_id'])
+
+            promoted_binding = bindings[0]
+            account_id = int(promoted_binding['account_id'])
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                if user_id is not None:
+                    cursor.execute('''
+                        UPDATE website_account_bindings
+                        SET role = 'both'
+                        WHERE website_id = ? AND account_id = ? AND user_id = ?
+                    ''', (website_id, account_id, user_id))
+                else:
+                    cursor.execute('''
+                        UPDATE website_account_bindings
+                        SET role = 'both'
+                        WHERE website_id = ? AND account_id = ?
+                    ''', (website_id, account_id))
+                conn.commit()
+
+            return account_id
+        except Exception as e:
+            logger.error(f"确保网站监听账号失败: {e}")
+            return None
 
     def remove_website_account_binding(self, website_id: int, account_id: int, user_id: int) -> bool:
         """移除网站账号绑定（按用户过滤）"""

@@ -40,6 +40,12 @@ def _should_include_standalone_numeric_token(tokens: list[str]) -> bool:
     return not _query_has_alpha_context(tokens)
 
 
+def _is_mixed_model_token(token: str) -> bool:
+    if len(token or "") < 2:
+        return False
+    return bool(re.search(r"[a-z]", token) and re.search(r"\d", token))
+
+
 def build_query_keyword_candidates(value: str) -> dict[str, str]:
     normalized_text = normalize_keyword_search_text(value)
     candidates: dict[str, str] = {}
@@ -61,6 +67,8 @@ def build_query_keyword_candidates(value: str) -> dict[str, str]:
             if include_numeric_token:
                 add(token, token)
             continue
+        if _is_mixed_model_token(token):
+            add(token, token)
 
     for size in (2, 3):
         if len(tokens) < size:
@@ -132,6 +140,144 @@ def split_keyword_phrases(raw_value: Any) -> list[str]:
     return phrases
 
 
+def normalize_partition_match_rules(raw_value: Any) -> list[list[str]]:
+    parsed = raw_value
+    if isinstance(raw_value, str):
+        text = raw_value.strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return []
+
+    if not isinstance(parsed, list):
+        return []
+
+    normalized: list[list[str]] = []
+    for row in parsed:
+        if isinstance(row, (list, tuple)):
+            cells = [str(cell).strip() if cell is not None else "" for cell in row]
+        else:
+            cells = [str(row).strip() if row is not None else ""]
+
+        if any(cells):
+            normalized.append(cells)
+
+    return normalized
+
+
+def serialize_partition_match_rules(raw_value: Any) -> str:
+    return json.dumps(normalize_partition_match_rules(raw_value), ensure_ascii=False)
+
+
+def _build_partition_query_text(
+    query_keyword_candidates: dict[str, str],
+    query_text: Any = None,
+) -> str:
+    direct_query = normalize_keyword_search_text(str(query_text or ""))
+    if direct_query:
+        return direct_query
+
+    if not query_keyword_candidates:
+        return ""
+
+    combined = " ".join(
+        str(display or "").strip()
+        for display in query_keyword_candidates.values()
+        if str(display or "").strip()
+    )
+    return normalize_keyword_search_text(combined)
+
+
+def _partition_token_matches_query(token: str, query_tokens: list[str]) -> bool:
+    if not token:
+        return True
+
+    if token in query_tokens:
+        return True
+
+    if token.isdigit():
+        return any(
+            query_token == token
+            or (
+                any(ch.isdigit() for ch in query_token)
+                and (query_token.endswith(token) or token in query_token)
+            )
+            for query_token in query_tokens
+        )
+
+    if len(token) == 1 and token.isalpha():
+        return any(
+            query_token.startswith(token) and any(ch.isdigit() for ch in query_token)
+            for query_token in query_tokens
+        )
+
+    return any(
+        query_token == token
+        or query_token.startswith(token)
+        or token.startswith(query_token)
+        for query_token in query_tokens
+    )
+
+
+def _partition_cell_matches_query(cell: str, query_tokens: list[str], query_compact: str) -> bool:
+    normalized_cell = normalize_keyword_search_text(cell)
+    if not normalized_cell:
+        return True
+
+    cell_tokens = tokenize_keyword_search_text(normalized_cell)
+    cell_compact = re.sub(r"\s+", "", normalized_cell)
+    if len(cell_tokens) > 1 and cell_compact and cell_compact in query_compact:
+        return True
+
+    if not cell_tokens:
+        return cell_compact in query_compact
+
+    return all(_partition_token_matches_query(token, query_tokens) for token in cell_tokens)
+
+
+def find_partition_keyword_match(
+    query_keyword_candidates: dict[str, str],
+    partition_match_rules: Any = None,
+    *,
+    query_text: Any = None,
+) -> dict[str, str] | None:
+    rules = normalize_partition_match_rules(partition_match_rules)
+    if not rules:
+        return None
+
+    normalized_query = _build_partition_query_text(
+        query_keyword_candidates,
+        query_text=query_text,
+    )
+    if not normalized_query:
+        return None
+
+    query_tokens = tokenize_keyword_search_text(normalized_query)
+    query_compact = re.sub(r"\s+", "", normalized_query)
+    if not query_tokens and not query_compact:
+        return None
+
+    for row_index, row in enumerate(rules):
+        active_cells = [str(cell or "").strip() for cell in row if str(cell or "").strip()]
+        if not active_cells:
+            continue
+        if all(_partition_cell_matches_query(cell, query_tokens, query_compact) for cell in active_cells):
+            canonical = "&".join(
+                re.sub(r"\s+", "", normalize_keyword_search_text(cell))
+                for cell in active_cells
+            )
+            return {
+                "phrase": " + ".join(active_cells),
+                "source": f"partition_row:{row_index}",
+                "rule": "partition_keyword_match",
+                "canonical_keyword": canonical or f"partition_row_{row_index}",
+            }
+
+    return None
+
+
 def _normalize_allowed_languages(value: Any) -> set[str] | None:
     if value is None:
         return None
@@ -171,7 +317,21 @@ def find_query_keyword_match(
     title: str | None = None,
     title_translations: Any = None,
     allowed_languages: Any = None,
+    query_text: Any = None,
+    partition_match_enabled: Any = False,
+    partition_match_rules: Any = None,
 ) -> dict[str, str] | None:
+    partition_enabled = str(partition_match_enabled).strip().lower() in {'1', 'true', 'yes', 'on'}
+    if partition_enabled:
+        partition_match = find_partition_keyword_match(
+            query_keyword_candidates,
+            partition_match_rules,
+            query_text=query_text,
+        )
+        if partition_match:
+            return partition_match
+        return None
+
     if not query_keyword_candidates:
         return None
 
@@ -262,6 +422,9 @@ def build_text_search_plan(query: Any) -> dict[str, list[str] | str]:
     if len(tokens) >= 2 and not _is_split_numeric_only_query(tokens):
         if query_normalized:
             extra_terms.append(query_normalized)
+        for token in tokens:
+            if _is_mixed_model_token(token) and token not in extra_terms:
+                extra_terms.append(token)
         for size in (2, 3):
             if len(tokens) < size or size == len(tokens):
                 continue

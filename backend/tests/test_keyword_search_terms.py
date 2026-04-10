@@ -76,6 +76,21 @@ class KeywordSearchTermsTestCase(unittest.TestCase):
         self.assertEqual(plan["fallback_tokens"], [])
         self.assertEqual(plan["extra_terms"], ["pony sweatpants"])
 
+    def test_long_sentence_keeps_standalone_model_candidate(self):
+        candidates = build_query_keyword_candidates("啊实打实大路上，的、 b30 啊稍等哈雕塑发给")
+
+        self.assertIn("b30", candidates)
+
+    def test_long_sentence_search_plan_extracts_standalone_model_term(self):
+        plan = build_text_search_plan("啊实打实大路上，的、 b30 啊稍等哈雕塑发给")
+
+        self.assertIn("b30", plan["extra_terms"])
+
+    def test_long_sentence_search_plan_extracts_aj1_model_term(self):
+        plan = build_text_search_plan("anyone got aj1 low in black")
+
+        self.assertIn("aj1", plan["extra_terms"])
+
     def test_split_numeric_expression_does_not_collapse_into_model_candidate(self):
         self.assertEqual(build_query_keyword_candidates("1+1"), {})
         self.assertEqual(build_query_keyword_candidates("1 1"), {})

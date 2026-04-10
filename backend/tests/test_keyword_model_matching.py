@@ -4,6 +4,7 @@ from backend.keyword_search_terms import (
     build_product_keyword_variants,
     build_query_keyword_candidates,
     find_query_keyword_match,
+    normalize_partition_match_rules,
 )
 
 
@@ -96,6 +97,62 @@ class KeywordModelMatchingTestCase(unittest.TestCase):
         self.assertIsNotNone(reason)
         self.assertEqual(reason["canonical_keyword"], "palacehoodie")
         self.assertEqual(reason["source"], "english_title")
+
+    def test_partition_rules_can_match_split_model_tokens_out_of_order(self):
+        query = "I need $30 Dior B30"
+        reason = find_query_keyword_match(
+            build_query_keyword_candidates(query),
+            "",
+            "",
+            query_text=query,
+            partition_match_enabled=True,
+            partition_match_rules=[["B", "30"]],
+        )
+
+        self.assertIsNotNone(reason)
+        self.assertEqual(reason["rule"], "partition_keyword_match")
+        self.assertEqual(reason["source"], "partition_row:0")
+
+    def test_partition_rules_can_match_loose_phrase_tokens(self):
+        query = "A hoodie like Sp5der's"
+        reason = find_query_keyword_match(
+            build_query_keyword_candidates(query),
+            "",
+            "",
+            query_text=query,
+            partition_match_enabled=True,
+            partition_match_rules=[["SP hood"]],
+        )
+
+        self.assertIsNotNone(reason)
+        self.assertEqual(reason["rule"], "partition_keyword_match")
+        self.assertEqual(reason["source"], "partition_row:0")
+
+    def test_partition_mode_disables_english_keyword_fallback(self):
+        query = "Palace hoodie"
+        reason = find_query_keyword_match(
+            build_query_keyword_candidates(query),
+            "Palace hoodie",
+            "",
+            query_text=query,
+            partition_match_enabled=True,
+            partition_match_rules=[["B", "30"]],
+        )
+
+        self.assertIsNone(reason)
+
+    def test_partition_rule_normalizer_keeps_matrix_shape_and_drops_empty_rows(self):
+        self.assertEqual(
+            normalize_partition_match_rules([
+                [" B ", " 30 "],
+                ["SP hood", "", None],
+                ["", ""],
+            ]),
+            [
+                ["B", "30"],
+                ["SP hood", "", ""],
+            ],
+        )
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 import { startTransition, useEffect, useRef, useState } from "react"
 import { useApiCache } from "@/hooks/use-api-cache"
 import {
+  buildAccountBindingPayload,
   getApiErrorMessage,
   getDisplayedReplyMode,
   getKeywordBatchDispatchModeLabel,
@@ -11,6 +12,7 @@ import {
   getReplyModeSwitchError,
   isReplyModeOptionDisabled,
   shouldShowCooldownForReplyMode,
+  toggleAccountBindingSelection,
 } from "@/lib/utils"
 import {
   getMinimumReplyMaxDelay,
@@ -313,8 +315,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
   const [websiteAccounts, setWebsiteAccounts] = useState<{[key: number]: any[]}>({})
   const [showBindAccount, setShowBindAccount] = useState<number | null>(null)
   const [newAccountBinding, setNewAccountBinding] = useState({
-    account_id: '',
-    role: 'both'
+    account_ids: [] as string[]
   })
 
   // 网站过滤规则相关状态
@@ -932,6 +933,22 @@ const formatWebsiteForEdit = (website: any) => ({
     }
     applyRotationSettingsState(websiteId, data)
     return data
+  }
+
+  const fetchWebsiteAccounts = async (websiteId: number) => {
+    const res = await fetch(`/api/websites/${websiteId}/accounts`, {
+      credentials: 'include',
+      cache: 'no-store',
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      throw new Error(getApiErrorMessage(data, '获取网站账号绑定失败'))
+    }
+    setWebsiteAccounts(prev => ({
+      ...prev,
+      [websiteId]: data.accounts || [],
+    }))
+    return data.accounts || []
   }
 
   useEffect(() => {
@@ -1692,35 +1709,24 @@ const formatWebsiteForEdit = (website: any) => ({
   // 账号绑定处理函数
   const handleBindAccount = async (websiteId: number) => {
     try {
+      const payload = buildAccountBindingPayload(newAccountBinding.account_ids)
+      if (!payload.account_ids.length) {
+        toast.error('请至少选择 1 个账号')
+        return
+      }
       const res = await fetch(`/api/websites/${websiteId}/accounts`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify(newAccountBinding)
+        body: JSON.stringify(payload)
       })
       const data = await res.json().catch(() => ({}))
       if (res.ok) {
-        toast.success('账号绑定成功')
+        toast.success(getApiErrorMessage(data, '账号绑定成功'))
         setShowBindAccount(null)
-
-        // 获取绑定的账号信息
-        const boundAccount = accounts.find(acc => acc.id.toString() === newAccountBinding.account_id)
-        if (boundAccount) {
-          // 立即更新前端状态，而不是重新获取所有数据
-          setWebsiteAccounts(prev => ({
-            ...prev,
-            [websiteId]: [...(prev[websiteId] || []), {
-              id: Date.now(), // 临时ID，后端会返回真实ID
-              account_id: parseInt(newAccountBinding.account_id),
-              username: boundAccount.username,
-              role: newAccountBinding.role
-            }]
-          }))
-        }
-
+        await fetchWebsiteAccounts(websiteId)
         await refreshWebsiteRotationSettings(websiteId)
-
-        setNewAccountBinding({ account_id: '', role: 'both' })
+        setNewAccountBinding({ account_ids: [] })
       } else {
         toast.error(getApiErrorMessage(data, '绑定失败'))
       }
@@ -1738,11 +1744,7 @@ const formatWebsiteForEdit = (website: any) => ({
       const data = await res.json().catch(() => ({}))
       if (res.ok) {
         toast.success('账号解绑成功')
-        // 立即更新前端状态，而不是重新获取所有数据
-        setWebsiteAccounts(prev => ({
-          ...prev,
-          [websiteId]: prev[websiteId]?.filter(binding => binding.account_id !== accountId) || []
-        }))
+        await fetchWebsiteAccounts(websiteId)
         await refreshWebsiteRotationSettings(websiteId)
       } else {
         toast.error(getApiErrorMessage(data, '解绑失败'))
@@ -3502,7 +3504,7 @@ const formatWebsiteForEdit = (website: any) => ({
                         <span className="text-sm font-medium">绑定账号</span>
                         <Dialog open={showBindAccount === website.id} onOpenChange={(open) => {
                           setShowBindAccount(open ? website.id : null)
-                          if (!open) setNewAccountBinding({ account_id: '', role: 'both' })
+                          if (!open) setNewAccountBinding({ account_ids: [] })
                         }}>
                           <DialogTrigger asChild>
                             <Button variant="outline" size="sm">
@@ -3513,41 +3515,41 @@ const formatWebsiteForEdit = (website: any) => ({
                           <DialogContent>
                             <DialogHeader>
                               <DialogTitle>绑定Discord账号</DialogTitle>
-                              <DialogDescription>选择账号并设置角色</DialogDescription>
+                              <DialogDescription>可多选账号。系统会自动保留 1 个监听位，其余账号自动作为发送位。</DialogDescription>
                             </DialogHeader>
                             <div className="space-y-4">
                               <div>
                                 <Label>选择账号</Label>
-                                <Select value={newAccountBinding.account_id} onValueChange={value => setNewAccountBinding(prev => ({ ...prev, account_id: value }))}>
-                                  <SelectTrigger>
-                                    <SelectValue placeholder="选择Discord账号" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {accounts.filter(account => !websiteAccounts[website.id]?.some(binding => binding.account_id === account.id)).map((account: any) => (
-                                      <SelectItem key={account.id} value={account.id.toString()}>
-                                        {account.username} ({account.status})
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </div>
-                              <div>
-                                <Label>账号角色</Label>
-                                <Select value={newAccountBinding.role} onValueChange={value => setNewAccountBinding(prev => ({ ...prev, role: value }))}>
-                                  <SelectTrigger>
-                                    <SelectValue />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="listener">监听 (只接收消息)</SelectItem>
-                                    <SelectItem value="sender">发送 (只发送回复)</SelectItem>
-                                    <SelectItem value="both">两者 (监听+发送)</SelectItem>
-                                  </SelectContent>
-                                </Select>
+                                <div className="mt-2 max-h-72 space-y-2 overflow-y-auto rounded-md border p-3">
+                                  {accounts
+                                    .filter(account => !websiteAccounts[website.id]?.some(binding => binding.account_id === account.id))
+                                    .map((account: any) => {
+                                      const checked = newAccountBinding.account_ids.includes(account.id.toString())
+                                      return (
+                                        <label
+                                          key={account.id}
+                                          className="flex items-center gap-2 rounded-md border px-3 py-2 cursor-pointer hover:bg-muted/40"
+                                        >
+                                          <Checkbox
+                                            checked={checked}
+                                            onCheckedChange={() => setNewAccountBinding(prev => ({
+                                              ...prev,
+                                              account_ids: toggleAccountBindingSelection(prev.account_ids, account.id.toString()),
+                                            }))}
+                                          />
+                                          <span className="text-sm">{account.username} ({account.status})</span>
+                                        </label>
+                                      )
+                                    })}
+                                  {!accounts.filter(account => !websiteAccounts[website.id]?.some(binding => binding.account_id === account.id)).length && (
+                                    <p className="text-sm text-muted-foreground">没有可绑定的新账号</p>
+                                  )}
+                                </div>
                               </div>
                             </div>
                             <DialogFooter>
                               <Button variant="outline" onClick={() => setShowBindAccount(null)}>取消</Button>
-                              <Button onClick={() => handleBindAccount(website.id)} disabled={!newAccountBinding.account_id}>
+                              <Button onClick={() => handleBindAccount(website.id)} disabled={!newAccountBinding.account_ids.length}>
                                 绑定
                               </Button>
                             </DialogFooter>

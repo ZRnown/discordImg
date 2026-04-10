@@ -565,6 +565,46 @@ async def _resolve_message_thread_id(message):
     return getattr(fetched_thread, 'id', None)
 
 
+async def _resolve_existing_reply_thread_after_create_failure(
+    target_client,
+    target_channel,
+    message,
+):
+    message_thread_id = await _resolve_message_thread_id(message)
+    if message_thread_id is not None:
+        existing_thread = await _resolve_client_channel(target_client, message_thread_id)
+        if existing_thread is not None:
+            _store_cached_auto_reply_thread_id(message, message_thread_id)
+            return existing_thread
+
+    fetch_message = getattr(target_channel, 'fetch_message', None)
+    message_id = getattr(message, 'id', None)
+    if callable(fetch_message) and message_id is not None:
+        try:
+            refreshed_message = await fetch_message(message_id)
+        except Exception as exc:
+            logger.warning(f"刷新消息以获取子分区失败: {message_id} | {exc}")
+        else:
+            refreshed_thread_id = await _resolve_message_thread_id(refreshed_message)
+            if refreshed_thread_id is not None:
+                existing_thread = await _resolve_client_channel(target_client, refreshed_thread_id)
+                if existing_thread is not None:
+                    _store_cached_auto_reply_thread_id(message, refreshed_thread_id)
+                    return existing_thread
+
+    active_threads = getattr(target_channel, 'threads', None)
+    if active_threads and message_id is not None:
+        for thread in active_threads:
+            starter_message_id = getattr(getattr(thread, 'starter_message', None), 'id', None)
+            if starter_message_id == message_id:
+                thread_id = getattr(thread, 'id', None)
+                if thread_id is not None:
+                    _store_cached_auto_reply_thread_id(message, thread_id)
+                return thread
+
+    return None
+
+
 async def resolve_reply_target_channel(
     target_client,
     target_channel,
@@ -618,6 +658,14 @@ async def resolve_reply_target_channel(
             _store_cached_auto_reply_thread_id(message, created_thread_id)
         return created_thread, True
     except Exception as exc:
+        if getattr(exc, 'code', None) == 160004:
+            existing_thread = await _resolve_existing_reply_thread_after_create_failure(
+                target_client,
+                target_channel,
+                message,
+            )
+            if existing_thread is not None:
+                return existing_thread, True
         logger.warning(f"创建子分区失败，回退频道直发: {exc}")
         return target_channel, False
 
@@ -652,6 +700,9 @@ def _find_query_keyword_match(
     title=None,
     title_translations=None,
     allowed_languages=None,
+    query_text=None,
+    partition_match_enabled=False,
+    partition_match_rules=None,
 ):
     return _shared_find_query_keyword_match(
         query_keyword_candidates,
@@ -659,6 +710,9 @@ def _find_query_keyword_match(
         title,
         title_translations=title_translations,
         allowed_languages=allowed_languages,
+        query_text=query_text,
+        partition_match_enabled=partition_match_enabled,
+        partition_match_rules=partition_match_rules,
     )
 
 
@@ -1117,6 +1171,8 @@ class DiscordBotClient(discord.Client):
         self.user_id = user_id  # 用户ID，用于获取个性化设置
         self.user_shops = user_shops  # 用户管理的店铺列表
         self.role = role  # 'listener', 'sender', 'both' - 账号角色
+        self.last_ready_at = 0.0
+        self.last_disconnect_at = 0.0
         # DM 会话提醒去重：避免“会话创建 + 首条DM消息”重复推送
         self._dm_alert_cache = {}
 
@@ -3178,6 +3234,7 @@ class DiscordBotClient(discord.Client):
         except Exception as e:
             logger.error(f'获取监听频道失败: {e}')
         self.running = True
+        self.last_ready_at = time.monotonic()
 
         # 更新数据库中的账号状态为在线
         try:
@@ -3195,6 +3252,42 @@ class DiscordBotClient(discord.Client):
                     logger.info(f'账号 {self.account_id} 状态已更新为在线')
         except Exception as e:
             logger.error(f'更新账号状态失败: {e}')
+
+    async def on_disconnect(self):
+        self.running = False
+        self.last_disconnect_at = time.monotonic()
+        logger.warning(
+            'Discord连接已断开，等待自动恢复: account_id=%s user_id=%s',
+            self.account_id,
+            self.user_id,
+        )
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+            if hasattr(self, 'account_id') and self.account_id:
+                db.update_account_status(self.account_id, 'offline')
+        except Exception as e:
+            logger.error(f'更新账号离线状态失败: {e}')
+
+    async def on_resumed(self):
+        self.running = True
+        self.last_ready_at = time.monotonic()
+        logger.info(
+            'Discord连接已恢复: account_id=%s user_id=%s',
+            self.account_id,
+            self.user_id,
+        )
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+            if hasattr(self, 'account_id') and self.account_id:
+                db.update_account_status(self.account_id, 'online')
+        except Exception as e:
+            logger.error(f'更新账号恢复在线状态失败: {e}')
 
     async def on_message(self, message):
         if not self.running:
@@ -3764,6 +3857,9 @@ class DiscordBotClient(discord.Client):
                         product.get('title') or '',
                         title_translations=product.get('title_translations') or product.get('titleTranslations'),
                         allowed_languages=allowed_languages,
+                        query_text=search_query,
+                        partition_match_enabled=product.get('partition_match_enabled') or product.get('partitionMatchEnabled'),
+                        partition_match_rules=product.get('partition_match_rules') or product.get('partitionMatchRules'),
                     )
                     if not reason:
                         continue
@@ -4129,11 +4225,24 @@ class DiscordBotClient(discord.Client):
                     form_data.add_field('user_shops', json.dumps(user_shops))
 
                 # 调用后端实时图片检索服务。
-                async with session.post(f'{config.BACKEND_API_URL.replace("/api", "")}/search_similar', data=form_data) as resp:
-                    if resp.status == 200:
-                        result = await resp.json()
-                        return result
-                    else:
+                request_url = f'{config.BACKEND_API_URL.replace("/api", "")}/search_similar'
+                for attempt in range(2):
+                    async with session.post(request_url, data=form_data) as resp:
+                        if resp.status == 200:
+                            result = await resp.json()
+                            return result
+
+                        response_text = (await resp.text()).strip()
+                        compact_response_text = re.sub(r'\s+', ' ', response_text)[:300]
+                        logger.warning(
+                            'recognize_image backend status=%s attempt=%s body=%s',
+                            resp.status,
+                            attempt + 1,
+                            compact_response_text or '<empty>',
+                        )
+                        if resp.status in {429, 503} and attempt == 0:
+                            await asyncio.sleep(1.0)
+                            continue
                         return None
 
         except asyncio.TimeoutError:
@@ -4148,126 +4257,5 @@ class DiscordBotClient(discord.Client):
             logger.error(f'Error recognizing image: {type(e).__name__}: {e}')
             return None
 
-async def get_all_accounts_from_backend():
-    """从后端 API 获取所有可用的 Discord 账号"""
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f'{config.BACKEND_API_URL}/accounts') as resp:
-                if resp.status == 200:
-                    result = await resp.json()
-                    accounts = result.get('accounts', [])
-                    # 只返回状态为online的账号
-                    return [account for account in accounts if account.get('status') == 'online']
-    except Exception as e:
-        logger.error(f'Failed to get accounts from backend: {e}')
-    return []
-
-async def bot_loop(client):
-    """主循环，定期检查并重连"""
-    while True:
-        try:
-            token = await get_token_from_backend()
-            if token:
-                if not client.is_ready():
-                    logger.info('Starting Discord bot with token from database...')
-                    await client.start(token, reconnect=True)
-                elif client.current_token != token:
-                    logger.info('Token changed, reconnecting...')
-                    await client.close()
-                    await asyncio.sleep(2)
-                    client.current_token = token
-                    await client.start(token, reconnect=True)
-            else:
-                logger.warning('No active token found in database, waiting...')
-                if client.is_ready():
-                    await client.close()
-                client.current_token = None
-
-        except Exception as e:
-            logger.error(f'Bot loop error: {e}')
-            if client.is_ready():
-                await client.close()
-
-        # 等待 30 秒后再次检查
-        await asyncio.sleep(30)
-
-async def start_multi_bot_loop():
-    """启动多账号机器人循环，定期检查账号状态"""
-    global bot_clients, bot_tasks
-
-    while True:
-        try:
-            # 获取当前所有账号
-            accounts = await get_all_accounts_from_backend()
-            current_account_ids = {account['id'] for account in accounts}
-
-            # 停止已删除账号的机器人
-            to_remove = []
-            for i, client in enumerate(bot_clients):
-                if client.account_id not in current_account_ids:
-                    logger.info(f'停止已删除账号的机器人: {client.account_id}')
-                    try:
-                        if not client.is_closed():
-                            await client.close()
-                    except Exception as e:
-                        logger.error(f'停止机器人时出错: {e}')
-
-                    # 取消对应的任务
-                    if i < len(bot_tasks) and bot_tasks[i] and not bot_tasks[i].done():
-                        bot_tasks[i].cancel()
-
-                    to_remove.append(i)
-
-            # 从列表中移除已停止的机器人
-            for i in reversed(to_remove):
-                bot_clients.pop(i)
-                if i < len(bot_tasks):
-                    bot_tasks.pop(i)
-
-            # 为新账号启动机器人
-            existing_account_ids = {client.account_id for client in bot_clients}
-            for account in accounts:
-                account_id = account['id']
-                if account_id not in existing_account_ids:
-                    token = account['token']
-                    username = account.get('username', f'account_{account_id}')
-                    start_delay_seconds = get_discord_start_delay_seconds(len(bot_clients))
-
-                    logger.info(f'启动新账号机器人: {username}')
-
-                    # 创建机器人实例
-                    client = DiscordBotClient(account_id=account_id)
-
-                    # 启动机器人
-                    try:
-                        task = asyncio.create_task(
-                            start_discord_client_with_delay(
-                                client,
-                                token,
-                                reconnect=True,
-                                start_delay_seconds=start_delay_seconds,
-                            )
-                        )
-                        bot_clients.append(client)
-                        bot_tasks.append(task)
-                        logger.info(
-                            f'机器人启动成功: {username} (启动延迟 {start_delay_seconds:.2f}s)'
-                        )
-                    except Exception as e:
-                        logger.error(f'启动机器人失败 {username}: {e}')
-
-            # 等待一段时间后再次检查
-            await asyncio.sleep(30)
-
-        except Exception as e:
-            logger.error(f'多账号机器人循环错误: {e}')
-            await asyncio.sleep(30)
-
-async def main():
-    client = DiscordBotClient()
-
-    # 启动主循环
-    await bot_loop(client)
-
 if __name__ == '__main__':
-    asyncio.run(main())
+    raise SystemExit('bot.py 已改为由 app.py 统一托管，请运行: python app.py')

@@ -30,6 +30,10 @@ except ImportError:
         aggregate_product_rankings,
         parse_bing_image_urls,
     )
+try:
+    from .live_search_runtime import should_enable_streaming_live_search
+except ImportError:
+    from live_search_runtime import should_enable_streaming_live_search
 
 logger = logging.getLogger(__name__)
 
@@ -1559,16 +1563,15 @@ class LiveImageRetriever:
         return strategy
 
     def _supports_streaming_search(self, strategy) -> bool:
-        supports_streaming = getattr(strategy, 'supports_streaming_live_search', None)
-        if not (
-            _env_bool("LIVE_IMAGE_SEARCH_STREAMING_ENABLED", False)
-            and
-            strategy_requires_persisted_catalog_cache(self.strategy_name)
-            and callable(supports_streaming)
-            and supports_streaming()
-        ):
+        if not callable(getattr(self.db, 'iter_searchable_product_image_records', None)):
             return False
-        return callable(getattr(self.db, 'iter_searchable_product_image_records', None))
+        return should_enable_streaming_live_search(
+            self.strategy_name,
+            strategy,
+            streaming_enabled=_env_bool("LIVE_IMAGE_SEARCH_STREAMING_ENABLED", False),
+            force_streaming=_env_bool("LIVE_IMAGE_SEARCH_STREAMING_FORCE", False),
+            require_persisted_cache=strategy_requires_persisted_catalog_cache(self.strategy_name),
+        )
 
     @staticmethod
     def _build_signature(rows: Sequence[Dict[str, Any]]) -> Tuple[int, int, str]:
@@ -1824,13 +1827,12 @@ class LiveImageRetriever:
 
     def warm(self) -> Dict[str, Any]:
         strategy = self._get_strategy_instance()
-        supports_streaming = getattr(strategy, 'supports_streaming_live_search', None)
-        if (
-            _env_bool("LIVE_IMAGE_SEARCH_STREAMING_ENABLED", False)
-            and
-            strategy_requires_persisted_catalog_cache(self.strategy_name)
-            and callable(supports_streaming)
-            and supports_streaming()
+        if should_enable_streaming_live_search(
+            self.strategy_name,
+            strategy,
+            streaming_enabled=_env_bool("LIVE_IMAGE_SEARCH_STREAMING_ENABLED", False),
+            force_streaming=_env_bool("LIVE_IMAGE_SEARCH_STREAMING_FORCE", False),
+            require_persisted_cache=strategy_requires_persisted_catalog_cache(self.strategy_name),
         ):
             return {
                 "strategy": self.strategy_name,

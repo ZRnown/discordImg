@@ -11,7 +11,7 @@ Discord Marketing System - a full-stack application for automated product market
 Three-tier architecture:
 - **Frontend** (Next.js 16, port 3000): React 19 + TypeScript + shadcn/ui + Tailwind CSS 4
 - **Backend** (Flask, port 5001): REST API + SQLite + FAISS vector search
-- **Discord Bot** (discord.py-self): Multi-account self-bot for image monitoring
+- **Discord Bot Runtime** (discord.py-self): Multi-account self-bot for image monitoring, managed inside the Flask process
 
 ### API Proxy Pattern
 Frontend Next.js API routes (`/frontend/app/api/**/route.ts`) are thin proxies that forward requests to Flask backend. All routes use `NEXT_PUBLIC_BACKEND_URL` environment variable to locate the backend server.
@@ -29,8 +29,7 @@ pnpm lint             # ESLint
 ### Backend (`/backend` directory)
 ```bash
 pip install -r requirements.txt    # Install dependencies
-python app.py                      # Start Flask API (port 5001)
-python bot.py                      # Start Discord bot
+python app.py                      # Start Flask API and managed Discord bot runtime (port 5001)
 python scripts/create_admin.py     # Create admin user
 python scripts/clear_database.py   # Clear database
 ```
@@ -40,7 +39,7 @@ python scripts/clear_database.py   # Clear database
 | Module | Purpose |
 |--------|---------|
 | `app.py` | Flask API server with all REST endpoints |
-| `bot.py` | Discord bot with multi-account support and cooldown management |
+| `bot.py` | Discord bot runtime module used by `app.py` |
 | `database.py` | SQLite operations for products, users, accounts, shops |
 | `feature_extractor.py` | AI pipeline: YOLO-World (object detection/cropping) + DINOv2 (feature extraction) |
 | `vector_engine.py` | FAISS HNSW index for vector similarity search |

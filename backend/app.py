@@ -86,6 +86,13 @@ except ModuleNotFoundError as e:
     else:
         raise
 try:
+    from bot_watchdog import build_bot_runtime_entries, collect_watchdog_restart_candidates
+except ModuleNotFoundError as e:
+    if e.name == 'bot_watchdog':
+        from .bot_watchdog import build_bot_runtime_entries, collect_watchdog_restart_candidates
+    else:
+        raise
+try:
     from retrieval_cache_warmup import (
         get_auto_backfill_emergency_limit,
         get_auto_backfill_limit,
@@ -122,6 +129,13 @@ except ModuleNotFoundError as e:
             should_run_startup_cache_compaction,
             should_run_startup_cache_warmup,
         )
+    else:
+        raise
+try:
+    from live_search_runtime import LiveSearchConcurrencyGate
+except ModuleNotFoundError as e:
+    if e.name == 'live_search_runtime':
+        from .live_search_runtime import LiveSearchConcurrencyGate
     else:
         raise
 try:
@@ -190,6 +204,8 @@ try:
         extract_marketplace_item_id_from_text,
         find_query_keyword_match,
         normalize_keyword_search_text,
+        normalize_partition_match_rules,
+        serialize_partition_match_rules,
     )
 except ModuleNotFoundError as e:
     if e.name == 'keyword_search_terms':
@@ -199,6 +215,8 @@ except ModuleNotFoundError as e:
             extract_marketplace_item_id_from_text,
             find_query_keyword_match,
             normalize_keyword_search_text,
+            normalize_partition_match_rules,
+            serialize_partition_match_rules,
         )
     else:
         raise
@@ -217,6 +235,16 @@ GLOBAL_AI_SEMAPHORE = threading.Semaphore(4)
 MAX_LOG_HISTORY = 5000
 AUTO_BACKFILL_THREAD = None
 AUTO_BACKFILL_THREAD_LOCK = threading.Lock()
+LIVE_SEARCH_REQUEST_GATE = LiveSearchConcurrencyGate(
+    getattr(config, 'LIVE_IMAGE_SEARCH_MAX_INFLIGHT', 2)
+)
+
+
+def _get_live_search_queue_timeout_seconds() -> float:
+    try:
+        return max(float(getattr(config, 'LIVE_IMAGE_SEARCH_QUEUE_TIMEOUT_SECONDS', 2.5) or 2.5), 0.0)
+    except (TypeError, ValueError):
+        return 2.5
 
 
 def _normalize_message_filter_value(filter_type, filter_value):
@@ -550,6 +578,21 @@ except ModuleNotFoundError as import_error:
 bot_running = False  # 标记机器人是否正在运行
 bot_loop = None  # 机器人事件循环
 bot_thread = None  # 机器人事件循环线程
+bot_runtime_lock = threading.RLock()
+bot_watchdog_thread = None
+bot_watchdog_restart_attempt_timestamps = {}
+BOT_WATCHDOG_INTERVAL_SECONDS = max(
+    float(getattr(config, 'DISCORD_WATCHDOG_INTERVAL_SECONDS', 3.0) or 3.0),
+    3.0,
+)
+BOT_WATCHDOG_RESTART_INTERVAL_SECONDS = max(
+    float(getattr(config, 'DISCORD_WATCHDOG_RESTART_INTERVAL_SECONDS', 8.0) or 8.0),
+    5.0,
+)
+BOT_WATCHDOG_DISCONNECTED_GRACE_SECONDS = max(
+    float(getattr(config, 'DISCORD_WATCHDOG_DISCONNECTED_GRACE_SECONDS', 8.0) or 8.0),
+    5.0,
+)
 
 def build_user_shop_scope(user_id):
     """构建用户可访问店铺集合（同时包含店铺ID与店铺名）"""
@@ -583,6 +626,103 @@ def refresh_running_bot_user_shops(user_id):
             updated_clients += 1
 
     return updated_clients, scoped_shops
+
+
+def _remove_bot_runtime_indices(indices_to_remove):
+    if not indices_to_remove:
+        return 0
+
+    removed_count = 0
+    for index in sorted({int(i) for i in indices_to_remove}, reverse=True):
+        if index < 0:
+            continue
+
+        if index < len(bot_tasks):
+            task = bot_tasks.pop(index)
+            try:
+                if task and not task.done():
+                    task.cancel()
+            except Exception:
+                pass
+
+        if index < len(bot_clients):
+            bot_clients.pop(index)
+            removed_count += 1
+
+    return removed_count
+
+
+def restart_unhealthy_discord_bots():
+    """自动补拉已标记自动恢复、但当前未正常运行的 Discord 账号。"""
+    global bot_watchdog_restart_attempt_timestamps
+
+    try:
+        accounts = db.get_discord_accounts_marked_for_autostart()
+        if not accounts:
+            return 0
+
+        with bot_runtime_lock:
+            runtime_entries = build_bot_runtime_entries(bot_clients, bot_tasks)
+            now_monotonic = time.monotonic()
+            candidates = collect_watchdog_restart_candidates(
+                accounts,
+                runtime_entries,
+                now_monotonic=now_monotonic,
+                restart_attempt_timestamps=bot_watchdog_restart_attempt_timestamps,
+                min_restart_interval_seconds=BOT_WATCHDOG_RESTART_INTERVAL_SECONDS,
+                disconnected_grace_seconds=BOT_WATCHDOG_DISCONNECTED_GRACE_SECONDS,
+            )
+            if not candidates:
+                return 0
+
+            indices_to_remove = [
+                candidate['runtime_entry']['index']
+                for candidate in candidates
+                if candidate.get('runtime_entry') and candidate['runtime_entry'].get('index') is not None
+            ]
+            _remove_bot_runtime_indices(indices_to_remove)
+
+            for candidate in candidates:
+                bot_watchdog_restart_attempt_timestamps[candidate['account_id']] = now_monotonic
+
+        restarted_count = 0
+        for candidate in candidates:
+            account = candidate['account']
+            logger.warning(
+                "检测到 Discord账号掉线，准备自动补拉: %s (ID: %s, reason=%s)",
+                account.get('username') or f"account_{candidate['account_id']}",
+                candidate['account_id'],
+                candidate['reason'],
+            )
+            restarted_count += start_discord_bot(accounts=[account])
+
+        if restarted_count:
+            logger.info("Discord账号自动补拉完成: restarted=%s", restarted_count)
+        return restarted_count
+    except Exception as e:
+        logger.error(f"自动补拉Discord账号失败: {e}")
+        return 0
+
+
+def schedule_discord_bot_watchdog():
+    """后台巡检 Discord 账号，发现掉线后自动补拉。"""
+    global bot_watchdog_thread
+
+    if bot_watchdog_thread is not None and bot_watchdog_thread.is_alive():
+        return
+
+    def _watchdog_worker():
+        time.sleep(min(BOT_WATCHDOG_INTERVAL_SECONDS, 5.0))
+        while True:
+            restart_unhealthy_discord_bots()
+            time.sleep(BOT_WATCHDOG_INTERVAL_SECONDS)
+
+    bot_watchdog_thread = threading.Thread(
+        target=_watchdog_worker,
+        name="discord-bot-watchdog",
+        daemon=True,
+    )
+    bot_watchdog_thread.start()
 
 # 全局特征提取器实例（在应用启动时创建）
 feature_extractor_instance = None
@@ -1360,14 +1500,37 @@ def search_similar():
 
             retriever = get_live_image_retriever(db, getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank'))
             filter_stage_elapsed = time.perf_counter() - filter_stage_started_at
-            retrieval_started_at = time.perf_counter()
-            retrieval_result = retriever.search(
-                image_path=image_path,
-                query_text=query_text,
-                top_k=limit,
-                threshold=threshold,
-                user_shops=user_shops,
+            retrieval_timeout_seconds = _get_live_search_queue_timeout_seconds()
+            release_live_search_slot = LIVE_SEARCH_REQUEST_GATE.try_acquire(
+                timeout_seconds=retrieval_timeout_seconds
             )
+            if release_live_search_slot is None:
+                logger.warning(
+                    "search_similar busy: inflight_limit=%s queue_timeout=%.2fs user_id=%s shops=%s",
+                    getattr(LIVE_SEARCH_REQUEST_GATE, 'max_inflight', 0),
+                    retrieval_timeout_seconds,
+                    user_id,
+                    user_shops,
+                )
+                return jsonify(
+                    {
+                        'error': 'search busy',
+                        'retryable': True,
+                        'message': '图搜服务繁忙，请稍后重试',
+                    }
+                ), 503
+
+            retrieval_started_at = time.perf_counter()
+            try:
+                retrieval_result = retriever.search(
+                    image_path=image_path,
+                    query_text=query_text,
+                    top_k=limit,
+                    threshold=threshold,
+                    user_shops=user_shops,
+                )
+            finally:
+                release_live_search_slot()
             retrieval_elapsed = time.perf_counter() - retrieval_started_at
             results = retrieval_result.get('ranked_products', [])
 
@@ -2200,33 +2363,76 @@ def add_website_account(config_id):
         return jsonify({'error': '需要登录'}), 401
 
     try:
-        data = request.get_json()
-        account_id = data.get('account_id')
-        role = data.get('role', 'both')  # 'listener', 'sender', 'both'
+        data = request.get_json() or {}
+        account_ids = data.get('account_ids')
+        role = data.get('role')
 
-        if not account_id or role not in ['listener', 'sender', 'both']:
-            return jsonify({'error': '无效的账号ID或角色'}), 400
+        if isinstance(account_ids, list):
+            normalized_account_ids = db._normalize_account_binding_ids(account_ids)
+        else:
+            normalized_account_ids = db._normalize_account_binding_ids([data.get('account_id')])
+
+        if not normalized_account_ids:
+            return jsonify({'error': '无效的账号ID'}), 400
+        if role is not None and role not in ['listener', 'sender', 'both']:
+            return jsonify({'error': '无效的账号角色'}), 400
 
         # 权限检查：确保该账号属于当前用户
         current_user = get_current_user()
-        # 获取该账号的详情
         with db.get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT user_id FROM discord_accounts WHERE id = ?", (account_id,))
-            row = cursor.fetchone()
-            if not row:
-                return jsonify({'error': '账号不存在'}), 404
+            placeholders = ','.join('?' * len(normalized_account_ids))
+            cursor.execute(
+                f"SELECT id, user_id FROM discord_accounts WHERE id IN ({placeholders})",
+                tuple(normalized_account_ids),
+            )
+            account_rows = cursor.fetchall()
 
-            account_owner_id = row[0]
+        found_rows = {
+            int(row[0]): int(row[1]) if row[1] is not None else None
+            for row in account_rows
+        }
+        missing_ids = [account_id for account_id in normalized_account_ids if account_id not in found_rows]
+        if missing_ids:
+            return jsonify({'error': f'账号不存在: {missing_ids[0]}'}), 404
 
-            # 如果不是管理员，且账号不属于当前用户，拒绝
-            if current_user['role'] != 'admin' and account_owner_id != current_user['id']:
+        if current_user['role'] != 'admin':
+            forbidden_ids = [
+                account_id
+                for account_id, owner_id in found_rows.items()
+                if owner_id != current_user['id']
+            ]
+            if forbidden_ids:
                 return jsonify({'error': '您无权操作此账号'}), 403
 
-        if db.add_website_account_binding(config_id, account_id, role, current_user['id']):
-            return jsonify({'success': True, 'message': f'账号绑定成功，角色: {role}'})
-        else:
+        if role is None:
+            bindings = db.add_website_account_bindings_auto(
+                config_id,
+                normalized_account_ids,
+                current_user['id'],
+            )
+            if not bindings:
+                return jsonify({'error': '绑定失败'}), 500
+            return jsonify({
+                'success': True,
+                'message': f'已绑定 {len(bindings)} 个账号，系统已自动分配监听与发送角色',
+                'accounts': bindings,
+            })
+
+        bound_count = 0
+        for account_id in normalized_account_ids:
+            if db.add_website_account_binding(config_id, account_id, role, current_user['id']):
+                bound_count += 1
+
+        if bound_count != len(normalized_account_ids):
             return jsonify({'error': '绑定失败'}), 500
+
+        message = (
+            f'账号绑定成功，角色: {role}'
+            if len(normalized_account_ids) == 1
+            else f'已绑定 {bound_count} 个账号，角色: {role}'
+        )
+        return jsonify({'success': True, 'message': message})
     except Exception as e:
         logger.error(f"添加网站账号绑定失败: {e}")
         return jsonify({'error': str(e)}), 500
@@ -2240,6 +2446,7 @@ def remove_website_account(config_id, account_id):
     try:
         current_user = get_current_user()
         if db.remove_website_account_binding(config_id, account_id, current_user['id']):
+            db.ensure_website_has_listener_binding(config_id, current_user['id'])
             return jsonify({'success': True, 'message': '账号绑定已移除'})
         else:
             return jsonify({'error': '移除失败'}), 500
@@ -3331,6 +3538,10 @@ def update_product():
                 title=product.get('title'),
                 english_title=product.get('english_title'),
             ),
+            'partitionMatchEnabled': bool(product.get('partition_match_enabled')),
+            'partitionMatchRules': normalize_partition_match_rules(
+                product.get('partition_match_rules')
+            ),
             'weidianUrl': product.get('product_url', ''),
             'cnfansUrl': product.get('cnfans_url', ''),
             'acbuyUrl': product.get('acbuy_url', ''),
@@ -3468,11 +3679,13 @@ def update_product():
                 updates['uploaded_reply_images'] = json.dumps(all_uploaded_filenames)
             if new_uploaded_filenames and 'imageSource' not in request.form:
                 updates['image_source'] = 'upload'
-            for key in ['title', 'englishTitle', 'ruleEnabled', 'customReplyText', 'imageSource', 'replyScope']:
+            for key in ['title', 'englishTitle', 'partitionMatchEnabled', 'ruleEnabled', 'customReplyText', 'imageSource', 'replyScope']:
                 value = request.form.get(key)
                 if value is not None:
                     if key == 'englishTitle':
                         updates['english_title'] = value
+                    elif key == 'partitionMatchEnabled':
+                        updates['partition_match_enabled'] = 1 if str(value).lower() in ['true', '1'] else 0
                     elif key == 'ruleEnabled':
                         # 兼容字符串 'true'/'false' 和 '1'/'0'
                         if str(value).lower() in ['true', '1']:
@@ -3499,6 +3712,11 @@ def update_product():
                     request.form.get('titleTranslations', current_product.get('title_translations')),
                     title=title_value,
                     english_title=english_title_value,
+                )
+
+            if 'partitionMatchRules' in request.form:
+                updates['partition_match_rules'] = serialize_partition_match_rules(
+                    request.form.get('partitionMatchRules')
                 )
 
             # 3. 处理数组数据 (JSON)
@@ -3547,6 +3765,8 @@ def update_product():
                 updates['title'] = data['title']
             if 'englishTitle' in data:
                 updates['english_title'] = data['englishTitle']
+            if 'partitionMatchEnabled' in data:
+                updates['partition_match_enabled'] = 1 if data['partitionMatchEnabled'] else 0
             if 'titleTranslations' in data or 'title' in data or 'englishTitle' in data:
                 title_value = updates.get('title', current_product.get('title', ''))
                 english_title_value = updates.get('english_title', current_product.get('english_title', ''))
@@ -3554,6 +3774,10 @@ def update_product():
                     data.get('titleTranslations', current_product.get('title_translations')),
                     title=title_value,
                     english_title=english_title_value,
+                )
+            if 'partitionMatchRules' in data:
+                updates['partition_match_rules'] = serialize_partition_match_rules(
+                    data.get('partitionMatchRules')
                 )
             if 'ruleEnabled' in data:
                 updates['ruleEnabled'] = 1 if data['ruleEnabled'] else 0
@@ -4395,6 +4619,10 @@ def get_product(product_id):
             title=product.get('title'),
             english_title=product.get('english_title'),
         )
+        product['partitionMatchEnabled'] = bool(product.get('partition_match_enabled'))
+        product['partitionMatchRules'] = normalize_partition_match_rules(
+            product.get('partition_match_rules')
+        )
         product['perWebsiteReplySettings'] = build_frontend_per_website_reply_settings(
             product.get('per_website_reply_settings'),
             product_id,
@@ -4475,6 +4703,10 @@ def upload_product_image(product_id):
             title=product.get('title'),
             english_title=product.get('english_title'),
         )
+        product['partitionMatchEnabled'] = bool(product.get('partition_match_enabled'))
+        product['partitionMatchRules'] = normalize_partition_match_rules(
+            product.get('partition_match_rules')
+        )
         product['cnfansUrl'] = product.get('cnfans_url')
         product['ruleEnabled'] = product.get('ruleEnabled')
         product['matchType'] = 'fuzzy'
@@ -4542,6 +4774,10 @@ def delete_product_image(product_id, image_index):
             product.get('title_translations'),
             title=product.get('title'),
             english_title=product.get('english_title'),
+        )
+        product['partitionMatchEnabled'] = bool(product.get('partition_match_enabled'))
+        product['partitionMatchRules'] = normalize_partition_match_rules(
+            product.get('partition_match_rules')
         )
         product['cnfansUrl'] = product.get('cnfans_url')
         product['acbuyUrl'] = product.get('acbuy_url')
@@ -5021,6 +5257,10 @@ def search_similar_text():
                         title=prod.get('title'),
                         english_title=prod.get('english_title'),
                     )
+                    prod['partitionMatchEnabled'] = bool(prod.get('partition_match_enabled'))
+                    prod['partitionMatchRules'] = normalize_partition_match_rules(
+                        prod.get('partition_match_rules')
+                    )
                     prod['autoReplyEnabled'] = bool(prod.get('ruleEnabled', True))
                     prod['replyScope'] = prod.get('reply_scope') or 'all'
 
@@ -5053,7 +5293,8 @@ def search_similar_text():
             linked_item_id = extract_marketplace_item_id_from_text(query)
             if linked_item_id:
                 cursor.execute("""
-                    SELECT id, product_url, title, english_title, title_translations, description,
+                    SELECT id, product_url, title, english_title, title_translations,
+                           partition_match_enabled, partition_match_rules, description,
                            ruleEnabled, min_delay, max_delay, created_at,
                            cnfans_url, shop_name, custom_reply_text,
                            custom_reply_images, custom_image_urls, image_source,
@@ -5091,6 +5332,9 @@ def search_similar_text():
                         query_keyword_candidates,
                         row['english_title'],
                         row['title'],
+                        query_text=query,
+                        partition_match_enabled=row['partition_match_enabled'],
+                        partition_match_rules=row['partition_match_rules'],
                     )
                     if not reason:
                         continue
@@ -5116,7 +5360,8 @@ def search_similar_text():
                     exclude_clause = f" AND id NOT IN ({placeholders})"
                     exclude_params = list(exclude_ids)
                 cursor.execute(f"""
-                    SELECT id, product_url, title, english_title, title_translations, description,
+                    SELECT id, product_url, title, english_title, title_translations,
+                           partition_match_enabled, partition_match_rules, description,
                            ruleEnabled, min_delay, max_delay, created_at,
                            cnfans_url, shop_name, custom_reply_text,
                            custom_reply_images, custom_image_urls, image_source,
@@ -5127,6 +5372,30 @@ def search_similar_text():
                     ORDER BY created_at DESC, id DESC
                     LIMIT ?
                 """, (*params, *exclude_params, *scoped_params, min(max(remaining_limit * 5, remaining_limit), 1000)))
+                return cursor.fetchall()
+
+            def fetch_partition_rows(remaining_limit, exclude_ids=None):
+                if remaining_limit <= 0:
+                    return []
+                exclude_clause = ""
+                exclude_params = []
+                if exclude_ids:
+                    placeholders = ",".join("?" for _ in exclude_ids)
+                    exclude_clause = f" AND id NOT IN ({placeholders})"
+                    exclude_params = list(exclude_ids)
+                cursor.execute(f"""
+                    SELECT id, product_url, title, english_title, title_translations,
+                           partition_match_enabled, partition_match_rules, description,
+                           ruleEnabled, min_delay, max_delay, created_at,
+                           cnfans_url, shop_name, custom_reply_text,
+                           custom_reply_images, custom_image_urls, image_source,
+                           reply_scope, per_website_reply_settings,
+                           uploaded_reply_images
+                    FROM products
+                    WHERE partition_match_enabled = 1{exclude_clause}{scoped_clause}
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ?
+                """, (*exclude_params, *scoped_params, min(max(remaining_limit * 20, remaining_limit), 2000)))
                 return cursor.fetchall()
 
             prefilter_terms = []
@@ -5161,7 +5430,8 @@ def search_similar_text():
 
             if not rows:
                 cursor.execute("""
-                    SELECT id, product_url, title, english_title, title_translations, description,
+                    SELECT id, product_url, title, english_title, title_translations,
+                           partition_match_enabled, partition_match_rules, description,
                            ruleEnabled, min_delay, max_delay, created_at,
                            cnfans_url, shop_name, custom_reply_text,
                            custom_reply_images, custom_image_urls, image_source,
@@ -5182,6 +5452,12 @@ def search_similar_text():
                     LIMIT ?
                 """, (query_normalized, query_normalized, *scoped_params, min(max(limit * 5, limit), 1000)))
                 rows = filter_exact_matches(cursor.fetchall())
+
+            if len(rows) < limit:
+                found_ids = {row['id'] for row in rows}
+                remaining = limit - len(rows)
+                extra_rows = filter_exact_matches(fetch_partition_rows(remaining, found_ids))
+                rows.extend(extra_rows)
 
             products = build_products_from_rows(rows)
 
@@ -5356,75 +5632,76 @@ def start_discord_bot(user_id=None, accounts=None):
 
         logger.info(f"找到 {len(accounts)} 个Discord账号，开始启动...")
 
-        # 确保事件循环存在并运行
-        if bot_loop is None or bot_thread is None or not bot_thread.is_alive():
-            bot_loop = asyncio.new_event_loop()
-            bot_thread = threading.Thread(target=bot_loop.run_forever, daemon=True)
-            bot_thread.start()
-            logger.info("已创建新的机器人事件循环")
-        loop = bot_loop
+        with bot_runtime_lock:
+            # 确保事件循环存在并运行
+            if bot_loop is None or bot_thread is None or not bot_thread.is_alive():
+                bot_loop = asyncio.new_event_loop()
+                bot_thread = threading.Thread(target=bot_loop.run_forever, daemon=True)
+                bot_thread.start()
+                logger.info("已创建新的机器人事件循环")
+            loop = bot_loop
 
-        # 为每个账号创建机器人实例
-        existing_account_ids = {client.account_id for client in bot_clients}
-        started_count = 0
-        for account in accounts:
-            account_id = account['id']
-            token = account['token']
-            username = account.get('username', f'account_{account_id}')
-            user_id = account.get('user_id')
+            # 为每个账号创建机器人实例
+            existing_account_ids = {client.account_id for client in bot_clients}
+            started_count = 0
+            for account in accounts:
+                account_id = account['id']
+                token = account['token']
+                username = account.get('username', f'account_{account_id}')
+                user_id = account.get('user_id')
 
-            if account_id in existing_account_ids:
-                logger.info(f"机器人账号已在运行: {username} (ID: {account_id})")
-                continue
+                if account_id in existing_account_ids:
+                    logger.info(f"机器人账号已在运行: {username} (ID: {account_id})")
+                    continue
 
-            # 获取用户管理的店铺（包含店铺ID与店铺名）
-            user_shops = build_user_shop_scope(user_id) if user_id else None
+                # 获取用户管理的店铺（包含店铺ID与店铺名）
+                user_shops = build_user_shop_scope(user_id) if user_id else None
 
-            # 确定账号角色：检查是否绑定了任何网站配置
-            account_bindings = db.get_account_website_bindings(account_id)
-            if account_bindings:
-                # 检查账号是否有发送或监听角色
-                has_sender = any(b['role'] in ['sender', 'both'] for b in account_bindings)
-                has_listener = any(b['role'] in ['listener', 'both'] for b in account_bindings)
+                # 确定账号角色：检查是否绑定了任何网站配置
+                account_bindings = db.get_account_website_bindings(account_id)
+                if account_bindings:
+                    # 检查账号是否有发送或监听角色
+                    has_sender = any(b['role'] in ['sender', 'both'] for b in account_bindings)
+                    has_listener = any(b['role'] in ['listener', 'both'] for b in account_bindings)
 
-                if has_sender and has_listener:
-                    role = 'both'
-                elif has_sender:
-                    role = 'sender'
-                elif has_listener:
-                    role = 'listener'
+                    if has_sender and has_listener:
+                        role = 'both'
+                    elif has_sender:
+                        role = 'sender'
+                    elif has_listener:
+                        role = 'listener'
+                    else:
+                        role = 'both'  # 默认
                 else:
-                    role = 'both'  # 默认
-            else:
-                role = 'both'  # 未绑定的账号默认为both
+                    role = 'both'  # 未绑定的账号默认为both
 
-            logger.info(f"正在启动机器人账号: {username} (用户ID: {user_id}, 管理店铺: {user_shops}, 角色: {role})")
+                logger.info(f"正在启动机器人账号: {username} (用户ID: {user_id}, 管理店铺: {user_shops}, 角色: {role})")
 
-            # 创建机器人实例，传入角色参数
-            client = DiscordBotClient(account_id=account_id, user_id=user_id, user_shops=user_shops, role=role)
-            start_delay_seconds = get_discord_start_delay_seconds(started_count)
+                # 创建机器人实例，传入角色参数
+                client = DiscordBotClient(account_id=account_id, user_id=user_id, user_shops=user_shops, role=role)
+                start_delay_seconds = get_discord_start_delay_seconds(started_count)
 
-            # 启动机器人
-            try:
-                task = asyncio.run_coroutine_threadsafe(
-                    start_discord_client_with_delay(
-                        client,
-                        token,
-                        reconnect=True,
-                        start_delay_seconds=start_delay_seconds,
-                    ),
-                    loop,
-                )
-                bot_clients.append(client)
-                bot_tasks.append(task)
-                started_count += 1
-                logger.info(
-                    "Discord机器人启动成功: %s (启动延迟 %.2fs)",
-                    username,
-                    start_delay_seconds,
-                )
-            except Exception as e:
-                logger.error(f"启动机器人失败 {username}: {e}")
+                # 启动机器人
+                try:
+                    task = asyncio.run_coroutine_threadsafe(
+                        start_discord_client_with_delay(
+                            client,
+                            token,
+                            reconnect=True,
+                            start_delay_seconds=start_delay_seconds,
+                        ),
+                        loop,
+                    )
+                    bot_clients.append(client)
+                    bot_tasks.append(task)
+                    started_count += 1
+                    logger.info(
+                        "Discord机器人启动成功: %s (启动延迟 %.2fs)",
+                        username,
+                        start_delay_seconds,
+                    )
+                except Exception as e:
+                    logger.error(f"启动机器人失败 {username}: {e}")
 
         if bot_clients:
             bot_running = True
@@ -5481,67 +5758,58 @@ def stop_discord_bot(user_id=None):
     """停止Discord机器人 (支持按用户停止)"""
     global bot_running, bot_loop
 
-    # 如果没有客户端，直接返回
-    if not bot_clients:
-        logger.info("没有正在运行的机器人")
-        bot_running = False
-        return
-
-    logger.info(f"正在停止机器人... {'(特定用户: ' + str(user_id) + ')' if user_id else '(所有用户)'}")
-
     try:
         import asyncio
-        # 获取当前的事件循环，如果是在 Flask 线程中可能需要处理
-        loop = bot_loop
-        if loop is None:
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+        with bot_runtime_lock:
+            # 如果没有客户端，直接返回
+            if not bot_clients:
+                logger.info("没有正在运行的机器人")
+                bot_running = False
+                return
 
-        # 筛选需要停止的客户端索引
-        indices_to_remove = []
+            logger.info(f"正在停止机器人... {'(特定用户: ' + str(user_id) + ')' if user_id else '(所有用户)'}")
 
-        for i, client in enumerate(bot_clients):
-            # 如果指定了 user_id，只停止该用户的机器人
-            # client.user_id 是我们在 DiscordBotClient 初始化时传入的
-            if user_id is not None and getattr(client, 'user_id', None) != user_id:
-                continue
+            # 获取当前的事件循环，如果是在 Flask 线程中可能需要处理
+            loop = bot_loop
+            if loop is None:
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
 
-            try:
-                if client and not client.is_closed():
-                    # 更新账号状态为offline
-                    if hasattr(client, 'account_id') and client.account_id:
-                        db.update_account_status(client.account_id, 'offline')
-                        logger.info(f"账号 {client.account_id} 状态已更新为离线")
+            # 筛选需要停止的客户端索引
+            indices_to_remove = []
 
-                    # 停止机器人
-                    if loop:
-                        asyncio.run_coroutine_threadsafe(client.close(), loop)
-                    logger.info(f"Discord机器人 {i} (用户 {getattr(client, 'user_id', 'unknown')}) 已停止信号发送")
-            except Exception as e:
-                logger.error(f"停止机器人 {i} 时出错: {e}")
+            for i, client in enumerate(bot_clients):
+                # 如果指定了 user_id，只停止该用户的机器人
+                # client.user_id 是我们在 DiscordBotClient 初始化时传入的
+                if user_id is not None and getattr(client, 'user_id', None) != user_id:
+                    continue
 
-            indices_to_remove.append(i)
+                try:
+                    if client and not client.is_closed():
+                        # 更新账号状态为offline
+                        if hasattr(client, 'account_id') and client.account_id:
+                            db.update_account_status(client.account_id, 'offline')
+                            logger.info(f"账号 {client.account_id} 状态已更新为离线")
 
-        # 从列表中移除已停止的机器人和任务
-        # 从后往前删，避免索引偏移
-        for i in sorted(indices_to_remove, reverse=True):
-            if i < len(bot_clients):
-                bot_clients.pop(i)
-            if i < len(bot_tasks):
-                # 尝试取消任务
-                task = bot_tasks[i]
-                if task and not task.done():
-                    task.cancel()
-                bot_tasks.pop(i)
+                        # 停止机器人
+                        if loop:
+                            asyncio.run_coroutine_threadsafe(client.close(), loop)
+                        logger.info(f"Discord机器人 {i} (用户 {getattr(client, 'user_id', 'unknown')}) 已停止信号发送")
+                except Exception as e:
+                    logger.error(f"停止机器人 {i} 时出错: {e}")
 
-        if not bot_clients:
-            bot_running = False
-            logger.info("所有机器人已停止")
-        else:
-            logger.info(f"剩余 {len(bot_clients)} 个机器人仍在运行")
+                indices_to_remove.append(i)
+
+            _remove_bot_runtime_indices(indices_to_remove)
+
+            if not bot_clients:
+                bot_running = False
+                logger.info("所有机器人已停止")
+            else:
+                logger.info(f"剩余 {len(bot_clients)} 个机器人仍在运行")
 
     except Exception as e:
         logger.error(f"停止机器人流程出错: {e}")
@@ -5568,8 +5836,8 @@ def start_bot():
             return jsonify({'error': '用户没有Discord账号，请先添加账号'}), 400
 
         # 启动机器人（启动所有账号，不管是否在线）
-        started_count = start_discord_bot(user_id)
         db.set_discord_accounts_autostart_by_user(user_id, True)
+        started_count = start_discord_bot(user_id)
 
         if started_count == 0:
             logger.info(f"用户 {user_id} 的机器人已在运行中，共有 {len(user_accounts)} 个账号")
@@ -5599,8 +5867,8 @@ def stop_bot():
         # 这里简化逻辑：用户只能停止自己的
         user_id = current_user['id']
 
-        stop_discord_bot(user_id)
         db.set_discord_accounts_autostart_by_user(user_id, False)
+        stop_discord_bot(user_id)
 
         logger.info(f"用户 {user_id} 的机器人已停止")
         return jsonify({'message': '机器人停止成功'})
@@ -7531,6 +7799,7 @@ if __name__ == '__main__':
 
     # 恢复上次保持运行的 Discord 账号
     schedule_discord_bot_restore()
+    schedule_discord_bot_watchdog()
 
     # 启动 Flask 服务
     print("🚀 服务启动中...")

@@ -3,7 +3,7 @@
 ## Project Structure & Module Organization
 - `frontend/` is a Next.js 16 + React 19 admin UI. Page entry is `frontend/app/page.tsx`, with UI views in `frontend/components/` and shared UI primitives in `frontend/components/ui/`.
 - `frontend/app/api/**/route.ts` contains Next.js API routes that proxy requests to the Flask backend.
-- `backend/` is a Flask API plus a Discord self-bot and AI tooling. Key entry points: `backend/app.py` (API) and `backend/bot.py` (bot).
+- `backend/` is a Flask API plus Discord bot runtime and AI tooling. Main service entry point is `backend/app.py`; `backend/bot.py` provides the bot runtime module used by the API process.
 - `backend/scripts/` holds operational scripts such as `create_admin.py` and `clear_database.py`.
 - Runtime data lives under `backend/data/` (SQLite DB, FAISS index, scraped images, logs).
 
@@ -18,8 +18,7 @@ Frontend:
 
 Backend:
 - `pip install -r requirements.txt` — install Python dependencies.
-- `python app.py` — start the Flask API on port 5001.
-- `python bot.py` — start the Discord bot.
+- `python app.py` — start the Flask API and managed Discord bot runtime on port 5001.
 - `python scripts/create_admin.py` — create an admin user.
 - `python scripts/clear_database.py` — clear the SQLite database.
 

@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
-import { Copy, ChevronLeft, ChevronRight, Trash2, ImageIcon, Edit, X, Download, Loader2, List, Upload, Store, CheckSquare, Square, Search, Pause, Play, StopCircle, AlertCircle } from "lucide-react"
+import { Copy, ChevronLeft, ChevronRight, Trash2, ImageIcon, Edit, X, Download, Loader2, List, Upload, Store, CheckSquare, Square, Search, Pause, Play, StopCircle, AlertCircle, Plus } from "lucide-react"
 import { toast } from "sonner"
 import {
   Dialog,
@@ -44,6 +44,13 @@ import {
   normalizeProductTitleTranslations,
   serializeProductTitleTranslations,
 } from "@/lib/product-title-translations"
+import {
+  buildInitialProductPartitionMatchRules,
+  getProductPartitionColumnCount,
+  getProductPartitionColumnLabel,
+  normalizeProductPartitionMatchRules,
+  serializeProductPartitionMatchRules,
+} from "@/lib/product-partition-match"
 
 type FailedDetail = {
   index: number
@@ -252,6 +259,13 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
     englishTitle,
   })
 
+  const isTruthyFlag = (value: unknown) => (
+    value === true
+    || value === 1
+    || value === '1'
+    || String(value ?? '').trim().toLowerCase() === 'true'
+  )
+
   const buildProductState = (product: any) => {
     const title = product.title || ''
     const englishTitle = product.englishTitle || product.english_title || ''
@@ -265,6 +279,12 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
         product.titleTranslations || product.title_translations,
         title,
         englishTitle,
+      ),
+      partitionMatchEnabled: isTruthyFlag(
+        product.partitionMatchEnabled ?? product.partition_match_enabled,
+      ),
+      partitionMatchRules: normalizeProductPartitionMatchRules(
+        product.partitionMatchRules || product.partition_match_rules,
       ),
       weidianUrl: product.weidianUrl || product.product_url || '',
       cnfansUrl: product.cnfansUrl || product.cnfans_url || '',
@@ -667,6 +687,9 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
       ? getLegacyWebsiteReplySetting(editingProduct)
       : getWebsiteReplySetting(editingProduct, activeReplyTarget, availableWebsites)
 
+  const editingPartitionRules = normalizeProductPartitionMatchRules(editingProduct?.partitionMatchRules)
+  const editingPartitionColumnCount = getProductPartitionColumnCount(editingPartitionRules)
+
   const updateEditingProductTitleFields = (field: 'title' | 'englishTitle', value: string) => {
     if (!editingProduct) return
     const nextTitle = field === 'title' ? value : editingProduct.title
@@ -702,6 +725,92 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
       ...editingProduct,
       titleTranslations: nextTranslations,
     })
+  }
+
+  const updateEditingPartitionRules = (nextRules: unknown) => {
+    if (!editingProduct) return
+    setEditingProduct({
+      ...editingProduct,
+      partitionMatchRules: normalizeProductPartitionMatchRules(nextRules),
+    })
+  }
+
+  const toggleEditingPartitionMatch = (enabled: boolean) => {
+    if (!editingProduct) return
+    const currentRules = normalizeProductPartitionMatchRules(editingProduct.partitionMatchRules)
+    setEditingProduct({
+      ...editingProduct,
+      partitionMatchEnabled: enabled,
+      partitionMatchRules: enabled
+        ? (currentRules.length > 0
+          ? currentRules
+          : buildInitialProductPartitionMatchRules(editingProduct.englishTitle))
+        : currentRules,
+    })
+  }
+
+  const updateEditingPartitionCell = (rowIndex: number, columnIndex: number, value: string) => {
+    const nextRules = editingPartitionRules.length > 0
+      ? editingPartitionRules.map(row => {
+        const nextRow = [...row]
+        while (nextRow.length < editingPartitionColumnCount) {
+          nextRow.push('')
+        }
+        return nextRow
+      })
+      : buildInitialProductPartitionMatchRules('')
+
+    while (nextRules.length <= rowIndex) {
+      nextRules.push(Array.from({ length: editingPartitionColumnCount }, () => ''))
+    }
+    while (nextRules[rowIndex].length <= columnIndex) {
+      nextRules[rowIndex].push('')
+    }
+    nextRules[rowIndex][columnIndex] = value
+    updateEditingPartitionRules(nextRules)
+  }
+
+  const addEditingPartitionRow = () => {
+    const nextRules = editingPartitionRules.map(row => {
+      const nextRow = [...row]
+      while (nextRow.length < editingPartitionColumnCount) {
+        nextRow.push('')
+      }
+      return nextRow
+    })
+    nextRules.push(Array.from({ length: editingPartitionColumnCount }, () => ''))
+    updateEditingPartitionRules(nextRules)
+  }
+
+  const removeEditingPartitionRow = (rowIndex: number) => {
+    const nextRules = editingPartitionRules
+      .filter((_, index) => index !== rowIndex)
+      .map(row => {
+        const nextRow = [...row]
+        while (nextRow.length < editingPartitionColumnCount) {
+          nextRow.push('')
+        }
+        return nextRow
+      })
+
+    updateEditingPartitionRules(
+      nextRules.length > 0
+        ? nextRules
+        : [Array.from({ length: editingPartitionColumnCount }, () => '')],
+    )
+  }
+
+  const addEditingPartitionColumn = () => {
+    const nextRules = (editingPartitionRules.length > 0 ? editingPartitionRules : [['']])
+      .map(row => [...row, ''])
+    updateEditingPartitionRules(nextRules)
+  }
+
+  const removeEditingPartitionColumn = () => {
+    if (editingPartitionColumnCount <= 1) return
+    updateEditingPartitionRules(
+      editingPartitionRules.map(row => row.slice(0, editingPartitionColumnCount - 1)),
+    )
   }
 
   const activeTargetUsesSharedFallback = !!(
@@ -1149,12 +1258,18 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
         updatedProduct.title,
         updatedProduct.englishTitle,
       )
+      const normalizedPartitionMatchRules = normalizeProductPartitionMatchRules(
+        updatedProduct.partitionMatchRules,
+      )
       const serializedTitleTranslations = serializeProductTitleTranslations(
         normalizedTitleTranslations,
         {
           title: updatedProduct.title,
           englishTitle: updatedProduct.englishTitle,
         },
+      )
+      const serializedPartitionMatchRules = serializeProductPartitionMatchRules(
+        normalizedPartitionMatchRules,
       )
       const hasField = (key: string) => Object.prototype.hasOwnProperty.call(updatedProduct, key)
 
@@ -1178,6 +1293,8 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
         if (hasField('title')) formData.append('title', updatedProduct.title ?? '')
         if (hasField('englishTitle')) formData.append('englishTitle', updatedProduct.englishTitle ?? '')
         formData.append('titleTranslations', serializedTitleTranslations)
+        formData.append('partitionMatchEnabled', String(!!updatedProduct.partitionMatchEnabled))
+        formData.append('partitionMatchRules', serializedPartitionMatchRules)
         if (updatedProduct.ruleEnabled !== undefined) formData.append('ruleEnabled', updatedProduct.ruleEnabled.toString())
         if (hasField('customReplyText')) formData.append('customReplyText', updatedProduct.customReplyText ?? '')
         if (hasField('imageSource')) formData.append('imageSource', updatedProduct.imageSource ?? '')
@@ -1222,6 +1339,7 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
           body: JSON.stringify({
             ...updatedProduct,
             titleTranslations: normalizedTitleTranslations,
+            partitionMatchRules: normalizedPartitionMatchRules,
             perWebsiteReplySettings: serializedPerWebsiteReplySettings,
           })
         });
@@ -1968,22 +2086,114 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
                                 onChange={(e) => updateEditingProductTitleFields('title', e.target.value)}
                               />
                             </div>
-                            <div className="space-y-2">
-                              <Label>英文关键词</Label>
-                              <Input
-                                value={editingProduct?.englishTitle || ""}
-                                onChange={(e) => updateEditingProductTitleFields('englishTitle', e.target.value)}
-                              />
-                            </div>
+                            {!editingProduct?.partitionMatchEnabled ? (
+                              <div className="space-y-2">
+                                <Label>英文关键词</Label>
+                                <Input
+                                  value={editingProduct?.englishTitle || ""}
+                                  onChange={(e) => updateEditingProductTitleFields('englishTitle', e.target.value)}
+                                />
+                              </div>
+                            ) : (
+                              <div className="space-y-2 rounded-lg border bg-muted/20 p-4">
+                                <div className="space-y-1">
+                                  <Label className="text-sm font-medium">分区识别已启用</Label>
+                                  <p className="text-xs text-muted-foreground">
+                                    当前商品改用下面的分区关键词矩阵匹配，英文关键词输入已隐藏。
+                                  </p>
+                                </div>
+                              </div>
+                            )}
                           </div>
-                          <div className="space-y-3 rounded-lg border bg-muted/20 p-4">
+                          <div className="flex items-center justify-between rounded-lg border bg-muted/20 p-4">
                             <div className="space-y-1">
-                              <Label className="text-sm font-medium">其他语言翻译</Label>
+                              <Label className="text-sm font-bold">分区识别模式</Label>
                               <p className="text-xs text-muted-foreground">
-                                这里只显示当前网站实际启用的语言。英文继续使用上面的“英文关键词”，网站命中对应语言时，回复模板里的 <span className="font-mono">{`{title}`}</span> 会优先用这里。
+                                打开后，一行里的所有非空分区都命中才会回复；多行之间是任选一行命中即可。
                               </p>
                             </div>
-                            {usedProductTitleLanguageOptions.length > 0 ? (
+                            <Switch
+                              checked={!!editingProduct?.partitionMatchEnabled}
+                              onCheckedChange={toggleEditingPartitionMatch}
+                            />
+                          </div>
+                          {editingProduct?.partitionMatchEnabled ? (
+                            <div className="space-y-4 rounded-lg border bg-amber-50/30 p-4">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="space-y-1">
+                                  <Label className="text-sm font-medium">分区关键词矩阵</Label>
+                                  <p className="text-xs text-muted-foreground">
+                                    顺序不限，只要一句话里命中同一行的所有非空分区就触发。比如 `B + 30` 可以命中 `Dior B30`，`SP hood` 可以命中 `Sp5der hoodie`。
+                                  </p>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Button type="button" variant="outline" size="sm" onClick={addEditingPartitionColumn}>
+                                    <Plus className="mr-1 size-3.5" />
+                                    新增列
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={removeEditingPartitionColumn}
+                                    disabled={editingPartitionColumnCount <= 1}
+                                  >
+                                    删除最后一列
+                                  </Button>
+                                  <Button type="button" variant="outline" size="sm" onClick={addEditingPartitionRow}>
+                                    <Plus className="mr-1 size-3.5" />
+                                    新增行
+                                  </Button>
+                                </div>
+                              </div>
+                              <div className="space-y-3">
+                                <div
+                                  className="grid gap-2"
+                                  style={{ gridTemplateColumns: `repeat(${editingPartitionColumnCount}, minmax(0, 1fr)) 40px` }}
+                                >
+                                  {Array.from({ length: editingPartitionColumnCount }).map((_, columnIndex) => (
+                                    <div key={`partition-header-${columnIndex}`} className="px-1 text-xs font-medium text-muted-foreground">
+                                      {getProductPartitionColumnLabel(columnIndex)}
+                                    </div>
+                                  ))}
+                                  <div />
+                                </div>
+                                {editingPartitionRules.map((row, rowIndex) => (
+                                  <div
+                                    key={`partition-row-${rowIndex}`}
+                                    className="grid gap-2"
+                                    style={{ gridTemplateColumns: `repeat(${editingPartitionColumnCount}, minmax(0, 1fr)) 40px` }}
+                                  >
+                                    {Array.from({ length: editingPartitionColumnCount }).map((_, columnIndex) => (
+                                      <Input
+                                        key={`partition-cell-${rowIndex}-${columnIndex}`}
+                                        value={row[columnIndex] || ""}
+                                        onChange={(e) => updateEditingPartitionCell(rowIndex, columnIndex, e.target.value)}
+                                        placeholder={`输入${getProductPartitionColumnLabel(columnIndex)}内容`}
+                                      />
+                                    ))}
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="icon"
+                                      className="h-10 w-10"
+                                      onClick={() => removeEditingPartitionRow(rowIndex)}
+                                    >
+                                      <Trash2 className="size-4" />
+                                    </Button>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ) : null}
+                          {usedProductTitleLanguageOptions.length > 0 ? (
+                            <div className="space-y-3 rounded-lg border bg-muted/20 p-4">
+                              <div className="space-y-1">
+                                <Label className="text-sm font-medium">其他语言翻译</Label>
+                                <p className="text-xs text-muted-foreground">
+                                  这里只显示当前网站实际启用的其他语言。网站命中对应语言时，回复模板里的 <span className="font-mono">{`{title}`}</span> 会优先用这里。
+                                </p>
+                              </div>
                               <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                                 {usedProductTitleLanguageOptions.map(option => (
                                   <div key={option.value} className="space-y-2">
@@ -1996,12 +2206,8 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
                                   </div>
                                 ))}
                               </div>
-                            ) : (
-                              <div className="rounded-md border border-dashed bg-white/70 px-3 py-4 text-xs text-muted-foreground">
-                                当前网站配置里只用了英文关键词，暂时不需要填写额外语言标题。
-                              </div>
-                            )}
-                          </div>
+                            </div>
+                          ) : null}
                           <div className="flex items-center justify-between p-4 border rounded-lg bg-muted/30">
                             <div className="space-y-1">
                               <Label className="text-sm font-bold">启用自动回复规则</Label>

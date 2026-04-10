@@ -47,6 +47,38 @@ export function getApiErrorMessage(error: unknown, fallback: string): string {
   return fallback
 }
 
+export function toggleAccountBindingSelection(
+  selectedAccountIds: string[],
+  accountId: string,
+): string[] {
+  const normalizedId = String(accountId || '').trim()
+  if (!normalizedId) {
+    return selectedAccountIds
+  }
+
+  if (selectedAccountIds.includes(normalizedId)) {
+    return selectedAccountIds.filter(id => id !== normalizedId)
+  }
+
+  return [...selectedAccountIds, normalizedId]
+}
+
+export function buildAccountBindingPayload(
+  selectedAccountIds: Array<string | number | null | undefined>,
+): { account_ids: number[] } {
+  const normalizedIds: number[] = []
+
+  for (const rawId of selectedAccountIds) {
+    const parsedId = Number.parseInt(String(rawId ?? '').trim(), 10)
+    if (!Number.isFinite(parsedId) || parsedId <= 0 || normalizedIds.includes(parsedId)) {
+      continue
+    }
+    normalizedIds.push(parsedId)
+  }
+
+  return { account_ids: normalizedIds }
+}
+
 export function formatDate(dateString: string | undefined | null): string {
   if (!dateString) return '未知时间'
 
