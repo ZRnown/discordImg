@@ -323,6 +323,12 @@ def load_system_config():
         func_logger.info(f"Discord相似度阈值: {config.DISCORD_SIMILARITY_THRESHOLD} ({config.DISCORD_SIMILARITY_THRESHOLD*100:.0f}%)")
         func_logger.info(f"全局回复延迟设置为: {config.GLOBAL_REPLY_MIN_DELAY}-{config.GLOBAL_REPLY_MAX_DELAY}秒")
         func_logger.info(f"Discord频道ID: {discord_channel_id or '未设置(监听所有频道)'}")
+        func_logger.info(
+            "Discord网关配置: guild_subscriptions=%s, chunk_guilds_at_startup=%s, max_messages=%s",
+            config.DISCORD_GUILD_SUBSCRIPTIONS,
+            config.DISCORD_CHUNK_GUILDS_AT_STARTUP,
+            config.DISCORD_MAX_MESSAGES,
+        )
     except Exception as e:
         func_logger.warning(f"加载系统配置失败，使用默认值: {e}")
 

@@ -3065,6 +3065,68 @@ class DiscordBotClient(discord.Client):
             return False
         return False
 
+    @staticmethod
+    def _message_preview(message, limit=120) -> str:
+        content = ((getattr(message, 'content', None) or '') or '').replace('\n', ' ').strip()
+        if content:
+            return content[:limit] + ('...' if len(content) > limit else '')
+
+        attachments = getattr(message, 'attachments', None) or []
+        if attachments:
+            labels = []
+            for att in attachments[:3]:
+                filename = (getattr(att, 'filename', None) or '').strip()
+                content_type = (getattr(att, 'content_type', None) or '').strip()
+                labels.append(filename or content_type or '[附件]')
+            preview = ', '.join(labels)
+            if len(attachments) > 3:
+                preview = f'{preview} 等{len(attachments)}个附件'
+            return f'[附件] {preview}'
+
+        return '[空消息]'
+
+    def _is_plain_text_keyword_trigger_candidate(self, message) -> bool:
+        if getattr(message, 'guild', None) is None:
+            return False
+        if getattr(message, 'attachments', None):
+            return False
+        if getattr(message, 'reference', None) is not None:
+            return False
+        if getattr(message, 'mentions', None):
+            return False
+
+        content = (getattr(message, 'content', None) or '').strip()
+        if not content:
+            return False
+
+        cleaned_query = re.sub(r'<a?:\w+:\d+>', ' ', content)
+        cleaned_query = re.sub(r'\s+', ' ', cleaned_query).strip()
+        if not cleaned_query or not re.search(r'\w', cleaned_query):
+            return False
+        if re.search(r'https?://|www\.', cleaned_query, re.IGNORECASE):
+            return False
+
+        return True
+
+    def _should_process_self_authored_message(self, message) -> bool:
+        return self._is_plain_text_keyword_trigger_candidate(message)
+
+    def _should_allow_managed_account_trigger(self, message) -> bool:
+        return self._is_plain_text_keyword_trigger_candidate(message)
+
+    def _log_message_skip(self, message, reason):
+        author = getattr(message, 'author', None)
+        author_name = getattr(author, 'name', None) or '未知作者'
+        author_id = getattr(author, 'id', None)
+        channel = getattr(message, 'channel', None)
+        channel_name = getattr(channel, 'name', None) or str(getattr(channel, 'id', '未知频道'))
+        account_name = getattr(getattr(self, 'user', None), 'name', None) or f'账号#{self.account_id}'
+        preview = self._message_preview(message)
+        logger.info(
+            f'⏭️ [跳过] 账号:{account_name} | 原因:{reason} | 作者:{author_name}({author_id}) '
+            f'| 频道:{channel_name} | 内容:"{preview}"'
+        )
+
     def _should_filter_message(self, message):
         """检查消息是否应该被过滤"""
         try:
@@ -3120,20 +3182,20 @@ class DiscordBotClient(discord.Client):
 
                 if filter_type == 'contains':
                     if filter_value in message_content:
-                        logger.debug(f'消息被过滤: 包含 "{filter_value}"')
+                        logger.info(f'消息被过滤: 包含 "{filter_value}"')
                         return True
                 elif filter_type == 'starts_with':
                     if message_content.startswith(filter_value):
-                        logger.debug(f'消息被过滤: 以 "{filter_value}" 开头')
+                        logger.info(f'消息被过滤: 以 "{filter_value}" 开头')
                         return True
                 elif filter_type == 'ends_with':
                     if message_content.endswith(filter_value):
-                        logger.debug(f'消息被过滤: 以 "{filter_value}" 结尾')
+                        logger.info(f'消息被过滤: 以 "{filter_value}" 结尾')
                         return True
                 elif filter_type == 'regex':
                     try:
                         if re.search(filter_value, message_content, re.IGNORECASE):
-                            logger.debug(f'消息被过滤: 匹配正则 "{filter_value}"')
+                            logger.info(f'消息被过滤: 匹配正则 "{filter_value}"')
                             return True
                     except re.error:
                         logger.warning(f'无效的正则表达式: {filter_value}')
@@ -3317,17 +3379,26 @@ class DiscordBotClient(discord.Client):
         if not self.running:
             return
 
-        # 忽略自己的消息
-        if message.author == self.user:
+        is_self_authored = message.author == self.user
+
+        # 默认忽略自己的消息；仅顶层纯文本关键词允许监听/两者账号自触发
+        if is_self_authored and not self._should_process_self_authored_message(message):
             return
 
         # 忽略机器人和webhook的消息
         if message.author.bot or message.webhook_id:
             return
 
-        # 忽略当前系统托管账号发出的消息，避免账号之间互相触发自动回复
-        if _is_managed_account_author_id(getattr(message.author, "id", None)):
-            return
+        # 托管账号之间默认不互相触发；仅放行顶层纯文本关键词，方便绑定账号手动测试/触发
+        if _is_managed_account_author_id(getattr(message.author, "id", None)) and not is_self_authored:
+            if not self._should_allow_managed_account_trigger(message):
+                if (
+                    getattr(message, 'reference', None) is None
+                    and not getattr(message, 'attachments', None)
+                    and (getattr(message, 'content', None) or '').strip()
+                ):
+                    self._log_message_skip(message, '托管账号消息已忽略')
+                return
 
         # 他人发起私信（DM）立即通知；DM 不进入自动回复链路
         if getattr(message, "guild", None) is None:
@@ -3347,25 +3418,25 @@ class DiscordBotClient(discord.Client):
         except Exception as e:
             logger.error(f"处理 @/回复 Bark 通知失败: {e}")
 
-        # 2. 纯 sender 账号只负责互动通知，不参与自动回复链路
-        if self.role == 'sender':
-            return
-
-        # 3. 仅监听角色进入自动回复链路（sender-only 绑定不会进入）
+        # 2. 所有绑定账号都可进入自动回复链路；真正执行搜索的账号由去重锁选出
         try:
-            listener_allowed, _ = await self._is_account_bound_in_channel(message.channel)
+            listener_allowed, _ = await self._is_account_bound_in_channel(message.channel, include_sender=True)
             if not listener_allowed:
+                if self._is_plain_text_keyword_trigger_candidate(message):
+                    self._log_message_skip(message, '当前账号未绑定该频道')
                 return
         except Exception as e:
             logger.error(f"检查监听权限失败: {e}")
             return
 
-        # 4. 忽略 @别人的信息（避免进入商品回复链路）
+        # 3. 忽略 @别人的信息（避免进入商品回复链路）
         if message.mentions:
+            self._log_message_skip(message, '消息包含@提及')
             return
 
-        # 5. 忽略回复别人的信息（避免进入商品回复链路）
+        # 4. 忽略回复别人的信息（避免进入商品回复链路）
         if message.reference is not None:
+            self._log_message_skip(message, '回复消息不进入商品搜索')
             return
 
         try:
@@ -3380,7 +3451,9 @@ class DiscordBotClient(discord.Client):
         if self._should_filter_message(message):
             return
 
-        logger.info(f'📨 [接收] 账号:{self.user.name} | 频道:{message.channel.name} | 内容: "{message.content[:50]}..."')
+        logger.info(
+            f'📨 [接收] 账号:{self.user.name} | 频道:{message.channel.name} | 内容: "{self._message_preview(message, limit=50)}"'
+        )
 
         # 获取用户设置
         keyword_reply_enabled = True
