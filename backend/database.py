@@ -693,6 +693,36 @@ class Database:
                 )
             ''')
 
+            # 创建用户-网站回复统计表（累计）
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_website_reply_stats (
+                    user_id INTEGER NOT NULL,
+                    website_id INTEGER NOT NULL,
+                    stat_replies_text INTEGER DEFAULT 0,
+                    stat_replies_image INTEGER DEFAULT 0,
+                    stat_replies_total INTEGER DEFAULT 0,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, website_id),
+                    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+                    FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE
+                )
+            ''')
+
+            # 创建用户-网站回复统计表（每日）
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_website_reply_stats_daily (
+                    user_id INTEGER NOT NULL,
+                    website_id INTEGER NOT NULL,
+                    stat_date DATE NOT NULL,
+                    stat_replies_text INTEGER DEFAULT 0,
+                    stat_replies_image INTEGER DEFAULT 0,
+                    stat_replies_total INTEGER DEFAULT 0,
+                    PRIMARY KEY (user_id, website_id, stat_date),
+                    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+                    FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE
+                )
+            ''')
+
             # 创建用户设置表（每个用户的个性化设置）
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS user_settings (
@@ -2673,6 +2703,38 @@ class Database:
                             stat_replies_image = stat_replies_image + excluded.stat_replies_image
                     ''', (user_id, daily_text, daily_image))
 
+                    cursor.execute('''
+                        INSERT INTO user_website_reply_stats (
+                            user_id,
+                            website_id,
+                            stat_replies_total,
+                            stat_replies_text,
+                            stat_replies_image
+                        )
+                        VALUES (?, ?, 1, ?, ?)
+                        ON CONFLICT(user_id, website_id) DO UPDATE SET
+                            stat_replies_total = stat_replies_total + 1,
+                            stat_replies_text = stat_replies_text + excluded.stat_replies_text,
+                            stat_replies_image = stat_replies_image + excluded.stat_replies_image,
+                            updated_at = CURRENT_TIMESTAMP
+                    ''', (user_id, website_id, daily_text, daily_image))
+
+                    cursor.execute('''
+                        INSERT INTO user_website_reply_stats_daily (
+                            user_id,
+                            website_id,
+                            stat_date,
+                            stat_replies_total,
+                            stat_replies_text,
+                            stat_replies_image
+                        )
+                        VALUES (?, ?, date('now','localtime'), 1, ?, ?)
+                        ON CONFLICT(user_id, website_id, stat_date) DO UPDATE SET
+                            stat_replies_total = stat_replies_total + 1,
+                            stat_replies_text = stat_replies_text + excluded.stat_replies_text,
+                            stat_replies_image = stat_replies_image + excluded.stat_replies_image
+                    ''', (user_id, website_id, daily_text, daily_image))
+
                 if should_update_global:
                     updates = ['stat_replies_total = stat_replies_total + 1']
                     if has_text:
@@ -2706,6 +2768,51 @@ class Database:
         except Exception as e:
             logger.error(f"更新网站回复统计失败: {e}")
             return False
+
+    def get_user_website_reply_stats_map(self, user_id: int, website_ids: List[int] = None) -> Dict[int, Dict[str, int]]:
+        """获取用户维度的网站回复统计映射。"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+
+                params = [user_id]
+                website_filter_clause = ''
+                if website_ids:
+                    placeholders = ','.join('?' for _ in website_ids)
+                    website_filter_clause = f' AND uwrs.website_id IN ({placeholders})'
+                    params.extend(website_ids)
+
+                cursor.execute(f'''
+                    SELECT
+                        uwrs.website_id,
+                        uwrs.stat_replies_total,
+                        uwrs.stat_replies_text,
+                        uwrs.stat_replies_image,
+                        COALESCE(uwrsd.stat_replies_total, 0) AS stat_replies_daily_total,
+                        COALESCE(uwrsd.stat_replies_text, 0) AS stat_replies_daily_text,
+                        COALESCE(uwrsd.stat_replies_image, 0) AS stat_replies_daily_image
+                    FROM user_website_reply_stats uwrs
+                    LEFT JOIN user_website_reply_stats_daily uwrsd
+                        ON uwrs.user_id = uwrsd.user_id
+                        AND uwrs.website_id = uwrsd.website_id
+                        AND uwrsd.stat_date = date('now','localtime')
+                    WHERE uwrs.user_id = ?{website_filter_clause}
+                ''', tuple(params))
+
+                stats_map: Dict[int, Dict[str, int]] = {}
+                for row in cursor.fetchall():
+                    stats_map[row['website_id']] = {
+                        'stat_replies_total': row['stat_replies_total'] or 0,
+                        'stat_replies_text': row['stat_replies_text'] or 0,
+                        'stat_replies_image': row['stat_replies_image'] or 0,
+                        'stat_replies_daily_total': row['stat_replies_daily_total'] or 0,
+                        'stat_replies_daily_text': row['stat_replies_daily_text'] or 0,
+                        'stat_replies_daily_image': row['stat_replies_daily_image'] or 0,
+                    }
+                return stats_map
+        except Exception as e:
+            logger.error(f"获取用户网站回复统计失败: {e}")
+            return {}
 
     def get_user_reply_stats(self, user_id: int) -> Dict[str, int]:
         """获取用户回复统计（累计 + 今日）"""

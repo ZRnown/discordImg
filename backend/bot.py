@@ -1414,7 +1414,7 @@ class DiscordBotClient(discord.Client):
             website_config=website_config,
         )
         if reply_content is None:
-            logger.info(f"商品 {product.get('id')} 回复范围不匹配，跳过网站 {website_config.get('name')}")
+            logger.debug(f"商品 {product.get('id')} 回复范围不匹配，跳过网站 {website_config.get('name')}")
             return None
 
         website_id = website_config.get('id')
@@ -1422,7 +1422,7 @@ class DiscordBotClient(discord.Client):
         website_filters = self._parse_message_filters(user_settings.get('message_filters', '[]') if user_settings else '[]')
 
         if website_filters and self._filters_block_message(message, website_filters, match_context=match_context):
-            logger.info(f"消息被过滤(网站规则): {website_config.get('name')}")
+            logger.debug(f"消息被过滤(网站规则): {website_config.get('name')}")
             return None
 
         reply_content_is_final = bool(custom_reply and custom_reply.get('explicit_mentions'))
@@ -1460,7 +1460,7 @@ class DiscordBotClient(discord.Client):
                 global_image_filters,
                 match_context=match_context,
             ):
-                logger.info("消息被过滤(全局图片相似度)")
+                logger.debug("消息被过滤(全局图片相似度)")
                 return None
 
             website_filter_matches = match_context.get('website_filter_matches') or []
@@ -2300,7 +2300,7 @@ class DiscordBotClient(discord.Client):
                     global_image_filters,
                     match_context=match_context,
                 ):
-                    logger.info("消息被过滤(全局图片相似度)")
+                    logger.debug("消息被过滤(全局图片相似度)")
                     return False
                 if not prevalidated_batch and match_context and match_context.get('type') == 'image':
                     website_filter_matches = match_context.get('website_filter_matches') or []
@@ -2313,7 +2313,7 @@ class DiscordBotClient(discord.Client):
                             sim = float(matched_filter.get('similarity', 0))
                             threshold_val = float(matched_filter.get('threshold', 0))
                             if sim >= threshold_val:
-                                logger.info(
+                                logger.debug(
                                     f"🚫 网站图片过滤命中: 网站 {website_config.get('name')} "
                                     f"规则 {matched_filter.get('filter_id')} 相似度 {sim:.3f} >= {threshold_val:.3f}"
                                 )
@@ -2329,7 +2329,7 @@ class DiscordBotClient(discord.Client):
                     threshold_to_use = website_threshold if website_threshold is not None else base_threshold
 
                     if similarity < threshold_to_use:
-                        logger.info(
+                        logger.debug(
                             f"📷 图片相似度 {similarity:.3f} 低于网站阈值 {threshold_to_use:.3f}，跳过回复"
                         )
                         continue
@@ -2377,7 +2377,7 @@ class DiscordBotClient(discord.Client):
                     website_config=website_config
                 )
                 if response_content is None:
-                    logger.info(f"商品 {active_product.get('id')} 回复范围不匹配，跳过发送")
+                    logger.debug(f"商品 {active_product.get('id')} 回复范围不匹配，跳过发送")
                     continue
 
                 # 2. 获取数据库配置的发送者 ID
@@ -2435,7 +2435,7 @@ class DiscordBotClient(discord.Client):
                         and website_filters
                         and self._filters_block_message(message, website_filters, match_context=match_context)
                     ):
-                        logger.info(f"消息被过滤(网站规则): {website_config.get('name')}")
+                        logger.debug(f"消息被过滤(网站规则): {website_config.get('name')}")
                         continue
 
                 if reply_mode == 'default':
@@ -3122,7 +3122,7 @@ class DiscordBotClient(discord.Client):
         channel_name = getattr(channel, 'name', None) or str(getattr(channel, 'id', '未知频道'))
         account_name = getattr(getattr(self, 'user', None), 'name', None) or f'账号#{self.account_id}'
         preview = self._message_preview(message)
-        logger.info(
+        logger.debug(
             f'⏭️ [跳过] 账号:{account_name} | 原因:{reason} | 作者:{author_name}({author_id}) '
             f'| 频道:{channel_name} | 内容:"{preview}"'
         )
@@ -3164,7 +3164,7 @@ class DiscordBotClient(discord.Client):
                         try:
                             value = int(value_str)
                             if value < min_value or value > max_value:
-                                logger.info(
+                                logger.debug(
                                     f'🚫 消息被过滤: {filter_keyword} {value} 超出范围 ({min_value}-{max_value})'
                                 )
                                 return True
@@ -3182,20 +3182,20 @@ class DiscordBotClient(discord.Client):
 
                 if filter_type == 'contains':
                     if filter_value in message_content:
-                        logger.info(f'消息被过滤: 包含 "{filter_value}"')
+                        logger.debug(f'消息被过滤: 包含 "{filter_value}"')
                         return True
                 elif filter_type == 'starts_with':
                     if message_content.startswith(filter_value):
-                        logger.info(f'消息被过滤: 以 "{filter_value}" 开头')
+                        logger.debug(f'消息被过滤: 以 "{filter_value}" 开头')
                         return True
                 elif filter_type == 'ends_with':
                     if message_content.endswith(filter_value):
-                        logger.info(f'消息被过滤: 以 "{filter_value}" 结尾')
+                        logger.debug(f'消息被过滤: 以 "{filter_value}" 结尾')
                         return True
                 elif filter_type == 'regex':
                     try:
                         if re.search(filter_value, message_content, re.IGNORECASE):
-                            logger.info(f'消息被过滤: 匹配正则 "{filter_value}"')
+                            logger.debug(f'消息被过滤: 匹配正则 "{filter_value}"')
                             return True
                     except re.error:
                         logger.warning(f'无效的正则表达式: {filter_value}')
@@ -3227,7 +3227,7 @@ class DiscordBotClient(discord.Client):
                         try:
                             value = int(value_str)
                             if value < min_value or value > max_value:
-                                logger.info(
+                                logger.debug(
                                     f'消息被过滤: {keyword} {value} 超出范围 ({min_value}-{max_value})'
                                 )
                                 return True
@@ -3242,7 +3242,7 @@ class DiscordBotClient(discord.Client):
                     for blocked_id in filter_user_ids:
                         blocked_id = blocked_id.strip()
                         if blocked_id == sender_id or blocked_id.lower() in sender_name:
-                            logger.info(f'消息被过滤: 用户 {message.author.name} (ID: {sender_id}) 在过滤列表中')
+                            logger.debug(f'消息被过滤: 用户 {message.author.name} (ID: {sender_id}) 在过滤列表中')
                             return True
                 elif filter_type == 'role_id':
                     role_ids = split_filter_values(filter_value)
@@ -3250,11 +3250,11 @@ class DiscordBotClient(discord.Client):
                         author_roles = getattr(message.author, 'roles', []) or []
                         author_role_ids = {str(role.id) for role in author_roles if getattr(role, 'id', None) is not None}
                         if author_role_ids.intersection(set(role_ids)):
-                            logger.info(f'消息被过滤: 用户 {message.author.name} 命中身份组过滤')
+                            logger.debug(f'消息被过滤: 用户 {message.author.name} 命中身份组过滤')
                             return True
                 elif filter_type == 'image':
                     if self._message_has_image(message):
-                        logger.info('消息被过滤: 图片消息')
+                        logger.debug('消息被过滤: 图片消息')
                         return True
 
             # 2. 检查用户个性化设置的过滤规则
@@ -3269,7 +3269,7 @@ class DiscordBotClient(discord.Client):
                     for blocked_user in blacklist_users:
                         blocked_user = blocked_user.lower()
                         if blocked_user in sender_name or blocked_user == sender_id:
-                            logger.info(f'消息被过滤: 用户 {message.author.name} 在黑名单中')
+                            logger.debug(f'消息被过滤: 用户 {message.author.name} 在黑名单中')
                             return True
 
                 # 检查关键词过滤
@@ -3279,7 +3279,7 @@ class DiscordBotClient(discord.Client):
 
                     for keyword in filter_keywords:
                         if keyword in message_content:
-                            logger.info(f'消息被过滤: 包含关键词 "{keyword}"')
+                            logger.debug(f'消息被过滤: 包含关键词 "{keyword}"')
                             return True
 
         except Exception as e:
