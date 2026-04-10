@@ -46,6 +46,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
+import { WebsitePostingPanel } from "@/components/website-posting-panel"
 import { toast } from "sonner"
 import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit, Clock } from "lucide-react"
 
@@ -3312,7 +3313,7 @@ const formatWebsiteForEdit = (website: any) => ({
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2 text-center">
+                    <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-2 text-center">
                       <div className="rounded-lg border bg-muted/30 px-3 py-2">
                         <div className="text-[11px] text-muted-foreground">总回复</div>
                         <div className="text-base font-semibold leading-none mt-1">{website.stat_replies_total || 0}</div>
@@ -3337,7 +3338,20 @@ const formatWebsiteForEdit = (website: any) => ({
                         <div className="text-[11px] text-muted-foreground">今日图片</div>
                         <div className="text-base font-semibold leading-none mt-1">{website.stat_replies_daily_image || 0}</div>
                       </div>
+                      <div className="rounded-lg border bg-muted/30 px-3 py-2">
+                        <div className="text-[11px] text-muted-foreground">总发帖</div>
+                        <div className="text-base font-semibold leading-none mt-1">{website.stat_posts_total || 0}</div>
+                      </div>
+                      <div className="rounded-lg border bg-muted/30 px-3 py-2">
+                        <div className="text-[11px] text-muted-foreground">今日发帖</div>
+                        <div className="text-base font-semibold leading-none mt-1">{website.stat_posts_daily_total || 0}</div>
+                      </div>
                     </div>
+
+                    <WebsitePostingPanel
+                      website={website}
+                      onChanged={() => fetchWebsites(true)}
+                    />
 
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4" data-tutorial="accounts-website-overrides">
                       <div className="space-y-2" data-tutorial="accounts-website-threshold">

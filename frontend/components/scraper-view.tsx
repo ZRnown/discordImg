@@ -2076,7 +2076,7 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
                             <div className="space-y-1">
                               <Label className="text-sm font-bold">分区识别模式</Label>
                               <p className="text-xs text-muted-foreground">
-                                打开后，一行里的所有非空分区都命中才会回复；多行之间是任选一行命中即可。
+                                打开后，一行里的所有非空分区都命中才会回复；空着不填的列会自动忽略；多行之间是任选一行命中即可。
                               </p>
                             </div>
                             <Switch
@@ -2090,7 +2090,7 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
                                 <div className="space-y-1">
                                   <Label className="text-sm font-medium">分区关键词矩阵</Label>
                                   <p className="text-xs text-muted-foreground">
-                                    顺序不限，只要一句话里命中同一行的所有非空分区就触发。比如 `B + 30` 可以命中 `Dior B30`，`SP hood` 可以命中 `Sp5der hoodie`。
+                                    顺序不限，只要一句话里命中同一行的所有非空分区就触发。空列允许留空，不会影响识别。比如 `B + 30` 可以命中 `Dior B30`，`SP hood` 可以命中 `Sp5der hoodie`。
                                   </p>
                                 </div>
                                 <div className="flex flex-wrap items-center gap-2">

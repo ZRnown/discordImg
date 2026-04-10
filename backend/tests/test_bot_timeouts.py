@@ -7,6 +7,7 @@ from backend.bot import (
     MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS,
     _auto_reply_thread_ids,
     _get_image_recognition_request_timeout_seconds,
+    _resolve_message_reply_channel,
     _resolve_cooldown_channel_id,
     resolve_reply_target_channel,
 )
@@ -84,6 +85,13 @@ class BotTimeoutHelpersTestCase(unittest.TestCase):
 
         self.assertEqual(_resolve_cooldown_channel_id(root_channel), "123001")
 
+    def test_resolve_channel_lookup_ids_include_parent_for_forum_post(self):
+        lookup_ids = bot_module.DiscordBotClient._resolve_channel_lookup_ids(
+            SimpleNamespace(id=555001, parent_id=123001)
+        )
+
+        self.assertEqual(lookup_ids, ["555001", "123001"])
+
 
 class _SlottedMessage:
     __slots__ = ("id", "channel", "thread", "flags", "fetch_thread")
@@ -157,3 +165,30 @@ class ResolveReplyTargetChannelTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIs(reply_target_channel, existing_thread)
         self.assertTrue(used_thread_reply)
         target_channel.create_thread.assert_not_awaited()
+
+
+class ResolveMessageReplyChannelTestCase(unittest.IsolatedAsyncioTestCase):
+    async def test_prefers_cached_channel_when_available(self):
+        thread_channel = SimpleNamespace(id=555001, parent_id=123001)
+        target_client = SimpleNamespace(
+            get_channel=lambda channel_id: thread_channel if channel_id == 555001 else None,
+            fetch_channel=AsyncMock(side_effect=AssertionError("should not fetch when cached")),
+        )
+        message = SimpleNamespace(channel=SimpleNamespace(id=555001, parent_id=123001))
+
+        resolved = await _resolve_message_reply_channel(target_client, message)
+
+        self.assertIs(resolved, thread_channel)
+
+    async def test_fetches_forum_post_channel_when_not_cached(self):
+        fetched_thread = SimpleNamespace(id=555001, parent_id=123001)
+        target_client = SimpleNamespace(
+            get_channel=lambda channel_id: None,
+            fetch_channel=AsyncMock(return_value=fetched_thread),
+        )
+        message = SimpleNamespace(channel=SimpleNamespace(id=555001, parent_id=123001))
+
+        resolved = await _resolve_message_reply_channel(target_client, message)
+
+        self.assertIs(resolved, fetched_thread)
+        target_client.fetch_channel.assert_awaited_once_with(555001)

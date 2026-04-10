@@ -123,6 +123,11 @@ _keyword_reply_window_configs = {}
 _keyword_reply_background_tasks = set()
 _auto_reply_thread_ids = {}
 _AUTO_REPLY_THREAD_CACHE_LIMIT = 2048
+_scheduled_post_runner_task = None
+_scheduled_post_runner_lock = asyncio.Lock()
+_scheduled_post_cycle_lock = asyncio.Lock()
+SCHEDULED_POST_POLL_INTERVAL_SECONDS = 30.0
+SCHEDULED_POST_BATCH_LIMIT = 10
 
 
 def _coerce_int(value, default):
@@ -573,6 +578,14 @@ async def _resolve_client_channel(target_client, channel_id):
     return None
 
 
+async def _resolve_message_reply_channel(target_client, message):
+    if message is None:
+        return None
+    message_channel = getattr(message, "channel", None)
+    message_channel_id = getattr(message_channel, "id", None)
+    return await _resolve_client_channel(target_client, message_channel_id)
+
+
 async def _resolve_message_thread_id(message):
     if message is None:
         return None
@@ -1004,6 +1017,241 @@ def apply_reply_mode_cooldown(reply_mode, sender_ids, channel_id):
 
     if unique_sender_ids:
         set_account_cooldown(unique_sender_ids[0], channel_id)
+
+
+async def _ensure_scheduled_post_runner_started():
+    global _scheduled_post_runner_task
+
+    async with _scheduled_post_runner_lock:
+        if _scheduled_post_runner_task is not None and not _scheduled_post_runner_task.done():
+            return
+
+        _scheduled_post_runner_task = asyncio.create_task(
+            _scheduled_post_runner_loop(),
+            name='website-post-scheduler',
+        )
+
+
+async def _scheduled_post_runner_loop():
+    while True:
+        try:
+            await _process_due_scheduled_posts()
+        except Exception as exc:
+            logger.error(f"网站定时发帖轮询失败: {exc}")
+        await asyncio.sleep(SCHEDULED_POST_POLL_INTERVAL_SECONDS)
+
+
+def _get_ready_sender_clients():
+    return [
+        client
+        for client in bot_clients
+        if client.is_ready() and not client.is_closed()
+    ]
+
+
+async def _load_website_post_files(user_id, website_id, post):
+    try:
+        try:
+            from database import db
+        except ImportError:
+            from .database import db
+
+        post_id = _coerce_int((post or {}).get('id'), None)
+        if post_id is None:
+            return []
+
+        file_dir = db.get_website_post_media_dir(user_id, website_id, post_id)
+        filenames = db._normalize_post_image_filenames((post or {}).get('image_filenames'))
+        files = []
+        for filename in filenames:
+            file_path = os.path.join(file_dir, filename)
+            if not os.path.exists(file_path):
+                continue
+            files.append(discord.File(file_path, filename=filename))
+        return files
+    except Exception as exc:
+        logger.error(f"加载网站帖子图片失败: {exc}")
+        return []
+
+
+async def _process_due_scheduled_posts():
+    ready_clients = _get_ready_sender_clients()
+    if not ready_clients:
+        return
+
+    if _scheduled_post_cycle_lock.locked():
+        return
+
+    async with _scheduled_post_cycle_lock:
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+
+            schedules = await asyncio.get_event_loop().run_in_executor(
+                None,
+                db.get_due_website_post_schedules,
+                SCHEDULED_POST_BATCH_LIMIT,
+            )
+            if not schedules:
+                return
+
+            for schedule in schedules:
+                await _dispatch_scheduled_post(schedule)
+        except Exception as exc:
+            logger.error(f"处理网站定时发帖失败: {exc}")
+
+
+async def _dispatch_scheduled_post(schedule):
+    try:
+        try:
+            from database import db
+        except ImportError:
+            from .database import db
+
+        website_id = _coerce_int(schedule.get('website_id'), None)
+        user_id = _coerce_int(schedule.get('user_id'), None)
+        schedule_id = _coerce_int(schedule.get('id'), None)
+        channel_id = str(schedule.get('channel_id') or '').strip()
+        if website_id is None or user_id is None or schedule_id is None or not channel_id:
+            return False
+
+        post = await asyncio.get_event_loop().run_in_executor(
+            None,
+            db.select_website_post_for_schedule,
+            schedule_id,
+            user_id,
+        )
+        if not post:
+            logger.info(
+                "网站定时发帖跳过: schedule=%s website=%s user=%s reason=no-post",
+                schedule_id,
+                website_id,
+                user_id,
+            )
+            return False
+
+        db_sender_ids = await asyncio.get_event_loop().run_in_executor(
+            None,
+            db.get_website_senders,
+            website_id,
+            user_id,
+        )
+        if not db_sender_ids:
+            logger.info(
+                "网站定时发帖跳过: schedule=%s website=%s user=%s reason=no-sender",
+                schedule_id,
+                website_id,
+                user_id,
+            )
+            return False
+
+        ready_clients = _get_ready_sender_clients()
+        online_sender_ids = [client.account_id for client in ready_clients]
+        valid_senders = [uid for uid in db_sender_ids if uid in online_sender_ids]
+        if not valid_senders:
+            logger.info(
+                "网站定时发帖跳过: schedule=%s website=%s user=%s reason=no-online-sender",
+                schedule_id,
+                website_id,
+                user_id,
+            )
+            return False
+
+        user_settings = await asyncio.get_event_loop().run_in_executor(
+            None,
+            db.get_user_website_settings,
+            user_id,
+            website_id,
+        )
+        rotation_interval = _coerce_int((user_settings or {}).get('rotation_interval'), 180)
+        if rotation_interval <= 0:
+            rotation_interval = 180
+        cooldown_channel_id = str(channel_id)
+
+        dispatch_plan = build_sender_dispatch_plan(
+            db_sender_ids=db_sender_ids,
+            valid_senders=valid_senders,
+            channel_id=cooldown_channel_id,
+            rotation_interval=rotation_interval,
+            rotation_enabled=len(db_sender_ids) > 1,
+            skip_sender_cooldown=False,
+            reply_mode='rotation',
+        )
+        selected_sender_ids = list(dispatch_plan.get('selected_ids') or [])
+        if not selected_sender_ids:
+            return False
+
+        selected_sender_id = selected_sender_ids[0]
+        target_client = next(
+            (client for client in ready_clients if client.account_id == selected_sender_id),
+            None,
+        )
+        if target_client is None:
+            return False
+
+        target_channel = await _resolve_client_channel(target_client, channel_id)
+        if target_channel is None:
+            logger.info(
+                "网站定时发帖跳过: schedule=%s website=%s user=%s reason=channel-unavailable",
+                schedule_id,
+                website_id,
+                user_id,
+            )
+            return False
+
+        content = str(post.get('content') or '').strip()
+        files = await _load_website_post_files(user_id, website_id, post)
+        if not content and not files:
+            logger.info(
+                "网站定时发帖跳过: schedule=%s post=%s reason=empty-content",
+                schedule_id,
+                post.get('id'),
+            )
+            return False
+
+        try:
+            if files:
+                if content:
+                    await target_channel.send(content=content, files=files)
+                else:
+                    await target_channel.send(files=files)
+            else:
+                await target_channel.send(content)
+        finally:
+            for file in files:
+                try:
+                    file.close()
+                except Exception:
+                    continue
+
+        apply_reply_mode_cooldown('rotation', [selected_sender_id], cooldown_channel_id)
+        await asyncio.get_event_loop().run_in_executor(
+            None,
+            db.mark_website_post_schedule_sent,
+            schedule_id,
+            user_id,
+            post.get('id'),
+        )
+        await asyncio.get_event_loop().run_in_executor(
+            None,
+            db.increment_user_website_post_stats,
+            user_id,
+            website_id,
+        )
+        logger.info(
+            "网站定时发帖成功: schedule=%s website=%s channel=%s sender=%s post=%s",
+            schedule_id,
+            website_id,
+            channel_id,
+            selected_sender_id,
+            post.get('id'),
+        )
+        return True
+    except Exception as exc:
+        logger.error(f"网站定时发帖发送失败: schedule={schedule.get('id')} error={exc}")
+        return False
 
 def cleanup_expired_cooldowns():
     """清理过期的冷却状态"""
@@ -2549,7 +2797,7 @@ class DiscordBotClient(discord.Client):
 
                 for target_index, target_client in enumerate(target_clients):
                     try:
-                        target_channel = target_client.get_channel(message.channel.id)
+                        target_channel = await _resolve_message_reply_channel(target_client, message)
 
                         if target_channel:
                             reply_target_channel, used_thread_reply = await resolve_reply_target_channel(
@@ -3363,6 +3611,11 @@ class DiscordBotClient(discord.Client):
                     logger.info(f'账号 {self.account_id} 状态已更新为在线')
         except Exception as e:
             logger.error(f'更新账号状态失败: {e}')
+
+        try:
+            await _ensure_scheduled_post_runner_started()
+        except Exception as e:
+            logger.error(f'启动网站定时发帖轮询失败: {e}')
 
     async def on_disconnect(self):
         self.running = False

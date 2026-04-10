@@ -68,8 +68,8 @@ export const serializeProductPartitionMatchRules = (rawValue: unknown) => JSON.s
 )
 
 export const getProductPartitionColumnCount = (rules: unknown) => {
-  const normalized = normalizeProductPartitionMatchRules(rules)
-  const maxColumns = normalized.reduce((count, row) => Math.max(count, row.length), 0)
+  const editableRules = buildEditableProductPartitionMatchRules(rules)
+  const maxColumns = editableRules.reduce((count, row) => Math.max(count, row.length), 0)
   return Math.max(maxColumns, 1)
 }
 

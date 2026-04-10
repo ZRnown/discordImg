@@ -619,6 +619,68 @@ class Database:
                 )
             ''')
 
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS website_post_library (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    website_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    category TEXT DEFAULT '',
+                    content TEXT DEFAULT '',
+                    image_filenames TEXT DEFAULT '[]',
+                    is_active INTEGER DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE,
+                    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+                )
+            ''')
+
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS website_post_schedules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    website_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    channel_id TEXT NOT NULL,
+                    category TEXT DEFAULT '',
+                    send_mode TEXT NOT NULL DEFAULT 'random'
+                        CHECK (send_mode IN ('random', 'sequential')),
+                    interval_minutes INTEGER NOT NULL DEFAULT 60,
+                    enabled INTEGER DEFAULT 1,
+                    last_sent_at TIMESTAMP DEFAULT NULL,
+                    last_post_id INTEGER DEFAULT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE,
+                    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+                    FOREIGN KEY (last_post_id) REFERENCES website_post_library (id) ON DELETE SET NULL
+                )
+            ''')
+
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_website_post_stats (
+                    user_id INTEGER NOT NULL,
+                    website_id INTEGER NOT NULL,
+                    stat_posts_total INTEGER DEFAULT 0,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (user_id, website_id),
+                    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+                    FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE
+                )
+            ''')
+
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_website_post_stats_daily (
+                    user_id INTEGER NOT NULL,
+                    website_id INTEGER NOT NULL,
+                    stat_date DATE NOT NULL,
+                    stat_posts_total INTEGER DEFAULT 0,
+                    PRIMARY KEY (user_id, website_id, stat_date),
+                    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+                    FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE
+                )
+            ''')
+
             # 创建系统公告表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS system_announcements (
@@ -3433,6 +3495,531 @@ class Database:
         except Exception as e:
             logger.error(f"获取网站监听账号失败: {e}")
             return []
+
+    @staticmethod
+    def _normalize_post_image_filenames(image_filenames: Any) -> List[str]:
+        if image_filenames is None:
+            return []
+        if isinstance(image_filenames, str):
+            try:
+                parsed = json.loads(image_filenames)
+                if isinstance(parsed, list):
+                    image_filenames = parsed
+                else:
+                    image_filenames = [image_filenames]
+            except Exception:
+                image_filenames = [image_filenames]
+        if not isinstance(image_filenames, list):
+            return []
+        normalized = []
+        for item in image_filenames:
+            value = str(item or '').strip()
+            if value and value not in normalized:
+                normalized.append(value)
+        return normalized
+
+    def get_website_post_media_dir(self, user_id: int, website_id: int, post_id: int = None) -> str:
+        base_dir = os.path.join(os.path.dirname(self.db_path), 'website_post_media', str(user_id), str(website_id))
+        if post_id is None:
+            return base_dir
+        return os.path.join(base_dir, str(post_id))
+
+    def get_website_post_library(self, website_id: int, user_id: int) -> List[Dict[str, Any]]:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    SELECT id, website_id, user_id, title, category, content, image_filenames,
+                           is_active, created_at, updated_at
+                    FROM website_post_library
+                    WHERE website_id = ? AND user_id = ?
+                    ORDER BY created_at DESC, id DESC
+                    ''',
+                    (website_id, user_id),
+                )
+                entries = []
+                for row in cursor.fetchall():
+                    item = dict(row)
+                    item['image_filenames'] = self._normalize_post_image_filenames(item.get('image_filenames'))
+                    item['image_urls'] = [
+                        f"/api/websites/{website_id}/post-library/{item['id']}/images/{filename}"
+                        for filename in item['image_filenames']
+                    ]
+                    item['is_active'] = 1 if int(item.get('is_active') or 0) else 0
+                    entries.append(item)
+                return entries
+        except Exception as e:
+            logger.error(f"获取网站帖子库失败: {e}")
+            return []
+
+    def get_website_post_library_entry(self, post_id: int, website_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+        entries = self.get_website_post_library(website_id, user_id)
+        for item in entries:
+            if int(item['id']) == int(post_id):
+                return item
+        return None
+
+    def add_website_post_library_entry(
+        self,
+        website_id: int,
+        user_id: int,
+        title: str,
+        category: str = '',
+        content: str = '',
+        image_filenames: Any = None,
+        is_active: int = 1,
+    ) -> Optional[int]:
+        try:
+            normalized_images = self._normalize_post_image_filenames(image_filenames)
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    INSERT INTO website_post_library (
+                        website_id, user_id, title, category, content, image_filenames, is_active
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ''',
+                    (
+                        website_id,
+                        user_id,
+                        str(title or '').strip() or '未命名帖子',
+                        str(category or '').strip(),
+                        str(content or ''),
+                        json.dumps(normalized_images, ensure_ascii=False),
+                        1 if int(is_active or 0) else 0,
+                    ),
+                )
+                conn.commit()
+                return cursor.lastrowid
+        except Exception as e:
+            logger.error(f"添加网站帖子失败: {e}")
+            return None
+
+    def update_website_post_library_entry(
+        self,
+        post_id: int,
+        website_id: int,
+        user_id: int,
+        title: str,
+        category: str = '',
+        content: str = '',
+        image_filenames: Any = None,
+        is_active: int = 1,
+    ) -> bool:
+        try:
+            normalized_images = self._normalize_post_image_filenames(image_filenames)
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    UPDATE website_post_library
+                    SET title = ?, category = ?, content = ?, image_filenames = ?,
+                        is_active = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ? AND website_id = ? AND user_id = ?
+                    ''',
+                    (
+                        str(title or '').strip() or '未命名帖子',
+                        str(category or '').strip(),
+                        str(content or ''),
+                        json.dumps(normalized_images, ensure_ascii=False),
+                        1 if int(is_active or 0) else 0,
+                        post_id,
+                        website_id,
+                        user_id,
+                    ),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"更新网站帖子失败: {e}")
+            return False
+
+    def delete_website_post_library_entry(self, post_id: int, website_id: int, user_id: int) -> bool:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    DELETE FROM website_post_library
+                    WHERE id = ? AND website_id = ? AND user_id = ?
+                    ''',
+                    (post_id, website_id, user_id),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"删除网站帖子失败: {e}")
+            return False
+
+    def get_website_post_categories(self, website_id: int, user_id: int) -> List[str]:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    SELECT DISTINCT category
+                    FROM website_post_library
+                    WHERE website_id = ? AND user_id = ? AND is_active = 1 AND TRIM(COALESCE(category, '')) != ''
+                    ORDER BY category COLLATE NOCASE
+                    ''',
+                    (website_id, user_id),
+                )
+                return [str(row['category']).strip() for row in cursor.fetchall() if str(row['category']).strip()]
+        except Exception as e:
+            logger.error(f"获取网站帖子分类失败: {e}")
+            return []
+
+    def get_website_post_summary_map(self, user_id: int, website_ids: Optional[List[int]] = None) -> Dict[int, Dict[str, Any]]:
+        summary_map: Dict[int, Dict[str, Any]] = {}
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                params: List[Any] = [user_id]
+                library_query = '''
+                    SELECT website_id, COUNT(*) AS post_library_count
+                    FROM website_post_library
+                    WHERE user_id = ?
+                '''
+                schedule_query = '''
+                    SELECT website_id, COUNT(*) AS post_schedule_count
+                    FROM website_post_schedules
+                    WHERE user_id = ?
+                '''
+                category_query = '''
+                    SELECT website_id, category
+                    FROM website_post_library
+                    WHERE user_id = ? AND is_active = 1 AND TRIM(COALESCE(category, '')) != ''
+                '''
+                if website_ids:
+                    placeholders = ','.join('?' for _ in website_ids)
+                    library_query += f' AND website_id IN ({placeholders})'
+                    schedule_query += f' AND website_id IN ({placeholders})'
+                    category_query += f' AND website_id IN ({placeholders})'
+                    params.extend(website_ids)
+                library_query += ' GROUP BY website_id'
+                schedule_query += ' GROUP BY website_id'
+                category_query += ' ORDER BY website_id, category COLLATE NOCASE'
+
+                cursor.execute(library_query, params)
+                for row in cursor.fetchall():
+                    summary_map.setdefault(row['website_id'], {
+                        'post_library_count': 0,
+                        'post_schedule_count': 0,
+                        'post_categories': [],
+                    })
+                    summary_map[row['website_id']]['post_library_count'] = row['post_library_count'] or 0
+
+                cursor.execute(schedule_query, params)
+                for row in cursor.fetchall():
+                    summary_map.setdefault(row['website_id'], {
+                        'post_library_count': 0,
+                        'post_schedule_count': 0,
+                        'post_categories': [],
+                    })
+                    summary_map[row['website_id']]['post_schedule_count'] = row['post_schedule_count'] or 0
+
+                cursor.execute(category_query, params)
+                for row in cursor.fetchall():
+                    entry = summary_map.setdefault(row['website_id'], {
+                        'post_library_count': 0,
+                        'post_schedule_count': 0,
+                        'post_categories': [],
+                    })
+                    category = str(row['category'] or '').strip()
+                    if category and category not in entry['post_categories']:
+                        entry['post_categories'].append(category)
+        except Exception as e:
+            logger.error(f"获取网站帖子概要失败: {e}")
+        return summary_map
+
+    def get_website_post_schedules(self, website_id: int, user_id: int) -> List[Dict[str, Any]]:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    SELECT id, website_id, user_id, channel_id, category, send_mode,
+                           interval_minutes, enabled, last_sent_at, last_post_id, created_at, updated_at
+                    FROM website_post_schedules
+                    WHERE website_id = ? AND user_id = ?
+                    ORDER BY created_at DESC, id DESC
+                    ''',
+                    (website_id, user_id),
+                )
+                schedules = []
+                for row in cursor.fetchall():
+                    item = dict(row)
+                    item['enabled'] = 1 if int(item.get('enabled') or 0) else 0
+                    schedules.append(item)
+                return schedules
+        except Exception as e:
+            logger.error(f"获取网站发帖计划失败: {e}")
+            return []
+
+    def add_website_post_schedule(
+        self,
+        website_id: int,
+        user_id: int,
+        channel_id: str,
+        category: str = '',
+        send_mode: str = 'random',
+        interval_minutes: int = 60,
+        enabled: int = 1,
+    ) -> Optional[int]:
+        try:
+            normalized_send_mode = 'sequential' if str(send_mode or '').strip().lower() == 'sequential' else 'random'
+            normalized_interval = max(int(interval_minutes or 0), 1)
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    INSERT INTO website_post_schedules (
+                        website_id, user_id, channel_id, category, send_mode, interval_minutes, enabled
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ''',
+                    (
+                        website_id,
+                        user_id,
+                        str(channel_id or '').strip(),
+                        str(category or '').strip(),
+                        normalized_send_mode,
+                        normalized_interval,
+                        1 if int(enabled or 0) else 0,
+                    ),
+                )
+                conn.commit()
+                return cursor.lastrowid
+        except Exception as e:
+            logger.error(f"添加网站发帖计划失败: {e}")
+            return None
+
+    def update_website_post_schedule(
+        self,
+        schedule_id: int,
+        website_id: int,
+        user_id: int,
+        channel_id: str,
+        category: str = '',
+        send_mode: str = 'random',
+        interval_minutes: int = 60,
+        enabled: int = 1,
+    ) -> bool:
+        try:
+            normalized_send_mode = 'sequential' if str(send_mode or '').strip().lower() == 'sequential' else 'random'
+            normalized_interval = max(int(interval_minutes or 0), 1)
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    UPDATE website_post_schedules
+                    SET channel_id = ?, category = ?, send_mode = ?, interval_minutes = ?,
+                        enabled = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ? AND website_id = ? AND user_id = ?
+                    ''',
+                    (
+                        str(channel_id or '').strip(),
+                        str(category or '').strip(),
+                        normalized_send_mode,
+                        normalized_interval,
+                        1 if int(enabled or 0) else 0,
+                        schedule_id,
+                        website_id,
+                        user_id,
+                    ),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"更新网站发帖计划失败: {e}")
+            return False
+
+    def delete_website_post_schedule(self, schedule_id: int, website_id: int, user_id: int) -> bool:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    DELETE FROM website_post_schedules
+                    WHERE id = ? AND website_id = ? AND user_id = ?
+                    ''',
+                    (schedule_id, website_id, user_id),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"删除网站发帖计划失败: {e}")
+            return False
+
+    def get_due_website_post_schedules(self, limit: int = 50) -> List[Dict[str, Any]]:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    SELECT id, website_id, user_id, channel_id, category, send_mode,
+                           interval_minutes, enabled, last_sent_at, last_post_id, created_at, updated_at
+                    FROM website_post_schedules
+                    WHERE enabled = 1
+                      AND interval_minutes > 0
+                      AND (
+                        last_sent_at IS NULL
+                        OR datetime(last_sent_at, '+' || interval_minutes || ' minutes') <= CURRENT_TIMESTAMP
+                      )
+                    ORDER BY COALESCE(last_sent_at, '1970-01-01 00:00:00') ASC, id ASC
+                    LIMIT ?
+                    ''',
+                    (max(int(limit or 0), 1),),
+                )
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"获取待发送网站发帖计划失败: {e}")
+            return []
+
+    def select_website_post_for_schedule(self, schedule_id: int, user_id: int) -> Optional[Dict[str, Any]]:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    SELECT id, website_id, user_id, channel_id, category, send_mode,
+                           interval_minutes, enabled, last_sent_at, last_post_id
+                    FROM website_post_schedules
+                    WHERE id = ? AND user_id = ?
+                    ''',
+                    (schedule_id, user_id),
+                )
+                schedule = cursor.fetchone()
+                if not schedule:
+                    return None
+
+                schedule_dict = dict(schedule)
+                params: List[Any] = [schedule_dict['website_id'], user_id]
+                query = '''
+                    SELECT id, website_id, user_id, title, category, content, image_filenames,
+                           is_active, created_at, updated_at
+                    FROM website_post_library
+                    WHERE website_id = ? AND user_id = ? AND is_active = 1
+                '''
+                category = str(schedule_dict.get('category') or '').strip()
+                if category:
+                    query += ' AND category = ?'
+                    params.append(category)
+                query += ' ORDER BY id ASC'
+                cursor.execute(query, params)
+                candidates = [dict(row) for row in cursor.fetchall()]
+                if not candidates:
+                    return None
+
+                selected = None
+                if str(schedule_dict.get('send_mode') or '').strip().lower() == 'sequential':
+                    last_post_id = schedule_dict.get('last_post_id')
+                    if last_post_id is not None:
+                        for item in candidates:
+                            if int(item['id']) > int(last_post_id):
+                                selected = item
+                                break
+                    if selected is None:
+                        selected = candidates[0]
+                else:
+                    selected = candidates[0] if len(candidates) == 1 else np.random.choice(candidates)
+
+                if isinstance(selected, np.ndarray):
+                    selected = selected.item()
+                if selected is None:
+                    return None
+                selected['image_filenames'] = self._normalize_post_image_filenames(selected.get('image_filenames'))
+                selected['image_urls'] = [
+                    f"/api/websites/{selected['website_id']}/post-library/{selected['id']}/images/{filename}"
+                    for filename in selected['image_filenames']
+                ]
+                return selected
+        except Exception as e:
+            logger.error(f"选择网站发帖内容失败: {e}")
+            return None
+
+    def mark_website_post_schedule_sent(self, schedule_id: int, user_id: int, post_id: int) -> bool:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    UPDATE website_post_schedules
+                    SET last_sent_at = CURRENT_TIMESTAMP,
+                        last_post_id = ?,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ? AND user_id = ?
+                    ''',
+                    (post_id, schedule_id, user_id),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"标记网站发帖计划发送成功失败: {e}")
+            return False
+
+    def increment_user_website_post_stats(self, user_id: int, website_id: int) -> bool:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    INSERT INTO user_website_post_stats (user_id, website_id, stat_posts_total)
+                    VALUES (?, ?, 1)
+                    ON CONFLICT(user_id, website_id) DO UPDATE SET
+                        stat_posts_total = stat_posts_total + 1,
+                        updated_at = CURRENT_TIMESTAMP
+                    ''',
+                    (user_id, website_id),
+                )
+                cursor.execute(
+                    '''
+                    INSERT INTO user_website_post_stats_daily (user_id, website_id, stat_date, stat_posts_total)
+                    VALUES (?, ?, date('now','localtime'), 1)
+                    ON CONFLICT(user_id, website_id, stat_date) DO UPDATE SET
+                        stat_posts_total = stat_posts_total + 1
+                    ''',
+                    (user_id, website_id),
+                )
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"更新网站发帖统计失败: {e}")
+            return False
+
+    def get_user_website_post_stats_map(self, user_id: int, website_ids: Optional[List[int]] = None) -> Dict[int, Dict[str, int]]:
+        stats_map: Dict[int, Dict[str, int]] = {}
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                params: List[Any] = [user_id]
+                query = '''
+                    SELECT
+                        uwps.website_id,
+                        uwps.stat_posts_total,
+                        COALESCE(uwpsd.stat_posts_total, 0) AS stat_posts_daily_total
+                    FROM user_website_post_stats uwps
+                    LEFT JOIN user_website_post_stats_daily uwpsd
+                      ON uwps.user_id = uwpsd.user_id
+                     AND uwps.website_id = uwpsd.website_id
+                     AND uwpsd.stat_date = date('now','localtime')
+                    WHERE uwps.user_id = ?
+                '''
+                if website_ids:
+                    placeholders = ','.join('?' for _ in website_ids)
+                    query += f' AND uwps.website_id IN ({placeholders})'
+                    params.extend(website_ids)
+                cursor.execute(query, params)
+                for row in cursor.fetchall():
+                    stats_map[row['website_id']] = {
+                        'stat_posts_total': row['stat_posts_total'] or 0,
+                        'stat_posts_daily_total': row['stat_posts_daily_total'] or 0,
+                    }
+        except Exception as e:
+            logger.error(f"获取网站发帖统计失败: {e}")
+        return stats_map
 
     def update_website_config_rotation(self, config_id: int, rotation_interval: int) -> bool:
         """更新网站配置的轮换间隔"""

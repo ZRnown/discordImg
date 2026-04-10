@@ -39,6 +39,7 @@ test('product partition match helpers normalize matrix-style rules', async () =>
   )
 
   assert.equal(mod?.getProductPartitionColumnCount([]), 1)
+  assert.equal(mod?.getProductPartitionColumnCount([['', '']]), 2)
   assert.equal(mod?.getProductPartitionColumnCount([['A'], ['B', '30', 'Dior']]), 3)
   assert.deepEqual(mod?.buildInitialProductPartitionMatchRules('Dior B30'), [['Dior B30']])
   assert.deepEqual(mod?.buildInitialProductPartitionMatchRules(''), [['']])
@@ -58,6 +59,20 @@ test('product partition match helpers normalize matrix-style rules', async () =>
   assert.deepEqual(
     mod?.removeProductPartitionMatchColumn([['B'], ['SP']], 0),
     [[''], ['']],
+  )
+  assert.deepEqual(
+    mod?.appendProductPartitionMatchColumn(
+      mod?.removeProductPartitionMatchColumn([['']], 0),
+    ),
+    [['', '']],
+  )
+  assert.equal(
+    mod?.getProductPartitionColumnCount(
+      mod?.appendProductPartitionMatchColumn(
+        mod?.removeProductPartitionMatchColumn([['']], 0),
+      ),
+    ),
+    2,
   )
   assert.equal(mod?.getProductPartitionColumnLabel(0), 'A区')
   assert.equal(mod?.getProductPartitionColumnLabel(3), 'D区')

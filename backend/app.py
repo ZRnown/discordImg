@@ -18,7 +18,7 @@ os.environ.setdefault("TORCH_CPP_LOG_LEVEL", "ERROR")
 os.environ.setdefault("TORCH_SHOW_CPP_STACKTRACES", "0")
 os.environ.setdefault("GLOG_minloglevel", "2")
 
-from flask import Flask, request, jsonify, Response, session
+from flask import Flask, request, jsonify, Response, session, send_from_directory
 import numpy as np
 import logging
 import sys
@@ -2042,6 +2042,116 @@ def reset_user_password(user_id):
         return jsonify({'error': str(e)}), 500
 
 # === 新增：网站配置管理API ===
+def _parse_website_post_payload():
+    is_multipart = bool(request.content_type and 'multipart/form-data' in request.content_type)
+    source = request.form if is_multipart else (request.get_json(silent=True) or {})
+
+    title = str(source.get('title') or '').strip()
+    category = str(source.get('category') or '').strip()
+    content = str(source.get('content') or '')
+    is_active_raw = source.get('is_active', 1)
+    if isinstance(is_active_raw, str):
+        is_active = 0 if is_active_raw.strip().lower() in {'0', 'false', 'no', 'off'} else 1
+    else:
+        is_active = 1 if is_active_raw else 0
+
+    existing_images = source.get('existing_images', '[]')
+    if isinstance(existing_images, list):
+        normalized_existing_images = db._normalize_post_image_filenames(existing_images)
+    else:
+        normalized_existing_images = db._normalize_post_image_filenames(existing_images)
+
+    return {
+        'title': title,
+        'category': category,
+        'content': content,
+        'is_active': is_active,
+        'existing_images': normalized_existing_images,
+        'files': list(request.files.getlist('images')) if is_multipart else [],
+    }
+
+
+def _save_website_post_images(user_id: int, website_id: int, post_id: int, files):
+    if not files:
+        return []
+
+    target_dir = db.get_website_post_media_dir(user_id, website_id, post_id)
+    os.makedirs(target_dir, exist_ok=True)
+    saved_filenames = []
+
+    for file in files:
+        if not file or not getattr(file, 'filename', None):
+            continue
+        _, ext = os.path.splitext(file.filename)
+        suffix = ext[:16] if ext else '.jpg'
+        filename = f"{uuid.uuid4().hex}{suffix}"
+        file.save(os.path.join(target_dir, filename))
+        saved_filenames.append(filename)
+
+    return saved_filenames
+
+
+def _delete_missing_website_post_images(user_id: int, website_id: int, post_id: int, keep_filenames):
+    target_dir = db.get_website_post_media_dir(user_id, website_id, post_id)
+    if not os.path.isdir(target_dir):
+        return
+
+    keep_set = set(db._normalize_post_image_filenames(keep_filenames))
+    for filename in os.listdir(target_dir):
+        if filename in keep_set:
+            continue
+        try:
+            os.remove(os.path.join(target_dir, filename))
+        except FileNotFoundError:
+            continue
+
+
+def _remove_website_post_media_dir(user_id: int, website_id: int, post_id: int):
+    target_dir = db.get_website_post_media_dir(user_id, website_id, post_id)
+    if not os.path.isdir(target_dir):
+        return
+    for filename in os.listdir(target_dir):
+        try:
+            os.remove(os.path.join(target_dir, filename))
+        except FileNotFoundError:
+            continue
+    try:
+        os.rmdir(target_dir)
+    except OSError:
+        pass
+
+
+def _normalize_website_post_schedule_payload(data):
+    channel_id = str((data or {}).get('channel_id') or '').strip()
+    if 'discord.com/channels/' in channel_id:
+        parts = channel_id.rstrip('/').split('/')
+        channel_id = parts[-1] if parts else channel_id
+    if not channel_id or not channel_id.isdigit():
+        raise ValueError('无效的频道ID格式')
+
+    send_mode = str((data or {}).get('send_mode') or 'random').strip().lower()
+    if send_mode not in {'random', 'sequential'}:
+        raise ValueError('发送模式必须是 random 或 sequential')
+
+    interval_minutes = int((data or {}).get('interval_minutes') or 0)
+    if interval_minutes <= 0:
+        raise ValueError('发帖间隔必须大于 0 分钟')
+
+    enabled_raw = (data or {}).get('enabled', 1)
+    if isinstance(enabled_raw, str):
+        enabled = 0 if enabled_raw.strip().lower() in {'0', 'false', 'no', 'off'} else 1
+    else:
+        enabled = 1 if enabled_raw else 0
+
+    return {
+        'channel_id': channel_id,
+        'category': str((data or {}).get('category') or '').strip(),
+        'send_mode': send_mode,
+        'interval_minutes': interval_minutes,
+        'enabled': enabled,
+    }
+
+
 @app.route('/api/websites', methods=['GET'])
 def get_website_configs():
     """获取所有网站配置及其用户相关的频道绑定和账号绑定"""
@@ -2060,6 +2170,8 @@ def get_website_configs():
             if current_user.get('role') != 'admin'
             else {}
         )
+        user_website_post_stats_map = db.get_user_website_post_stats_map(current_user['id'], website_ids)
+        website_post_summary_map = db.get_website_post_summary_map(current_user['id'], website_ids)
 
         # 为每个配置添加绑定信息
         for config in configs:
@@ -2080,6 +2192,14 @@ def get_website_configs():
                 config['stat_replies_daily_total'] = user_stats.get('stat_replies_daily_total', 0)
                 config['stat_replies_daily_text'] = user_stats.get('stat_replies_daily_text', 0)
                 config['stat_replies_daily_image'] = user_stats.get('stat_replies_daily_image', 0)
+
+            post_stats = user_website_post_stats_map.get(config_id, {})
+            post_summary = website_post_summary_map.get(config_id, {})
+            config['stat_posts_total'] = post_stats.get('stat_posts_total', 0)
+            config['stat_posts_daily_total'] = post_stats.get('stat_posts_daily_total', 0)
+            config['post_library_count'] = post_summary.get('post_library_count', 0)
+            config['post_schedule_count'] = post_summary.get('post_schedule_count', 0)
+            config['post_categories'] = post_summary.get('post_categories', [])
 
             # 3) 用户级别的轮换设置
             user_settings = user_settings_map.get(config_id, {})
@@ -2473,6 +2593,283 @@ def remove_website_account(config_id, account_id):
             return jsonify({'error': '移除失败'}), 500
     except Exception as e:
         logger.error(f"移除网站账号绑定失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/websites/<int:config_id>/post-library', methods=['GET'])
+def get_website_post_library(config_id):
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        current_user = get_current_user()
+        posts = db.get_website_post_library(config_id, current_user['id'])
+        categories = db.get_website_post_categories(config_id, current_user['id'])
+        return jsonify({
+            'posts': posts,
+            'categories': categories,
+        })
+    except Exception as e:
+        logger.error(f"获取网站帖子库失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/websites/<int:config_id>/post-library', methods=['POST'])
+def add_website_post_library_entry(config_id):
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        current_user = get_current_user()
+        payload = _parse_website_post_payload()
+        if not payload['title']:
+            return jsonify({'error': '帖子名称不能为空'}), 400
+
+        post_id = db.add_website_post_library_entry(
+            website_id=config_id,
+            user_id=current_user['id'],
+            title=payload['title'],
+            category=payload['category'],
+            content=payload['content'],
+            image_filenames=[],
+            is_active=payload['is_active'],
+        )
+        if not post_id:
+            return jsonify({'error': '创建帖子失败'}), 500
+
+        saved_filenames = _save_website_post_images(
+            current_user['id'],
+            config_id,
+            post_id,
+            payload['files'],
+        )
+        if saved_filenames:
+            db.update_website_post_library_entry(
+                post_id=post_id,
+                website_id=config_id,
+                user_id=current_user['id'],
+                title=payload['title'],
+                category=payload['category'],
+                content=payload['content'],
+                image_filenames=saved_filenames,
+                is_active=payload['is_active'],
+            )
+
+        entry = db.get_website_post_library_entry(post_id, config_id, current_user['id'])
+        return jsonify({
+            'success': True,
+            'message': '帖子已添加',
+            'post': entry,
+        })
+    except Exception as e:
+        logger.error(f"添加网站帖子失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/websites/<int:config_id>/post-library/<int:post_id>', methods=['PUT'])
+def update_website_post_library_entry(config_id, post_id):
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        current_user = get_current_user()
+        existing_entry = db.get_website_post_library_entry(post_id, config_id, current_user['id'])
+        if not existing_entry:
+            return jsonify({'error': '帖子不存在'}), 404
+
+        payload = _parse_website_post_payload()
+        if not payload['title']:
+            return jsonify({'error': '帖子名称不能为空'}), 400
+
+        saved_filenames = _save_website_post_images(
+            current_user['id'],
+            config_id,
+            post_id,
+            payload['files'],
+        )
+        merged_filenames = db._normalize_post_image_filenames(
+            payload['existing_images'] + saved_filenames
+        )
+
+        success = db.update_website_post_library_entry(
+            post_id=post_id,
+            website_id=config_id,
+            user_id=current_user['id'],
+            title=payload['title'],
+            category=payload['category'],
+            content=payload['content'],
+            image_filenames=merged_filenames,
+            is_active=payload['is_active'],
+        )
+        if not success:
+            return jsonify({'error': '更新帖子失败'}), 500
+
+        _delete_missing_website_post_images(
+            current_user['id'],
+            config_id,
+            post_id,
+            merged_filenames,
+        )
+        entry = db.get_website_post_library_entry(post_id, config_id, current_user['id'])
+        return jsonify({
+            'success': True,
+            'message': '帖子已更新',
+            'post': entry,
+        })
+    except Exception as e:
+        logger.error(f"更新网站帖子失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/websites/<int:config_id>/post-library/<int:post_id>', methods=['DELETE'])
+def delete_website_post_library_entry(config_id, post_id):
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        current_user = get_current_user()
+        if not db.delete_website_post_library_entry(post_id, config_id, current_user['id']):
+            return jsonify({'error': '删除失败'}), 500
+
+        _remove_website_post_media_dir(current_user['id'], config_id, post_id)
+        return jsonify({'success': True, 'message': '帖子已删除'})
+    except Exception as e:
+        logger.error(f"删除网站帖子失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/websites/<int:config_id>/post-library/<int:post_id>/images/<filename>', methods=['GET'])
+def get_website_post_image(config_id, post_id, filename):
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        current_user = get_current_user()
+        entry = db.get_website_post_library_entry(post_id, config_id, current_user['id'])
+        if not entry:
+            return jsonify({'error': '帖子不存在'}), 404
+
+        normalized_filenames = set(entry.get('image_filenames') or [])
+        safe_filename = os.path.basename(filename)
+        if safe_filename not in normalized_filenames:
+            return jsonify({'error': '图片不存在'}), 404
+
+        image_dir = db.get_website_post_media_dir(current_user['id'], config_id, post_id)
+        return send_from_directory(image_dir, safe_filename)
+    except Exception as e:
+        logger.error(f"读取网站帖子图片失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/websites/<int:config_id>/post-schedules', methods=['GET'])
+def get_website_post_schedules(config_id):
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        current_user = get_current_user()
+        schedules = db.get_website_post_schedules(config_id, current_user['id'])
+        categories = db.get_website_post_categories(config_id, current_user['id'])
+        return jsonify({
+            'schedules': schedules,
+            'categories': categories,
+        })
+    except Exception as e:
+        logger.error(f"获取网站发帖计划失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/websites/<int:config_id>/post-schedules', methods=['POST'])
+def add_website_post_schedule(config_id):
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        current_user = get_current_user()
+        payload = _normalize_website_post_schedule_payload(request.get_json(silent=True) or {})
+        schedule_id = db.add_website_post_schedule(
+            website_id=config_id,
+            user_id=current_user['id'],
+            channel_id=payload['channel_id'],
+            category=payload['category'],
+            send_mode=payload['send_mode'],
+            interval_minutes=payload['interval_minutes'],
+            enabled=payload['enabled'],
+        )
+        if not schedule_id:
+            return jsonify({'error': '创建发帖计划失败'}), 500
+
+        schedule = next(
+            (
+                item for item in db.get_website_post_schedules(config_id, current_user['id'])
+                if int(item['id']) == int(schedule_id)
+            ),
+            None,
+        )
+        return jsonify({
+            'success': True,
+            'message': '发帖计划已添加',
+            'schedule': schedule,
+        })
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f"添加网站发帖计划失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/websites/<int:config_id>/post-schedules/<int:schedule_id>', methods=['PUT'])
+def update_website_post_schedule(config_id, schedule_id):
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        current_user = get_current_user()
+        payload = _normalize_website_post_schedule_payload(request.get_json(silent=True) or {})
+        success = db.update_website_post_schedule(
+            schedule_id=schedule_id,
+            website_id=config_id,
+            user_id=current_user['id'],
+            channel_id=payload['channel_id'],
+            category=payload['category'],
+            send_mode=payload['send_mode'],
+            interval_minutes=payload['interval_minutes'],
+            enabled=payload['enabled'],
+        )
+        if not success:
+            return jsonify({'error': '更新发帖计划失败'}), 500
+
+        schedule = next(
+            (
+                item for item in db.get_website_post_schedules(config_id, current_user['id'])
+                if int(item['id']) == int(schedule_id)
+            ),
+            None,
+        )
+        return jsonify({
+            'success': True,
+            'message': '发帖计划已更新',
+            'schedule': schedule,
+        })
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    except Exception as e:
+        logger.error(f"更新网站发帖计划失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/websites/<int:config_id>/post-schedules/<int:schedule_id>', methods=['DELETE'])
+def delete_website_post_schedule(config_id, schedule_id):
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        current_user = get_current_user()
+        if not db.delete_website_post_schedule(schedule_id, config_id, current_user['id']):
+            return jsonify({'error': '删除失败'}), 500
+        return jsonify({'success': True, 'message': '发帖计划已删除'})
+    except Exception as e:
+        logger.error(f"删除网站发帖计划失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/websites/<int:config_id>/rotation', methods=['GET'])

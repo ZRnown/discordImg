@@ -141,6 +141,34 @@ class KeywordModelMatchingTestCase(unittest.TestCase):
 
         self.assertIsNone(reason)
 
+    def test_partition_rules_ignore_empty_cells_within_a_row(self):
+        query = "I need Dior B30"
+        reason = find_query_keyword_match(
+            build_query_keyword_candidates(query),
+            "",
+            "",
+            query_text=query,
+            partition_match_enabled=True,
+            partition_match_rules=[["B", "", "30"]],
+        )
+
+        self.assertIsNotNone(reason)
+        self.assertEqual(reason["source"], "partition_row:0")
+
+    def test_partition_rules_allow_multiple_rows_as_or_conditions(self):
+        query = "Can you find an SP hoodie"
+        reason = find_query_keyword_match(
+            build_query_keyword_candidates(query),
+            "",
+            "",
+            query_text=query,
+            partition_match_enabled=True,
+            partition_match_rules=[["B", "30"], ["SP", "", "hood"]],
+        )
+
+        self.assertIsNotNone(reason)
+        self.assertEqual(reason["source"], "partition_row:1")
+
     def test_partition_rule_normalizer_keeps_matrix_shape_and_drops_empty_rows(self):
         self.assertEqual(
             normalize_partition_match_rules([
