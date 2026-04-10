@@ -331,20 +331,133 @@ export function WebsitePostingPanel({
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Card className="border-dashed">
-          <CardContent className="p-4 space-y-4">
-            <div className="flex items-center justify-between gap-3">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <ImageIcon className="w-4 h-4" />
-                  <span className="text-sm font-medium">帖子库</span>
-                  <Badge variant="secondary">{postCountLabel}</Badge>
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  每条帖子都可以带文字和图片，定时计划会按分类取这里的内容发送。
-                </div>
+      <Card className="border-dashed">
+        <CardContent className="p-4 space-y-5">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div className="space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <ImageIcon className="w-4 h-4" />
+                <span className="text-sm font-medium">帖子库</span>
+                <Badge variant="secondary">{postCountLabel}</Badge>
+                <Badge variant="outline">发送设置 {scheduleCountLabel}</Badge>
               </div>
+              <div className="text-xs text-muted-foreground">
+                在这里一起管理帖子内容和发送规则。频道、分类、发送方式、间隔时间都在这一块设置。
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Dialog open={scheduleDialogOpen} onOpenChange={(open) => {
+                if (!open) {
+                  resetScheduleDialog()
+                  return
+                }
+                setScheduleDialogOpen(true)
+              }}>
+                <DialogTrigger asChild>
+                  <Button size="sm" variant="outline" onClick={openCreateScheduleDialog}>
+                    <CalendarClock className="w-3 h-3 mr-1" />
+                    添加发送设置
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>{editingSchedule ? "编辑发送设置" : "添加发送设置"}</DialogTitle>
+                    <DialogDescription>
+                      这里设置这个网站要往哪个频道发、发哪个分类、多久发一次，以及随机还是顺序发送。
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <Label>频道 ID</Label>
+                      <Input
+                        value={scheduleForm.channel_id}
+                        onChange={event => setScheduleForm(prev => ({ ...prev, channel_id: event.target.value }))}
+                        placeholder="例如：1234567890123456789"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label>分类</Label>
+                      <Select
+                        value={scheduleForm.category || "__all__"}
+                        onValueChange={value => {
+                          setScheduleForm(prev => ({ ...prev, category: value === "__all__" ? "" : value }))
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="选择分类" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="__all__">全部分类</SelectItem>
+                          {categories.map(category => (
+                            <SelectItem key={category} value={category}>{category}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {categories.length === 0 ? (
+                        <div className="text-xs text-muted-foreground">
+                          还没有可选分类，先添加帖子时填上分类，之后这里就能直接选。
+                        </div>
+                      ) : null}
+                    </div>
+
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label>发送方式</Label>
+                        <Select
+                          value={scheduleForm.send_mode}
+                          onValueChange={value => setScheduleForm(prev => ({
+                            ...prev,
+                            send_mode: value as "random" | "sequential",
+                          }))}
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="random">随机发送</SelectItem>
+                            <SelectItem value="sequential">顺序发送</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="space-y-2">
+                        <Label>间隔分钟</Label>
+                        <Input
+                          type="number"
+                          min="1"
+                          value={scheduleForm.interval_minutes}
+                          onChange={event => setScheduleForm(prev => ({
+                            ...prev,
+                            interval_minutes: event.target.value,
+                          }))}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                      <div>
+                        <div className="text-sm font-medium">启用这条发送设置</div>
+                        <div className="text-xs text-muted-foreground">
+                          关闭后不会继续自动发帖
+                        </div>
+                      </div>
+                      <Switch
+                        checked={scheduleForm.enabled}
+                        onCheckedChange={checked => setScheduleForm(prev => ({ ...prev, enabled: checked }))}
+                      />
+                    </div>
+                  </div>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={resetScheduleDialog}>取消</Button>
+                    <Button onClick={handleSaveSchedule} disabled={savingSchedule}>
+                      {savingSchedule ? "保存中..." : "保存"}
+                    </Button>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
+
               <Dialog open={postDialogOpen} onOpenChange={(open) => {
                 if (!open) {
                   resetPostDialog()
@@ -362,7 +475,7 @@ export function WebsitePostingPanel({
                   <DialogHeader>
                     <DialogTitle>{editingPost ? "编辑帖子" : "添加帖子"}</DialogTitle>
                     <DialogDescription>
-                      分类可以为空。后面的定时发帖可以按分类筛选，也可以发全部分类。
+                      分类可以为空。发送设置里选中某个分类后，只会从这个分类的帖子里发送。
                     </DialogDescription>
                   </DialogHeader>
                   <div className="space-y-4">
@@ -456,7 +569,7 @@ export function WebsitePostingPanel({
                       <div>
                         <div className="text-sm font-medium">启用这条帖子</div>
                         <div className="text-xs text-muted-foreground">
-                          关闭后不会参与定时发帖
+                          关闭后不会进入自动发送候选
                         </div>
                       </div>
                       <Switch
@@ -474,237 +587,129 @@ export function WebsitePostingPanel({
                 </DialogContent>
               </Dialog>
             </div>
+          </div>
 
-            {categories.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                {categories.map(category => (
-                  <Badge key={category} variant="secondary">{category}</Badge>
+          {categories.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {categories.map(category => (
+                <Badge key={category} variant="secondary">{category}</Badge>
+              ))}
+            </div>
+          )}
+
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <Send className="w-4 h-4" />
+              <span className="text-sm font-medium">发送设置</span>
+              <Badge variant="secondary">{scheduleCountLabel}</Badge>
+            </div>
+
+            {loading ? (
+              <div className="text-sm text-muted-foreground">正在加载发送设置...</div>
+            ) : schedules.length === 0 ? (
+              <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+                还没有发送设置。就在这里添加频道、分类、发送方式和间隔时间。
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {schedules.map(schedule => (
+                  <div key={schedule.id} className="rounded-md border p-3 space-y-2">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-medium font-mono">{schedule.channel_id}</span>
+                          {schedule.category ? <Badge variant="outline">{schedule.category}</Badge> : <Badge variant="outline">全部分类</Badge>}
+                          <Badge variant="secondary">
+                            {schedule.send_mode === "sequential" ? "顺序" : "随机"}
+                          </Badge>
+                          <Badge variant={schedule.enabled ? "default" : "secondary"}>
+                            {schedule.enabled ? "启用" : "停用"}
+                          </Badge>
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          每 {schedule.interval_minutes} 分钟发一次
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          上次发送: {schedule.last_sent_at || "还没有发送过"}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <Button variant="outline" size="sm" onClick={() => openEditScheduleDialog(schedule)}>
+                          <Pencil className="w-3 h-3" />
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={() => void handleDeleteSchedule(schedule.id)}>
+                          <Trash2 className="w-3 h-3" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
                 ))}
               </div>
             )}
+          </div>
 
-            <div className="space-y-2">
-              {loading ? (
-                <div className="text-sm text-muted-foreground">正在加载帖子库...</div>
-              ) : posts.length === 0 ? (
-                <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-                  还没有帖子。先添加几条帖子，再给频道配置定时发帖。
-                </div>
-              ) : posts.map(post => (
-                <div key={post.id} className="rounded-md border p-3 space-y-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="space-y-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-sm font-medium">{post.title}</span>
-                        {post.category ? <Badge variant="outline">{post.category}</Badge> : null}
-                        <Badge variant={post.is_active ? "default" : "secondary"}>
-                          {post.is_active ? "启用" : "停用"}
-                        </Badge>
-                      </div>
-                      <div className="text-xs text-muted-foreground line-clamp-3 whitespace-pre-wrap break-words">
-                        {post.content || "仅图片帖子"}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        图片 {post.image_filenames?.length || 0} 张
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <Button variant="outline" size="sm" onClick={() => openEditPostDialog(post)}>
-                        <Pencil className="w-3 h-3" />
-                      </Button>
-                      <Button variant="outline" size="sm" onClick={() => void handleDeletePost(post.id)}>
-                        <Trash2 className="w-3 h-3" />
-                      </Button>
-                    </div>
-                  </div>
-
-                  {post.image_urls?.length > 0 && (
-                    <div className="flex flex-wrap gap-2">
-                      {post.image_urls.slice(0, 4).map((url, index) => (
-                        <img
-                          key={`${post.id}-${index}`}
-                          src={url}
-                          alt={`${post.title}-${index}`}
-                          className="h-16 w-16 rounded border object-cover"
-                        />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
+          <div className="space-y-3">
+            <div className="flex items-center gap-2">
+              <ImageIcon className="w-4 h-4" />
+              <span className="text-sm font-medium">帖子内容</span>
+              <Badge variant="secondary">{postCountLabel}</Badge>
             </div>
-          </CardContent>
-        </Card>
 
-        <Card className="border-dashed">
-          <CardContent className="p-4 space-y-4">
-            <div className="flex items-center justify-between gap-3">
-              <div className="space-y-1">
-                <div className="flex items-center gap-2">
-                  <CalendarClock className="w-4 h-4" />
-                  <span className="text-sm font-medium">定时发帖</span>
-                  <Badge variant="secondary">{scheduleCountLabel}</Badge>
-                </div>
-                <div className="text-xs text-muted-foreground">
-                  每条计划绑定一个频道和一个分类，可以随机发，也可以按顺序轮流发。
-                </div>
+            {loading ? (
+              <div className="text-sm text-muted-foreground">正在加载帖子库...</div>
+            ) : posts.length === 0 ? (
+              <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
+                还没有帖子。先添加几条帖子，发送设置会从这里按分类取内容。
               </div>
-              <Dialog open={scheduleDialogOpen} onOpenChange={(open) => {
-                if (!open) {
-                  resetScheduleDialog()
-                  return
-                }
-                setScheduleDialogOpen(true)
-              }}>
-                <DialogTrigger asChild>
-                  <Button size="sm" variant="outline" onClick={openCreateScheduleDialog}>
-                    <Plus className="w-3 h-3 mr-1" />
-                    添加计划
-                  </Button>
-                </DialogTrigger>
-                <DialogContent>
-                  <DialogHeader>
-                    <DialogTitle>{editingSchedule ? "编辑发帖计划" : "添加发帖计划"}</DialogTitle>
-                    <DialogDescription>
-                      这里不单独设置回复延迟，直接复用网站绑定发送账号的轮换冷却。
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="space-y-4">
-                    <div className="space-y-2">
-                      <Label>频道 ID</Label>
-                      <Input
-                        value={scheduleForm.channel_id}
-                        onChange={event => setScheduleForm(prev => ({ ...prev, channel_id: event.target.value }))}
-                        placeholder="例如：1234567890123456789"
-                      />
-                    </div>
-
-                    <div className="space-y-2">
-                      <Label>分类</Label>
-                      <Select
-                        value={scheduleForm.category || "__all__"}
-                        onValueChange={value => {
-                          setScheduleForm(prev => ({ ...prev, category: value === "__all__" ? "" : value }))
-                        }}
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="选择分类" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="__all__">全部分类</SelectItem>
-                          {categories.map(category => (
-                            <SelectItem key={category} value={category}>{category}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      {categories.length === 0 && (
-                        <div className="text-xs text-muted-foreground">
-                          还没有可选分类。你也可以先创建帖子后再回来选。
+            ) : (
+              <div className="space-y-2">
+                {posts.map(post => (
+                  <div key={post.id} className="rounded-md border p-3 space-y-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="space-y-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-medium">{post.title}</span>
+                          {post.category ? <Badge variant="outline">{post.category}</Badge> : null}
+                          <Badge variant={post.is_active ? "default" : "secondary"}>
+                            {post.is_active ? "启用" : "停用"}
+                          </Badge>
                         </div>
-                      )}
-                    </div>
-
-                    <div className="grid gap-4 md:grid-cols-2">
-                      <div className="space-y-2">
-                        <Label>发送方式</Label>
-                        <Select
-                          value={scheduleForm.send_mode}
-                          onValueChange={value => setScheduleForm(prev => ({
-                            ...prev,
-                            send_mode: value as "random" | "sequential",
-                          }))}
-                        >
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="random">随机发送</SelectItem>
-                            <SelectItem value="sequential">顺序发送</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label>间隔分钟</Label>
-                        <Input
-                          type="number"
-                          min="1"
-                          value={scheduleForm.interval_minutes}
-                          onChange={event => setScheduleForm(prev => ({
-                            ...prev,
-                            interval_minutes: event.target.value,
-                          }))}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between rounded-md border px-3 py-2">
-                      <div>
-                        <div className="text-sm font-medium">启用这条计划</div>
+                        <div className="text-xs text-muted-foreground line-clamp-3 whitespace-pre-wrap break-words">
+                          {post.content || "仅图片帖子"}
+                        </div>
                         <div className="text-xs text-muted-foreground">
-                          关闭后这条计划不会继续发帖
+                          图片 {post.image_filenames?.length || 0} 张
                         </div>
                       </div>
-                      <Switch
-                        checked={scheduleForm.enabled}
-                        onCheckedChange={checked => setScheduleForm(prev => ({ ...prev, enabled: checked }))}
-                      />
+                      <div className="flex items-center gap-2 shrink-0">
+                        <Button variant="outline" size="sm" onClick={() => openEditPostDialog(post)}>
+                          <Pencil className="w-3 h-3" />
+                        </Button>
+                        <Button variant="outline" size="sm" onClick={() => void handleDeletePost(post.id)}>
+                          <Trash2 className="w-3 h-3" />
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                  <DialogFooter>
-                    <Button variant="outline" onClick={resetScheduleDialog}>取消</Button>
-                    <Button onClick={handleSaveSchedule} disabled={savingSchedule}>
-                      {savingSchedule ? "保存中..." : "保存"}
-                    </Button>
-                  </DialogFooter>
-                </DialogContent>
-              </Dialog>
-            </div>
 
-            <div className="space-y-2">
-              {loading ? (
-                <div className="text-sm text-muted-foreground">正在加载发帖计划...</div>
-              ) : schedules.length === 0 ? (
-                <div className="rounded-md border border-dashed p-4 text-sm text-muted-foreground">
-                  还没有发帖计划。添加计划后，机器人会按频道和分类自动发帖。
-                </div>
-              ) : schedules.map(schedule => (
-                <div key={schedule.id} className="rounded-md border p-3 space-y-2">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="space-y-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <Send className="w-3 h-3" />
-                        <span className="text-sm font-medium font-mono">{schedule.channel_id}</span>
-                        {schedule.category ? <Badge variant="outline">{schedule.category}</Badge> : <Badge variant="outline">全部分类</Badge>}
-                        <Badge variant="secondary">
-                          {schedule.send_mode === "sequential" ? "顺序" : "随机"}
-                        </Badge>
-                        <Badge variant={schedule.enabled ? "default" : "secondary"}>
-                          {schedule.enabled ? "启用" : "停用"}
-                        </Badge>
+                    {post.image_urls?.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {post.image_urls.slice(0, 4).map((url, index) => (
+                          <img
+                            key={`${post.id}-${index}`}
+                            src={url}
+                            alt={`${post.title}-${index}`}
+                            className="h-16 w-16 rounded border object-cover"
+                          />
+                        ))}
                       </div>
-                      <div className="text-xs text-muted-foreground">
-                        每 {schedule.interval_minutes} 分钟发一次
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        上次发送: {schedule.last_sent_at || "还没有发送过"}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      <Button variant="outline" size="sm" onClick={() => openEditScheduleDialog(schedule)}>
-                        <Pencil className="w-3 h-3" />
-                      </Button>
-                      <Button variant="outline" size="sm" onClick={() => void handleDeleteSchedule(schedule.id)}>
-                        <Trash2 className="w-3 h-3" />
-                      </Button>
-                    </div>
+                    )}
                   </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }
