@@ -5217,7 +5217,7 @@ def search_similar_text():
             return jsonify({'error': 'Query is required'}), 400
 
         if _should_ignore_keyword_search_query(query):
-            logger.info(f'文字搜索忽略无效查询: "{query}"')
+            logger.debug(f'文字搜索忽略无效查询: "{query}"')
             return jsonify({
                 'success': True,
                 'query': query,
@@ -5243,10 +5243,10 @@ def search_similar_text():
         scoped_shops.discard('')
         scoped_shop_list = sorted(scoped_shops)
 
-        logger.info(f'文字搜索请求: "{query}", 限制: {limit}')
+        logger.debug(f'文字搜索请求: "{query}", 限制: {limit}')
 
         if user_id is not None and not scoped_shop_list:
-            logger.info(f'文字搜索被店铺权限拦截: user_id={user_id} 无可用店铺')
+            logger.debug(f'文字搜索被店铺权限拦截: user_id={user_id} 无可用店铺')
             return jsonify({
                 'success': True,
                 'query': query,
@@ -5482,7 +5482,7 @@ def search_similar_text():
 
             products = build_products_from_rows(rows)
 
-        logger.info(f'文字搜索完成，找到 {len(products)} 个商品')
+        logger.debug(f'文字搜索完成，找到 {len(products)} 个商品')
 
         return jsonify({
             'success': True,

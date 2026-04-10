@@ -11,6 +11,11 @@ import sqlite3
 import re
 from datetime import datetime
 from urllib.parse import quote
+
+try:
+    import discord.state as discord_state
+except Exception:
+    discord_state = None
 try:
     from config import config
 except ImportError:
@@ -80,6 +85,26 @@ except ImportError:
         get_effective_reply_languages,
         render_reply_template,
     )
+
+
+def _apply_discord_presence_compat_patch():
+    """兼容部分 discord.py-self 版本缺少 FakeClientPresence.hidden_activities 的问题。"""
+    fake_presence_cls = getattr(discord_state, 'FakeClientPresence', None) if discord_state else None
+    if fake_presence_cls is None or hasattr(fake_presence_cls, 'hidden_activities'):
+        return
+
+    @property
+    def hidden_activities(self):
+        all_session = getattr(getattr(self, '_state', None), 'all_session', None)
+        hidden = getattr(all_session, 'hidden_activities', None)
+        if hidden is None:
+            return ()
+        return hidden
+
+    setattr(fake_presence_cls, 'hidden_activities', hidden_activities)
+
+
+_apply_discord_presence_compat_patch()
 # 全局变量用于多账号机器人管理
 bot_clients = []
 bot_tasks = []
@@ -3441,7 +3466,7 @@ class DiscordBotClient(discord.Client):
 
         try:
             if not mark_message_as_processed(message.id, self.user_id):
-                logger.info(f"消息 {message.id} 已被其他(合法的)Bot处理，跳过")
+                logger.debug(f"消息 {message.id} 已被其他(合法的)Bot处理，跳过")
                 return
         except Exception as e:
             logger.error(f"消息去重检查失败: {e}")
@@ -3451,7 +3476,7 @@ class DiscordBotClient(discord.Client):
         if self._should_filter_message(message):
             return
 
-        logger.info(
+        logger.debug(
             f'📨 [接收] 账号:{self.user.name} | 频道:{message.channel.name} | 内容: "{self._message_preview(message, limit=50)}"'
         )
 
@@ -3910,7 +3935,7 @@ class DiscordBotClient(discord.Client):
                 all_products = result['products']
 
             if not all_products:
-                logger.info(f'关键词搜索无结果: {search_query}')
+                logger.debug(f'关键词搜索无结果: {search_query}')
                 return
 
             if self.user_shops:
@@ -3932,7 +3957,7 @@ class DiscordBotClient(discord.Client):
                     if filtered_products:
                         all_products = filtered_products
                     else:
-                        logger.info(f'关键词搜索结果被店铺权限过滤: {search_query}')
+                        logger.debug(f'关键词搜索结果被店铺权限过滤: {search_query}')
                         return
 
             query_normalized = _normalize_keyword_search_text(search_query)
@@ -3941,7 +3966,7 @@ class DiscordBotClient(discord.Client):
             # 检查频道是否绑定了网站配置（必须绑定才能回复）
             website_configs = await self.get_website_configs_by_channel_async(message.channel)
             if not website_configs:
-                logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过关键词回复")
+                logger.debug(f"频道 {message.channel.id} 未绑定网站配置，跳过关键词回复")
                 return
 
             def _match_products_for_languages(allowed_languages):
@@ -3982,7 +4007,7 @@ class DiscordBotClient(discord.Client):
                     reply_languages
                 )
                 if not matched_products:
-                    logger.info(
+                    logger.debug(
                         f'关键词搜索未命中网站 {website_config.get("id")}: '
                         f'query="{search_query}" | languages={",".join(reply_languages)}'
                     )
@@ -4002,7 +4027,7 @@ class DiscordBotClient(discord.Client):
                 )
 
             if not website_match_contexts:
-                logger.info(f'关键词搜索无精确匹配: {search_query}')
+                logger.debug(f'关键词搜索无精确匹配: {search_query}')
                 return
 
             db = None
@@ -4037,7 +4062,7 @@ class DiscordBotClient(discord.Client):
                 fallback_limit=legacy_global_keyword_match_limit,
             )
 
-            logger.info(
+            logger.debug(
                 f'关键词搜索成功: "{search_query}" -> 网站命中 {len(website_match_contexts)} 个, '
                 f'商品命中 {len(matched_product_ids)} 个'
             )
@@ -4048,7 +4073,7 @@ class DiscordBotClient(discord.Client):
                     reason = website_context['match_reasons'].get(product_id)
                     if not reason:
                         continue
-                    logger.info(
+                    logger.debug(
                         f'关键词命中: query="{search_query}" | 网站 {website_config.get("id")} '
                         f'| 语言 {",".join(website_context["reply_languages"])} | 商品 {product_id} '
                         f'| 命中词 "{reason.get("phrase")}" ({reason.get("source")})'

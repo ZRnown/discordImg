@@ -10,6 +10,9 @@ def _should_ignore_keyword_search_query(search_query):
     if not normalized_query:
         return True
 
+    if re.search(r'https?://|www\.', normalized_query, re.IGNORECASE):
+        return True
+
     if len(normalized_query) < 2:
         return True
 
