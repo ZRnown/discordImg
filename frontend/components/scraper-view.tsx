@@ -45,11 +45,17 @@ import {
   serializeProductTitleTranslations,
 } from "@/lib/product-title-translations"
 import {
+  appendProductPartitionMatchColumn,
+  appendProductPartitionMatchRow,
+  buildEditableProductPartitionMatchRules,
   buildInitialProductPartitionMatchRules,
   getProductPartitionColumnCount,
   getProductPartitionColumnLabel,
   normalizeProductPartitionMatchRules,
+  removeProductPartitionMatchColumn,
+  removeProductPartitionMatchRow,
   serializeProductPartitionMatchRules,
+  updateProductPartitionMatchCell,
 } from "@/lib/product-partition-match"
 
 type FailedDetail = {
@@ -687,7 +693,7 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
       ? getLegacyWebsiteReplySetting(editingProduct)
       : getWebsiteReplySetting(editingProduct, activeReplyTarget, availableWebsites)
 
-  const editingPartitionRules = normalizeProductPartitionMatchRules(editingProduct?.partitionMatchRules)
+  const editingPartitionRules = buildEditableProductPartitionMatchRules(editingProduct?.partitionMatchRules)
   const editingPartitionColumnCount = getProductPartitionColumnCount(editingPartitionRules)
 
   const updateEditingProductTitleFields = (field: 'title' | 'englishTitle', value: string) => {
@@ -731,18 +737,19 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
     if (!editingProduct) return
     setEditingProduct({
       ...editingProduct,
-      partitionMatchRules: normalizeProductPartitionMatchRules(nextRules),
+      partitionMatchRules: buildEditableProductPartitionMatchRules(nextRules),
     })
   }
 
   const toggleEditingPartitionMatch = (enabled: boolean) => {
     if (!editingProduct) return
-    const currentRules = normalizeProductPartitionMatchRules(editingProduct.partitionMatchRules)
+    const currentRules = buildEditableProductPartitionMatchRules(editingProduct.partitionMatchRules)
+    const currentNormalizedRules = normalizeProductPartitionMatchRules(editingProduct.partitionMatchRules)
     setEditingProduct({
       ...editingProduct,
       partitionMatchEnabled: enabled,
       partitionMatchRules: enabled
-        ? (currentRules.length > 0
+        ? (currentNormalizedRules.length > 0
           ? currentRules
           : buildInitialProductPartitionMatchRules(editingProduct.englishTitle))
         : currentRules,
@@ -750,66 +757,26 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
   }
 
   const updateEditingPartitionCell = (rowIndex: number, columnIndex: number, value: string) => {
-    const nextRules = editingPartitionRules.length > 0
-      ? editingPartitionRules.map(row => {
-        const nextRow = [...row]
-        while (nextRow.length < editingPartitionColumnCount) {
-          nextRow.push('')
-        }
-        return nextRow
-      })
-      : buildInitialProductPartitionMatchRules('')
-
-    while (nextRules.length <= rowIndex) {
-      nextRules.push(Array.from({ length: editingPartitionColumnCount }, () => ''))
-    }
-    while (nextRules[rowIndex].length <= columnIndex) {
-      nextRules[rowIndex].push('')
-    }
-    nextRules[rowIndex][columnIndex] = value
-    updateEditingPartitionRules(nextRules)
-  }
-
-  const addEditingPartitionRow = () => {
-    const nextRules = editingPartitionRules.map(row => {
-      const nextRow = [...row]
-      while (nextRow.length < editingPartitionColumnCount) {
-        nextRow.push('')
-      }
-      return nextRow
-    })
-    nextRules.push(Array.from({ length: editingPartitionColumnCount }, () => ''))
-    updateEditingPartitionRules(nextRules)
-  }
-
-  const removeEditingPartitionRow = (rowIndex: number) => {
-    const nextRules = editingPartitionRules
-      .filter((_, index) => index !== rowIndex)
-      .map(row => {
-        const nextRow = [...row]
-        while (nextRow.length < editingPartitionColumnCount) {
-          nextRow.push('')
-        }
-        return nextRow
-      })
-
     updateEditingPartitionRules(
-      nextRules.length > 0
-        ? nextRules
-        : [Array.from({ length: editingPartitionColumnCount }, () => '')],
+      updateProductPartitionMatchCell(editingPartitionRules, rowIndex, columnIndex, value),
     )
   }
 
-  const addEditingPartitionColumn = () => {
-    const nextRules = (editingPartitionRules.length > 0 ? editingPartitionRules : [['']])
-      .map(row => [...row, ''])
-    updateEditingPartitionRules(nextRules)
+  const addEditingPartitionRow = () => {
+    updateEditingPartitionRules(appendProductPartitionMatchRow(editingPartitionRules))
   }
 
-  const removeEditingPartitionColumn = () => {
-    if (editingPartitionColumnCount <= 1) return
+  const removeEditingPartitionRow = (rowIndex: number) => {
+    updateEditingPartitionRules(removeProductPartitionMatchRow(editingPartitionRules, rowIndex))
+  }
+
+  const addEditingPartitionColumn = () => {
+    updateEditingPartitionRules(appendProductPartitionMatchColumn(editingPartitionRules))
+  }
+
+  const removeEditingPartitionColumn = (columnIndex: number) => {
     updateEditingPartitionRules(
-      editingPartitionRules.map(row => row.slice(0, editingPartitionColumnCount - 1)),
+      removeProductPartitionMatchColumn(editingPartitionRules, columnIndex),
     )
   }
 
@@ -2131,15 +2098,6 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
                                     <Plus className="mr-1 size-3.5" />
                                     新增列
                                   </Button>
-                                  <Button
-                                    type="button"
-                                    variant="outline"
-                                    size="sm"
-                                    onClick={removeEditingPartitionColumn}
-                                    disabled={editingPartitionColumnCount <= 1}
-                                  >
-                                    删除最后一列
-                                  </Button>
                                   <Button type="button" variant="outline" size="sm" onClick={addEditingPartitionRow}>
                                     <Plus className="mr-1 size-3.5" />
                                     新增行
@@ -2152,8 +2110,22 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
                                   style={{ gridTemplateColumns: `repeat(${editingPartitionColumnCount}, minmax(0, 1fr)) 40px` }}
                                 >
                                   {Array.from({ length: editingPartitionColumnCount }).map((_, columnIndex) => (
-                                    <div key={`partition-header-${columnIndex}`} className="px-1 text-xs font-medium text-muted-foreground">
-                                      {getProductPartitionColumnLabel(columnIndex)}
+                                    <div
+                                      key={`partition-header-${columnIndex}`}
+                                      className="flex items-center justify-between gap-1 px-1 text-xs font-medium text-muted-foreground"
+                                    >
+                                      <span>{getProductPartitionColumnLabel(columnIndex)}</span>
+                                      <Button
+                                        type="button"
+                                        variant="ghost"
+                                        size="icon"
+                                        className="h-5 w-5"
+                                        onClick={() => removeEditingPartitionColumn(columnIndex)}
+                                        disabled={editingPartitionColumnCount <= 1}
+                                        aria-label={`删除${getProductPartitionColumnLabel(columnIndex)}`}
+                                      >
+                                        <Trash2 className="size-3.5" />
+                                      </Button>
                                     </div>
                                   ))}
                                   <div />

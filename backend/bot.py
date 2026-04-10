@@ -138,10 +138,11 @@ def _clear_cached_auto_reply_thread_id(message):
 
 
 def build_discord_client_runtime_options(intents=None):
+    chunk_guilds_at_startup = bool(
+        getattr(config, 'DISCORD_CHUNK_GUILDS_AT_STARTUP', False)
+    )
     options = {
-        'chunk_guilds_at_startup': bool(
-            getattr(config, 'DISCORD_CHUNK_GUILDS_AT_STARTUP', False)
-        ),
+        'chunk_guilds_at_startup': chunk_guilds_at_startup,
         'guild_subscriptions': bool(
             getattr(config, 'DISCORD_GUILD_SUBSCRIPTIONS', False)
         ),
@@ -162,6 +163,11 @@ def build_discord_client_runtime_options(intents=None):
             options['member_cache_flags'] = member_cache_flags_cls.none()
         except Exception:
             pass
+
+    # discord.py/self 在无成员缓存时不能开启 startup chunking。
+    # 这里做一次兜底，避免配置误填后机器人整体无法启动。
+    if options.get('chunk_guilds_at_startup') and 'member_cache_flags' in options:
+        options['chunk_guilds_at_startup'] = False
 
     return options
 
@@ -836,6 +842,22 @@ def get_all_cooldowns():
             continue
 
     return cooldowns
+
+
+def _resolve_cooldown_channel_id(channel_like):
+    """把子区/线程消息的冷却统一归到主频道，便于前端按绑定频道展示"""
+    if channel_like is None:
+        return ""
+
+    if isinstance(channel_like, (str, int)):
+        return str(channel_like)
+
+    parent_id = getattr(channel_like, "parent_id", None)
+    if parent_id is not None:
+        return str(parent_id)
+
+    channel_id = getattr(channel_like, "id", channel_like)
+    return str(channel_id)
 
 def get_account_cooldown_remaining(account_id, channel_id, interval):
     """返回账号在频道中的剩余冷却秒数"""
@@ -2427,10 +2449,12 @@ class DiscordBotClient(discord.Client):
                     min_delay = global_min_delay
                     max_delay = global_max_delay
 
+                cooldown_channel_id = _resolve_cooldown_channel_id(message.channel)
+
                 dispatch_plan = build_sender_dispatch_plan(
                     db_sender_ids=db_sender_ids,
                     valid_senders=valid_senders,
-                    channel_id=message.channel.id,
+                    channel_id=cooldown_channel_id,
                     rotation_interval=rotation_interval,
                     rotation_enabled=rotation_enabled,
                     skip_sender_cooldown=skip_sender_cooldown,
@@ -2455,7 +2479,7 @@ class DiscordBotClient(discord.Client):
                         dispatch_plan = build_sender_dispatch_plan(
                             db_sender_ids=db_sender_ids,
                             valid_senders=valid_senders,
-                            channel_id=message.channel.id,
+                            channel_id=cooldown_channel_id,
                             rotation_interval=rotation_interval,
                             rotation_enabled=rotation_enabled,
                             skip_sender_cooldown=skip_sender_cooldown,
@@ -2733,7 +2757,7 @@ class DiscordBotClient(discord.Client):
                                     apply_reply_mode_cooldown(
                                         reply_mode,
                                         [target_client.account_id],
-                                        message.channel.id,
+                                        cooldown_channel_id,
                                     )
     
                                 reply_preview = (response_content or '').replace('\n', ' ').strip()
@@ -2818,7 +2842,7 @@ class DiscordBotClient(discord.Client):
                                     apply_reply_mode_cooldown(
                                         reply_mode,
                                         [target_client.account_id],
-                                        message.channel.id,
+                                        cooldown_channel_id,
                                     )
                                 sent_any = True
     
@@ -2861,7 +2885,7 @@ class DiscordBotClient(discord.Client):
                     apply_reply_mode_cooldown(
                         reply_mode,
                         selected_sender_ids or successful_sender_ids,
-                        message.channel.id,
+                        cooldown_channel_id,
                     )
 
         except Exception as e:

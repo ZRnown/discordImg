@@ -7,36 +7,82 @@ from backend.bot import (
     MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS,
     _auto_reply_thread_ids,
     _get_image_recognition_request_timeout_seconds,
+    _resolve_cooldown_channel_id,
     resolve_reply_target_channel,
 )
 
 
-def test_image_recognition_request_timeout_tracks_stage_timeout():
-    assert _get_image_recognition_request_timeout_seconds(
-        MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS
-    ) == 85.0
+class BotTimeoutHelpersTestCase(unittest.TestCase):
+    def test_image_recognition_request_timeout_tracks_stage_timeout(self):
+        self.assertEqual(
+            _get_image_recognition_request_timeout_seconds(
+                MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS
+            ),
+            85.0,
+        )
 
+    def test_image_recognition_request_timeout_never_drops_below_floor(self):
+        self.assertEqual(
+            _get_image_recognition_request_timeout_seconds(20),
+            30.0,
+        )
 
-def test_image_recognition_request_timeout_never_drops_below_floor():
-    assert _get_image_recognition_request_timeout_seconds(20) == 30.0
+    def test_build_discord_client_runtime_options_disable_startup_chunking_by_default(
+        self,
+    ):
+        with patch.object(
+            bot_module.config,
+            "DISCORD_CHUNK_GUILDS_AT_STARTUP",
+            True,
+            create=True,
+        ), patch.object(
+            bot_module.config,
+            "DISCORD_GUILD_SUBSCRIPTIONS",
+            False,
+            create=True,
+        ), patch.object(
+            bot_module.config,
+            "DISCORD_HEARTBEAT_TIMEOUT",
+            120.0,
+            create=True,
+        ), patch.object(
+            bot_module.config,
+            "DISCORD_MAX_MESSAGES",
+            200,
+            create=True,
+        ):
+            options = bot_module.build_discord_client_runtime_options()
 
+            self.assertFalse(options["chunk_guilds_at_startup"])
+            self.assertFalse(options["guild_subscriptions"])
+            self.assertEqual(options["heartbeat_timeout"], 120.0)
+            self.assertEqual(options["max_messages"], 200)
+            if hasattr(bot_module.discord, "MemberCacheFlags"):
+                self.assertEqual(
+                    options["member_cache_flags"],
+                    bot_module.discord.MemberCacheFlags.none(),
+                )
 
-def test_build_discord_client_runtime_options_disable_startup_chunking_by_default():
-    options = bot_module.build_discord_client_runtime_options()
+    def test_get_discord_start_delay_seconds_uses_configured_stagger(self):
+        with patch.object(
+            bot_module.config,
+            "DISCORD_STARTUP_STAGGER_SECONDS",
+            1.75,
+            create=True,
+        ):
+            self.assertEqual(bot_module.get_discord_start_delay_seconds(0), 0.0)
+            self.assertEqual(bot_module.get_discord_start_delay_seconds(1), 1.75)
+            self.assertEqual(bot_module.get_discord_start_delay_seconds(3), 5.25)
 
-    assert options["chunk_guilds_at_startup"] is False
-    assert options["guild_subscriptions"] is False
-    assert options["heartbeat_timeout"] == 120.0
-    assert options["max_messages"] == 200
-    if hasattr(bot_module.discord, "MemberCacheFlags"):
-        assert options["member_cache_flags"] == bot_module.discord.MemberCacheFlags.none()
+    def test_resolve_cooldown_channel_id_prefers_parent_thread_channel(self):
+        thread_channel = SimpleNamespace(id=555001, parent_id=123001)
 
+        self.assertEqual(_resolve_cooldown_channel_id(thread_channel), "123001")
 
-def test_get_discord_start_delay_seconds_uses_configured_stagger():
-    with patch.object(bot_module.config, "DISCORD_STARTUP_STAGGER_SECONDS", 1.75, create=True):
-        assert bot_module.get_discord_start_delay_seconds(0) == 0.0
-        assert bot_module.get_discord_start_delay_seconds(1) == 1.75
-        assert bot_module.get_discord_start_delay_seconds(3) == 5.25
+    def test_resolve_cooldown_channel_id_falls_back_to_channel_id(self):
+        root_channel = SimpleNamespace(id=123001, parent_id=None)
+
+        self.assertEqual(_resolve_cooldown_channel_id(root_channel), "123001")
 
 
 class _SlottedMessage:
