@@ -48,7 +48,7 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { WebsitePostingPanel } from "@/components/website-posting-panel"
 import { toast } from "sonner"
-import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit, Clock, ChevronDown, ChevronUp } from "lucide-react"
+import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit, Clock } from "lucide-react"
 
 type NumericRangeFilterValue = {
   keyword: string
@@ -302,7 +302,6 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
   const [websiteChannels, setWebsiteChannels] = useState<{[key: number]: string[]}>({})
   const [channelInputs, setChannelInputs] = useState<{[key: number]: string}>({})
   const [channelToRemove, setChannelToRemove] = useState<{webId: number, chanId: string} | null>(null)
-  const [expandedWebsitePostingPanels, setExpandedWebsitePostingPanels] = useState<{[key: number]: boolean}>({})
   const [replyModes, setReplyModes] = useState<{[key: number]: string}>({})
   const [pendingReplyModes, setPendingReplyModes] = useState<{[key: number]: string}>({})
   const [replyModeSaving, setReplyModeSaving] = useState<{[key: number]: boolean}>({})
@@ -410,13 +409,6 @@ const formatWebsiteForEdit = (website: any) => ({
         : website
     )))
     setWebsiteKeywordMatchInputs(prev => ({ ...prev, [websiteId]: value }))
-  }
-
-  const toggleWebsitePostingPanel = (websiteId: number) => {
-    setExpandedWebsitePostingPanels(prev => ({
-      ...prev,
-      [websiteId]: !prev[websiteId],
-    }))
   }
 
   const mergeIncomingSettings = (prev: any, data: any) => {
@@ -3299,19 +3291,30 @@ const formatWebsiteForEdit = (website: any) => ({
                       </div>
 
                       <div className="flex items-center gap-2 self-start lg:self-auto">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => toggleWebsitePostingPanel(website.id)}
-                          className="gap-1"
-                        >
-                          {expandedWebsitePostingPanels[website.id] ? (
-                            <ChevronUp className="w-4 h-4" />
-                          ) : (
-                            <ChevronDown className="w-4 h-4" />
-                          )}
-                          <span>{expandedWebsitePostingPanels[website.id] ? '收起帖子库' : '帖子库与发送设置'}</span>
-                        </Button>
+                        <Dialog>
+                          <DialogTrigger asChild>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                            >
+                              帖子库与发送方式
+                            </Button>
+                          </DialogTrigger>
+                          <DialogContent className="max-h-[90vh] overflow-hidden p-0 sm:max-w-6xl">
+                            <DialogHeader className="border-b px-6 py-5">
+                              <DialogTitle>{website.display_name} 帖子库与发送方式</DialogTitle>
+                              <DialogDescription>
+                                在这个弹窗里一起维护帖子内容，以及这些帖子要往哪个频道、按什么方式发送。
+                              </DialogDescription>
+                            </DialogHeader>
+                            <div className="max-h-[calc(90vh-96px)] overflow-y-auto px-6 py-5">
+                              <WebsitePostingPanel
+                                website={website}
+                                onChanged={() => fetchWebsites(true)}
+                              />
+                            </div>
+                          </DialogContent>
+                        </Dialog>
                         {/* 只有管理员可以编辑/删除网站定义 */}
                         {currentUser?.role === 'admin' && (
                           <div className="flex gap-2">
@@ -3368,13 +3371,6 @@ const formatWebsiteForEdit = (website: any) => ({
                         <div className="text-base font-semibold leading-none mt-1">{website.stat_posts_daily_total || 0}</div>
                       </div>
                     </div>
-
-                    {expandedWebsitePostingPanels[website.id] ? (
-                      <WebsitePostingPanel
-                        website={website}
-                        onChanged={() => fetchWebsites(true)}
-                      />
-                    ) : null}
 
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4" data-tutorial="accounts-website-overrides">
                       <div className="space-y-2" data-tutorial="accounts-website-threshold">
