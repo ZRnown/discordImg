@@ -304,6 +304,177 @@ def _coerce_float(value):
         return None
 
 
+def _build_auto_reply_thread_name(message):
+    author_name = str(getattr(getattr(message, 'author', None), 'name', '') or '').strip()
+    content = re.sub(r'\s+', ' ', str(getattr(message, 'content', '') or '')).strip()
+    if content:
+        base_name = content[:80]
+    elif author_name:
+        base_name = f"{author_name} 的消息"
+    else:
+        base_name = f"自动回复-{getattr(message, 'id', 'thread')}"
+
+    base_name = base_name.strip()[:95].strip()
+    return base_name or f"自动回复-{getattr(message, 'id', 'thread')}"
+
+
+async def _resolve_client_channel(target_client, channel_id):
+    normalized_channel_id = _coerce_int(channel_id, None)
+    if normalized_channel_id is None or target_client is None:
+        return None
+
+    try:
+        channel = target_client.get_channel(normalized_channel_id)
+    except Exception:
+        channel = None
+    if channel is not None:
+        return channel
+
+    fetch_channel = getattr(target_client, 'fetch_channel', None)
+    if callable(fetch_channel):
+        try:
+            return await fetch_channel(normalized_channel_id)
+        except Exception as exc:
+            logger.warning(f"获取子分区频道失败: {normalized_channel_id} | {exc}")
+    return None
+
+
+async def _resolve_message_reply_channel(target_client, message):
+    if message is None:
+        return None
+    message_channel = getattr(message, "channel", None)
+    message_channel_id = getattr(message_channel, "id", None)
+    return await _resolve_client_channel(target_client, message_channel_id)
+
+
+async def _resolve_message_thread_id(message):
+    if message is None:
+        return None
+
+    message_thread_id = getattr(getattr(message, 'thread', None), 'id', None)
+    if message_thread_id is not None:
+        return message_thread_id
+
+    message_flags = getattr(message, 'flags', None)
+    has_thread = bool(getattr(message_flags, 'has_thread', False))
+    fetch_thread = getattr(message, 'fetch_thread', None)
+    if not has_thread or not callable(fetch_thread):
+        return None
+
+    try:
+        fetched_thread = await fetch_thread()
+    except Exception as exc:
+        logger.warning(f"获取消息关联子分区失败: {getattr(message, 'id', None)} | {exc}")
+        return None
+
+    return getattr(fetched_thread, 'id', None)
+
+
+async def _resolve_existing_reply_thread_after_create_failure(
+    target_client,
+    target_channel,
+    message,
+):
+    message_thread_id = await _resolve_message_thread_id(message)
+    if message_thread_id is not None:
+        existing_thread = await _resolve_client_channel(target_client, message_thread_id)
+        if existing_thread is not None:
+            _store_cached_auto_reply_thread_id(message, message_thread_id)
+            return existing_thread
+
+    fetch_message = getattr(target_channel, 'fetch_message', None)
+    message_id = getattr(message, 'id', None)
+    if callable(fetch_message) and message_id is not None:
+        try:
+            refreshed_message = await fetch_message(message_id)
+        except Exception as exc:
+            logger.warning(f"刷新消息以获取子分区失败: {message_id} | {exc}")
+        else:
+            refreshed_thread_id = await _resolve_message_thread_id(refreshed_message)
+            if refreshed_thread_id is not None:
+                existing_thread = await _resolve_client_channel(target_client, refreshed_thread_id)
+                if existing_thread is not None:
+                    _store_cached_auto_reply_thread_id(message, refreshed_thread_id)
+                    return existing_thread
+
+    active_threads = getattr(target_channel, 'threads', None)
+    if active_threads and message_id is not None:
+        for thread in active_threads:
+            starter_message_id = getattr(getattr(thread, 'starter_message', None), 'id', None)
+            if starter_message_id == message_id:
+                thread_id = getattr(thread, 'id', None)
+                if thread_id is not None:
+                    _store_cached_auto_reply_thread_id(message, thread_id)
+                return thread
+
+    return None
+
+
+async def resolve_reply_target_channel(
+    target_client,
+    target_channel,
+    message,
+    thread_reply_enabled=False,
+):
+    if not thread_reply_enabled or target_channel is None or message is None:
+        return target_channel, False
+
+    if getattr(target_channel, 'parent_id', None) is not None:
+        target_thread_id = getattr(target_channel, 'id', None)
+        if target_thread_id is not None:
+            _store_cached_auto_reply_thread_id(message, target_thread_id)
+        return target_channel, True
+
+    cached_thread_id = _get_cached_auto_reply_thread_id(message)
+    if cached_thread_id is not None:
+        cached_thread = await _resolve_client_channel(target_client, cached_thread_id)
+        if cached_thread is not None:
+            return cached_thread, True
+        _clear_cached_auto_reply_thread_id(message)
+
+    current_channel = getattr(message, 'channel', None)
+    current_channel_parent_id = getattr(current_channel, 'parent_id', None)
+    if current_channel_parent_id is not None:
+        current_thread = await _resolve_client_channel(target_client, getattr(current_channel, 'id', None))
+        if current_thread is not None:
+            current_thread_id = getattr(current_thread, 'id', None)
+            if current_thread_id is not None:
+                _store_cached_auto_reply_thread_id(message, current_thread_id)
+            return current_thread, True
+
+    message_thread_id = await _resolve_message_thread_id(message)
+    if message_thread_id is not None:
+        existing_thread = await _resolve_client_channel(target_client, message_thread_id)
+        if existing_thread is not None:
+            _store_cached_auto_reply_thread_id(message, message_thread_id)
+            return existing_thread, True
+
+    create_thread = getattr(target_channel, 'create_thread', None)
+    if not callable(create_thread):
+        return target_channel, False
+
+    try:
+        created_thread = await create_thread(
+            name=_build_auto_reply_thread_name(message),
+            message=message,
+        )
+        created_thread_id = getattr(created_thread, 'id', None)
+        if created_thread_id is not None:
+            _store_cached_auto_reply_thread_id(message, created_thread_id)
+        return created_thread, True
+    except Exception as exc:
+        if getattr(exc, 'code', None) == 160004:
+            existing_thread = await _resolve_existing_reply_thread_after_create_failure(
+                target_client,
+                target_channel,
+                message,
+            )
+            if existing_thread is not None:
+                return existing_thread, True
+        logger.warning(f"创建子分区失败，回退频道直发: {exc}")
+        return target_channel, False
+
+
 def _build_keyword_window_key(user_id, website_id, guild_id):
     return (
         _coerce_int(user_id, 0),
@@ -322,6 +493,39 @@ def _tokenize_keyword_search_text(normalized_text: str):
 
 def _build_query_keyword_candidates(normalized_text: str):
     return _shared_build_query_keyword_candidates(normalized_text)
+
+
+def _resolve_forum_parent_channel_id(channel_like):
+    if channel_like is None or not hasattr(channel_like, 'id'):
+        return None
+
+    parent_id = getattr(channel_like, 'parent_id', None)
+    if parent_id is None:
+        parent = getattr(channel_like, 'parent', None)
+        parent_id = getattr(parent, 'id', None)
+    return parent_id
+
+
+def filter_forum_channel_configs_for_message(
+    channel_like,
+    direct_configs,
+    parent_configs,
+    settings_map,
+):
+    parent_id = _resolve_forum_parent_channel_id(channel_like)
+    if parent_id is None:
+        return list(direct_configs or parent_configs or [])
+
+    if direct_configs:
+        return list(direct_configs)
+
+    filtered_configs = []
+    for config in parent_configs or []:
+        website_id = config.get('id')
+        website_settings = settings_map.get(website_id) or {}
+        if _coerce_bool(website_settings.get('forum_post_reply_enabled', 0), False):
+            filtered_configs.append(config)
+    return filtered_configs
 
 
 def _build_product_keyword_variants(raw_value: str):
@@ -2333,7 +2537,27 @@ class DiscordBotClient(discord.Client):
             except ImportError:
                 from .database import db
 
-            return db.get_website_configs_by_channel(str(channel_id), self.user_id)
+            lookup_ids = self._resolve_channel_lookup_ids(channel_id)
+            if len(lookup_ids) <= 1:
+                return db.get_website_configs_by_channel(lookup_ids, self.user_id)
+
+            direct_configs = db.get_website_configs_by_channel(lookup_ids[0], self.user_id)
+            parent_configs = db.get_website_configs_by_channel(lookup_ids[1], self.user_id)
+            if direct_configs:
+                return direct_configs
+            if not parent_configs:
+                return []
+
+            settings_map = db.get_user_website_settings_map(
+                self.user_id,
+                [config.get('id') for config in parent_configs if config.get('id') is not None],
+            )
+            return filter_forum_channel_configs_for_message(
+                channel_id,
+                direct_configs=direct_configs,
+                parent_configs=parent_configs,
+                settings_map=settings_map,
+            )
         except Exception as e:
             logger.error(f"获取频道网站配置失败: {e}")
             return []
@@ -2355,8 +2579,36 @@ class DiscordBotClient(discord.Client):
             except ImportError:
                 from .database import db
 
-            return await asyncio.get_event_loop().run_in_executor(
-                None, db.get_website_configs_by_channel, str(channel_id), self.user_id
+            lookup_ids = self._resolve_channel_lookup_ids(channel_id)
+            if len(lookup_ids) <= 1:
+                return await asyncio.get_event_loop().run_in_executor(
+                    None, db.get_website_configs_by_channel, lookup_ids, self.user_id
+                )
+
+            direct_configs = await asyncio.get_event_loop().run_in_executor(
+                None, db.get_website_configs_by_channel, lookup_ids[0], self.user_id
+            )
+            parent_configs = await asyncio.get_event_loop().run_in_executor(
+                None, db.get_website_configs_by_channel, lookup_ids[1], self.user_id
+            )
+            if direct_configs:
+                return direct_configs
+            if not parent_configs:
+                return []
+
+            website_ids = [
+                config.get('id')
+                for config in parent_configs
+                if config.get('id') is not None
+            ]
+            settings_map = await asyncio.get_event_loop().run_in_executor(
+                None, db.get_user_website_settings_map, self.user_id, website_ids
+            )
+            return filter_forum_channel_configs_for_message(
+                channel_id,
+                direct_configs=direct_configs,
+                parent_configs=parent_configs,
+                settings_map=settings_map,
             )
         except Exception as e:
             logger.error(f"异步获取频道网站配置失败: {e}")
