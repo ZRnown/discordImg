@@ -6,6 +6,7 @@ from backend import bot as bot_module
 from backend.bot import (
     MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS,
     _auto_reply_thread_ids,
+    filter_forum_channel_configs_for_message,
     _get_image_recognition_request_timeout_seconds,
     _resolve_message_reply_channel,
     _resolve_cooldown_channel_id,
@@ -91,6 +92,45 @@ class BotTimeoutHelpersTestCase(unittest.TestCase):
         )
 
         self.assertEqual(lookup_ids, ["555001", "123001"])
+
+    def test_forum_parent_configs_require_forum_post_reply_toggle(self):
+        channel = SimpleNamespace(id=555001, parent_id=123001)
+        parent_configs = [{"id": 7, "name": "oopbuy"}]
+
+        filtered = filter_forum_channel_configs_for_message(
+            channel,
+            direct_configs=[],
+            parent_configs=parent_configs,
+            settings_map={7: {"forum_post_reply_enabled": 0}},
+        )
+
+        self.assertEqual(filtered, [])
+
+    def test_direct_thread_binding_is_not_blocked_by_forum_post_reply_toggle(self):
+        channel = SimpleNamespace(id=555001, parent_id=123001)
+        direct_configs = [{"id": 8, "name": "kakobuy"}]
+
+        filtered = filter_forum_channel_configs_for_message(
+            channel,
+            direct_configs=direct_configs,
+            parent_configs=[],
+            settings_map={8: {"forum_post_reply_enabled": 0}},
+        )
+
+        self.assertEqual(filtered, direct_configs)
+
+    def test_forum_parent_configs_pass_when_forum_post_reply_enabled(self):
+        channel = SimpleNamespace(id=555001, parent_id=123001)
+        parent_configs = [{"id": 9, "name": "hipobuy"}]
+
+        filtered = filter_forum_channel_configs_for_message(
+            channel,
+            direct_configs=[],
+            parent_configs=parent_configs,
+            settings_map={9: {"forum_post_reply_enabled": 1}},
+        )
+
+        self.assertEqual(filtered, parent_configs)
 
 
 class _SlottedMessage:

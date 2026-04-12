@@ -816,6 +816,7 @@ class Database:
                     keyword_reply_batch_size INTEGER DEFAULT 0,
                     keyword_batch_dispatch_mode TEXT DEFAULT 'immediate',
                     thread_reply_enabled INTEGER DEFAULT 0,
+                    forum_post_reply_enabled INTEGER DEFAULT 0,
                     keyword_match_limit INTEGER DEFAULT NULL,
                     message_filters TEXT DEFAULT '[]',
                     image_similarity_threshold REAL DEFAULT NULL,
@@ -858,6 +859,10 @@ class Database:
                 pass
             try:
                 cursor.execute('ALTER TABLE user_website_settings ADD COLUMN thread_reply_enabled INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute('ALTER TABLE user_website_settings ADD COLUMN forum_post_reply_enabled INTEGER DEFAULT 0')
             except sqlite3.OperationalError:
                 pass
             try:
@@ -3493,6 +3498,7 @@ class Database:
             'keyword_reply_batch_size': 0,
             'keyword_batch_dispatch_mode': 'immediate',
             'thread_reply_enabled': 0,
+            'forum_post_reply_enabled': 0,
             'keyword_match_limit': None,
             'message_filters': '[]',
             'image_similarity_threshold': None,
@@ -3541,6 +3547,7 @@ class Database:
             'keyword_reply_batch_size': row['keyword_reply_batch_size'] or 0,
             'keyword_batch_dispatch_mode': keyword_batch_dispatch_mode,
             'thread_reply_enabled': 1 if int(row['thread_reply_enabled'] or 0) else 0,
+            'forum_post_reply_enabled': 1 if int(row['forum_post_reply_enabled'] or 0) else 0,
             'keyword_match_limit': row['keyword_match_limit'],
             'message_filters': row['message_filters'],
             'image_similarity_threshold': row['image_similarity_threshold'],
@@ -3555,7 +3562,8 @@ class Database:
                 cursor = conn.cursor()
                 cursor.execute('''
                     SELECT rotation_interval, rotation_enabled, reply_mode, keyword_reply_interval, keyword_reply_batch_size,
-                           keyword_batch_dispatch_mode, thread_reply_enabled, keyword_match_limit, message_filters,
+                           keyword_batch_dispatch_mode, thread_reply_enabled, forum_post_reply_enabled,
+                           keyword_match_limit, message_filters,
                            image_similarity_threshold, reply_min_delay, reply_max_delay
                     FROM user_website_settings
                     WHERE user_id = ? AND website_id = ?
@@ -3575,6 +3583,7 @@ class Database:
                 query = '''
                     SELECT website_id, rotation_interval, rotation_enabled, reply_mode, keyword_reply_interval,
                            keyword_reply_batch_size, keyword_batch_dispatch_mode, thread_reply_enabled,
+                           forum_post_reply_enabled,
                            keyword_match_limit, message_filters, image_similarity_threshold,
                            reply_min_delay, reply_max_delay
                     FROM user_website_settings
@@ -3657,6 +3666,7 @@ class Database:
         keyword_reply_batch_size: int = None,
         keyword_batch_dispatch_mode: str = None,
         thread_reply_enabled: int = None,
+        forum_post_reply_enabled: int = None,
         keyword_match_limit: int = None,
     ) -> bool:
         """更新用户的网站轮换设置"""
@@ -3672,6 +3682,9 @@ class Database:
                 normalized_thread_reply_enabled = None
                 if thread_reply_enabled is not None:
                     normalized_thread_reply_enabled = 1 if int(thread_reply_enabled) else 0
+                normalized_forum_post_reply_enabled = None
+                if forum_post_reply_enabled is not None:
+                    normalized_forum_post_reply_enabled = 1 if int(forum_post_reply_enabled) else 0
                 if normalized_reply_mode is None:
                     if rotation_enabled == 0 and (keyword_reply_batch_size or 0) > 0:
                         normalized_reply_mode = 'keyword'
@@ -3719,6 +3732,9 @@ class Database:
                     if normalized_thread_reply_enabled is not None:
                         updates.append('thread_reply_enabled = ?')
                         params.append(normalized_thread_reply_enabled)
+                    if normalized_forum_post_reply_enabled is not None:
+                        updates.append('forum_post_reply_enabled = ?')
+                        params.append(normalized_forum_post_reply_enabled)
                     if keyword_match_limit is not None:
                         updates.append('keyword_match_limit = ?')
                         params.append(keyword_match_limit)
@@ -3743,9 +3759,10 @@ class Database:
                             keyword_reply_batch_size,
                             keyword_batch_dispatch_mode,
                             thread_reply_enabled,
+                            forum_post_reply_enabled,
                             keyword_match_limit
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         user_id,
                         website_id,
@@ -3758,6 +3775,7 @@ class Database:
                         keyword_reply_batch_size if keyword_reply_batch_size is not None else 0,
                         normalized_keyword_batch_dispatch_mode or 'immediate',
                         normalized_thread_reply_enabled if normalized_thread_reply_enabled is not None else 0,
+                        normalized_forum_post_reply_enabled if normalized_forum_post_reply_enabled is not None else 0,
                         keyword_match_limit,
                     ))
 

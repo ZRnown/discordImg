@@ -2098,6 +2098,7 @@ def get_website_configs():
             config['keyword_reply_batch_size'] = effective_settings['keyword_reply_batch_size']
             config['keyword_batch_dispatch_mode'] = effective_settings['keyword_batch_dispatch_mode']
             config['thread_reply_enabled'] = user_settings.get('thread_reply_enabled', 0)
+            config['forum_post_reply_enabled'] = user_settings.get('forum_post_reply_enabled', 0)
             config['keyword_match_limit'] = user_settings.get('keyword_match_limit')
             config['reply_min_delay'] = user_settings.get('reply_min_delay')
             config['reply_max_delay'] = user_settings.get('reply_max_delay')
@@ -2497,6 +2498,7 @@ def get_website_rotation(config_id):
             'keyword_reply_batch_size': effective_settings['keyword_reply_batch_size'],
             'keyword_batch_dispatch_mode': effective_settings['keyword_batch_dispatch_mode'],
             'thread_reply_enabled': settings.get('thread_reply_enabled', 0),
+            'forum_post_reply_enabled': settings.get('forum_post_reply_enabled', 0),
             'keyword_match_limit': settings.get('keyword_match_limit'),
             'reply_min_delay': settings.get('reply_min_delay'),
             'reply_max_delay': settings.get('reply_max_delay'),
@@ -2530,12 +2532,14 @@ def update_website_rotation(config_id):
         keyword_reply_batch_size = data.get('keyword_reply_batch_size')
         keyword_batch_dispatch_mode = data.get('keyword_batch_dispatch_mode')
         thread_reply_enabled = data.get('thread_reply_enabled')
+        forum_post_reply_enabled = data.get('forum_post_reply_enabled')
         keyword_match_limit = data.get('keyword_match_limit')
         reply_min_delay = data.get('reply_min_delay')
         reply_max_delay = data.get('reply_max_delay')
         reply_delay_requested = 'reply_min_delay' in data or 'reply_max_delay' in data
         reply_delay_cleared = reply_delay_requested and reply_min_delay in {'', None} and reply_max_delay in {'', None}
         thread_reply_requested = 'thread_reply_enabled' in data
+        forum_post_reply_requested = 'forum_post_reply_enabled' in data
         keyword_match_limit_requested = 'keyword_match_limit' in data
         keyword_match_limit_cleared = keyword_match_limit_requested and keyword_match_limit in {'', None}
         target_reply_mode = str(reply_mode or current_effective_settings.get('reply_mode', 'rotation')).strip().lower()
@@ -2572,6 +2576,21 @@ def update_website_rotation(config_id):
                 thread_reply_enabled = int(thread_reply_enabled)
             else:
                 return jsonify({'error': '子分区回复状态必须是 0 或 1'}), 400
+        if forum_post_reply_requested:
+            if isinstance(forum_post_reply_enabled, str):
+                normalized_forum_post_reply_enabled = forum_post_reply_enabled.strip().lower()
+                if normalized_forum_post_reply_enabled in {'1', 'true', 'yes', 'on'}:
+                    forum_post_reply_enabled = 1
+                elif normalized_forum_post_reply_enabled in {'0', 'false', 'no', 'off'}:
+                    forum_post_reply_enabled = 0
+                else:
+                    return jsonify({'error': '帖子回复状态必须是 0 或 1'}), 400
+            elif isinstance(forum_post_reply_enabled, bool):
+                forum_post_reply_enabled = 1 if forum_post_reply_enabled else 0
+            elif isinstance(forum_post_reply_enabled, (int, float)) and float(forum_post_reply_enabled) in {0.0, 1.0}:
+                forum_post_reply_enabled = int(forum_post_reply_enabled)
+            else:
+                return jsonify({'error': '帖子回复状态必须是 0 或 1'}), 400
         if keyword_match_limit in {'', None}:
             keyword_match_limit = None
         if keyword_match_limit is not None:
@@ -2623,6 +2642,7 @@ def update_website_rotation(config_id):
             effective_settings['keyword_reply_batch_size'],
             effective_settings['keyword_batch_dispatch_mode'],
             thread_reply_enabled=thread_reply_enabled,
+            forum_post_reply_enabled=forum_post_reply_enabled,
             keyword_match_limit=None if keyword_match_limit_cleared else keyword_match_limit,
         ):
             if keyword_match_limit_cleared:
@@ -2676,6 +2696,8 @@ def update_website_rotation(config_id):
                 messages.append('站点关键词命中上限已清空' if keyword_match_limit_cleared else f'站点关键词命中上限已设置为 {keyword_match_limit}')
             if thread_reply_requested and int(current_settings.get('thread_reply_enabled', 0) or 0) != int(thread_reply_enabled):
                 messages.append('子分区回复已开启' if thread_reply_enabled else '子分区回复已关闭')
+            if forum_post_reply_requested and int(current_settings.get('forum_post_reply_enabled', 0) or 0) != int(forum_post_reply_enabled):
+                messages.append('帖子回复已开启' if forum_post_reply_enabled else '帖子回复已关闭')
             current_settings = db.get_user_website_settings(current_user['id'], config_id)
             return jsonify({
                 'success': True,
@@ -2683,6 +2705,7 @@ def update_website_rotation(config_id):
                 'settings': {
                     **effective_settings,
                     'thread_reply_enabled': current_settings.get('thread_reply_enabled', 0),
+                    'forum_post_reply_enabled': current_settings.get('forum_post_reply_enabled', 0),
                     'keyword_match_limit': current_settings.get('keyword_match_limit'),
                     'reply_min_delay': current_settings.get('reply_min_delay'),
                     'reply_max_delay': current_settings.get('reply_max_delay'),

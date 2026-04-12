@@ -573,6 +573,14 @@ async def _resolve_client_channel(target_client, channel_id):
     return None
 
 
+async def _resolve_message_reply_channel(target_client, message):
+    if message is None:
+        return None
+    message_channel = getattr(message, "channel", None)
+    message_channel_id = getattr(message_channel, "id", None)
+    return await _resolve_client_channel(target_client, message_channel_id)
+
+
 async def _resolve_message_thread_id(message):
     if message is None:
         return None
@@ -719,6 +727,39 @@ def _tokenize_keyword_search_text(normalized_text: str):
 
 def _build_query_keyword_candidates(normalized_text: str):
     return _shared_build_query_keyword_candidates(normalized_text)
+
+
+def _resolve_forum_parent_channel_id(channel_like):
+    if channel_like is None or not hasattr(channel_like, 'id'):
+        return None
+
+    parent_id = getattr(channel_like, 'parent_id', None)
+    if parent_id is None:
+        parent = getattr(channel_like, 'parent', None)
+        parent_id = getattr(parent, 'id', None)
+    return parent_id
+
+
+def filter_forum_channel_configs_for_message(
+    channel_like,
+    direct_configs,
+    parent_configs,
+    settings_map,
+):
+    parent_id = _resolve_forum_parent_channel_id(channel_like)
+    if parent_id is None:
+        return list(direct_configs or parent_configs or [])
+
+    if direct_configs:
+        return list(direct_configs)
+
+    filtered_configs = []
+    for config in parent_configs or []:
+        website_id = config.get('id')
+        website_settings = settings_map.get(website_id) or {}
+        if _coerce_bool(website_settings.get('forum_post_reply_enabled', 0), False):
+            filtered_configs.append(config)
+    return filtered_configs
 
 
 def _build_product_keyword_variants(raw_value: str):
@@ -3040,7 +3081,26 @@ class DiscordBotClient(discord.Client):
                 from .database import db
 
             lookup_ids = self._resolve_channel_lookup_ids(channel_id)
-            return db.get_website_configs_by_channel(lookup_ids, self.user_id)
+            if len(lookup_ids) <= 1:
+                return db.get_website_configs_by_channel(lookup_ids, self.user_id)
+
+            direct_configs = db.get_website_configs_by_channel(lookup_ids[0], self.user_id)
+            parent_configs = db.get_website_configs_by_channel(lookup_ids[1], self.user_id)
+            if direct_configs:
+                return direct_configs
+            if not parent_configs:
+                return []
+
+            settings_map = db.get_user_website_settings_map(
+                self.user_id,
+                [config.get('id') for config in parent_configs if config.get('id') is not None],
+            )
+            return filter_forum_channel_configs_for_message(
+                channel_id,
+                direct_configs=direct_configs,
+                parent_configs=parent_configs,
+                settings_map=settings_map,
+            )
         except Exception as e:
             logger.error(f"获取频道网站配置失败: {e}")
             return []
@@ -3063,8 +3123,35 @@ class DiscordBotClient(discord.Client):
                 from .database import db
 
             lookup_ids = self._resolve_channel_lookup_ids(channel_id)
-            return await asyncio.get_event_loop().run_in_executor(
-                None, db.get_website_configs_by_channel, lookup_ids, self.user_id
+            if len(lookup_ids) <= 1:
+                return await asyncio.get_event_loop().run_in_executor(
+                    None, db.get_website_configs_by_channel, lookup_ids, self.user_id
+                )
+
+            direct_configs = await asyncio.get_event_loop().run_in_executor(
+                None, db.get_website_configs_by_channel, lookup_ids[0], self.user_id
+            )
+            parent_configs = await asyncio.get_event_loop().run_in_executor(
+                None, db.get_website_configs_by_channel, lookup_ids[1], self.user_id
+            )
+            if direct_configs:
+                return direct_configs
+            if not parent_configs:
+                return []
+
+            website_ids = [
+                config.get('id')
+                for config in parent_configs
+                if config.get('id') is not None
+            ]
+            settings_map = await asyncio.get_event_loop().run_in_executor(
+                None, db.get_user_website_settings_map, self.user_id, website_ids
+            )
+            return filter_forum_channel_configs_for_message(
+                channel_id,
+                direct_configs=direct_configs,
+                parent_configs=parent_configs,
+                settings_map=settings_map,
             )
         except Exception as e:
             logger.error(f"异步获取频道网站配置失败: {e}")
