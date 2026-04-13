@@ -132,6 +132,27 @@ class BotTimeoutHelpersTestCase(unittest.TestCase):
 
         self.assertEqual(filtered, parent_configs)
 
+    def test_summarize_exception_for_log_collapses_whitespace_and_truncates(self):
+        error = RuntimeError("429 Too Many Requests\n\n" + ("x" * 260))
+
+        summary = bot_module._summarize_exception_for_log(error, limit=80)
+
+        self.assertNotIn("\n", summary)
+        self.assertLessEqual(len(summary), 80)
+        self.assertTrue(summary.endswith("..."))
+
+    def test_log_rate_limited_bark_issue_suppresses_duplicates_within_window(self):
+        with patch.object(bot_module.time, "monotonic", side_effect=[100.0, 110.0, 180.0]), patch.object(
+            bot_module.logger, "error"
+        ) as mock_error, patch.object(bot_module.logger, "warning") as mock_warning:
+            bot_module._log_rate_limited_bark_issue("表情互动 Bark 通知失败", RuntimeError("first failure"))
+            bot_module._log_rate_limited_bark_issue("表情互动 Bark 通知失败", RuntimeError("second failure"))
+            bot_module._log_rate_limited_bark_issue("表情互动 Bark 通知失败", RuntimeError("third failure"))
+
+        self.assertEqual(mock_error.call_count, 2)
+        self.assertEqual(mock_warning.call_count, 1)
+        self.assertIn("重复 1 次", mock_warning.call_args.args[0])
+
 
 class _SlottedMessage:
     __slots__ = ("id", "channel", "thread", "flags", "fetch_thread")

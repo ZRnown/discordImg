@@ -811,7 +811,7 @@ def initialize_runtime():
         root_logger.handlers = []
 
     # 创建控制台处理器
-    console_handler = logging.StreamHandler()
+    console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(logging.INFO)
     console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     console_handler.setFormatter(console_formatter)
