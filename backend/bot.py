@@ -545,6 +545,44 @@ def _should_mention_reply_author(explicit_mentions, reply_mode):
     return str(reply_mode or "rotation").strip().lower() != "default"
 
 
+def _build_cross_client_message_reference(message):
+    if message is None:
+        return None
+
+    try:
+        if hasattr(message, "to_reference"):
+            return message.to_reference(fail_if_not_exists=False)
+    except Exception:
+        pass
+
+    message_id = getattr(message, "id", None)
+    if message_id is None:
+        return None
+
+    channel = getattr(message, "channel", None)
+    guild = getattr(message, "guild", None)
+    channel_id = getattr(channel, "id", None)
+    guild_id = getattr(guild, "id", None)
+    try:
+        return discord.MessageReference(
+            message_id=message_id,
+            channel_id=channel_id,
+            guild_id=guild_id,
+            fail_if_not_exists=False,
+        )
+    except Exception:
+        return None
+
+
+def _build_reply_fallback_content(author_id, response_content, explicit_mentions, send_plain_message):
+    content = (response_content or "").strip()
+    if not content:
+        return content
+    if explicit_mentions or send_plain_message or not author_id:
+        return content
+    return f"<@{author_id}> {content}"
+
+
 def _resolve_runtime_rotation_settings(website_config, user_settings, sender_count):
     website_config = website_config or {}
     user_settings = user_settings or {}
@@ -2851,7 +2889,9 @@ class DiscordBotClient(discord.Client):
                                     )
                                 else:
                                     if not used_thread_reply:
-                                        send_kwargs['reference'] = message
+                                        message_reference = _build_cross_client_message_reference(message)
+                                        if message_reference is not None:
+                                            send_kwargs['reference'] = message_reference
                                         send_kwargs['mention_author'] = _should_mention_reply_author(
                                             explicit_mentions=explicit_mentions,
                                             reply_mode=reply_mode,
@@ -2923,8 +2963,14 @@ class DiscordBotClient(discord.Client):
                                 fallback_sent = False
                                 if response_content:
                                     try:
+                                        fallback_content = _build_reply_fallback_content(
+                                            author_id=author_id,
+                                            response_content=response_content,
+                                            explicit_mentions=explicit_mentions,
+                                            send_plain_message=send_plain_message,
+                                        )
                                         fallback_kwargs = {}
-                                        if send_plain_message:
+                                        if send_plain_message or fallback_content != response_content:
                                             fallback_kwargs['allowed_mentions'] = discord.AllowedMentions(
                                                 users=True,
                                                 roles=False,
@@ -2938,7 +2984,15 @@ class DiscordBotClient(discord.Client):
                                                 everyone=False,
                                                 replied_user=False,
                                             )
-                                        await reply_target_channel.send(response_content, **fallback_kwargs)
+                                        elif not used_thread_reply:
+                                            message_reference = _build_cross_client_message_reference(message)
+                                            if message_reference is not None:
+                                                fallback_kwargs['reference'] = message_reference
+                                            fallback_kwargs['mention_author'] = _should_mention_reply_author(
+                                                explicit_mentions=explicit_mentions,
+                                                reply_mode=reply_mode,
+                                            )
+                                        await reply_target_channel.send(fallback_content, **fallback_kwargs)
                                         fallback_sent = True
                                     except Exception as fallback_error:
                                         logger.error(f"文本兜底发送失败: {fallback_error}")
