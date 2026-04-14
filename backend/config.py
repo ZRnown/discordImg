@@ -91,6 +91,18 @@ class Config:
     # === API 地址 ===
     BACKEND_API_URL = os.getenv('BACKEND_API_URL', 'http://127.0.0.1:5001')
     NEXTJS_API_URL = f'{BACKEND_API_URL}/api'
+    SEARCHAPI_IMAGE_SEARCH_API_KEY = os.getenv(
+        'SEARCHAPI_IMAGE_SEARCH_API_KEY',
+        os.getenv('KEYWORD_IMAGE_SEARCH_API_KEY', ''),
+    ).strip()
+    GOOGLE_IMAGE_SEARCH_API_KEY = os.getenv('GOOGLE_IMAGE_SEARCH_API_KEY', '').strip()
+    GOOGLE_IMAGE_SEARCH_CX = os.getenv('GOOGLE_IMAGE_SEARCH_CX', '').strip()
+    KEYWORD_IMAGE_SEARCH_PROVIDER = os.getenv(
+        'KEYWORD_IMAGE_SEARCH_PROVIDER',
+        'searchapi_google_images',
+    ).strip() or 'searchapi_google_images'
+    KEYWORD_IMAGE_SEARCH_REQUEST_TIMEOUT_SECONDS = _env_float('KEYWORD_IMAGE_SEARCH_REQUEST_TIMEOUT_SECONDS', 15.0)
+    KEYWORD_IMAGE_SEARCH_INTERNAL_TIMEOUT_SECONDS = _env_float('KEYWORD_IMAGE_SEARCH_INTERNAL_TIMEOUT_SECONDS', 20.0)
 
     # === 机器人 ===
     COMMAND_PREFIX = '!'

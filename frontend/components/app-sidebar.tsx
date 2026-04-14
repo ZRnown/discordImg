@@ -27,6 +27,7 @@ const baseMenuItems = [
   { id: "accounts", icon: Users, label: "账号与规则" },
   { id: "scraper", icon: Search, label: "微店抓取" },
   { id: "image-search", icon: ImageIcon, label: "以图搜图" },
+  { id: "keyword-image-review", icon: ListTree, label: "关键词搜图" },
   { id: "shops", icon: Store, label: "店铺管理" },
 ]
 
