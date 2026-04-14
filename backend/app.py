@@ -39,19 +39,19 @@ except ImportError:
     print("ℹ️  python-dotenv未安装，使用系统环境变量")
 
 try:
-    from feature_extractor import get_feature_extractor, DINOv2FeatureExtractor
-except ModuleNotFoundError as e:
-    if e.name == 'feature_extractor':
-        from .feature_extractor import get_feature_extractor, DINOv2FeatureExtractor
-    else:
-        raise
-try:
     from database import db
     from config import config
 except ModuleNotFoundError as e:
     if e.name in {'database', 'config'}:
         from .database import db
         from .config import config
+    else:
+        raise
+try:
+    from license_manager import LicenseManager
+except ModuleNotFoundError as e:
+    if e.name == 'license_manager':
+        from .license_manager import LicenseManager
     else:
         raise
 import requests
@@ -228,6 +228,11 @@ except ModuleNotFoundError as e:
     else:
         raise
 
+DESKTOP_SINGLE_USER = os.getenv('DESKTOP_SINGLE_USER', '0') == '1'
+DESKTOP_USER_ID = int(os.getenv('DESKTOP_USER_ID', '1'))
+DESKTOP_USERNAME = os.getenv('DESKTOP_USERNAME', 'desktop')
+LICENSE_REQUIRED = os.getenv('LICENSE_REQUIRED', '1') == '1'
+
 # === 全局状态变量 ===
 ai_model_ready = False  # AI模型是否已就绪
 # 全局 AI 并发控制（跨商品），避免 CPU 被同时推理任务打满
@@ -306,6 +311,8 @@ def load_system_config():
         config.DISCORD_CHANNEL_ID = sys_config['discord_channel_id']
         config.CNFANS_CHANNEL_ID = sys_config['cnfans_channel_id']
         config.ACBUY_CHANNEL_ID = sys_config['acbuy_channel_id']
+        config.HTTP_PROXY = (sys_config.get('http_proxy') or '').strip()
+        config.HTTPS_PROXY = (sys_config.get('https_proxy') or '').strip()
 
         # 加载全局回复延迟配置
         reply_config = db.get_global_reply_config()
@@ -316,6 +323,8 @@ def load_system_config():
         discord_channel_id = sys_config['discord_channel_id']
         if discord_channel_id:
             os.environ['DISCORD_CHANNEL_ID'] = discord_channel_id
+        os.environ['HTTP_PROXY'] = config.HTTP_PROXY
+        os.environ['HTTPS_PROXY'] = config.HTTPS_PROXY
 
         func_logger.info("系统配置已从数据库加载")
         func_logger.info(f"下载线程: {config.DOWNLOAD_THREADS}")
@@ -323,6 +332,12 @@ def load_system_config():
         func_logger.info(f"Discord相似度阈值: {config.DISCORD_SIMILARITY_THRESHOLD} ({config.DISCORD_SIMILARITY_THRESHOLD*100:.0f}%)")
         func_logger.info(f"全局回复延迟设置为: {config.GLOBAL_REPLY_MIN_DELAY}-{config.GLOBAL_REPLY_MAX_DELAY}秒")
         func_logger.info(f"Discord频道ID: {discord_channel_id or '未设置(监听所有频道)'}")
+        if config.HTTP_PROXY or config.HTTPS_PROXY:
+            func_logger.info(
+                f"代理设置已加载: http={config.HTTP_PROXY or '-'} https={config.HTTPS_PROXY or '-'}"
+            )
+        else:
+            func_logger.info("代理设置: 未启用")
         func_logger.info(
             "Discord网关配置: guild_subscriptions=%s, chunk_guilds_at_startup=%s, max_messages=%s",
             config.DISCORD_GUILD_SUBSCRIPTIONS,
@@ -734,10 +749,22 @@ def schedule_discord_bot_watchdog():
 feature_extractor_instance = None
 feature_extractor_lock = threading.Lock()
 feature_extractor_failed_at = 0.0
+feature_extractor_last_error = None
+
+
+def _load_feature_extractor_class():
+    try:
+        from feature_extractor import DINOv2FeatureExtractor as extractor_class
+    except ModuleNotFoundError as import_error:
+        if import_error.name == 'feature_extractor':
+            from .feature_extractor import DINOv2FeatureExtractor as extractor_class
+        else:
+            raise
+    return extractor_class
 
 def initialize_feature_extractor():
     """在应用启动时初始化特征提取器，确保单例模式"""
-    global feature_extractor_instance, feature_extractor_failed_at
+    global feature_extractor_instance, feature_extractor_failed_at, feature_extractor_last_error
     if feature_extractor_instance is None:
         with feature_extractor_lock:
             if feature_extractor_instance is None:
@@ -748,13 +775,16 @@ def initialize_feature_extractor():
                         return None
                 print("🚀 初始化全局特征提取器实例...")
                 try:
-                    from feature_extractor import DINOv2FeatureExtractor
-                    feature_extractor_instance = DINOv2FeatureExtractor()
+                    extractor_class = _load_feature_extractor_class()
+                    feature_extractor_instance = extractor_class()
+                    feature_extractor_failed_at = 0.0
+                    feature_extractor_last_error = None
                     print("✅ 全局特征提取器实例初始化完成")
                 except Exception as e:
                     print(f"❌ 特征提取器初始化失败: {e}")
                     feature_extractor_instance = None
                     feature_extractor_failed_at = time.time()
+                    feature_extractor_last_error = str(e)
     return feature_extractor_instance
 
 def get_global_feature_extractor():
@@ -792,6 +822,38 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=config.SESSION_LIFETIME,  # 30天不过期
 )
 
+license_manager = LicenseManager(config.DATA_DIR)
+
+
+def should_skip_license_check(path: str) -> bool:
+    allow_prefixes = (
+        "/api/health",
+        "/api/license",
+        "/api/auth",
+    )
+    return any(path.startswith(prefix) for prefix in allow_prefixes)
+
+
+@app.before_request
+def enforce_desktop_license():
+    if not DESKTOP_SINGLE_USER or not LICENSE_REQUIRED:
+        return None
+
+    path = request.path or ""
+    if not path.startswith("/api"):
+        return None
+
+    if should_skip_license_check(path):
+        return None
+
+    if license_manager.is_activated_local():
+        return None
+
+    return jsonify({
+        "error": "软件尚未激活，请先输入授权密钥",
+        "code": "LICENSE_REQUIRED",
+    }), 402
+
 def initialize_runtime():
     """
     初始化运行时环境 (日志、配置等)
@@ -811,7 +873,7 @@ def initialize_runtime():
         root_logger.handlers = []
 
     # 创建控制台处理器
-    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     console_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     console_handler.setFormatter(console_formatter)
@@ -1846,6 +1908,28 @@ def scrape_product():
 
 def get_current_user():
     """获取当前登录用户"""
+    if DESKTOP_SINGLE_USER:
+        user = db.get_user_by_id(DESKTOP_USER_ID)
+        if user:
+            return user
+
+        try:
+            from werkzeug.security import generate_password_hash
+            with db.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    INSERT OR REPLACE INTO users (id, username, password_hash, role, is_active)
+                    VALUES (?, ?, ?, 'admin', 1)
+                    ''',
+                    (DESKTOP_USER_ID, DESKTOP_USERNAME, generate_password_hash('desktop-local-only'))
+                )
+                conn.commit()
+            return db.get_user_by_id(DESKTOP_USER_ID)
+        except Exception as e:
+            logger.error(f"创建桌面单用户失败: {e}")
+            return None
+
     user_id = session.get('user_id')
     if user_id:
         return db.get_user_by_id(user_id)
@@ -1853,6 +1937,8 @@ def get_current_user():
 
 def require_admin():
     """检查是否为管理员"""
+    if DESKTOP_SINGLE_USER:
+        return True
     user = get_current_user()
     return user and user.get('role') == 'admin'
 
@@ -1874,6 +1960,9 @@ def can_manage_shops():
 
 def require_login():
     """检查是否已登录"""
+    if DESKTOP_SINGLE_USER:
+        return True
+
     # 开发模式下跳过认证
     if config.DEBUG:
         # 开发模式下自动设置为admin用户
@@ -1895,9 +1984,56 @@ def get_bot_cooldowns():
         logger.error(f"获取冷却状态失败: {e}")
         return jsonify({'cooldowns': []}), 500
 
+
+@app.route('/api/license/status', methods=['GET'])
+def get_license_status():
+    status = license_manager.status()
+    status['required'] = DESKTOP_SINGLE_USER and LICENSE_REQUIRED
+    status['desktop_backend'] = True
+    return jsonify(status)
+
+
+@app.route('/api/desktop/health', methods=['GET'])
+def desktop_health():
+    return jsonify({
+        'desktop_backend': True,
+        'single_user': DESKTOP_SINGLE_USER,
+        'license_required': LICENSE_REQUIRED,
+        'ai_model_ready': ai_model_ready,
+        'feature_extractor_error': feature_extractor_last_error,
+        'pid': os.getpid(),
+    })
+
+
+@app.route('/api/license/activate', methods=['POST'])
+def activate_license():
+    data = request.get_json(silent=True) or {}
+    key = data.get('key', '')
+    activated, msg, payload, status_code = license_manager.activate(key)
+
+    if activated:
+        return jsonify({
+            'status': 'success',
+            'msg': msg,
+            'data': payload,
+            'license': license_manager.status(),
+        })
+
+    return jsonify({
+        'status': 'error',
+        'error': msg,
+    }), status_code
+
 @app.route('/api/auth/login', methods=['POST'])
 def login():
     """用户登录"""
+    if DESKTOP_SINGLE_USER:
+        user = get_current_user()
+        if user:
+            user_info = {k: v for k, v in user.items() if k != 'password_hash'}
+            return jsonify({'user': user_info, 'message': '桌面版已自动登录'})
+        return jsonify({'error': '桌面版用户初始化失败'}), 500
+
     try:
         data = request.get_json()
         if not data or not data.get('username') or not data.get('password'):
@@ -1921,6 +2057,9 @@ def login():
 @app.route('/api/auth/logout', methods=['POST'])
 def logout():
     """用户登出"""
+    if DESKTOP_SINGLE_USER:
+        return jsonify({'message': '桌面版无需登出'})
+
     session.pop('user_id', None)
     return jsonify({'message': '已登出'})
 
@@ -1937,6 +2076,13 @@ def get_current_user_info():
 @app.route('/api/users', methods=['GET'])
 def get_users():
     """获取所有用户（管理员权限）"""
+    if DESKTOP_SINGLE_USER:
+        user = get_current_user()
+        if not user:
+            return jsonify({'users': []})
+        user_info = {k: v for k, v in user.items() if k != 'password_hash'}
+        return jsonify({'users': [user_info]})
+
     if not require_admin():
         return jsonify({'error': '需要管理员权限'}), 403
 
@@ -1953,6 +2099,9 @@ def get_users():
 @app.route('/api/users', methods=['POST'])
 def create_user():
     """创建新用户（管理员权限）"""
+    if DESKTOP_SINGLE_USER:
+        return jsonify({'error': '桌面版已禁用多用户管理'}), 403
+
     if not require_admin():
         return jsonify({'error': '需要管理员权限'}), 403
 
@@ -1994,6 +2143,9 @@ def create_user():
 @app.route('/api/users/<int:user_id>', methods=['DELETE'])
 def delete_user(user_id):
     """删除用户（管理员权限）"""
+    if DESKTOP_SINGLE_USER:
+        return jsonify({'error': '桌面版已禁用多用户管理'}), 403
+
     if not require_admin():
         return jsonify({'error': '需要管理员权限'}), 403
 
@@ -2020,6 +2172,9 @@ def delete_user(user_id):
 # === 新增：管理员修改用户密码 ===
 @app.route('/api/users/<int:user_id>/password', methods=['PUT'])
 def reset_user_password(user_id):
+    if DESKTOP_SINGLE_USER:
+        return jsonify({'error': '桌面版已禁用多用户管理'}), 403
+
     if not require_admin():
         return jsonify({'error': '需要管理员权限'}), 403
 
@@ -3408,6 +3563,9 @@ def delete_custom_reply(reply_id):
 @app.route('/api/users/<int:user_id>/shops', methods=['PUT'])
 def update_user_shops(user_id):
     """更新用户店铺权限（管理员权限）"""
+    if DESKTOP_SINGLE_USER:
+        return jsonify({'error': '桌面版已禁用多用户管理'}), 403
+
     if not require_admin():
         return jsonify({'error': '需要管理员权限'}), 403
 
@@ -5055,6 +5213,68 @@ def config_scrape_threads():
     except Exception as e:
         logger.error(f"更新抓取线程配置失败: {e}")
         return jsonify({'error': '更新配置失败'}), 500
+
+@app.route('/api/config/proxy', methods=['GET', 'POST'])
+def config_proxy():
+    """读取或更新桌面端全局代理配置。"""
+    if request.method == 'GET':
+        sys_config = db.get_system_config()
+        http_proxy = (sys_config.get('http_proxy') or '').strip()
+        https_proxy = (sys_config.get('https_proxy') or '').strip()
+        return jsonify({
+            'http_proxy': http_proxy,
+            'https_proxy': https_proxy,
+            'enabled': bool(http_proxy or https_proxy),
+        })
+
+    try:
+        data = request.get_json(silent=True) or {}
+        http_proxy = (data.get('http_proxy') or '').strip()
+        https_proxy = (data.get('https_proxy') or '').strip()
+
+        def _is_valid_proxy(url: str) -> bool:
+            if not url:
+                return True
+            return (
+                url.startswith('http://')
+                or url.startswith('https://')
+                or url.startswith('socks5://')
+                or url.startswith('socks5h://')
+            )
+
+        if not _is_valid_proxy(http_proxy):
+            return jsonify({'error': 'HTTP 代理格式无效，请使用 http(s):// 或 socks5://'}), 400
+        if not _is_valid_proxy(https_proxy):
+            return jsonify({'error': 'HTTPS 代理格式无效，请使用 http(s):// 或 socks5://'}), 400
+
+        ok = db.update_system_config(http_proxy=http_proxy, https_proxy=https_proxy)
+        if not ok:
+            return jsonify({'error': '保存代理配置失败'}), 500
+
+        load_system_config()
+
+        try:
+            from weidian_scraper import get_weidian_scraper
+        except ModuleNotFoundError as import_error:
+            if import_error.name == 'weidian_scraper':
+                from .weidian_scraper import get_weidian_scraper
+            else:
+                raise
+
+        try:
+            get_weidian_scraper().apply_proxy_settings()
+        except Exception as sync_error:
+            logger.warning(f"同步爬虫代理配置失败: {sync_error}")
+
+        return jsonify({
+            'message': '代理配置已保存',
+            'http_proxy': http_proxy,
+            'https_proxy': https_proxy,
+            'enabled': bool(http_proxy or https_proxy),
+        })
+    except Exception as e:
+        logger.error(f"更新代理配置失败: {e}")
+        return jsonify({'error': '更新代理配置失败'}), 500
 
 @app.route('/api/config/global-reply-delay', methods=['GET'])
 def get_global_reply_delay():

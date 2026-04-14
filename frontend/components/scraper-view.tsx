@@ -25,6 +25,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { Checkbox } from "@/components/ui/checkbox"
+import { toBackendUrl } from "@/lib/desktop-api"
 import {
   cloneWebsiteReplySetting,
   ensurePerWebsiteReplySettings,
@@ -116,7 +117,7 @@ function ImageLightbox({
       </button>
       <div className="relative w-full h-full flex items-center justify-center p-4">
         <img
-          src={images[currentIndex]}
+          src={toBackendUrl(images[currentIndex])}
           alt={`Preview ${currentIndex + 1}`}
           className="max-h-[90vh] max-w-[90vw] object-contain rounded-md shadow-2xl"
           onClick={(e) => e.stopPropagation()}
@@ -908,7 +909,7 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
                     }}
                   >
                     <img
-                      src={image}
+                      src={toBackendUrl(image)}
                       alt={`图片 ${index + 1}`}
                       className="w-full h-full object-cover"
                     />
@@ -961,7 +962,7 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
                     {setting.existingUploadedImageUrls.map((url: string, index: number) => (
                       <div key={`${options.targetKey}-existing-${index}`} className="relative aspect-square rounded-md overflow-hidden border-2 border-blue-500">
                         <img
-                          src={url}
+                          src={toBackendUrl(url)}
                           alt="已保存图片"
                           className="w-full h-full object-cover"
                         />
@@ -1852,7 +1853,7 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
                     <DialogTrigger asChild>
                                         <Button variant="ghost" className="size-10 p-0 rounded bg-muted flex items-center justify-center flex-shrink-0 border shadow-sm">
                         {product.images && product.images.length > 0 ? (
-                                                <img src={product.images[0]} alt="thumb" className="object-cover w-12 h-12 rounded-md" />
+                                                <img src={toBackendUrl(product.images[0])} alt="thumb" className="object-cover w-12 h-12 rounded-md" />
                                             ) : <ImageIcon className="size-4 text-muted-foreground" />}
                       </Button>
                     </DialogTrigger>
@@ -1888,7 +1889,7 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
                           {product.images?.map((img: string, idx: number) => (
                             <div key={img} className="aspect-square rounded-xl border-2 bg-muted overflow-hidden group relative">
                               <img
-                                src={img}
+                                src={toBackendUrl(img)}
                                 alt={`Img ${idx}`}
                                 className="object-cover w-full h-full transition-transform group-hover:scale-110 cursor-zoom-in"
                                 onClick={() => openLightbox(product.images || [], idx)}

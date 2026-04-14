@@ -1,0 +1,71 @@
+name: Build Windows EXE
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - feature/desktop-*
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install root dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      - name: Install frontend dependencies
+        run: pnpm --dir frontend install --frozen-lockfile=false
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pyinstaller
+
+      - name: Build and release Windows EXE
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_TARGET_TRIPLE: x86_64-pc-windows-msvc
+        with:
+          projectPath: .
+          args: --target x86_64-pc-windows-msvc
+          tagName: desktop-v__VERSION__
+          releaseName: "Desktop v__VERSION__"
+          releaseDraft: true
+          prerelease: false
+
+      - name: Upload Windows installer artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-windows-installer
+          if-no-files-found: warn
+          path: |
+            src-tauri/target/**/bundle/nsis/*.exe
+            src-tauri/target/**/bundle/msi/*.msi

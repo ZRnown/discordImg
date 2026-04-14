@@ -11,6 +11,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { Upload, Search, ExternalLink, Settings, X, Clock, Trash2, Copy } from "lucide-react"
 import { toast } from "sonner"
+import { toBackendUrl } from "@/lib/desktop-api"
 
 export function ImageSearchView() {
   const [uploadedImage, setUploadedImage] = useState<string | null>(null)
@@ -539,7 +540,7 @@ export function ImageSearchView() {
                       <div className="flex-shrink-0">
                         <div className="w-16 h-16 bg-muted rounded-lg overflow-hidden">
                           <img
-                            src={result.matchedImage}
+                            src={toBackendUrl(result.matchedImage)}
                             alt={result.product.title}
                             className="w-full h-full object-cover"
                             onError={(e) => {
@@ -675,7 +676,7 @@ export function ImageSearchView() {
                           <div className="flex-shrink-0">
                             <div className="w-16 h-16 bg-muted rounded-lg overflow-hidden">
                               <img
-                                src={`/api/image/${history.matched_product_id}/${history.matched_image_index}`}
+                                src={toBackendUrl(`/api/image/${history.matched_product_id}/${history.matched_image_index}`)}
                                 alt="匹配的商品图片"
                                 className="w-full h-full object-cover"
                                 onError={(e) => {

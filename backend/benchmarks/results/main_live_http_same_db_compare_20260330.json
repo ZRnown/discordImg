@@ -1,0 +1,203 @@
+{
+  "manifest": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/shop_1774155549_manifest_v1_strict_image_only.json",
+  "scope": [
+    "Closet"
+  ],
+  "endpoint": "http://127.0.0.1:5001/search_similar",
+  "threshold": 0.6,
+  "limit": 5,
+  "queries": 106,
+  "hit_at_1_count": 72,
+  "hit_at_1": 0.6792452830188679,
+  "hit_at_3_count": 91,
+  "hit_at_3": 0.8584905660377359,
+  "mrr_at_5": 0.7624213836477987,
+  "latency_mean_seconds": 1.8464463030642673,
+  "latency_median_seconds": 1.2668697084882297,
+  "empty_count": 0,
+  "error_count": 0,
+  "errors": [],
+  "top1_miss_count": 34,
+  "top1_miss_examples": [
+    {
+      "path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716766172/1729ca92d5a20d78.jpg",
+      "expected": "917",
+      "http_top1": "930",
+      "http_ranked": [
+        "930",
+        "924",
+        "917",
+        "919",
+        "926"
+      ]
+    },
+    {
+      "path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716766172/fb76cecc279ca121.jpg",
+      "expected": "917",
+      "http_top1": "924",
+      "http_ranked": [
+        "924",
+        "920",
+        "917",
+        "926",
+        "930"
+      ]
+    },
+    {
+      "path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967326/54980143b801fd87.jpg",
+      "expected": "918",
+      "http_top1": "931",
+      "http_ranked": [
+        "931",
+        "918",
+        "932",
+        "916",
+        "919"
+      ]
+    },
+    {
+      "path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967326/288d55a24d5b8f06.jpg",
+      "expected": "918",
+      "http_top1": "932",
+      "http_ranked": [
+        "932",
+        "933",
+        "928",
+        "924",
+        "919"
+      ]
+    },
+    {
+      "path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967326/a0c1f05f9aa6244a.jpg",
+      "expected": "918",
+      "http_top1": "932",
+      "http_ranked": [
+        "932",
+        "931",
+        "923",
+        "916",
+        "918"
+      ]
+    },
+    {
+      "path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967326/2e506e064cc071d5.jpg",
+      "expected": "918",
+      "http_top1": "923",
+      "http_ranked": [
+        "923",
+        "932",
+        "931",
+        "916",
+        "918"
+      ]
+    },
+    {
+      "path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713673587/3a80b5206ee9e931.jpg",
+      "expected": "919",
+      "http_top1": "926",
+      "http_ranked": [
+        "926",
+        "919",
+        "925",
+        "931",
+        "917"
+      ]
+    },
+    {
+      "path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713673587/dcd460efe9171a88.jpg",
+      "expected": "919",
+      "http_top1": "933",
+      "http_ranked": [
+        "933",
+        "919",
+        "926",
+        "932",
+        "917"
+      ]
+    },
+    {
+      "path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063870/9f998f5a37a72245.jpg",
+      "expected": "921",
+      "http_top1": "916",
+      "http_ranked": [
+        "916",
+        "925",
+        "921",
+        "926",
+        "922"
+      ]
+    },
+    {
+      "path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713996934/9e76530913c20677.jpg",
+      "expected": "922",
+      "http_top1": "916",
+      "http_ranked": [
+        "916",
+        "925",
+        "924",
+        "926",
+        "933"
+      ]
+    },
+    {
+      "path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713996934/1c9a89478e2619ca.jpg",
+      "expected": "922",
+      "http_top1": "924",
+      "http_ranked": [
+        "924",
+        "926",
+        "920",
+        "925",
+        "917"
+      ]
+    },
+    {
+      "path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711058275/67f7e1cd22c6420c.jpg",
+      "expected": "923",
+      "http_top1": "918",
+      "http_ranked": [
+        "918",
+        "921",
+        "923",
+        "922",
+        "925"
+      ]
+    },
+    {
+      "path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711058275/8b47d0dd60446dc4.jpg",
+      "expected": "923",
+      "http_top1": "916",
+      "http_ranked": [
+        "916",
+        "918",
+        "933",
+        "919",
+        "917"
+      ]
+    },
+    {
+      "path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711058275/09e368d500ca5692.jpg",
+      "expected": "923",
+      "http_top1": "927",
+      "http_ranked": [
+        "927",
+        "919",
+        "922",
+        "924",
+        "930"
+      ]
+    },
+    {
+      "path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714044088/1aee4e3cadca1627.jpg",
+      "expected": "924",
+      "http_top1": "922",
+      "http_ranked": [
+        "922",
+        "924",
+        "925",
+        "933",
+        "917"
+      ]
+    }
+  ]
+}

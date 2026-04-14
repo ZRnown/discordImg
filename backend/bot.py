@@ -9,7 +9,6 @@ import json
 import io
 import sqlite3
 import re
-import sys
 from datetime import datetime
 from urllib.parse import quote
 
@@ -124,49 +123,6 @@ _keyword_reply_window_configs = {}
 _keyword_reply_background_tasks = set()
 _auto_reply_thread_ids = {}
 _AUTO_REPLY_THREAD_CACHE_LIMIT = 2048
-_BARK_ERROR_LOG_WINDOW_SECONDS = 60.0
-_bark_issue_log_state = {}
-
-
-def _summarize_text_for_log(value, limit=200):
-    text = re.sub(r"\s+", " ", str(value or "")).strip()
-    if not text:
-        return ""
-    if len(text) <= limit:
-        return text
-    if limit <= 3:
-        return text[:limit]
-    return f"{text[: limit - 3]}..."
-
-
-def _summarize_exception_for_log(error, limit=200):
-    summary = _summarize_text_for_log(error, limit=limit)
-    if summary:
-        return summary
-    return getattr(error, "__class__", type(error)).__name__
-
-
-def _log_rate_limited_bark_issue(scene, detail, *, level="error"):
-    summary = _summarize_text_for_log(detail, limit=200) or "unknown error"
-    now = time.monotonic()
-    state = _bark_issue_log_state.get(scene)
-    if state is not None and now - state["logged_at"] < _BARK_ERROR_LOG_WINDOW_SECONDS:
-        state["suppressed"] += 1
-        state["last_summary"] = summary
-        return
-
-    if state is not None and state["suppressed"] > 0:
-        logger.warning(
-            f"{scene} 在过去 {int(_BARK_ERROR_LOG_WINDOW_SECONDS)}s 内重复 {state['suppressed']} 次，最近一次: {state['last_summary']}"
-        )
-
-    log_method = getattr(logger, level, logger.error)
-    log_method(f"{scene}: {summary}")
-    _bark_issue_log_state[scene] = {
-        "logged_at": now,
-        "suppressed": 0,
-        "last_summary": summary,
-    }
 
 
 def _coerce_int(value, default):
@@ -1258,7 +1214,7 @@ class HTTPLogHandler(logging.Handler):
             self.is_sending = False
 
 # 配置日志
-logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+logging.basicConfig(level=logging.INFO)
 
 # 添加HTTP日志处理器
 http_handler = HTTPLogHandler()
@@ -2010,17 +1966,13 @@ class DiscordBotClient(discord.Client):
                             await asyncio.sleep(0.5)
                             continue
 
-                        _log_rate_limited_bark_issue(
-                            "Bark 推送失败",
-                            f"status={response.status}, body={text}",
-                            level="warning",
-                        )
+                        logger.warning(f"Bark 推送失败: status={response.status}, body={text[:200]}")
                         return
             except Exception as e:
                 if attempt == 0:
                     await asyncio.sleep(0.5)
                     continue
-                _log_rate_limited_bark_issue("Bark 推送异常", _summarize_exception_for_log(e))
+                logger.error(f"Bark 推送异常: {e}")
 
     async def _notify_direct_interaction_if_needed(self, message):
         interaction_type = await self._classify_direct_interaction(message)
@@ -3565,7 +3517,7 @@ class DiscordBotClient(discord.Client):
             try:
                 await self._notify_dm_interaction_if_needed(message)
             except Exception as e:
-                _log_rate_limited_bark_issue("处理私信 Bark 通知失败", _summarize_exception_for_log(e))
+                logger.error(f"处理私信 Bark 通知失败: {e}")
             return
 
         # 屏蔽活动通知/系统消息以及 @everyone/@here 广播
@@ -3576,7 +3528,7 @@ class DiscordBotClient(discord.Client):
         try:
             await self._notify_direct_interaction_if_needed(message)
         except Exception as e:
-            _log_rate_limited_bark_issue("处理 @/回复 Bark 通知失败", _summarize_exception_for_log(e))
+            logger.error(f"处理 @/回复 Bark 通知失败: {e}")
 
         # 2. 所有绑定账号都可进入自动回复链路；真正执行搜索的账号由去重锁选出
         try:
@@ -3700,7 +3652,7 @@ class DiscordBotClient(discord.Client):
 
             await self._notify_reaction_interaction_if_needed(message, reactor, emoji_text)
         except Exception as e:
-            _log_rate_limited_bark_issue("处理表情互动 Bark 通知失败", _summarize_exception_for_log(e))
+            logger.error(f"处理表情互动 Bark 通知失败: {e}")
 
     async def on_relationship_add(self, relationship):
         """监听好友关系新增（重点：收到好友请求）。"""
@@ -3731,7 +3683,7 @@ class DiscordBotClient(discord.Client):
                 detail_text="对方向该账号发起了好友请求",
             )
         except Exception as e:
-            _log_rate_limited_bark_issue("处理好友请求 Bark 通知失败", _summarize_exception_for_log(e))
+            logger.error(f"处理好友请求 Bark 通知失败: {e}")
 
     async def on_relationship_update(self, before, after):
         """监听好友关系更新（例如：请求通过后成为好友）。"""
@@ -3754,7 +3706,7 @@ class DiscordBotClient(discord.Client):
                 detail_text="双方已建立好友关系",
             )
         except Exception as e:
-            _log_rate_limited_bark_issue("处理添加好友 Bark 通知失败", _summarize_exception_for_log(e))
+            logger.error(f"处理添加好友 Bark 通知失败: {e}")
 
     async def on_private_channel_create(self, channel):
         """监听新私信会话创建并提醒（兜底）。"""

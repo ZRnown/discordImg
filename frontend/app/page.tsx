@@ -1,8 +1,5 @@
-import { AppPageClient } from "@/components/app-page-client"
-
-export const dynamic = "force-dynamic"
-export const revalidate = 0
+import { DesktopRootClient } from "@/components/desktop-root-client"
 
 export default function Page() {
-  return <AppPageClient />
+  return <DesktopRootClient />
 }

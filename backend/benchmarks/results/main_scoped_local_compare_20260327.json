@@ -1,0 +1,14 @@
+{
+  "manifest": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/shop_1774155549_manifest_v1_strict_image_only.json",
+  "scope": [
+    "Closet"
+  ],
+  "queries": 0,
+  "hit_at_1_count": 0,
+  "hit_at_1": 0.0,
+  "hit_at_3_count": 0,
+  "hit_at_3": 0.0,
+  "mrr_at_5": 0.0,
+  "latency_mean_seconds": 0.0,
+  "latency_median_seconds": 0.0
+}

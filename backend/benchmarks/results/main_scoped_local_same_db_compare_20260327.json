@@ -1,0 +1,15 @@
+{
+  "manifest": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/shop_1774155549_manifest_v1_strict_image_only.json",
+  "db_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/data/metadata.db",
+  "scope": [
+    "Closet"
+  ],
+  "queries": 106,
+  "hit_at_1_count": 43,
+  "hit_at_1": 0.4056603773584906,
+  "hit_at_3_count": 60,
+  "hit_at_3": 0.5660377358490566,
+  "mrr_at_5": 0.49040880503144657,
+  "latency_mean_seconds": 2.1998068915673463,
+  "latency_median_seconds": 0.8970424591097981
+}

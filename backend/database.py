@@ -39,7 +39,10 @@ USABLE_RETRIEVAL_CACHE_INDEX_NAME = 'idx_retrieval_cache_usable_image_strategy'
 class Database:
     def __init__(self, db_path: Optional[str] = None):
         # SQLite 数据库路径 (用于存储商品元数据和Discord账号信息)
-        self.db_path = db_path or os.path.join(os.path.dirname(__file__), 'data', 'metadata.db')
+        configured_db_path = getattr(config, 'DATABASE_PATH', None)
+        self.db_path = os.path.abspath(
+            db_path or configured_db_path or os.path.join(os.path.dirname(__file__), 'data', 'metadata.db')
+        )
 
         # 确保数据目录存在
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
@@ -410,6 +413,8 @@ class Database:
                     cnfans_channel_id TEXT DEFAULT '',
                     acbuy_channel_id TEXT DEFAULT '',
                     scrape_threads INTEGER DEFAULT 2,
+                    http_proxy TEXT DEFAULT '',
+                    https_proxy TEXT DEFAULT '',
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
@@ -425,6 +430,16 @@ class Database:
                 cursor.execute('ALTER TABLE system_config ADD COLUMN scrape_threads INTEGER DEFAULT 2')
             except sqlite3.OperationalError:
                 pass  # 字段已存在
+
+            try:
+                cursor.execute("ALTER TABLE system_config ADD COLUMN http_proxy TEXT DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute("ALTER TABLE system_config ADD COLUMN https_proxy TEXT DEFAULT ''")
+            except sqlite3.OperationalError:
+                pass
 
             # 创建网站配置表
             cursor.execute('''
@@ -4638,7 +4653,14 @@ class Database:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute('SELECT discord_channel_id, download_threads, feature_extract_threads, discord_similarity_threshold, cnfans_channel_id, acbuy_channel_id, scrape_threads FROM system_config WHERE id = 1')
+                cursor.execute(
+                    '''
+                    SELECT discord_channel_id, download_threads, feature_extract_threads,
+                           discord_similarity_threshold, cnfans_channel_id, acbuy_channel_id,
+                           scrape_threads, http_proxy, https_proxy
+                    FROM system_config WHERE id = 1
+                    '''
+                )
                 row = cursor.fetchone()
                 if row:
                     return {
@@ -4648,7 +4670,9 @@ class Database:
                         'discord_similarity_threshold': row[3] or 0.6,
                         'cnfans_channel_id': row[4] or '',
                         'acbuy_channel_id': row[5] or '',
-                        'scrape_threads': row[6] or 2
+                        'scrape_threads': row[6] or 2,
+                        'http_proxy': row[7] or '',
+                        'https_proxy': row[8] or '',
                     }
                 # 如果没有配置记录，创建默认配置
                 cursor.execute('''
@@ -4663,7 +4687,9 @@ class Database:
                     'discord_similarity_threshold': 0.6,
                     'cnfans_channel_id': '',
                     'acbuy_channel_id': '',
-                    'scrape_threads': 2
+                    'scrape_threads': 2,
+                    'http_proxy': '',
+                    'https_proxy': '',
                 }
         except Exception as e:
             logger.error(f"获取系统配置失败: {e}")
@@ -4674,7 +4700,9 @@ class Database:
                 'discord_similarity_threshold': 0.6,
                 'cnfans_channel_id': '',
                 'acbuy_channel_id': '',
-                'scrape_threads': 2
+                'scrape_threads': 2,
+                'http_proxy': '',
+                'https_proxy': '',
             }
 
     def get_user_settings(self, user_id: int) -> Dict[str, any]:
@@ -4887,8 +4915,15 @@ class Database:
             logger.error(f"更新用户设置失败: {e}")
             return False
 
-    def update_system_config(self, discord_channel_id: str = None, discord_similarity_threshold: float = None,
-                           cnfans_channel_id: str = None, acbuy_channel_id: str = None) -> bool:
+    def update_system_config(
+        self,
+        discord_channel_id: str = None,
+        discord_similarity_threshold: float = None,
+        cnfans_channel_id: str = None,
+        acbuy_channel_id: str = None,
+        http_proxy: str = None,
+        https_proxy: str = None,
+    ) -> bool:
         """更新系统配置"""
         try:
             with self.get_connection() as conn:
@@ -4919,6 +4954,14 @@ class Database:
                 if acbuy_channel_id is not None:
                     update_fields.append('acbuy_channel_id = ?')
                     params.append(acbuy_channel_id)
+
+                if http_proxy is not None:
+                    update_fields.append('http_proxy = ?')
+                    params.append(http_proxy)
+
+                if https_proxy is not None:
+                    update_fields.append('https_proxy = ?')
+                    params.append(https_proxy)
 
                 if update_fields:
                     update_fields.append('updated_at = CURRENT_TIMESTAMP')

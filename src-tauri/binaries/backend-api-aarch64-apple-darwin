@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+echo "backend sidecar placeholder for local checks"
+exit 1

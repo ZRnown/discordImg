@@ -1,0 +1,18 @@
+{
+  "name": "discord-marketing-system-desktop",
+  "private": true,
+  "scripts": {
+    "start": "pnpm desktop:dev",
+    "dev": "pnpm desktop:dev",
+    "frontend:install": "pnpm --dir frontend install --frozen-lockfile=false",
+    "frontend:dev": "pnpm --dir frontend dev:desktop",
+    "frontend:build": "pnpm --dir frontend build:desktop",
+    "desktop:dev": "tauri dev",
+    "desktop:build": "tauri build",
+    "tauri": "tauri"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.10.0"
+  },
+  "packageManager": "pnpm@10.30.1+sha512.3590e550d5384caa39bd5c7c739f72270234b2f6059e13018f975c313b1eb9fefcc09714048765d4d9efe961382c312e624572c0420762bdc5d5940cdf9be73a"
+}

@@ -48,6 +48,7 @@ import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
 import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit, Clock } from "lucide-react"
+import { toBackendUrl } from "@/lib/desktop-api"
 
 type NumericRangeFilterValue = {
   keyword: string
@@ -4191,7 +4192,7 @@ const formatWebsiteForEdit = (website: any) => ({
                           editingFilterImages.map((img: any) => (
                             <div key={img.id} className="group relative h-12 w-12">
                               <img
-                                src={img.url}
+                                src={toBackendUrl(img.url)}
                                 alt={`filter-${img.id}`}
                                 className="h-12 w-12 rounded border object-cover"
                                 loading="lazy"
@@ -4373,7 +4374,7 @@ const formatWebsiteForEdit = (website: any) => ({
                           editingWebsiteFilterImages.map((img: any) => (
                             <div key={img.id} className="group relative h-12 w-12">
                               <img
-                                src={img.url}
+                                src={toBackendUrl(img.url)}
                                 alt={`website-filter-${img.id}`}
                                 className="h-12 w-12 rounded border object-cover"
                                 loading="lazy"

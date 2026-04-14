@@ -5,6 +5,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Pause, Play, Trash2, RefreshCw } from "lucide-react"
+import { toBackendUrl } from "@/lib/desktop-api"
 
 type LogEntry = {
   timestamp: string
@@ -43,7 +44,7 @@ export function LogsView({ isActive = true }: { isActive?: boolean }) {
       eventSourceRef.current.close()
     }
 
-    const eventSource = new EventSource('/api/logs/stream')
+    const eventSource = new EventSource(toBackendUrl('/api/logs/stream'))
     eventSourceRef.current = eventSource
 
     eventSource.onopen = () => {

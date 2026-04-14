@@ -1,20 +1,12 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  output: "export",
   reactStrictMode: false, // 关闭React严格模式，避免开发环境下双重调用
   typescript: {
     ignoreBuildErrors: true,
   },
   images: {
     unoptimized: true,
-  },
-  async rewrites() {
-    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5001'
-    return [
-      {
-        source: '/api/:path*',
-        destination: `${backendUrl}/api/:path*`,
-      },
-    ]
   },
 }
 

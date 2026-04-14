@@ -1,23 +1,19 @@
 "use client"
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { DashboardView } from "@/components/dashboard-view"
 import { AccountsView } from "@/components/accounts-view"
 import { ScraperView } from "@/components/scraper-view"
 import { ShopsView } from "@/components/shops-view"
 import { ImageSearchView } from "@/components/image-search-view"
-import { UsersView } from "@/components/users-view"
-import { RulesView } from "@/components/rules-view"
 import { LogsView } from "@/components/logs-view"
 import { LoginView } from "@/components/login-view"
 import { AppSidebar } from "@/components/app-sidebar"
-import { TutorialTour } from "@/components/tutorial-tour"
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
 import { Separator } from "@/components/ui/separator"
 import { Button } from "@/components/ui/button"
 import { LogOut, User, Play, Square } from "lucide-react"
 import { toast } from "sonner"
-import { buildTutorialSteps } from "@/lib/tutorial-steps"
 
 interface UserData {
   id: number
@@ -26,25 +22,33 @@ interface UserData {
   shops: string[]
 }
 
-export function AppPageClient() {
+export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }) {
   const [currentView, setCurrentView] = useState("dashboard")
   const [currentUser, setCurrentUser] = useState<UserData | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(!desktopMode)
   const [botStatus, setBotStatus] = useState<"stopped" | "starting" | "running" | "stopping">("stopped")
-  const [tutorialOpen, setTutorialOpen] = useState(false)
-  const [tutorialStepIndex, setTutorialStepIndex] = useState(0)
-
   const hasFetchedUser = useRef(false)
-
-  const tutorialSteps = useMemo(() => buildTutorialSteps(currentUser?.role === "admin"), [currentUser?.role])
+  const desktopFallbackUser: UserData | null = desktopMode
+    ? {
+        id: 1,
+        username: "desktop",
+        role: "admin",
+        shops: [],
+      }
+    : null
+  const effectiveUser = currentUser ?? desktopFallbackUser
 
   useEffect(() => {
     if (!hasFetchedUser.current) {
       hasFetchedUser.current = true
-      checkLoginStatus()
+      if (desktopMode) {
+        void hydrateDesktopUser()
+      } else {
+        void checkLoginStatus()
+      }
       fetchBotStatus()
     }
-  }, [])
+  }, [desktopMode])
 
   useEffect(() => {
     console.log("BotStatus changed to:", botStatus)
@@ -52,12 +56,16 @@ export function AppPageClient() {
 
   useEffect(() => {
     const handleShopsUpdated = () => {
-      checkLoginStatus()
+      if (desktopMode) {
+        void hydrateDesktopUser()
+      } else {
+        void checkLoginStatus()
+      }
     }
 
     window.addEventListener("shops-updated", handleShopsUpdated)
     return () => window.removeEventListener("shops-updated", handleShopsUpdated)
-  }, [])
+  }, [desktopMode])
 
   const checkLoginStatus = async () => {
     try {
@@ -72,6 +80,24 @@ export function AppPageClient() {
       // ignored
     } finally {
       setLoading(false)
+    }
+  }
+
+  const hydrateDesktopUser = async () => {
+    try {
+      const response = await fetch("/api/auth/me", {
+        credentials: "include",
+      })
+      if (!response.ok) {
+        return
+      }
+
+      const data = await response.json()
+      if (data?.user) {
+        setCurrentUser(data.user)
+      }
+    } catch (_) {
+      // ignored
     }
   }
 
@@ -102,8 +128,6 @@ export function AppPageClient() {
       setCurrentUser(null)
       setCurrentView("accounts")
       setBotStatus("stopped")
-      setTutorialOpen(false)
-      setTutorialStepIndex(0)
       toast.success("已登出")
     } catch (_) {
       toast.error("登出失败")
@@ -111,7 +135,8 @@ export function AppPageClient() {
   }
 
   const handleStartBot = async () => {
-    if (!currentUser) {
+    const user = effectiveUser
+    if (!user) {
       toast.error("请先登录")
       return
     }
@@ -123,7 +148,7 @@ export function AppPageClient() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ userId: currentUser.id }),
+        body: JSON.stringify({ userId: user.id }),
       })
 
       console.log("启动API响应:", response.status, response.ok)
@@ -170,20 +195,6 @@ export function AppPageClient() {
     }
   }
 
-  const startTutorial = () => {
-    if (!currentUser) {
-      toast.error("请先登录")
-      return
-    }
-    setCurrentView("dashboard")
-    setTutorialStepIndex(0)
-    setTutorialOpen(true)
-  }
-
-  const closeTutorial = () => {
-    setTutorialOpen(false)
-  }
-
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -192,8 +203,12 @@ export function AppPageClient() {
     )
   }
 
-  if (!currentUser) {
+  if (!desktopMode && !currentUser) {
     return <LoginView onLogin={handleLogin} />
+  }
+
+  if (!effectiveUser) {
+    return null
   }
 
   return (
@@ -201,20 +216,19 @@ export function AppPageClient() {
       <AppSidebar
         currentView={currentView}
         setCurrentView={setCurrentView}
-        currentUser={currentUser}
-        onStartTutorial={startTutorial}
+        currentUser={effectiveUser}
       />
       <SidebarInset>
         <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
           <SidebarTrigger />
           <Separator orientation="vertical" className="h-6" />
-          <h1 className="text-lg font-semibold">LinkRadar 链接雷达</h1>
+          <h1 className="text-lg font-semibold">{desktopMode ? "LinkRadar 桌面版" : "LinkRadar 链接雷达"}</h1>
           <div className="flex-1" />
           <div className="flex items-center gap-3">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <User className="size-4" />
-              <span>{currentUser.username}</span>
-              {currentUser.role === "admin" && (
+              <span>{effectiveUser.username}</span>
+              {effectiveUser.role === "admin" && (
                 <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded">管理员</span>
               )}
             </div>
@@ -263,15 +277,17 @@ export function AppPageClient() {
               )}
             </div>
 
-            <Button variant="outline" size="sm" onClick={handleLogout}>
-              <LogOut className="size-4 mr-1" />
-              登出
-            </Button>
+            {!desktopMode && (
+              <Button variant="outline" size="sm" onClick={handleLogout}>
+                <LogOut className="size-4 mr-1" />
+                登出
+              </Button>
+            )}
           </div>
         </header>
         <main className="flex-1 overflow-auto p-6">
           <div style={{ display: currentView === "dashboard" ? "block" : "none", height: "100%" }}>
-            <DashboardView currentUser={currentUser} isActive={currentView === "dashboard"} />
+            <DashboardView currentUser={effectiveUser} isActive={currentView === "dashboard"} />
           </div>
 
           <div style={{ display: currentView === "accounts" ? "block" : "none", height: "100%" }}>
@@ -279,38 +295,22 @@ export function AppPageClient() {
           </div>
 
           <div style={{ display: currentView === "shops" ? "block" : "none", height: "100%" }}>
-            <ShopsView currentUser={currentUser} />
+            <ShopsView currentUser={effectiveUser} />
           </div>
 
           <div style={{ display: currentView === "scraper" ? "block" : "none", height: "100%" }}>
-            <ScraperView currentUser={currentUser} isActive={currentView === "scraper"} />
+            <ScraperView currentUser={effectiveUser} isActive={currentView === "scraper"} />
           </div>
 
           <div style={{ display: currentView === "image-search" ? "block" : "none", height: "100%" }}>
             <ImageSearchView />
           </div>
 
-          {currentUser.role === "admin" && (
-            <>
-              <div style={{ display: currentView === "users" ? "block" : "none", height: "100%" }}>
-                <UsersView />
-              </div>
-              <div style={{ display: currentView === "logs" ? "block" : "none", height: "100%" }}>
-                <LogsView isActive={currentView === "logs"} />
-              </div>
-            </>
-          )}
+          <div style={{ display: currentView === "logs" ? "block" : "none", height: "100%" }}>
+            <LogsView isActive={currentView === "logs"} />
+          </div>
         </main>
       </SidebarInset>
-      <TutorialTour
-        open={tutorialOpen}
-        steps={tutorialSteps}
-        stepIndex={tutorialStepIndex}
-        currentView={currentView}
-        onClose={closeTutorial}
-        onStepIndexChange={setTutorialStepIndex}
-        onCurrentViewChange={setCurrentView}
-      />
     </SidebarProvider>
   )
 }

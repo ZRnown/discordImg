@@ -1,5 +1,11 @@
 import os
-from dotenv import load_dotenv
+import sys
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv(*_args, **_kwargs):
+        return False
 
 # 加载环境变量
 load_dotenv()
@@ -39,7 +45,7 @@ def _env_float(name: str, default: float) -> float:
 class Config:
     # === 基础配置 ===
     HOST = '0.0.0.0'
-    PORT = 5001
+    PORT = int(os.getenv('BACKEND_PORT', '5001'))
     DEBUG = False  # 生产环境建议关闭调试模式以减少日志
 
     # === 关键修复：SECRET_KEY 必须在类里面 ===
@@ -112,7 +118,11 @@ class Config:
 
     # === AI 模型 ===
     DINO_MODEL_NAME = 'facebook/dinov2-small'
-    YOLO_MODEL_PATH = 'yolov8s-world.pt'
+    if getattr(sys, 'frozen', False):
+        _RESOURCE_BASE = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+    else:
+        _RESOURCE_BASE = os.path.dirname(os.path.dirname(__file__))
+    YOLO_MODEL_PATH = os.getenv('YOLO_MODEL_PATH', os.path.join(_RESOURCE_BASE, 'yolov8s-world.pt'))
     USE_YOLO_CROP = True
 
     # === 多线程配置 (针对 10核 CPU 优化) ===
@@ -136,7 +146,7 @@ class Config:
 
     # === 路径 ===
     BASE_DIR = os.path.dirname(os.path.dirname(__file__))
-    DATA_DIR = os.path.join(BASE_DIR, 'backend', 'data')
+    DATA_DIR = os.getenv('APP_DATA_DIR') or os.path.join(BASE_DIR, 'backend', 'data')
     # 确保这些路径是绝对路径
     IMAGE_SAVE_DIR = os.path.join(DATA_DIR, 'scraped_images')
     MESSAGE_FILTER_IMAGE_DIR = os.path.join(DATA_DIR, 'message_filter_images')
@@ -147,6 +157,21 @@ class Config:
     # === 网络 ===
     REQUEST_TIMEOUT = 30
     MAX_RETRIES = 3
+    HTTP_PROXY = os.getenv('HTTP_PROXY', '').strip()
+    HTTPS_PROXY = os.getenv('HTTPS_PROXY', '').strip()
+
+    @classmethod
+    def get_request_proxies(cls):
+        http_proxy = (getattr(cls, 'HTTP_PROXY', '') or '').strip()
+        https_proxy = (getattr(cls, 'HTTPS_PROXY', '') or '').strip()
+
+        if not http_proxy and not https_proxy:
+            return {'http': None, 'https': None}
+
+        return {
+            'http': http_proxy or https_proxy,
+            'https': https_proxy or http_proxy,
+        }
 
     @classmethod
     def init_dirs(cls):

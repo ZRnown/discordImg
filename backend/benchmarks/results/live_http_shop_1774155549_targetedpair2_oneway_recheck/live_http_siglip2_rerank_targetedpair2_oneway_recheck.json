@@ -1,0 +1,4811 @@
+{
+  "strategy": "live_http_siglip2_rerank_targetedpair2_oneway_recheck",
+  "manifest_meta": {
+    "dataset_name": "shop_1774155549_live_http_targetedpair2_oneway_recheck"
+  },
+  "dataset": {
+    "products": 18,
+    "catalog_images": 89,
+    "queries": 106
+  },
+  "metrics": {
+    "queries": 106,
+    "hit_at_1_count": 94,
+    "hit_at_1": 0.8867924528301887,
+    "hit_at_3_count": 105,
+    "hit_at_3": 0.9905660377358491,
+    "mrr_at_5": 0.9394654088050315
+  },
+  "query_group_metrics": {
+    "clean_web": {
+      "queries": 54,
+      "hit_at_1_count": 48,
+      "hit_at_1": 0.8888888888888888,
+      "hit_at_3_count": 54,
+      "hit_at_3": 1.0,
+      "mrr_at_5": 0.941358024691358
+    },
+    "discord_noise": {
+      "queries": 52,
+      "hit_at_1_count": 46,
+      "hit_at_1": 0.8846153846153846,
+      "hit_at_3_count": 51,
+      "hit_at_3": 0.9807692307692307,
+      "mrr_at_5": 0.9375
+    }
+  },
+  "results": [
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998250/1b0e2af71f9fdc3a.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾n zoom阿尔法跑步鞋(多色合集)",
+      "expected_product_id": "916",
+      "ranked_products": [
+        {
+          "product_id": "916",
+          "title": "勾n zoom阿尔法跑步鞋(多色合集)",
+          "score": 1.00445772507837,
+          "image_path": "/api/image/916/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "750",
+          "title": "N运动鞋",
+          "score": 0.7533047080039978,
+          "image_path": "/api/image/750/23",
+          "image_index": 23
+        },
+        {
+          "product_id": "823",
+          "title": "AS-K14",
+          "score": 0.7398780202607548,
+          "image_path": "/api/image/823/4",
+          "image_index": 4
+        },
+        {
+          "product_id": "922",
+          "title": "勾k SB板鞋(多色合集)",
+          "score": 0.7312556505203247,
+          "image_path": "/api/image/922/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "844",
+          "title": "AD休闲鞋",
+          "score": 0.7178814996147046,
+          "image_path": "/api/image/844/3",
+          "image_index": 3
+        }
+      ],
+      "latency_seconds": 0.8905887603759766
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998250/c40493d2062cf9e0.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾n zoom阿尔法跑步鞋(多色合集)",
+      "expected_product_id": "916",
+      "ranked_products": [
+        {
+          "product_id": "916",
+          "title": "勾n zoom阿尔法跑步鞋(多色合集)",
+          "score": 1.010919076241202,
+          "image_path": "/api/image/916/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "688",
+          "title": "N-Sac*i3 0 ",
+          "score": 0.7989199256655956,
+          "image_path": "/api/image/688/2",
+          "image_index": 2
+        },
+        {
+          "product_id": "750",
+          "title": "N运动鞋",
+          "score": 0.7805669784545899,
+          "image_path": "/api/image/750/23",
+          "image_index": 23
+        },
+        {
+          "product_id": "685",
+          "title": "N-Sac*i",
+          "score": 0.7559634911039982,
+          "image_path": "/api/image/685/8",
+          "image_index": 8
+        },
+        {
+          "product_id": "921",
+          "title": "勾n HotStepTerra运动跑步鞋",
+          "score": 0.7526076436042786,
+          "image_path": "/api/image/921/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.5644993782043457
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998250/0ce3eba47649e5bc.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾n zoom阿尔法跑步鞋(多色合集)",
+      "expected_product_id": "916",
+      "ranked_products": [
+        {
+          "product_id": "916",
+          "title": "勾n zoom阿尔法跑步鞋(多色合集)",
+          "score": 0.9699957966804504,
+          "image_path": "/api/image/916/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "750",
+          "title": "N运动鞋",
+          "score": 0.834557044506073,
+          "image_path": "/api/image/750/23",
+          "image_index": 23
+        },
+        {
+          "product_id": "625",
+          "title": "N运动鞋",
+          "score": 0.8317328243324662,
+          "image_path": "/api/image/625/9",
+          "image_index": 9
+        },
+        {
+          "product_id": "700",
+          "title": "N-运动鞋",
+          "score": 0.8062476966196876,
+          "image_path": "/api/image/700/7",
+          "image_index": 7
+        },
+        {
+          "product_id": "688",
+          "title": "N-Sac*i3 0 ",
+          "score": 0.7961462765787022,
+          "image_path": "/api/image/688/11",
+          "image_index": 11
+        }
+      ],
+      "latency_seconds": 0.5225238800048828
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998250/b266b45ebfb5e262.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾n zoom阿尔法跑步鞋(多色合集)",
+      "expected_product_id": "916",
+      "ranked_products": [
+        {
+          "product_id": "916",
+          "title": "勾n zoom阿尔法跑步鞋(多色合集)",
+          "score": 1.0,
+          "image_path": "/api/image/916/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "844",
+          "title": "AD休闲鞋",
+          "score": 0.8035673167210171,
+          "image_path": "/api/image/844/0",
+          "image_index": 0
+        },
+        {
+          "product_id": "750",
+          "title": "N运动鞋",
+          "score": 0.7996402859687806,
+          "image_path": "/api/image/750/27",
+          "image_index": 27
+        },
+        {
+          "product_id": "618",
+          "title": "N跑步鞋",
+          "score": 0.7763994664761126,
+          "image_path": "/api/image/618/7",
+          "image_index": 7
+        },
+        {
+          "product_id": "890",
+          "title": "N休闲鞋",
+          "score": 0.7479688894785271,
+          "image_path": "/api/image/890/5",
+          "image_index": 5
+        }
+      ],
+      "latency_seconds": 0.45264506340026855
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998250/9e76530913c20677.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾n zoom阿尔法跑步鞋(多色合集)",
+      "expected_product_id": "916",
+      "ranked_products": [
+        {
+          "product_id": "916",
+          "title": "勾n zoom阿尔法跑步鞋(多色合集)",
+          "score": 1.0084186638009864,
+          "image_path": "/api/image/916/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "922",
+          "title": "勾k SB板鞋(多色合集)",
+          "score": 1.0009027669544368,
+          "image_path": "/api/image/922/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "705",
+          "title": "N-KD15运动鞋",
+          "score": 0.7936253428459168,
+          "image_path": "/api/image/705/2",
+          "image_index": 2
+        },
+        {
+          "product_id": "823",
+          "title": "AS-K14",
+          "score": 0.7782594416693351,
+          "image_path": "/api/image/823/4",
+          "image_index": 4
+        },
+        {
+          "product_id": "919",
+          "title": "勾n ly联名 A*ir *orce 1 Low series",
+          "score": 0.7625969052314758,
+          "image_path": "/api/image/919/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.47873783111572266
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998250/8f355ce96d5b1e89.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾n zoom阿尔法跑步鞋(多色合集)",
+      "expected_product_id": "916",
+      "ranked_products": [
+        {
+          "product_id": "916",
+          "title": "勾n zoom阿尔法跑步鞋(多色合集)",
+          "score": 1.0,
+          "image_path": "/api/image/916/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "700",
+          "title": "N-运动鞋",
+          "score": 0.8436561964894547,
+          "image_path": "/api/image/700/3",
+          "image_index": 3
+        },
+        {
+          "product_id": "750",
+          "title": "N运动鞋",
+          "score": 0.8244160890579224,
+          "image_path": "/api/image/750/23",
+          "image_index": 23
+        },
+        {
+          "product_id": "888",
+          "title": "N休闲气垫鞋",
+          "score": 0.8212654143790915,
+          "image_path": "/api/image/888/7",
+          "image_index": 7
+        },
+        {
+          "product_id": "625",
+          "title": "N运动鞋",
+          "score": 0.7604494474189606,
+          "image_path": "/api/image/625/9",
+          "image_index": 9
+        }
+      ],
+      "latency_seconds": 0.5627880096435547
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716766172/8b297c68242f1207.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾1 JOR*AN 1 D*I*O*R联名",
+      "expected_product_id": "917",
+      "ranked_products": [
+        {
+          "product_id": "917",
+          "title": "勾1 JOR*AN 1 D*I*O*R联名",
+          "score": 0.9810737243816411,
+          "image_path": "/api/image/917/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "704",
+          "title": "A * 1 Tr*vis sc*t 系列",
+          "score": 0.8674950614016937,
+          "image_path": "/api/image/704/20",
+          "image_index": 20
+        },
+        {
+          "product_id": "630",
+          "title": "4",
+          "score": 0.8410810708999634,
+          "image_path": "/api/image/630/29",
+          "image_index": 29
+        },
+        {
+          "product_id": "641",
+          "title": "AF-OW",
+          "score": 0.8394973044436319,
+          "image_path": "/api/image/641/10",
+          "image_index": 10
+        },
+        {
+          "product_id": "924",
+          "title": "勾1 UN联名板鞋",
+          "score": 0.8394944071769714,
+          "image_path": "/api/image/924/3",
+          "image_index": 3
+        }
+      ],
+      "latency_seconds": 0.5045499801635742
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716766172/38593ab4301314f2.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾1 JOR*AN 1 D*I*O*R联名",
+      "expected_product_id": "917",
+      "ranked_products": [
+        {
+          "product_id": "917",
+          "title": "勾1 JOR*AN 1 D*I*O*R联名",
+          "score": 0.9764010906219482,
+          "image_path": "/api/image/917/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "924",
+          "title": "勾1 UN联名板鞋",
+          "score": 0.8816260860664691,
+          "image_path": "/api/image/924/3",
+          "image_index": 3
+        },
+        {
+          "product_id": "630",
+          "title": "4",
+          "score": 0.8452819466590882,
+          "image_path": "/api/image/630/4",
+          "image_index": 4
+        },
+        {
+          "product_id": "704",
+          "title": "A * 1 Tr*vis sc*t 系列",
+          "score": 0.8397015872125966,
+          "image_path": "/api/image/704/20",
+          "image_index": 20
+        },
+        {
+          "product_id": "641",
+          "title": "AF-OW",
+          "score": 0.8246823103123617,
+          "image_path": "/api/image/641/9",
+          "image_index": 9
+        }
+      ],
+      "latency_seconds": 0.5513200759887695
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716766172/c69d223a6182ee9a.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾1 JOR*AN 1 D*I*O*R联名",
+      "expected_product_id": "917",
+      "ranked_products": [
+        {
+          "product_id": "917",
+          "title": "勾1 JOR*AN 1 D*I*O*R联名",
+          "score": 0.9895047239264017,
+          "image_path": "/api/image/917/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "704",
+          "title": "A * 1 Tr*vis sc*t 系列",
+          "score": 0.9111881136894227,
+          "image_path": "/api/image/704/20",
+          "image_index": 20
+        },
+        {
+          "product_id": "641",
+          "title": "AF-OW",
+          "score": 0.8719886054357885,
+          "image_path": "/api/image/641/10",
+          "image_index": 10
+        },
+        {
+          "product_id": "924",
+          "title": "勾1 UN联名板鞋",
+          "score": 0.8581953048706055,
+          "image_path": "/api/image/924/0",
+          "image_index": 0
+        },
+        {
+          "product_id": "933",
+          "title": "勾1 粉色板鞋",
+          "score": 0.8429592886155302,
+          "image_path": "/api/image/933/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.5501737594604492
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716766172/1729ca92d5a20d78.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾1 JOR*AN 1 D*I*O*R联名",
+      "expected_product_id": "917",
+      "ranked_products": [
+        {
+          "product_id": "917",
+          "title": "勾1 JOR*AN 1 D*I*O*R联名",
+          "score": 0.9743767976760864,
+          "image_path": "/api/image/917/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "704",
+          "title": "A * 1 Tr*vis sc*t 系列",
+          "score": 0.959134864807129,
+          "image_path": "/api/image/704/3",
+          "image_index": 3
+        },
+        {
+          "product_id": "930",
+          "title": "勾dg 板鞋(多色/品牌联名合集)",
+          "score": 0.8985691984941562,
+          "image_path": "/api/image/930/1",
+          "image_index": 1
+        },
+        {
+          "product_id": "649",
+          "title": "K锡安娃娃",
+          "score": 0.856022434182592,
+          "image_path": "/api/image/649/14",
+          "image_index": 14
+        },
+        {
+          "product_id": "924",
+          "title": "勾1 UN联名板鞋",
+          "score": 0.8354178494064265,
+          "image_path": "/api/image/924/1",
+          "image_index": 1
+        }
+      ],
+      "latency_seconds": 0.5051250457763672
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716766172/fb76cecc279ca121.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾1 JOR*AN 1 D*I*O*R联名",
+      "expected_product_id": "917",
+      "ranked_products": [
+        {
+          "product_id": "917",
+          "title": "勾1 JOR*AN 1 D*I*O*R联名",
+          "score": 1.0033503403324655,
+          "image_path": "/api/image/917/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "704",
+          "title": "A * 1 Tr*vis sc*t 系列",
+          "score": 0.8340543985366822,
+          "image_path": "/api/image/704/21",
+          "image_index": 21
+        },
+        {
+          "product_id": "649",
+          "title": "K锡安娃娃",
+          "score": 0.8123246598043082,
+          "image_path": "/api/image/649/6",
+          "image_index": 6
+        },
+        {
+          "product_id": "924",
+          "title": "勾1 UN联名板鞋",
+          "score": 0.7836131066916956,
+          "image_path": "/api/image/924/3",
+          "image_index": 3
+        },
+        {
+          "product_id": "920",
+          "title": "勾3 aj3黑猫",
+          "score": 0.7802372574806213,
+          "image_path": "/api/image/920/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.7770891189575195
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716766172/e44c54f2194c9bc5.JPG",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾1 JOR*AN 1 D*I*O*R联名",
+      "expected_product_id": "917",
+      "ranked_products": [
+        {
+          "product_id": "917",
+          "title": "勾1 JOR*AN 1 D*I*O*R联名",
+          "score": 0.9571612477302551,
+          "image_path": "/api/image/917/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "704",
+          "title": "A * 1 Tr*vis sc*t 系列",
+          "score": 0.8557509064674378,
+          "image_path": "/api/image/704/20",
+          "image_index": 20
+        },
+        {
+          "product_id": "641",
+          "title": "AF-OW",
+          "score": 0.8505697789831044,
+          "image_path": "/api/image/641/10",
+          "image_index": 10
+        },
+        {
+          "product_id": "933",
+          "title": "勾1 粉色板鞋",
+          "score": 0.8371675853326822,
+          "image_path": "/api/image/933/1",
+          "image_index": 1
+        },
+        {
+          "product_id": "924",
+          "title": "勾1 UN联名板鞋",
+          "score": 0.831063878055069,
+          "image_path": "/api/image/924/1",
+          "image_index": 1
+        }
+      ],
+      "latency_seconds": 0.459367036819458
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967326/54980143b801fd87.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾n HotStep2气垫运动鞋(基础色合集)",
+      "expected_product_id": "918",
+      "ranked_products": [
+        {
+          "product_id": "931",
+          "title": "勾n VapormaxFlyknit气垫鞋",
+          "score": 0.9697018468113049,
+          "image_path": "/api/image/931/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "918",
+          "title": "勾n HotStep2气垫运动鞋(基础色合集)",
+          "score": 1.0082814478874207,
+          "image_path": "/api/image/918/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "750",
+          "title": "N运动鞋",
+          "score": 0.8889329910278321,
+          "image_path": "/api/image/750/26",
+          "image_index": 26
+        },
+        {
+          "product_id": "625",
+          "title": "N运动鞋",
+          "score": 0.8777205931924574,
+          "image_path": "/api/image/625/9",
+          "image_index": 9
+        },
+        {
+          "product_id": "826",
+          "title": "AS-ST2",
+          "score": 0.8587706153773736,
+          "image_path": "/api/image/826/12",
+          "image_index": 12
+        }
+      ],
+      "latency_seconds": 8.106049060821533
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967326/322d928c40fe2a69.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾n HotStep2气垫运动鞋(基础色合集)",
+      "expected_product_id": "918",
+      "ranked_products": [
+        {
+          "product_id": "918",
+          "title": "勾n HotStep2气垫运动鞋(基础色合集)",
+          "score": 0.9811685681343079,
+          "image_path": "/api/image/918/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "873",
+          "title": "N-6***",
+          "score": 0.8056949257850647,
+          "image_path": "/api/image/873/6",
+          "image_index": 6
+        },
+        {
+          "product_id": "876",
+          "title": "N-R4",
+          "score": 0.769718633068297,
+          "image_path": "/api/image/876/10",
+          "image_index": 10
+        },
+        {
+          "product_id": "656",
+          "title": "N-mo2k",
+          "score": 0.7648483140496761,
+          "image_path": "/api/image/656/4",
+          "image_index": 4
+        },
+        {
+          "product_id": "890",
+          "title": "N休闲鞋",
+          "score": 0.7600830410800963,
+          "image_path": "/api/image/890/3",
+          "image_index": 3
+        }
+      ],
+      "latency_seconds": 0.4973170757293701
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967326/2437e668f296dc0f.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾n HotStep2气垫运动鞋(基础色合集)",
+      "expected_product_id": "918",
+      "ranked_products": [
+        {
+          "product_id": "918",
+          "title": "勾n HotStep2气垫运动鞋(基础色合集)",
+          "score": 1.0262855076789856,
+          "image_path": "/api/image/918/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "931",
+          "title": "勾n VapormaxFlyknit气垫鞋",
+          "score": 0.9365799142102477,
+          "image_path": "/api/image/931/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "701",
+          "title": "N运动鞋",
+          "score": 0.9096072540609043,
+          "image_path": "/api/image/701/6",
+          "image_index": 6
+        },
+        {
+          "product_id": "695",
+          "title": "N-95",
+          "score": 0.8457053184509278,
+          "image_path": "/api/image/695/23",
+          "image_index": 23
+        },
+        {
+          "product_id": "891",
+          "title": "N-Ti",
+          "score": 0.8324873164805556,
+          "image_path": "/api/image/891/8",
+          "image_index": 8
+        }
+      ],
+      "latency_seconds": 7.964435815811157
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967326/288d55a24d5b8f06.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾n HotStep2气垫运动鞋(基础色合集)",
+      "expected_product_id": "918",
+      "ranked_products": [
+        {
+          "product_id": "918",
+          "title": "勾n HotStep2气垫运动鞋(基础色合集)",
+          "score": 0.9637510180473328,
+          "image_path": "/api/image/918/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "893",
+          "title": "N-TN",
+          "score": 0.7746188521385193,
+          "image_path": "/api/image/893/16",
+          "image_index": 16
+        },
+        {
+          "product_id": "695",
+          "title": "N-95",
+          "score": 0.7665778131451262,
+          "image_path": "/api/image/695/9",
+          "image_index": 9
+        },
+        {
+          "product_id": "687",
+          "title": "N-27*",
+          "score": 0.7451146954552663,
+          "image_path": "/api/image/687/1",
+          "image_index": 1
+        },
+        {
+          "product_id": "890",
+          "title": "N休闲鞋",
+          "score": 0.742932277064934,
+          "image_path": "/api/image/890/0",
+          "image_index": 0
+        }
+      ],
+      "latency_seconds": 0.4450812339782715
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967326/a0c1f05f9aa6244a.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾n HotStep2气垫运动鞋(基础色合集)",
+      "expected_product_id": "918",
+      "ranked_products": [
+        {
+          "product_id": "918",
+          "title": "勾n HotStep2气垫运动鞋(基础色合集)",
+          "score": 0.973169207572937,
+          "image_path": "/api/image/918/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "750",
+          "title": "N运动鞋",
+          "score": 0.9131024360656739,
+          "image_path": "/api/image/750/16",
+          "image_index": 16
+        },
+        {
+          "product_id": "697",
+          "title": "N-TL 2.5",
+          "score": 0.8419597577067077,
+          "image_path": "/api/image/697/13",
+          "image_index": 13
+        },
+        {
+          "product_id": "700",
+          "title": "N-运动鞋",
+          "score": 0.8401255705608199,
+          "image_path": "/api/image/700/1",
+          "image_index": 1
+        },
+        {
+          "product_id": "887",
+          "title": "N-M*X95-C*G",
+          "score": 0.8243627340470759,
+          "image_path": "/api/image/887/4",
+          "image_index": 4
+        }
+      ],
+      "latency_seconds": 0.5000588893890381
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967326/2e506e064cc071d5.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾n HotStep2气垫运动鞋(基础色合集)",
+      "expected_product_id": "918",
+      "ranked_products": [
+        {
+          "product_id": "918",
+          "title": "勾n HotStep2气垫运动鞋(基础色合集)",
+          "score": 1.0032252110422273,
+          "image_path": "/api/image/918/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "750",
+          "title": "N运动鞋",
+          "score": 0.909875500202179,
+          "image_path": "/api/image/750/22",
+          "image_index": 22
+        },
+        {
+          "product_id": "700",
+          "title": "N-运动鞋",
+          "score": 0.8732469458027526,
+          "image_path": "/api/image/700/14",
+          "image_index": 14
+        },
+        {
+          "product_id": "697",
+          "title": "N-TL 2.5",
+          "score": 0.870860267360575,
+          "image_path": "/api/image/697/16",
+          "image_index": 16
+        },
+        {
+          "product_id": "749",
+          "title": "N-T*rch4",
+          "score": 0.8246324062347412,
+          "image_path": "/api/image/749/0",
+          "image_index": 0
+        }
+      ],
+      "latency_seconds": 0.45331716537475586
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713673587/a3d0672f970fd57a.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾n ly联名 A*ir *orce 1 Low series",
+      "expected_product_id": "919",
+      "ranked_products": [
+        {
+          "product_id": "919",
+          "title": "勾n ly联名 A*ir *orce 1 Low series",
+          "score": 0.9931602478027344,
+          "image_path": "/api/image/919/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "614",
+          "title": "AF系列合集",
+          "score": 0.9981959116790541,
+          "image_path": "/api/image/614/2",
+          "image_index": 2
+        },
+        {
+          "product_id": "612",
+          "title": "AF CTA联名运动板鞋",
+          "score": 0.9792966723442078,
+          "image_path": "/api/image/612/14",
+          "image_index": 14
+        },
+        {
+          "product_id": "628",
+          "title": "AF休闲运动板鞋",
+          "score": 0.974687259270804,
+          "image_path": "/api/image/628/9",
+          "image_index": 9
+        },
+        {
+          "product_id": "769",
+          "title": "AF板鞋",
+          "score": 0.9368312127523594,
+          "image_path": "/api/image/769/6",
+          "image_index": 6
+        }
+      ],
+      "latency_seconds": 0.5627782344818115
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713673587/dba7bd012d374fb9.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾n ly联名 A*ir *orce 1 Low series",
+      "expected_product_id": "919",
+      "ranked_products": [
+        {
+          "product_id": "919",
+          "title": "勾n ly联名 A*ir *orce 1 Low series",
+          "score": 0.9663839340209961,
+          "image_path": "/api/image/919/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "614",
+          "title": "AF系列合集",
+          "score": 0.9132595459331662,
+          "image_path": "/api/image/614/2",
+          "image_index": 2
+        },
+        {
+          "product_id": "768",
+          "title": "AF-SUP",
+          "score": 0.9104706525802613,
+          "image_path": "/api/image/768/3",
+          "image_index": 3
+        },
+        {
+          "product_id": "628",
+          "title": "AF休闲运动板鞋",
+          "score": 0.887241992008126,
+          "image_path": "/api/image/628/4",
+          "image_index": 4
+        },
+        {
+          "product_id": "769",
+          "title": "AF板鞋",
+          "score": 0.8809580989557414,
+          "image_path": "/api/image/769/6",
+          "image_index": 6
+        }
+      ],
+      "latency_seconds": 0.46871399879455566
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713673587/3a80b5206ee9e931.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾n ly联名 A*ir *orce 1 Low series",
+      "expected_product_id": "919",
+      "ranked_products": [
+        {
+          "product_id": "919",
+          "title": "勾n ly联名 A*ir *orce 1 Low series",
+          "score": 1.0024893781898137,
+          "image_path": "/api/image/919/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "614",
+          "title": "AF系列合集",
+          "score": 0.945372748374939,
+          "image_path": "/api/image/614/11",
+          "image_index": 11
+        },
+        {
+          "product_id": "628",
+          "title": "AF休闲运动板鞋",
+          "score": 0.910288280836459,
+          "image_path": "/api/image/628/9",
+          "image_index": 9
+        },
+        {
+          "product_id": "765",
+          "title": "AF板鞋",
+          "score": 0.8843487501144409,
+          "image_path": "/api/image/765/0",
+          "image_index": 0
+        },
+        {
+          "product_id": "770",
+          "title": "AF双勾",
+          "score": 0.8765807329409402,
+          "image_path": "/api/image/770/2",
+          "image_index": 2
+        }
+      ],
+      "latency_seconds": 0.5118799209594727
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713673587/dcd460efe9171a88.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾n ly联名 A*ir *orce 1 Low series",
+      "expected_product_id": "919",
+      "ranked_products": [
+        {
+          "product_id": "919",
+          "title": "勾n ly联名 A*ir *orce 1 Low series",
+          "score": 1.0,
+          "image_path": "/api/image/919/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "766",
+          "title": "AF板鞋",
+          "score": 0.8778487324714661,
+          "image_path": "/api/image/766/5",
+          "image_index": 5
+        },
+        {
+          "product_id": "763",
+          "title": "AF运动鞋",
+          "score": 0.8634727099815559,
+          "image_path": "/api/image/763/5",
+          "image_index": 5
+        },
+        {
+          "product_id": "628",
+          "title": "AF休闲运动板鞋",
+          "score": 0.8585345319216715,
+          "image_path": "/api/image/628/4",
+          "image_index": 4
+        },
+        {
+          "product_id": "615",
+          "title": "AF板鞋联名款",
+          "score": 0.84355726528218,
+          "image_path": "/api/image/615/9",
+          "image_index": 9
+        }
+      ],
+      "latency_seconds": 0.47751712799072266
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7712698523/95c683ab465ccd15.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾3 aj3黑猫",
+      "expected_product_id": "920",
+      "ranked_products": [
+        {
+          "product_id": "920",
+          "title": "勾3 aj3黑猫",
+          "score": 1.002480795010884,
+          "image_path": "/api/image/920/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "709",
+          "title": "3",
+          "score": 0.9430220603942872,
+          "image_path": "/api/image/709/16",
+          "image_index": 16
+        },
+        {
+          "product_id": "629",
+          "title": "5",
+          "score": 0.8163301881267012,
+          "image_path": "/api/image/629/27",
+          "image_index": 27
+        },
+        {
+          "product_id": "630",
+          "title": "4",
+          "score": 0.8085923719196015,
+          "image_path": "/api/image/630/19",
+          "image_index": 19
+        },
+        {
+          "product_id": "929",
+          "title": "勾11 JOR*AN 11 （Series)",
+          "score": 0.7660874128341675,
+          "image_path": "/api/image/929/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.446552038192749
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7712698523/f9a8521e10b384ba.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾3 aj3黑猫",
+      "expected_product_id": "920",
+      "ranked_products": [
+        {
+          "product_id": "920",
+          "title": "勾3 aj3黑猫",
+          "score": 1.0015271076682872,
+          "image_path": "/api/image/920/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "709",
+          "title": "3",
+          "score": 0.830475914478302,
+          "image_path": "/api/image/709/2",
+          "image_index": 2
+        },
+        {
+          "product_id": "630",
+          "title": "4",
+          "score": 0.7645781724052519,
+          "image_path": "/api/image/630/26",
+          "image_index": 26
+        },
+        {
+          "product_id": "629",
+          "title": "5",
+          "score": 0.7456404014326937,
+          "image_path": "/api/image/629/24",
+          "image_index": 24
+        },
+        {
+          "product_id": "928",
+          "title": "勾6 JOR*AN 6 （Series)",
+          "score": 0.6948609352111816,
+          "image_path": "/api/image/928/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.5613498687744141
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7712698523/2753c4eb41c7392d.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾3 aj3黑猫",
+      "expected_product_id": "920",
+      "ranked_products": [
+        {
+          "product_id": "920",
+          "title": "勾3 aj3黑猫",
+          "score": 1.0022710087236693,
+          "image_path": "/api/image/920/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "709",
+          "title": "3",
+          "score": 0.8664886236190796,
+          "image_path": "/api/image/709/5",
+          "image_index": 5
+        },
+        {
+          "product_id": "630",
+          "title": "4",
+          "score": 0.7957316230851783,
+          "image_path": "/api/image/630/0",
+          "image_index": 0
+        },
+        {
+          "product_id": "629",
+          "title": "5",
+          "score": 0.7868448933025649,
+          "image_path": "/api/image/629/28",
+          "image_index": 28
+        },
+        {
+          "product_id": "928",
+          "title": "勾6 JOR*AN 6 （Series)",
+          "score": 0.7386925220489502,
+          "image_path": "/api/image/928/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.5404379367828369
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7712698523/3f90dce4d303ffde.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾3 aj3黑猫",
+      "expected_product_id": "920",
+      "ranked_products": [
+        {
+          "product_id": "920",
+          "title": "勾3 aj3黑猫",
+          "score": 0.9781594779998165,
+          "image_path": "/api/image/920/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "930",
+          "title": "勾dg 板鞋(多色/品牌联名合集)",
+          "score": 0.8957073569297791,
+          "image_path": "/api/image/930/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "933",
+          "title": "勾1 粉色板鞋",
+          "score": 0.8938718303610855,
+          "image_path": "/api/image/933/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "917",
+          "title": "勾1 JOR*AN 1 D*I*O*R联名",
+          "score": 0.8852519124365927,
+          "image_path": "/api/image/917/1",
+          "image_index": 1
+        },
+        {
+          "product_id": "925",
+          "title": "勾dg 联名DunkSB低帮板鞋",
+          "score": 0.867439866065979,
+          "image_path": "/api/image/925/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.505753755569458
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7712698523/0fef6b921924ab15.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾3 aj3黑猫",
+      "expected_product_id": "920",
+      "ranked_products": [
+        {
+          "product_id": "920",
+          "title": "勾3 aj3黑猫",
+          "score": 0.9664373397827148,
+          "image_path": "/api/image/920/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "709",
+          "title": "3",
+          "score": 1.00222008228302,
+          "image_path": "/api/image/709/8",
+          "image_index": 8
+        },
+        {
+          "product_id": "630",
+          "title": "4",
+          "score": 0.9184151199970979,
+          "image_path": "/api/image/630/8",
+          "image_index": 8
+        },
+        {
+          "product_id": "629",
+          "title": "5",
+          "score": 0.8910268351113951,
+          "image_path": "/api/image/629/32",
+          "image_index": 32
+        },
+        {
+          "product_id": "708",
+          "title": "13",
+          "score": 0.867487017182744,
+          "image_path": "/api/image/708/24",
+          "image_index": 24
+        }
+      ],
+      "latency_seconds": 0.4707958698272705
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7712698523/5e4b421e6f11ae6e.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾3 aj3黑猫",
+      "expected_product_id": "920",
+      "ranked_products": [
+        {
+          "product_id": "920",
+          "title": "勾3 aj3黑猫",
+          "score": 0.9709432125091553,
+          "image_path": "/api/image/920/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "709",
+          "title": "3",
+          "score": 1.0123945951461792,
+          "image_path": "/api/image/709/16",
+          "image_index": 16
+        },
+        {
+          "product_id": "630",
+          "title": "4",
+          "score": 0.905942027397352,
+          "image_path": "/api/image/630/16",
+          "image_index": 16
+        },
+        {
+          "product_id": "629",
+          "title": "5",
+          "score": 0.8918423613454506,
+          "image_path": "/api/image/629/27",
+          "image_index": 27
+        },
+        {
+          "product_id": "708",
+          "title": "13",
+          "score": 0.8535871328282826,
+          "image_path": "/api/image/708/24",
+          "image_index": 24
+        }
+      ],
+      "latency_seconds": 0.4042658805847168
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063870/8e92896e5b2df532.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾n HotStepTerra运动跑步鞋",
+      "expected_product_id": "921",
+      "ranked_products": [
+        {
+          "product_id": "921",
+          "title": "勾n HotStepTerra运动跑步鞋",
+          "score": 0.9829635620117188,
+          "image_path": "/api/image/921/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "826",
+          "title": "AS-ST2",
+          "score": 0.7959648847579956,
+          "image_path": "/api/image/826/2",
+          "image_index": 2
+        },
+        {
+          "product_id": "931",
+          "title": "勾n VapormaxFlyknit气垫鞋",
+          "score": 0.7809294087585095,
+          "image_path": "/api/image/931/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "700",
+          "title": "N-运动鞋",
+          "score": 0.7375102221461016,
+          "image_path": "/api/image/700/2",
+          "image_index": 2
+        },
+        {
+          "product_id": "916",
+          "title": "勾n zoom阿尔法跑步鞋(多色合集)",
+          "score": 0.7176036858556355,
+          "image_path": "/api/image/916/2",
+          "image_index": 2
+        }
+      ],
+      "latency_seconds": 0.6211681365966797
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063870/830f3d524a634225.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾n HotStepTerra运动跑步鞋",
+      "expected_product_id": "921",
+      "ranked_products": [
+        {
+          "product_id": "921",
+          "title": "勾n HotStepTerra运动跑步鞋",
+          "score": 1.001167734357887,
+          "image_path": "/api/image/921/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "705",
+          "title": "N-KD15运动鞋",
+          "score": 0.7365500211715699,
+          "image_path": "/api/image/705/23",
+          "image_index": 23
+        },
+        {
+          "product_id": "931",
+          "title": "勾n VapormaxFlyknit气垫鞋",
+          "score": 0.710450291633606,
+          "image_path": "/api/image/931/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "897",
+          "title": "N5代",
+          "score": 0.7021103294338068,
+          "image_path": "/api/image/897/3",
+          "image_index": 3
+        },
+        {
+          "product_id": "883",
+          "title": "AF六眼休闲鞋",
+          "score": 0.6787212971601722,
+          "image_path": "/api/image/883/9",
+          "image_index": 9
+        }
+      ],
+      "latency_seconds": 0.561394214630127
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063870/aedc6d7d65357f1f.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾n HotStepTerra运动跑步鞋",
+      "expected_product_id": "921",
+      "ranked_products": [
+        {
+          "product_id": "921",
+          "title": "勾n HotStepTerra运动跑步鞋",
+          "score": 0.9513319137558515,
+          "image_path": "/api/image/921/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "931",
+          "title": "勾n VapormaxFlyknit气垫鞋",
+          "score": 0.7600051760673523,
+          "image_path": "/api/image/931/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "826",
+          "title": "AS-ST2",
+          "score": 0.7537260532379151,
+          "image_path": "/api/image/826/13",
+          "image_index": 13
+        },
+        {
+          "product_id": "897",
+          "title": "N5代",
+          "score": 0.7365727910964188,
+          "image_path": "/api/image/897/3",
+          "image_index": 3
+        },
+        {
+          "product_id": "824",
+          "title": "AS-N*C",
+          "score": 0.7253612176458126,
+          "image_path": "/api/image/824/16",
+          "image_index": 16
+        }
+      ],
+      "latency_seconds": 0.44619297981262207
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063870/00044fd276ab8203.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾n HotStepTerra运动跑步鞋",
+      "expected_product_id": "921",
+      "ranked_products": [
+        {
+          "product_id": "921",
+          "title": "勾n HotStepTerra运动跑步鞋",
+          "score": 1.0072717713884605,
+          "image_path": "/api/image/921/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "821",
+          "title": "AS-CP休闲鞋",
+          "score": 0.7521666765213013,
+          "image_path": "/api/image/821/4",
+          "image_index": 4
+        },
+        {
+          "product_id": "918",
+          "title": "勾n HotStep2气垫运动鞋(基础色合集)",
+          "score": 0.717246689509682,
+          "image_path": "/api/image/918/4",
+          "image_index": 4
+        },
+        {
+          "product_id": "897",
+          "title": "N5代",
+          "score": 0.7096936555532505,
+          "image_path": "/api/image/897/9",
+          "image_index": 9
+        },
+        {
+          "product_id": "931",
+          "title": "勾n VapormaxFlyknit气垫鞋",
+          "score": 0.6743689179420471,
+          "image_path": "/api/image/931/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 8.153686046600342
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063870/d10212d51f7883e2.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾n HotStepTerra运动跑步鞋",
+      "expected_product_id": "921",
+      "ranked_products": [
+        {
+          "product_id": "921",
+          "title": "勾n HotStepTerra运动跑步鞋",
+          "score": 1.0,
+          "image_path": "/api/image/921/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "826",
+          "title": "AS-ST2",
+          "score": 0.7710764884948731,
+          "image_path": "/api/image/826/13",
+          "image_index": 13
+        },
+        {
+          "product_id": "618",
+          "title": "N跑步鞋",
+          "score": 0.6882090358221283,
+          "image_path": "/api/image/618/4",
+          "image_index": 4
+        },
+        {
+          "product_id": "931",
+          "title": "勾n VapormaxFlyknit气垫鞋",
+          "score": 0.6729365884606817,
+          "image_path": "/api/image/931/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "873",
+          "title": "N-6***",
+          "score": 0.6661588753336342,
+          "image_path": "/api/image/873/9",
+          "image_index": 9
+        }
+      ],
+      "latency_seconds": 0.39457106590270996
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063870/9f998f5a37a72245.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾n HotStepTerra运动跑步鞋",
+      "expected_product_id": "921",
+      "ranked_products": [
+        {
+          "product_id": "921",
+          "title": "勾n HotStepTerra运动跑步鞋",
+          "score": 1.0,
+          "image_path": "/api/image/921/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "916",
+          "title": "勾n zoom阿尔法跑步鞋(多色合集)",
+          "score": 0.7699326559538962,
+          "image_path": "/api/image/916/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "828",
+          "title": "AS休闲鞋",
+          "score": 0.7667645692825318,
+          "image_path": "/api/image/828/7",
+          "image_index": 7
+        },
+        {
+          "product_id": "823",
+          "title": "AS-K14",
+          "score": 0.748161979910593,
+          "image_path": "/api/image/823/4",
+          "image_index": 4
+        },
+        {
+          "product_id": "925",
+          "title": "勾dg 联名DunkSB低帮板鞋",
+          "score": 0.731604738129306,
+          "image_path": "/api/image/925/2",
+          "image_index": 2
+        }
+      ],
+      "latency_seconds": 0.41962432861328125
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713996934/ecf131401fd4e22b.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾k SB板鞋(多色合集)",
+      "expected_product_id": "922",
+      "ranked_products": [
+        {
+          "product_id": "922",
+          "title": "勾k SB板鞋(多色合集)",
+          "score": 1.0039135963533936,
+          "image_path": "/api/image/922/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "646",
+          "title": "K休闲鞋",
+          "score": 0.7992277622222901,
+          "image_path": "/api/image/646/14",
+          "image_index": 14
+        },
+        {
+          "product_id": "927",
+          "title": "勾dg 板鞋(三色合集)",
+          "score": 0.7511638142090957,
+          "image_path": "/api/image/927/2",
+          "image_index": 2
+        },
+        {
+          "product_id": "652",
+          "title": "K-of love",
+          "score": 0.7498363220796904,
+          "image_path": "/api/image/652/3",
+          "image_index": 3
+        },
+        {
+          "product_id": "874",
+          "title": "K休闲鞋",
+          "score": 0.7410079836845398,
+          "image_path": "/api/image/874/3",
+          "image_index": 3
+        }
+      ],
+      "latency_seconds": 0.4563887119293213
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713996934/1aee4e3cadca1627.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾k SB板鞋(多色合集)",
+      "expected_product_id": "922",
+      "ranked_products": [
+        {
+          "product_id": "922",
+          "title": "勾k SB板鞋(多色合集)",
+          "score": 0.99285966055937,
+          "image_path": "/api/image/922/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "926",
+          "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+          "score": 0.9694596070098075,
+          "image_path": "/api/image/926/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "924",
+          "title": "勾1 UN联名板鞋",
+          "score": 0.9812138525547358,
+          "image_path": "/api/image/924/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "927",
+          "title": "勾dg 板鞋(三色合集)",
+          "score": 0.9660131931304932,
+          "image_path": "/api/image/927/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "925",
+          "title": "勾dg 联名DunkSB低帮板鞋",
+          "score": 0.9066446900367737,
+          "image_path": "/api/image/925/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.4625861644744873
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713996934/0f98433067157a54.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾k SB板鞋(多色合集)",
+      "expected_product_id": "922",
+      "ranked_products": [
+        {
+          "product_id": "922",
+          "title": "勾k SB板鞋(多色合集)",
+          "score": 0.9749619960784912,
+          "image_path": "/api/image/922/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "889",
+          "title": "N休闲鞋",
+          "score": 0.8618236064910889,
+          "image_path": "/api/image/889/14",
+          "image_index": 14
+        },
+        {
+          "product_id": "614",
+          "title": "AF系列合集",
+          "score": 0.7828222781558734,
+          "image_path": "/api/image/614/3",
+          "image_index": 3
+        },
+        {
+          "product_id": "768",
+          "title": "AF-SUP",
+          "score": 0.7755142108800795,
+          "image_path": "/api/image/768/12",
+          "image_index": 12
+        },
+        {
+          "product_id": "615",
+          "title": "AF板鞋联名款",
+          "score": 0.7722167904980521,
+          "image_path": "/api/image/615/1",
+          "image_index": 1
+        }
+      ],
+      "latency_seconds": 0.5261869430541992
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713996934/9e76530913c20677.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾k SB板鞋(多色合集)",
+      "expected_product_id": "922",
+      "ranked_products": [
+        {
+          "product_id": "916",
+          "title": "勾n zoom阿尔法跑步鞋(多色合集)",
+          "score": 1.0084186638009864,
+          "image_path": "/api/image/916/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "922",
+          "title": "勾k SB板鞋(多色合集)",
+          "score": 1.0009027669544368,
+          "image_path": "/api/image/922/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "705",
+          "title": "N-KD15运动鞋",
+          "score": 0.7936253428459168,
+          "image_path": "/api/image/705/2",
+          "image_index": 2
+        },
+        {
+          "product_id": "823",
+          "title": "AS-K14",
+          "score": 0.7782594416693351,
+          "image_path": "/api/image/823/4",
+          "image_index": 4
+        },
+        {
+          "product_id": "919",
+          "title": "勾n ly联名 A*ir *orce 1 Low series",
+          "score": 0.7625969052314758,
+          "image_path": "/api/image/919/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.5276598930358887
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713996934/85d38493899d836e.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾k SB板鞋(多色合集)",
+      "expected_product_id": "922",
+      "ranked_products": [
+        {
+          "product_id": "922",
+          "title": "勾k SB板鞋(多色合集)",
+          "score": 0.986483288798542,
+          "image_path": "/api/image/922/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "646",
+          "title": "K休闲鞋",
+          "score": 0.887767243385315,
+          "image_path": "/api/image/646/0",
+          "image_index": 0
+        },
+        {
+          "product_id": "872",
+          "title": "K休闲鞋",
+          "score": 0.8681323644832737,
+          "image_path": "/api/image/872/7",
+          "image_index": 7
+        },
+        {
+          "product_id": "662",
+          "title": "K动物园",
+          "score": 0.8353022925052954,
+          "image_path": "/api/image/662/5",
+          "image_index": 5
+        },
+        {
+          "product_id": "874",
+          "title": "K休闲鞋",
+          "score": 0.8235499858856201,
+          "image_path": "/api/image/874/4",
+          "image_index": 4
+        }
+      ],
+      "latency_seconds": 0.4430961608886719
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713996934/1c9a89478e2619ca.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾k SB板鞋(多色合集)",
+      "expected_product_id": "922",
+      "ranked_products": [
+        {
+          "product_id": "922",
+          "title": "勾k SB板鞋(多色合集)",
+          "score": 0.9610924185594552,
+          "image_path": "/api/image/922/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "704",
+          "title": "A * 1 Tr*vis sc*t 系列",
+          "score": 0.8235435962677002,
+          "image_path": "/api/image/704/2",
+          "image_index": 2
+        },
+        {
+          "product_id": "924",
+          "title": "勾1 UN联名板鞋",
+          "score": 0.8007712628186685,
+          "image_path": "/api/image/924/2",
+          "image_index": 2
+        },
+        {
+          "product_id": "933",
+          "title": "勾1 粉色板鞋",
+          "score": 0.7793934791689736,
+          "image_path": "/api/image/933/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "926",
+          "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+          "score": 0.7703433036804199,
+          "image_path": "/api/image/926/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.5639100074768066
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711058275/cc78e308e6bfb881.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾n shoxRide2运动鞋(四色合集)",
+      "expected_product_id": "923",
+      "ranked_products": [
+        {
+          "product_id": "923",
+          "title": "勾n shoxRide2运动鞋(四色合集)",
+          "score": 0.9572312831878662,
+          "image_path": "/api/image/923/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "872",
+          "title": "K休闲鞋",
+          "score": 0.7939593076705933,
+          "image_path": "/api/image/872/7",
+          "image_index": 7
+        },
+        {
+          "product_id": "662",
+          "title": "K动物园",
+          "score": 0.784621866779053,
+          "image_path": "/api/image/662/5",
+          "image_index": 5
+        },
+        {
+          "product_id": "925",
+          "title": "勾dg 联名DunkSB低帮板鞋",
+          "score": 0.7767486983665594,
+          "image_path": "/api/image/925/1",
+          "image_index": 1
+        },
+        {
+          "product_id": "922",
+          "title": "勾k SB板鞋(多色合集)",
+          "score": 0.7739551476003309,
+          "image_path": "/api/image/922/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.490267276763916
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711058275/4d4bfeaf38ac1e3b.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾n shoxRide2运动鞋(四色合集)",
+      "expected_product_id": "923",
+      "ranked_products": [
+        {
+          "product_id": "923",
+          "title": "勾n shoxRide2运动鞋(四色合集)",
+          "score": 0.954567195042688,
+          "image_path": "/api/image/923/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "876",
+          "title": "N-R4",
+          "score": 0.914384949207306,
+          "image_path": "/api/image/876/1",
+          "image_index": 1
+        },
+        {
+          "product_id": "696",
+          "title": "N休闲鞋",
+          "score": 0.8210911472472419,
+          "image_path": "/api/image/696/31",
+          "image_index": 31
+        },
+        {
+          "product_id": "886",
+          "title": "N休闲鞋",
+          "score": 0.7976054809171255,
+          "image_path": "/api/image/886/25",
+          "image_index": 25
+        },
+        {
+          "product_id": "617",
+          "title": "N运动鞋",
+          "score": 0.7703592777252197,
+          "image_path": "/api/image/617/8",
+          "image_index": 8
+        }
+      ],
+      "latency_seconds": 0.549705982208252
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711058275/53a83ec6e9f08cf1.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾n shoxRide2运动鞋(四色合集)",
+      "expected_product_id": "923",
+      "ranked_products": [
+        {
+          "product_id": "923",
+          "title": "勾n shoxRide2运动鞋(四色合集)",
+          "score": 0.9742415547370911,
+          "image_path": "/api/image/923/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "696",
+          "title": "N休闲鞋",
+          "score": 0.9469986438751221,
+          "image_path": "/api/image/696/7",
+          "image_index": 7
+        },
+        {
+          "product_id": "876",
+          "title": "N-R4",
+          "score": 0.8936698479659866,
+          "image_path": "/api/image/876/18",
+          "image_index": 18
+        },
+        {
+          "product_id": "886",
+          "title": "N休闲鞋",
+          "score": 0.8450874554742103,
+          "image_path": "/api/image/886/19",
+          "image_index": 19
+        },
+        {
+          "product_id": "893",
+          "title": "N-TN",
+          "score": 0.8062050149062506,
+          "image_path": "/api/image/893/0",
+          "image_index": 0
+        }
+      ],
+      "latency_seconds": 0.4370241165161133
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711058275/67f7e1cd22c6420c.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾n shoxRide2运动鞋(四色合集)",
+      "expected_product_id": "923",
+      "ranked_products": [
+        {
+          "product_id": "927",
+          "title": "勾dg 板鞋(三色合集)",
+          "score": 1.0012642309823372,
+          "image_path": "/api/image/927/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "923",
+          "title": "勾n shoxRide2运动鞋(四色合集)",
+          "score": 1.0,
+          "image_path": "/api/image/923/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "695",
+          "title": "N-95",
+          "score": 0.7869853258132935,
+          "image_path": "/api/image/695/26",
+          "image_index": 26
+        },
+        {
+          "product_id": "887",
+          "title": "N-M*X95-C*G",
+          "score": 0.7255192519255376,
+          "image_path": "/api/image/887/7",
+          "image_index": 7
+        },
+        {
+          "product_id": "918",
+          "title": "勾n HotStep2气垫运动鞋(基础色合集)",
+          "score": 0.7098652653699815,
+          "image_path": "/api/image/918/4",
+          "image_index": 4
+        }
+      ],
+      "latency_seconds": 0.43569397926330566
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711058275/8b47d0dd60446dc4.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾n shoxRide2运动鞋(四色合集)",
+      "expected_product_id": "923",
+      "ranked_products": [
+        {
+          "product_id": "923",
+          "title": "勾n shoxRide2运动鞋(四色合集)",
+          "score": 0.9999998807907104,
+          "image_path": "/api/image/923/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "688",
+          "title": "N-Sac*i3 0 ",
+          "score": 0.8094318210773928,
+          "image_path": "/api/image/688/4",
+          "image_index": 4
+        },
+        {
+          "product_id": "645",
+          "title": "OW休闲鞋",
+          "score": 0.7990615248680115,
+          "image_path": "/api/image/645/4",
+          "image_index": 4
+        },
+        {
+          "product_id": "750",
+          "title": "N运动鞋",
+          "score": 0.7813642239342234,
+          "image_path": "/api/image/750/28",
+          "image_index": 28
+        },
+        {
+          "product_id": "697",
+          "title": "N-TL 2.5",
+          "score": 0.7620970374672028,
+          "image_path": "/api/image/697/15",
+          "image_index": 15
+        }
+      ],
+      "latency_seconds": 0.6314170360565186
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711058275/09e368d500ca5692.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾n shoxRide2运动鞋(四色合集)",
+      "expected_product_id": "923",
+      "ranked_products": [
+        {
+          "product_id": "923",
+          "title": "勾n shoxRide2运动鞋(四色合集)",
+          "score": 1.0007277233529241,
+          "image_path": "/api/image/923/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "704",
+          "title": "A * 1 Tr*vis sc*t 系列",
+          "score": 0.8036263465881348,
+          "image_path": "/api/image/704/2",
+          "image_index": 2
+        },
+        {
+          "product_id": "933",
+          "title": "勾1 粉色板鞋",
+          "score": 0.7612894773483276,
+          "image_path": "/api/image/933/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "922",
+          "title": "勾k SB板鞋(多色合集)",
+          "score": 0.7587741318760755,
+          "image_path": "/api/image/922/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "916",
+          "title": "勾n zoom阿尔法跑步鞋(多色合集)",
+          "score": 0.7580726138198943,
+          "image_path": "/api/image/916/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.44747376441955566
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714044088/1aee4e3cadca1627.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾1 UN联名板鞋",
+      "expected_product_id": "924",
+      "ranked_products": [
+        {
+          "product_id": "922",
+          "title": "勾k SB板鞋(多色合集)",
+          "score": 0.99285966055937,
+          "image_path": "/api/image/922/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "926",
+          "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+          "score": 0.9694596070098075,
+          "image_path": "/api/image/926/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "924",
+          "title": "勾1 UN联名板鞋",
+          "score": 0.9812138525547358,
+          "image_path": "/api/image/924/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "927",
+          "title": "勾dg 板鞋(三色合集)",
+          "score": 0.9660131931304932,
+          "image_path": "/api/image/927/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "925",
+          "title": "勾dg 联名DunkSB低帮板鞋",
+          "score": 0.9066446900367737,
+          "image_path": "/api/image/925/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.4362013339996338
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714044088/a89aea1813445312.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾1 UN联名板鞋",
+      "expected_product_id": "924",
+      "ranked_products": [
+        {
+          "product_id": "924",
+          "title": "勾1 UN联名板鞋",
+          "score": 0.9625890557328016,
+          "image_path": "/api/image/924/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "933",
+          "title": "勾1 粉色板鞋",
+          "score": 0.9578986536332612,
+          "image_path": "/api/image/933/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "925",
+          "title": "勾dg 联名DunkSB低帮板鞋",
+          "score": 0.8667413164185304,
+          "image_path": "/api/image/925/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "649",
+          "title": "K锡安娃娃",
+          "score": 0.8656211376190186,
+          "image_path": "/api/image/649/6",
+          "image_index": 6
+        },
+        {
+          "product_id": "920",
+          "title": "勾3 aj3黑猫",
+          "score": 0.8475604057312012,
+          "image_path": "/api/image/920/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.46340417861938477
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714044088/d69961ab16a2d754.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾1 UN联名板鞋",
+      "expected_product_id": "924",
+      "ranked_products": [
+        {
+          "product_id": "924",
+          "title": "勾1 UN联名板鞋",
+          "score": 0.9939019083976746,
+          "image_path": "/api/image/924/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "614",
+          "title": "AF系列合集",
+          "score": 0.9453330516815186,
+          "image_path": "/api/image/614/13",
+          "image_index": 13
+        },
+        {
+          "product_id": "763",
+          "title": "AF运动鞋",
+          "score": 0.9381789543352905,
+          "image_path": "/api/image/763/9",
+          "image_index": 9
+        },
+        {
+          "product_id": "612",
+          "title": "AF CTA联名运动板鞋",
+          "score": 0.9102388708440134,
+          "image_path": "/api/image/612/4",
+          "image_index": 4
+        },
+        {
+          "product_id": "615",
+          "title": "AF板鞋联名款",
+          "score": 0.8913981348354622,
+          "image_path": "/api/image/615/1",
+          "image_index": 1
+        }
+      ],
+      "latency_seconds": 0.46956896781921387
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714044088/937529e8356d9552.png",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾1 UN联名板鞋",
+      "expected_product_id": "924",
+      "ranked_products": [
+        {
+          "product_id": "924",
+          "title": "勾1 UN联名板鞋",
+          "score": 0.9999997019767761,
+          "image_path": "/api/image/924/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "644",
+          "title": "OW运动鞋",
+          "score": 0.7064851451558399,
+          "image_path": "/api/image/644/1",
+          "image_index": 1
+        },
+        {
+          "product_id": "792",
+          "title": "TBL户外靴",
+          "score": 0.6969587683677674,
+          "image_path": "/api/image/792/9",
+          "image_index": 9
+        },
+        {
+          "product_id": "932",
+          "title": "勾n Max90气垫运动鞋(多色合集)",
+          "score": 0.696822061563012,
+          "image_path": "/api/image/932/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "698",
+          "title": "N-MAX-1",
+          "score": 0.6745254737467726,
+          "image_path": "/api/image/698/5",
+          "image_index": 5
+        }
+      ],
+      "latency_seconds": 0.4084911346435547
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714044088/3eca5c2716dc8a60.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾1 UN联名板鞋",
+      "expected_product_id": "924",
+      "ranked_products": [
+        {
+          "product_id": "924",
+          "title": "勾1 UN联名板鞋",
+          "score": 0.9562678337097168,
+          "image_path": "/api/image/924/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "824",
+          "title": "AS-N*C",
+          "score": 0.804624605178833,
+          "image_path": "/api/image/824/32",
+          "image_index": 32
+        },
+        {
+          "product_id": "702",
+          "title": "N跑鞋",
+          "score": 0.7987497315434033,
+          "image_path": "/api/image/702/10",
+          "image_index": 10
+        },
+        {
+          "product_id": "688",
+          "title": "N-Sac*i3 0 ",
+          "score": 0.7732087221030703,
+          "image_path": "/api/image/688/11",
+          "image_index": 11
+        },
+        {
+          "product_id": "685",
+          "title": "N-Sac*i",
+          "score": 0.7717025837360523,
+          "image_path": "/api/image/685/8",
+          "image_index": 8
+        }
+      ],
+      "latency_seconds": 0.5329639911651611
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714044088/08fba8688a2ab2e8.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾1 UN联名板鞋",
+      "expected_product_id": "924",
+      "ranked_products": [
+        {
+          "product_id": "924",
+          "title": "勾1 UN联名板鞋",
+          "score": 1.0,
+          "image_path": "/api/image/924/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "769",
+          "title": "AF板鞋",
+          "score": 0.7971100687980652,
+          "image_path": "/api/image/769/6",
+          "image_index": 6
+        },
+        {
+          "product_id": "615",
+          "title": "AF板鞋联名款",
+          "score": 0.7878436271759163,
+          "image_path": "/api/image/615/1",
+          "image_index": 1
+        },
+        {
+          "product_id": "697",
+          "title": "N-TL 2.5",
+          "score": 0.784505142883905,
+          "image_path": "/api/image/697/15",
+          "image_index": 15
+        },
+        {
+          "product_id": "930",
+          "title": "勾dg 板鞋(多色/品牌联名合集)",
+          "score": 0.7481230035413055,
+          "image_path": "/api/image/930/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.4370429515838623
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714032296/f9b0a4ac60e8ee78.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾dg 联名DunkSB低帮板鞋",
+      "expected_product_id": "925",
+      "ranked_products": [
+        {
+          "product_id": "927",
+          "title": "勾dg 板鞋(三色合集)",
+          "score": 0.977545882438318,
+          "image_path": "/api/image/927/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "925",
+          "title": "勾dg 联名DunkSB低帮板鞋",
+          "score": 0.9735228048305137,
+          "image_path": "/api/image/925/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "645",
+          "title": "OW休闲鞋",
+          "score": 0.8061253309249878,
+          "image_path": "/api/image/645/3",
+          "image_index": 3
+        },
+        {
+          "product_id": "930",
+          "title": "勾dg 板鞋(多色/品牌联名合集)",
+          "score": 0.7651810050010681,
+          "image_path": "/api/image/930/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "614",
+          "title": "AF系列合集",
+          "score": 0.756893005761165,
+          "image_path": "/api/image/614/0",
+          "image_index": 0
+        }
+      ],
+      "latency_seconds": 0.44666099548339844
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714032296/be37fc8b66942f19.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾dg 联名DunkSB低帮板鞋",
+      "expected_product_id": "925",
+      "ranked_products": [
+        {
+          "product_id": "925",
+          "title": "勾dg 联名DunkSB低帮板鞋",
+          "score": 1.023048210144043,
+          "image_path": "/api/image/925/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "933",
+          "title": "勾1 粉色板鞋",
+          "score": 0.9762397675067866,
+          "image_path": "/api/image/933/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "924",
+          "title": "勾1 UN联名板鞋",
+          "score": 0.9295009151907113,
+          "image_path": "/api/image/924/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "930",
+          "title": "勾dg 板鞋(多色/品牌联名合集)",
+          "score": 0.8790081550799422,
+          "image_path": "/api/image/930/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "920",
+          "title": "勾3 aj3黑猫",
+          "score": 0.8591155409812927,
+          "image_path": "/api/image/920/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.5065200328826904
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714032296/8e7fe3aa2e7984f8.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾dg 联名DunkSB低帮板鞋",
+      "expected_product_id": "925",
+      "ranked_products": [
+        {
+          "product_id": "925",
+          "title": "勾dg 联名DunkSB低帮板鞋",
+          "score": 0.9641700723871712,
+          "image_path": "/api/image/925/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "704",
+          "title": "A * 1 Tr*vis sc*t 系列",
+          "score": 0.8650991201400757,
+          "image_path": "/api/image/704/2",
+          "image_index": 2
+        },
+        {
+          "product_id": "653",
+          "title": "K熊猫联名",
+          "score": 0.8377279043197632,
+          "image_path": "/api/image/653/0",
+          "image_index": 0
+        },
+        {
+          "product_id": "933",
+          "title": "勾1 粉色板鞋",
+          "score": 0.822065304557698,
+          "image_path": "/api/image/933/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "924",
+          "title": "勾1 UN联名板鞋",
+          "score": 0.8166441109268581,
+          "image_path": "/api/image/924/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.4638369083404541
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714032296/c6e3e821cf9c507d.png",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾dg 联名DunkSB低帮板鞋",
+      "expected_product_id": "925",
+      "ranked_products": [
+        {
+          "product_id": "925",
+          "title": "勾dg 联名DunkSB低帮板鞋",
+          "score": 1.0,
+          "image_path": "/api/image/925/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "664",
+          "title": "K板鞋",
+          "score": 0.8712287930874782,
+          "image_path": "/api/image/664/2",
+          "image_index": 2
+        },
+        {
+          "product_id": "654",
+          "title": "K板鞋",
+          "score": 0.8661178029998273,
+          "image_path": "/api/image/654/2",
+          "image_index": 2
+        },
+        {
+          "product_id": "658",
+          "title": "K-悟空",
+          "score": 0.8452826023101807,
+          "image_path": "/api/image/658/9",
+          "image_index": 9
+        },
+        {
+          "product_id": "662",
+          "title": "K动物园",
+          "score": 0.8387058929801927,
+          "image_path": "/api/image/662/7",
+          "image_index": 7
+        }
+      ],
+      "latency_seconds": 0.643517017364502
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714032296/61a4f88e3a96d27d.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾dg 联名DunkSB低帮板鞋",
+      "expected_product_id": "925",
+      "ranked_products": [
+        {
+          "product_id": "925",
+          "title": "勾dg 联名DunkSB低帮板鞋",
+          "score": 1.0,
+          "image_path": "/api/image/925/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "646",
+          "title": "K休闲鞋",
+          "score": 0.9078280210494996,
+          "image_path": "/api/image/646/19",
+          "image_index": 19
+        },
+        {
+          "product_id": "663",
+          "title": "K休闲鞋",
+          "score": 0.9077300502212564,
+          "image_path": "/api/image/663/12",
+          "image_index": 12
+        },
+        {
+          "product_id": "652",
+          "title": "K-of love",
+          "score": 0.8957348415050984,
+          "image_path": "/api/image/652/4",
+          "image_index": 4
+        },
+        {
+          "product_id": "647",
+          "title": "K鞋",
+          "score": 0.8716985654773868,
+          "image_path": "/api/image/647/2",
+          "image_index": 2
+        }
+      ],
+      "latency_seconds": 0.5767159461975098
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714032296/a6d3c21c65349621.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾dg 联名DunkSB低帮板鞋",
+      "expected_product_id": "925",
+      "ranked_products": [
+        {
+          "product_id": "925",
+          "title": "勾dg 联名DunkSB低帮板鞋",
+          "score": 0.9841780662536621,
+          "image_path": "/api/image/925/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "790",
+          "title": "PO纯棉袜子",
+          "score": 0.7830979108810425,
+          "image_path": "/api/image/790/0",
+          "image_index": 0
+        },
+        {
+          "product_id": "814",
+          "title": "KHT袜子",
+          "score": 0.7395415714138209,
+          "image_path": "/api/image/814/3",
+          "image_index": 3
+        },
+        {
+          "product_id": "686",
+          "title": "I帽",
+          "score": 0.7246081710590405,
+          "image_path": "/api/image/686/0",
+          "image_index": 0
+        },
+        {
+          "product_id": "774",
+          "title": "PO拉链毛衣",
+          "score": 0.7079216974536284,
+          "image_path": "/api/image/774/14",
+          "image_index": 14
+        }
+      ],
+      "latency_seconds": 0.587622880935669
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711016729/677e799d6ac9e884.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+      "expected_product_id": "926",
+      "ranked_products": [
+        {
+          "product_id": "926",
+          "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+          "score": 0.9550151059815993,
+          "image_path": "/api/image/926/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "643",
+          "title": "OW休闲鞋联名",
+          "score": 0.8584956810655515,
+          "image_path": "/api/image/643/2",
+          "image_index": 2
+        },
+        {
+          "product_id": "865",
+          "title": "K-OW",
+          "score": 0.8409888625144959,
+          "image_path": "/api/image/865/17",
+          "image_index": 17
+        },
+        {
+          "product_id": "925",
+          "title": "勾dg 联名DunkSB低帮板鞋",
+          "score": 0.7943277126396422,
+          "image_path": "/api/image/925/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "933",
+          "title": "勾1 粉色板鞋",
+          "score": 0.789827823638916,
+          "image_path": "/api/image/933/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.5322291851043701
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711016729/656d02b5efe712b0.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+      "expected_product_id": "926",
+      "ranked_products": [
+        {
+          "product_id": "926",
+          "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+          "score": 0.9654965400695801,
+          "image_path": "/api/image/926/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "645",
+          "title": "OW休闲鞋",
+          "score": 0.957649576663971,
+          "image_path": "/api/image/645/6",
+          "image_index": 6
+        },
+        {
+          "product_id": "865",
+          "title": "K-OW",
+          "score": 0.831583418450927,
+          "image_path": "/api/image/865/16",
+          "image_index": 16
+        },
+        {
+          "product_id": "643",
+          "title": "OW休闲鞋联名",
+          "score": 0.818933556900283,
+          "image_path": "/api/image/643/8",
+          "image_index": 8
+        },
+        {
+          "product_id": "641",
+          "title": "AF-OW",
+          "score": 0.8071481353388534,
+          "image_path": "/api/image/641/13",
+          "image_index": 13
+        }
+      ],
+      "latency_seconds": 0.5108547210693359
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711016729/799dc80c678a9731.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+      "expected_product_id": "926",
+      "ranked_products": [
+        {
+          "product_id": "933",
+          "title": "勾1 粉色板鞋",
+          "score": 1.0379636764526368,
+          "image_path": "/api/image/933/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "926",
+          "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+          "score": 0.9879636764526367,
+          "image_path": "/api/image/926/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "924",
+          "title": "勾1 UN联名板鞋",
+          "score": 0.8908720734442486,
+          "image_path": "/api/image/924/1",
+          "image_index": 1
+        },
+        {
+          "product_id": "917",
+          "title": "勾1 JOR*AN 1 D*I*O*R联名",
+          "score": 0.8720768921245167,
+          "image_path": "/api/image/917/1",
+          "image_index": 1
+        },
+        {
+          "product_id": "920",
+          "title": "勾3 aj3黑猫",
+          "score": 0.8665320588252613,
+          "image_path": "/api/image/920/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.6592090129852295
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711016729/1aee4e3cadca1627.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+      "expected_product_id": "926",
+      "ranked_products": [
+        {
+          "product_id": "922",
+          "title": "勾k SB板鞋(多色合集)",
+          "score": 0.99285966055937,
+          "image_path": "/api/image/922/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "926",
+          "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+          "score": 0.9694596070098075,
+          "image_path": "/api/image/926/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "924",
+          "title": "勾1 UN联名板鞋",
+          "score": 0.9812138525547358,
+          "image_path": "/api/image/924/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "927",
+          "title": "勾dg 板鞋(三色合集)",
+          "score": 0.9660131931304932,
+          "image_path": "/api/image/927/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "925",
+          "title": "勾dg 联名DunkSB低帮板鞋",
+          "score": 0.9066446900367737,
+          "image_path": "/api/image/925/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.5132560729980469
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711016729/35c93219eab5747f.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+      "expected_product_id": "926",
+      "ranked_products": [
+        {
+          "product_id": "926",
+          "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+          "score": 1.0,
+          "image_path": "/api/image/926/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "865",
+          "title": "K-OW",
+          "score": 0.909141230583191,
+          "image_path": "/api/image/865/20",
+          "image_index": 20
+        },
+        {
+          "product_id": "641",
+          "title": "AF-OW",
+          "score": 0.845055731447163,
+          "image_path": "/api/image/641/13",
+          "image_index": 13
+        },
+        {
+          "product_id": "655",
+          "title": "K-OW",
+          "score": 0.8412584939833846,
+          "image_path": "/api/image/655/5",
+          "image_index": 5
+        },
+        {
+          "product_id": "643",
+          "title": "OW休闲鞋联名",
+          "score": 0.8175830130244999,
+          "image_path": "/api/image/643/2",
+          "image_index": 2
+        }
+      ],
+      "latency_seconds": 0.5680832862854004
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711016729/d6743cf893ef6ed1.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+      "expected_product_id": "926",
+      "ranked_products": [
+        {
+          "product_id": "926",
+          "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+          "score": 0.9729526042938232,
+          "image_path": "/api/image/926/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "641",
+          "title": "AF-OW",
+          "score": 0.8586743950843811,
+          "image_path": "/api/image/641/9",
+          "image_index": 9
+        },
+        {
+          "product_id": "753",
+          "title": "AF-OW",
+          "score": 0.8032204205338765,
+          "image_path": "/api/image/753/3",
+          "image_index": 3
+        },
+        {
+          "product_id": "618",
+          "title": "N跑步鞋",
+          "score": 0.800627419545243,
+          "image_path": "/api/image/618/8",
+          "image_index": 8
+        },
+        {
+          "product_id": "628",
+          "title": "AF休闲运动板鞋",
+          "score": 0.7947162297128643,
+          "image_path": "/api/image/628/7",
+          "image_index": 7
+        }
+      ],
+      "latency_seconds": 0.42082881927490234
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7710979345/1f7803c6fd5c490f.png",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾dg 板鞋(三色合集)",
+      "expected_product_id": "927",
+      "ranked_products": [
+        {
+          "product_id": "930",
+          "title": "勾dg 板鞋(多色/品牌联名合集)",
+          "score": 0.9999998807907104,
+          "image_path": "/api/image/930/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "927",
+          "title": "勾dg 板鞋(三色合集)",
+          "score": 1.0048940507882531,
+          "image_path": "/api/image/927/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "688",
+          "title": "N-Sac*i3 0 ",
+          "score": 0.7353339140594364,
+          "image_path": "/api/image/688/15",
+          "image_index": 15
+        },
+        {
+          "product_id": "685",
+          "title": "N-Sac*i",
+          "score": 0.7342650771141053,
+          "image_path": "/api/image/685/10",
+          "image_index": 10
+        },
+        {
+          "product_id": "925",
+          "title": "勾dg 联名DunkSB低帮板鞋",
+          "score": 0.6639969731336747,
+          "image_path": "/api/image/925/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.6414039134979248
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7710979345/f9b0a4ac60e8ee78.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾dg 板鞋(三色合集)",
+      "expected_product_id": "927",
+      "ranked_products": [
+        {
+          "product_id": "927",
+          "title": "勾dg 板鞋(三色合集)",
+          "score": 0.977545882438318,
+          "image_path": "/api/image/927/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "925",
+          "title": "勾dg 联名DunkSB低帮板鞋",
+          "score": 0.9735228048305137,
+          "image_path": "/api/image/925/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "645",
+          "title": "OW休闲鞋",
+          "score": 0.8061253309249878,
+          "image_path": "/api/image/645/3",
+          "image_index": 3
+        },
+        {
+          "product_id": "930",
+          "title": "勾dg 板鞋(多色/品牌联名合集)",
+          "score": 0.7651810050010681,
+          "image_path": "/api/image/930/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "614",
+          "title": "AF系列合集",
+          "score": 0.756893005761165,
+          "image_path": "/api/image/614/0",
+          "image_index": 0
+        }
+      ],
+      "latency_seconds": 0.5956978797912598
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7710979345/97dcc0cb919cb1e7.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾dg 板鞋(三色合集)",
+      "expected_product_id": "927",
+      "ranked_products": [
+        {
+          "product_id": "927",
+          "title": "勾dg 板鞋(三色合集)",
+          "score": 1.0,
+          "image_path": "/api/image/927/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "895",
+          "title": "N-休闲鞋",
+          "score": 0.8513647513033447,
+          "image_path": "/api/image/895/0",
+          "image_index": 0
+        },
+        {
+          "product_id": "792",
+          "title": "TBL户外靴",
+          "score": 0.823587167263031,
+          "image_path": "/api/image/792/0",
+          "image_index": 0
+        },
+        {
+          "product_id": "828",
+          "title": "AS休闲鞋",
+          "score": 0.7384016943127897,
+          "image_path": "/api/image/828/2",
+          "image_index": 2
+        },
+        {
+          "product_id": "891",
+          "title": "N-Ti",
+          "score": 0.7338074192963322,
+          "image_path": "/api/image/891/1",
+          "image_index": 1
+        }
+      ],
+      "latency_seconds": 0.41353607177734375
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7710979345/67f7e1cd22c6420c.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾dg 板鞋(三色合集)",
+      "expected_product_id": "927",
+      "ranked_products": [
+        {
+          "product_id": "927",
+          "title": "勾dg 板鞋(三色合集)",
+          "score": 1.0012642309823372,
+          "image_path": "/api/image/927/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "923",
+          "title": "勾n shoxRide2运动鞋(四色合集)",
+          "score": 1.0,
+          "image_path": "/api/image/923/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "695",
+          "title": "N-95",
+          "score": 0.7869853258132935,
+          "image_path": "/api/image/695/26",
+          "image_index": 26
+        },
+        {
+          "product_id": "887",
+          "title": "N-M*X95-C*G",
+          "score": 0.7255192519255376,
+          "image_path": "/api/image/887/7",
+          "image_index": 7
+        },
+        {
+          "product_id": "918",
+          "title": "勾n HotStep2气垫运动鞋(基础色合集)",
+          "score": 0.7098652653699815,
+          "image_path": "/api/image/918/4",
+          "image_index": 4
+        }
+      ],
+      "latency_seconds": 0.46618199348449707
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7710979345/53fd70566f021833.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾dg 板鞋(三色合集)",
+      "expected_product_id": "927",
+      "ranked_products": [
+        {
+          "product_id": "927",
+          "title": "勾dg 板鞋(三色合集)",
+          "score": 0.9999998807907104,
+          "image_path": "/api/image/927/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "895",
+          "title": "N-休闲鞋",
+          "score": 0.8506849387829,
+          "image_path": "/api/image/895/0",
+          "image_index": 0
+        },
+        {
+          "product_id": "792",
+          "title": "TBL户外靴",
+          "score": 0.8026907920837403,
+          "image_path": "/api/image/792/0",
+          "image_index": 0
+        },
+        {
+          "product_id": "891",
+          "title": "N-Ti",
+          "score": 0.7659890488831808,
+          "image_path": "/api/image/891/1",
+          "image_index": 1
+        },
+        {
+          "product_id": "706",
+          "title": "N篮球鞋4",
+          "score": 0.7483604049100083,
+          "image_path": "/api/image/706/2",
+          "image_index": 2
+        }
+      ],
+      "latency_seconds": 0.7586560249328613
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7710979345/1aee4e3cadca1627.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾dg 板鞋(三色合集)",
+      "expected_product_id": "927",
+      "ranked_products": [
+        {
+          "product_id": "922",
+          "title": "勾k SB板鞋(多色合集)",
+          "score": 0.99285966055937,
+          "image_path": "/api/image/922/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "926",
+          "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+          "score": 0.9694596070098075,
+          "image_path": "/api/image/926/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "924",
+          "title": "勾1 UN联名板鞋",
+          "score": 0.9812138525547358,
+          "image_path": "/api/image/924/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "927",
+          "title": "勾dg 板鞋(三色合集)",
+          "score": 0.9660131931304932,
+          "image_path": "/api/image/927/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "925",
+          "title": "勾dg 联名DunkSB低帮板鞋",
+          "score": 0.9066446900367737,
+          "image_path": "/api/image/925/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.5321028232574463
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716671474/cc0f415031efa596.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾6 JOR*AN 6 （Series)",
+      "expected_product_id": "928",
+      "ranked_products": [
+        {
+          "product_id": "928",
+          "title": "勾6 JOR*AN 6 （Series)",
+          "score": 0.9780843477438793,
+          "image_path": "/api/image/928/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "629",
+          "title": "5",
+          "score": 0.7688275456428528,
+          "image_path": "/api/image/629/20",
+          "image_index": 20
+        },
+        {
+          "product_id": "630",
+          "title": "4",
+          "score": 0.7594102188984849,
+          "image_path": "/api/image/630/16",
+          "image_index": 16
+        },
+        {
+          "product_id": "707",
+          "title": "J*11",
+          "score": 0.7550385926977458,
+          "image_path": "/api/image/707/5",
+          "image_index": 5
+        },
+        {
+          "product_id": "929",
+          "title": "勾11 JOR*AN 11 （Series)",
+          "score": 0.7365623116493225,
+          "image_path": "/api/image/929/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.5
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716671474/7c506a7acd4f97b8.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾6 JOR*AN 6 （Series)",
+      "expected_product_id": "928",
+      "ranked_products": [
+        {
+          "product_id": "928",
+          "title": "勾6 JOR*AN 6 （Series)",
+          "score": 0.9874138832092285,
+          "image_path": "/api/image/928/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "629",
+          "title": "5",
+          "score": 0.9271510124206543,
+          "image_path": "/api/image/629/9",
+          "image_index": 9
+        },
+        {
+          "product_id": "630",
+          "title": "4",
+          "score": 0.886517597341059,
+          "image_path": "/api/image/630/36",
+          "image_index": 36
+        },
+        {
+          "product_id": "709",
+          "title": "3",
+          "score": 0.8412738046313556,
+          "image_path": "/api/image/709/7",
+          "image_index": 7
+        },
+        {
+          "product_id": "708",
+          "title": "13",
+          "score": 0.8397829711043506,
+          "image_path": "/api/image/708/20",
+          "image_index": 20
+        }
+      ],
+      "latency_seconds": 0.6851840019226074
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716671474/9a9cb1e1794d95d7.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾6 JOR*AN 6 （Series)",
+      "expected_product_id": "928",
+      "ranked_products": [
+        {
+          "product_id": "928",
+          "title": "勾6 JOR*AN 6 （Series)",
+          "score": 0.9873383254469124,
+          "image_path": "/api/image/928/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "629",
+          "title": "5",
+          "score": 0.8343260765075684,
+          "image_path": "/api/image/629/32",
+          "image_index": 32
+        },
+        {
+          "product_id": "630",
+          "title": "4",
+          "score": 0.8178352925062734,
+          "image_path": "/api/image/630/4",
+          "image_index": 4
+        },
+        {
+          "product_id": "709",
+          "title": "3",
+          "score": 0.7981645254757171,
+          "image_path": "/api/image/709/5",
+          "image_index": 5
+        },
+        {
+          "product_id": "924",
+          "title": "勾1 UN联名板鞋",
+          "score": 0.7782087326049805,
+          "image_path": "/api/image/924/3",
+          "image_index": 3
+        }
+      ],
+      "latency_seconds": 0.5713999271392822
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716671474/bd8e415954e47d88.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾6 JOR*AN 6 （Series)",
+      "expected_product_id": "928",
+      "ranked_products": [
+        {
+          "product_id": "928",
+          "title": "勾6 JOR*AN 6 （Series)",
+          "score": 0.9686996340751648,
+          "image_path": "/api/image/928/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "629",
+          "title": "5",
+          "score": 0.9114290356636048,
+          "image_path": "/api/image/629/12",
+          "image_index": 12
+        },
+        {
+          "product_id": "630",
+          "title": "4",
+          "score": 0.9063627957749857,
+          "image_path": "/api/image/630/17",
+          "image_index": 17
+        },
+        {
+          "product_id": "708",
+          "title": "13",
+          "score": 0.8565213175078229,
+          "image_path": "/api/image/708/4",
+          "image_index": 4
+        },
+        {
+          "product_id": "709",
+          "title": "3",
+          "score": 0.8551134956241578,
+          "image_path": "/api/image/709/12",
+          "image_index": 12
+        }
+      ],
+      "latency_seconds": 0.6739621162414551
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716671474/f8826c75ed1d042a.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾6 JOR*AN 6 （Series)",
+      "expected_product_id": "928",
+      "ranked_products": [
+        {
+          "product_id": "928",
+          "title": "勾6 JOR*AN 6 （Series)",
+          "score": 0.981811520816506,
+          "image_path": "/api/image/928/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "707",
+          "title": "J*11",
+          "score": 0.8533410906791687,
+          "image_path": "/api/image/707/40",
+          "image_index": 40
+        },
+        {
+          "product_id": "708",
+          "title": "13",
+          "score": 0.850191694177466,
+          "image_path": "/api/image/708/2",
+          "image_index": 2
+        },
+        {
+          "product_id": "630",
+          "title": "4",
+          "score": 0.8306949218998336,
+          "image_path": "/api/image/630/4",
+          "image_index": 4
+        },
+        {
+          "product_id": "929",
+          "title": "勾11 JOR*AN 11 （Series)",
+          "score": 0.8233870267868042,
+          "image_path": "/api/image/929/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.5102698802947998
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716671474/68e254b70d6b2c98.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾6 JOR*AN 6 （Series)",
+      "expected_product_id": "928",
+      "ranked_products": [
+        {
+          "product_id": "928",
+          "title": "勾6 JOR*AN 6 （Series)",
+          "score": 0.9852726300609298,
+          "image_path": "/api/image/928/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "707",
+          "title": "J*11",
+          "score": 0.751460599899292,
+          "image_path": "/api/image/707/47",
+          "image_index": 47
+        },
+        {
+          "product_id": "708",
+          "title": "13",
+          "score": 0.7445805753440332,
+          "image_path": "/api/image/708/27",
+          "image_index": 27
+        },
+        {
+          "product_id": "929",
+          "title": "勾11 JOR*AN 11 （Series)",
+          "score": 0.7218314260606778,
+          "image_path": "/api/image/929/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "917",
+          "title": "勾1 JOR*AN 1 D*I*O*R联名",
+          "score": 0.6921385526657104,
+          "image_path": "/api/image/917/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.5945971012115479
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716745908/bb36002d7d1d8f82.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾11 JOR*AN 11 （Series)",
+      "expected_product_id": "929",
+      "ranked_products": [
+        {
+          "product_id": "929",
+          "title": "勾11 JOR*AN 11 （Series)",
+          "score": 0.9771319366005607,
+          "image_path": "/api/image/929/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "707",
+          "title": "J*11",
+          "score": 0.9412897109985352,
+          "image_path": "/api/image/707/10",
+          "image_index": 10
+        },
+        {
+          "product_id": "630",
+          "title": "4",
+          "score": 0.8340340668720244,
+          "image_path": "/api/image/630/23",
+          "image_index": 23
+        },
+        {
+          "product_id": "709",
+          "title": "3",
+          "score": 0.820235357455658,
+          "image_path": "/api/image/709/13",
+          "image_index": 13
+        },
+        {
+          "product_id": "924",
+          "title": "勾1 UN联名板鞋",
+          "score": 0.8066717982292175,
+          "image_path": "/api/image/924/3",
+          "image_index": 3
+        }
+      ],
+      "latency_seconds": 0.5696470737457275
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716745908/7de772c5a50710fe.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾11 JOR*AN 11 （Series)",
+      "expected_product_id": "929",
+      "ranked_products": [
+        {
+          "product_id": "929",
+          "title": "勾11 JOR*AN 11 （Series)",
+          "score": 0.9738803482764787,
+          "image_path": "/api/image/929/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "707",
+          "title": "J*11",
+          "score": 0.9541956663131714,
+          "image_path": "/api/image/707/47",
+          "image_index": 47
+        },
+        {
+          "product_id": "708",
+          "title": "13",
+          "score": 0.8254434791347007,
+          "image_path": "/api/image/708/2",
+          "image_index": 2
+        },
+        {
+          "product_id": "709",
+          "title": "3",
+          "score": 0.8232685853317937,
+          "image_path": "/api/image/709/9",
+          "image_index": 9
+        },
+        {
+          "product_id": "928",
+          "title": "勾6 JOR*AN 6 （Series)",
+          "score": 0.8213295936584473,
+          "image_path": "/api/image/928/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.5281169414520264
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716745908/581e551514722699.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾11 JOR*AN 11 （Series)",
+      "expected_product_id": "929",
+      "ranked_products": [
+        {
+          "product_id": "929",
+          "title": "勾11 JOR*AN 11 （Series)",
+          "score": 0.9819297790527344,
+          "image_path": "/api/image/929/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "707",
+          "title": "J*11",
+          "score": 0.9722093224525452,
+          "image_path": "/api/image/707/21",
+          "image_index": 21
+        },
+        {
+          "product_id": "629",
+          "title": "5",
+          "score": 0.8756265580435895,
+          "image_path": "/api/image/629/6",
+          "image_index": 6
+        },
+        {
+          "product_id": "708",
+          "title": "13",
+          "score": 0.8687516317163404,
+          "image_path": "/api/image/708/24",
+          "image_index": 24
+        },
+        {
+          "product_id": "630",
+          "title": "4",
+          "score": 0.8656642286251914,
+          "image_path": "/api/image/630/17",
+          "image_index": 17
+        }
+      ],
+      "latency_seconds": 0.448228120803833
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716745908/89fbb5996e50ee70.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾11 JOR*AN 11 （Series)",
+      "expected_product_id": "929",
+      "ranked_products": [
+        {
+          "product_id": "929",
+          "title": "勾11 JOR*AN 11 （Series)",
+          "score": 1.0032958284230418,
+          "image_path": "/api/image/929/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "707",
+          "title": "J*11",
+          "score": 0.8893165469169617,
+          "image_path": "/api/image/707/39",
+          "image_index": 39
+        },
+        {
+          "product_id": "630",
+          "title": "4",
+          "score": 0.7561276008164651,
+          "image_path": "/api/image/630/38",
+          "image_index": 38
+        },
+        {
+          "product_id": "709",
+          "title": "3",
+          "score": 0.7298326086605391,
+          "image_path": "/api/image/709/9",
+          "image_index": 9
+        },
+        {
+          "product_id": "928",
+          "title": "勾6 JOR*AN 6 （Series)",
+          "score": 0.7293182611465454,
+          "image_path": "/api/image/928/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.5812816619873047
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716745908/6773c9224deadc6a.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾11 JOR*AN 11 （Series)",
+      "expected_product_id": "929",
+      "ranked_products": [
+        {
+          "product_id": "929",
+          "title": "勾11 JOR*AN 11 （Series)",
+          "score": 0.9808012247085571,
+          "image_path": "/api/image/929/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "707",
+          "title": "J*11",
+          "score": 0.9732578277587891,
+          "image_path": "/api/image/707/39",
+          "image_index": 39
+        },
+        {
+          "product_id": "630",
+          "title": "4",
+          "score": 0.8397074701892043,
+          "image_path": "/api/image/630/38",
+          "image_index": 38
+        },
+        {
+          "product_id": "709",
+          "title": "3",
+          "score": 0.813673129335341,
+          "image_path": "/api/image/709/9",
+          "image_index": 9
+        },
+        {
+          "product_id": "708",
+          "title": "13",
+          "score": 0.8113786429518991,
+          "image_path": "/api/image/708/30",
+          "image_index": 30
+        }
+      ],
+      "latency_seconds": 0.5289337635040283
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716745908/731d2926a372b88c.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾11 JOR*AN 11 （Series)",
+      "expected_product_id": "929",
+      "ranked_products": [
+        {
+          "product_id": "929",
+          "title": "勾11 JOR*AN 11 （Series)",
+          "score": 0.9779995679855347,
+          "image_path": "/api/image/929/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "707",
+          "title": "J*11",
+          "score": 0.8957906246185303,
+          "image_path": "/api/image/707/3",
+          "image_index": 3
+        },
+        {
+          "product_id": "630",
+          "title": "4",
+          "score": 0.7718971857515882,
+          "image_path": "/api/image/630/12",
+          "image_index": 12
+        },
+        {
+          "product_id": "629",
+          "title": "5",
+          "score": 0.7671636462633956,
+          "image_path": "/api/image/629/6",
+          "image_index": 6
+        },
+        {
+          "product_id": "709",
+          "title": "3",
+          "score": 0.7566693538061855,
+          "image_path": "/api/image/709/6",
+          "image_index": 6
+        }
+      ],
+      "latency_seconds": 0.5500819683074951
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998068/b01c66549efc1c88.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾dg 板鞋(多色/品牌联名合集)",
+      "expected_product_id": "930",
+      "ranked_products": [
+        {
+          "product_id": "930",
+          "title": "勾dg 板鞋(多色/品牌联名合集)",
+          "score": 0.9616047739982605,
+          "image_path": "/api/image/930/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "624",
+          "title": "N-SUP",
+          "score": 0.736923623085022,
+          "image_path": "/api/image/624/0",
+          "image_index": 0
+        },
+        {
+          "product_id": "923",
+          "title": "勾n shoxRide2运动鞋(四色合集)",
+          "score": 0.7011521445815228,
+          "image_path": "/api/image/923/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "927",
+          "title": "勾dg 板鞋(三色合集)",
+          "score": 0.6900715558018273,
+          "image_path": "/api/image/927/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "932",
+          "title": "勾n Max90气垫运动鞋(多色合集)",
+          "score": 0.6885229256735186,
+          "image_path": "/api/image/932/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.588120698928833
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998068/1f7803c6fd5c490f.png",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾dg 板鞋(多色/品牌联名合集)",
+      "expected_product_id": "930",
+      "ranked_products": [
+        {
+          "product_id": "930",
+          "title": "勾dg 板鞋(多色/品牌联名合集)",
+          "score": 0.9999998807907104,
+          "image_path": "/api/image/930/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "927",
+          "title": "勾dg 板鞋(三色合集)",
+          "score": 1.0048940507882531,
+          "image_path": "/api/image/927/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "688",
+          "title": "N-Sac*i3 0 ",
+          "score": 0.7353339140594364,
+          "image_path": "/api/image/688/15",
+          "image_index": 15
+        },
+        {
+          "product_id": "685",
+          "title": "N-Sac*i",
+          "score": 0.7342650771141053,
+          "image_path": "/api/image/685/10",
+          "image_index": 10
+        },
+        {
+          "product_id": "925",
+          "title": "勾dg 联名DunkSB低帮板鞋",
+          "score": 0.6639969731336747,
+          "image_path": "/api/image/925/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.5739932060241699
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998068/e526f3aedafbdb94.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾dg 板鞋(多色/品牌联名合集)",
+      "expected_product_id": "930",
+      "ranked_products": [
+        {
+          "product_id": "930",
+          "title": "勾dg 板鞋(多色/品牌联名合集)",
+          "score": 0.9745085113466977,
+          "image_path": "/api/image/930/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "658",
+          "title": "K-悟空",
+          "score": 0.8877516269683838,
+          "image_path": "/api/image/658/7",
+          "image_index": 7
+        },
+        {
+          "product_id": "925",
+          "title": "勾dg 联名DunkSB低帮板鞋",
+          "score": 0.8727514623146815,
+          "image_path": "/api/image/925/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "933",
+          "title": "勾1 粉色板鞋",
+          "score": 0.8578144311904907,
+          "image_path": "/api/image/933/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "874",
+          "title": "K休闲鞋",
+          "score": 0.8336350383160904,
+          "image_path": "/api/image/874/3",
+          "image_index": 3
+        }
+      ],
+      "latency_seconds": 0.5350890159606934
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998068/c357fd2f090aa8d2.png",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾dg 板鞋(多色/品牌联名合集)",
+      "expected_product_id": "930",
+      "ranked_products": [
+        {
+          "product_id": "930",
+          "title": "勾dg 板鞋(多色/品牌联名合集)",
+          "score": 0.9558748006820679,
+          "image_path": "/api/image/930/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "927",
+          "title": "勾dg 板鞋(三色合集)",
+          "score": 0.8706487001949752,
+          "image_path": "/api/image/927/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "685",
+          "title": "N-Sac*i",
+          "score": 0.7294651150703431,
+          "image_path": "/api/image/685/15",
+          "image_index": 15
+        },
+        {
+          "product_id": "645",
+          "title": "OW休闲鞋",
+          "score": 0.7211926301309068,
+          "image_path": "/api/image/645/2",
+          "image_index": 2
+        },
+        {
+          "product_id": "925",
+          "title": "勾dg 联名DunkSB低帮板鞋",
+          "score": 0.7099690831851657,
+          "image_path": "/api/image/925/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.5706040859222412
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998068/181f8583b9caa9fb.png",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾dg 板鞋(多色/品牌联名合集)",
+      "expected_product_id": "930",
+      "ranked_products": [
+        {
+          "product_id": "930",
+          "title": "勾dg 板鞋(多色/品牌联名合集)",
+          "score": 0.9507510662078857,
+          "image_path": "/api/image/930/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "927",
+          "title": "勾dg 板鞋(三色合集)",
+          "score": 0.8332863071579426,
+          "image_path": "/api/image/927/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "645",
+          "title": "OW休闲鞋",
+          "score": 0.6913692235946656,
+          "image_path": "/api/image/645/2",
+          "image_index": 2
+        },
+        {
+          "product_id": "925",
+          "title": "勾dg 联名DunkSB低帮板鞋",
+          "score": 0.68784893272341,
+          "image_path": "/api/image/925/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "688",
+          "title": "N-Sac*i3 0 ",
+          "score": 0.6732318957200153,
+          "image_path": "/api/image/688/15",
+          "image_index": 15
+        }
+      ],
+      "latency_seconds": 0.6499872207641602
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998068/d451efbeb6f13be3.png",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾dg 板鞋(多色/品牌联名合集)",
+      "expected_product_id": "930",
+      "ranked_products": [
+        {
+          "product_id": "930",
+          "title": "勾dg 板鞋(多色/品牌联名合集)",
+          "score": 0.9599385261535645,
+          "image_path": "/api/image/930/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "927",
+          "title": "勾dg 板鞋(三色合集)",
+          "score": 0.8449556636750948,
+          "image_path": "/api/image/927/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "685",
+          "title": "N-Sac*i",
+          "score": 0.7868755340576172,
+          "image_path": "/api/image/685/20",
+          "image_index": 20
+        },
+        {
+          "product_id": "925",
+          "title": "勾dg 联名DunkSB低帮板鞋",
+          "score": 0.7640951223036593,
+          "image_path": "/api/image/925/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "898",
+          "title": "N跑鞋",
+          "score": 0.7364809709113644,
+          "image_path": "/api/image/898/0",
+          "image_index": 0
+        }
+      ],
+      "latency_seconds": 0.5353569984436035
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713979464/55442a1fb0827e59.gif",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾n VapormaxFlyknit气垫鞋",
+      "expected_product_id": "931",
+      "ranked_products": [
+        {
+          "product_id": "931",
+          "title": "勾n VapormaxFlyknit气垫鞋",
+          "score": 0.969433946008714,
+          "image_path": "/api/image/931/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "750",
+          "title": "N运动鞋",
+          "score": 0.7579189419746399,
+          "image_path": "/api/image/750/17",
+          "image_index": 17
+        },
+        {
+          "product_id": "625",
+          "title": "N运动鞋",
+          "score": 0.7450291974360159,
+          "image_path": "/api/image/625/7",
+          "image_index": 7
+        },
+        {
+          "product_id": "701",
+          "title": "N运动鞋",
+          "score": 0.7344017398646271,
+          "image_path": "/api/image/701/1",
+          "image_index": 1
+        },
+        {
+          "product_id": "921",
+          "title": "勾n HotStepTerra运动跑步鞋",
+          "score": 0.7333359718322754,
+          "image_path": "/api/image/921/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.5274879932403564
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713979464/00f0972d3f5a583a.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾n VapormaxFlyknit气垫鞋",
+      "expected_product_id": "931",
+      "ranked_products": [
+        {
+          "product_id": "931",
+          "title": "勾n VapormaxFlyknit气垫鞋",
+          "score": 1.0018645499311138,
+          "image_path": "/api/image/931/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "701",
+          "title": "N运动鞋",
+          "score": 0.9466721163273697,
+          "image_path": "/api/image/701/0",
+          "image_index": 0
+        },
+        {
+          "product_id": "918",
+          "title": "勾n HotStep2气垫运动鞋(基础色合集)",
+          "score": 0.9124784469604492,
+          "image_path": "/api/image/918/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "623",
+          "title": "N-T*N",
+          "score": 0.8925600528717041,
+          "image_path": "/api/image/623/29",
+          "image_index": 29
+        },
+        {
+          "product_id": "695",
+          "title": "N-95",
+          "score": 0.8847782870785276,
+          "image_path": "/api/image/695/23",
+          "image_index": 23
+        }
+      ],
+      "latency_seconds": 8.502620220184326
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713979464/54980143b801fd87.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾n VapormaxFlyknit气垫鞋",
+      "expected_product_id": "931",
+      "ranked_products": [
+        {
+          "product_id": "931",
+          "title": "勾n VapormaxFlyknit气垫鞋",
+          "score": 0.9697018468113049,
+          "image_path": "/api/image/931/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "918",
+          "title": "勾n HotStep2气垫运动鞋(基础色合集)",
+          "score": 1.0082814478874207,
+          "image_path": "/api/image/918/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "750",
+          "title": "N运动鞋",
+          "score": 0.8889329910278321,
+          "image_path": "/api/image/750/26",
+          "image_index": 26
+        },
+        {
+          "product_id": "625",
+          "title": "N运动鞋",
+          "score": 0.8777205931924574,
+          "image_path": "/api/image/625/9",
+          "image_index": 9
+        },
+        {
+          "product_id": "826",
+          "title": "AS-ST2",
+          "score": 0.8587706153773736,
+          "image_path": "/api/image/826/12",
+          "image_index": 12
+        }
+      ],
+      "latency_seconds": 8.153759002685547
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713979464/6302df787a03e76d.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾n VapormaxFlyknit气垫鞋",
+      "expected_product_id": "931",
+      "ranked_products": [
+        {
+          "product_id": "931",
+          "title": "勾n VapormaxFlyknit气垫鞋",
+          "score": 0.9806462892090138,
+          "image_path": "/api/image/931/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "921",
+          "title": "勾n HotStepTerra运动跑步鞋",
+          "score": 0.7832328081130981,
+          "image_path": "/api/image/921/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "826",
+          "title": "AS-ST2",
+          "score": 0.7363548755645752,
+          "image_path": "/api/image/826/2",
+          "image_index": 2
+        },
+        {
+          "product_id": "750",
+          "title": "N运动鞋",
+          "score": 0.7344488587908851,
+          "image_path": "/api/image/750/13",
+          "image_index": 13
+        },
+        {
+          "product_id": "916",
+          "title": "勾n zoom阿尔法跑步鞋(多色合集)",
+          "score": 0.6907085545073599,
+          "image_path": "/api/image/916/1",
+          "image_index": 1
+        }
+      ],
+      "latency_seconds": 0.48204517364501953
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713979464/f0edd27733fd949b.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾n VapormaxFlyknit气垫鞋",
+      "expected_product_id": "931",
+      "ranked_products": [
+        {
+          "product_id": "931",
+          "title": "勾n VapormaxFlyknit气垫鞋",
+          "score": 0.958151994623772,
+          "image_path": "/api/image/931/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "932",
+          "title": "勾n Max90气垫运动鞋(多色合集)",
+          "score": 0.9508323669433594,
+          "image_path": "/api/image/932/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "619",
+          "title": "N运动鞋",
+          "score": 0.9114967465400696,
+          "image_path": "/api/image/619/3",
+          "image_index": 3
+        },
+        {
+          "product_id": "629",
+          "title": "5",
+          "score": 0.8368669022941098,
+          "image_path": "/api/image/629/24",
+          "image_index": 24
+        },
+        {
+          "product_id": "614",
+          "title": "AF系列合集",
+          "score": 0.7996557004762529,
+          "image_path": "/api/image/614/14",
+          "image_index": 14
+        }
+      ],
+      "latency_seconds": 0.4362037181854248
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713979464/f54a3a9758cc281d.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾n VapormaxFlyknit气垫鞋",
+      "expected_product_id": "931",
+      "ranked_products": [
+        {
+          "product_id": "931",
+          "title": "勾n VapormaxFlyknit气垫鞋",
+          "score": 0.9999999403953552,
+          "image_path": "/api/image/931/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "623",
+          "title": "N-T*N",
+          "score": 0.8954383611679078,
+          "image_path": "/api/image/623/4",
+          "image_index": 4
+        },
+        {
+          "product_id": "697",
+          "title": "N-TL 2.5",
+          "score": 0.8834429744097068,
+          "image_path": "/api/image/697/9",
+          "image_index": 9
+        },
+        {
+          "product_id": "932",
+          "title": "勾n Max90气垫运动鞋(多色合集)",
+          "score": 0.8688747919474976,
+          "image_path": "/api/image/932/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "687",
+          "title": "N-27*",
+          "score": 0.8508596632091059,
+          "image_path": "/api/image/687/2",
+          "image_index": 2
+        }
+      ],
+      "latency_seconds": 0.5987288951873779
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967542/fe4f26f03e517d92.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾n Max90气垫运动鞋(多色合集)",
+      "expected_product_id": "932",
+      "ranked_products": [
+        {
+          "product_id": "932",
+          "title": "勾n Max90气垫运动鞋(多色合集)",
+          "score": 0.9905374773945791,
+          "image_path": "/api/image/932/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "894",
+          "title": "N-90",
+          "score": 0.8643195729725563,
+          "image_path": "/api/image/894/6",
+          "image_index": 6
+        },
+        {
+          "product_id": "695",
+          "title": "N-95",
+          "score": 0.860348391532898,
+          "image_path": "/api/image/695/7",
+          "image_index": 7
+        },
+        {
+          "product_id": "923",
+          "title": "勾n shoxRide2运动鞋(四色合集)",
+          "score": 0.8170970784995082,
+          "image_path": "/api/image/923/0",
+          "image_index": 0
+        },
+        {
+          "product_id": "898",
+          "title": "N跑鞋",
+          "score": 0.8126615285873413,
+          "image_path": "/api/image/898/0",
+          "image_index": 0
+        }
+      ],
+      "latency_seconds": 0.562711238861084
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967542/56217b28bf7a4ac7.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾n Max90气垫运动鞋(多色合集)",
+      "expected_product_id": "932",
+      "ranked_products": [
+        {
+          "product_id": "932",
+          "title": "勾n Max90气垫运动鞋(多色合集)",
+          "score": 0.9910658229780676,
+          "image_path": "/api/image/932/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "623",
+          "title": "N-T*N",
+          "score": 0.8295637845993042,
+          "image_path": "/api/image/623/29",
+          "image_index": 29
+        },
+        {
+          "product_id": "894",
+          "title": "N-90",
+          "score": 0.8221927881240845,
+          "image_path": "/api/image/894/1",
+          "image_index": 1
+        },
+        {
+          "product_id": "887",
+          "title": "N-M*X95-C*G",
+          "score": 0.8060277832585809,
+          "image_path": "/api/image/887/4",
+          "image_index": 4
+        },
+        {
+          "product_id": "700",
+          "title": "N-运动鞋",
+          "score": 0.7984033355482744,
+          "image_path": "/api/image/700/7",
+          "image_index": 7
+        }
+      ],
+      "latency_seconds": 0.5680193901062012
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967542/6d84289a72fc1107.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾n Max90气垫运动鞋(多色合集)",
+      "expected_product_id": "932",
+      "ranked_products": [
+        {
+          "product_id": "932",
+          "title": "勾n Max90气垫运动鞋(多色合集)",
+          "score": 0.9764626129313623,
+          "image_path": "/api/image/932/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "695",
+          "title": "N-95",
+          "score": 0.9032013893127442,
+          "image_path": "/api/image/695/13",
+          "image_index": 13
+        },
+        {
+          "product_id": "931",
+          "title": "勾n VapormaxFlyknit气垫鞋",
+          "score": 0.8789821267127991,
+          "image_path": "/api/image/931/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "697",
+          "title": "N-TL 2.5",
+          "score": 0.8712597570686398,
+          "image_path": "/api/image/697/1",
+          "image_index": 1
+        },
+        {
+          "product_id": "687",
+          "title": "N-27*",
+          "score": 0.8451262829250481,
+          "image_path": "/api/image/687/4",
+          "image_index": 4
+        }
+      ],
+      "latency_seconds": 0.4557178020477295
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967542/315aeaf8d46a273a.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾n Max90气垫运动鞋(多色合集)",
+      "expected_product_id": "932",
+      "ranked_products": [
+        {
+          "product_id": "932",
+          "title": "勾n Max90气垫运动鞋(多色合集)",
+          "score": 0.9705167695417907,
+          "image_path": "/api/image/932/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "697",
+          "title": "N-TL 2.5",
+          "score": 0.8661503076553345,
+          "image_path": "/api/image/697/9",
+          "image_index": 9
+        },
+        {
+          "product_id": "931",
+          "title": "勾n VapormaxFlyknit气垫鞋",
+          "score": 0.8634382486343384,
+          "image_path": "/api/image/931/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "890",
+          "title": "N休闲鞋",
+          "score": 0.8221280419417986,
+          "image_path": "/api/image/890/2",
+          "image_index": 2
+        },
+        {
+          "product_id": "887",
+          "title": "N-M*X95-C*G",
+          "score": 0.8164968204002682,
+          "image_path": "/api/image/887/10",
+          "image_index": 10
+        }
+      ],
+      "latency_seconds": 0.43499112129211426
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967542/628bfc21797e26c7.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾n Max90气垫运动鞋(多色合集)",
+      "expected_product_id": "932",
+      "ranked_products": [
+        {
+          "product_id": "932",
+          "title": "勾n Max90气垫运动鞋(多色合集)",
+          "score": 0.9999997615814209,
+          "image_path": "/api/image/932/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "873",
+          "title": "N-6***",
+          "score": 0.8590016841888428,
+          "image_path": "/api/image/873/15",
+          "image_index": 15
+        },
+        {
+          "product_id": "750",
+          "title": "N运动鞋",
+          "score": 0.8441825513683169,
+          "image_path": "/api/image/750/2",
+          "image_index": 2
+        },
+        {
+          "product_id": "931",
+          "title": "勾n VapormaxFlyknit气垫鞋",
+          "score": 0.8258262011406408,
+          "image_path": "/api/image/931/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "618",
+          "title": "N跑步鞋",
+          "score": 0.8228703604192006,
+          "image_path": "/api/image/618/18",
+          "image_index": 18
+        }
+      ],
+      "latency_seconds": 0.5034480094909668
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967542/f0edd27733fd949b.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾n Max90气垫运动鞋(多色合集)",
+      "expected_product_id": "932",
+      "ranked_products": [
+        {
+          "product_id": "931",
+          "title": "勾n VapormaxFlyknit气垫鞋",
+          "score": 0.958151994623772,
+          "image_path": "/api/image/931/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "932",
+          "title": "勾n Max90气垫运动鞋(多色合集)",
+          "score": 0.9508323669433594,
+          "image_path": "/api/image/932/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "619",
+          "title": "N运动鞋",
+          "score": 0.9114967465400696,
+          "image_path": "/api/image/619/3",
+          "image_index": 3
+        },
+        {
+          "product_id": "629",
+          "title": "5",
+          "score": 0.8368669022941098,
+          "image_path": "/api/image/629/24",
+          "image_index": 24
+        },
+        {
+          "product_id": "614",
+          "title": "AF系列合集",
+          "score": 0.7996557004762529,
+          "image_path": "/api/image/614/14",
+          "image_index": 14
+        }
+      ],
+      "latency_seconds": 0.7081921100616455
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063684/a89aea1813445312.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾1 粉色板鞋",
+      "expected_product_id": "933",
+      "ranked_products": [
+        {
+          "product_id": "924",
+          "title": "勾1 UN联名板鞋",
+          "score": 0.9625890557328016,
+          "image_path": "/api/image/924/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "933",
+          "title": "勾1 粉色板鞋",
+          "score": 0.9578986536332612,
+          "image_path": "/api/image/933/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "925",
+          "title": "勾dg 联名DunkSB低帮板鞋",
+          "score": 0.8667413164185304,
+          "image_path": "/api/image/925/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "649",
+          "title": "K锡安娃娃",
+          "score": 0.8656211376190186,
+          "image_path": "/api/image/649/6",
+          "image_index": 6
+        },
+        {
+          "product_id": "920",
+          "title": "勾3 aj3黑猫",
+          "score": 0.8475604057312012,
+          "image_path": "/api/image/920/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.6531057357788086
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063684/0bca6d72dc14e6b4.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾1 粉色板鞋",
+      "expected_product_id": "933",
+      "ranked_products": [
+        {
+          "product_id": "933",
+          "title": "勾1 粉色板鞋",
+          "score": 1.0125383826492402,
+          "image_path": "/api/image/933/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "643",
+          "title": "OW休闲鞋联名",
+          "score": 0.8314291191905403,
+          "image_path": "/api/image/643/4",
+          "image_index": 4
+        },
+        {
+          "product_id": "704",
+          "title": "A * 1 Tr*vis sc*t 系列",
+          "score": 0.8035171508789063,
+          "image_path": "/api/image/704/19",
+          "image_index": 19
+        },
+        {
+          "product_id": "658",
+          "title": "K-悟空",
+          "score": 0.7673564326540078,
+          "image_path": "/api/image/658/6",
+          "image_index": 6
+        },
+        {
+          "product_id": "923",
+          "title": "勾n shoxRide2运动鞋(四色合集)",
+          "score": 0.7612894773483276,
+          "image_path": "/api/image/923/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.730557918548584
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063684/799dc80c678a9731.jpg",
+      "query": "",
+      "query_group": "clean_web",
+      "title": "勾1 粉色板鞋",
+      "expected_product_id": "933",
+      "ranked_products": [
+        {
+          "product_id": "933",
+          "title": "勾1 粉色板鞋",
+          "score": 1.0379636764526368,
+          "image_path": "/api/image/933/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "926",
+          "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+          "score": 0.9879636764526367,
+          "image_path": "/api/image/926/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "924",
+          "title": "勾1 UN联名板鞋",
+          "score": 0.8908720734442486,
+          "image_path": "/api/image/924/1",
+          "image_index": 1
+        },
+        {
+          "product_id": "917",
+          "title": "勾1 JOR*AN 1 D*I*O*R联名",
+          "score": 0.8720768921245167,
+          "image_path": "/api/image/917/1",
+          "image_index": 1
+        },
+        {
+          "product_id": "920",
+          "title": "勾3 aj3黑猫",
+          "score": 0.8665320588252613,
+          "image_path": "/api/image/920/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.7882709503173828
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063684/cbf72677cc466398.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾1 粉色板鞋",
+      "expected_product_id": "933",
+      "ranked_products": [
+        {
+          "product_id": "933",
+          "title": "勾1 粉色板鞋",
+          "score": 0.9709697755616963,
+          "image_path": "/api/image/933/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "761",
+          "title": "AF钻石",
+          "score": 0.7221807903137232,
+          "image_path": "/api/image/761/9",
+          "image_index": 9
+        },
+        {
+          "product_id": "817",
+          "title": "AS鬼冢虎",
+          "score": 0.7095203876495362,
+          "image_path": "/api/image/817/16",
+          "image_index": 16
+        },
+        {
+          "product_id": "919",
+          "title": "勾n ly联名 A*ir *orce 1 Low series",
+          "score": 0.6756506562232971,
+          "image_path": "/api/image/919/0",
+          "image_index": 0
+        },
+        {
+          "product_id": "833",
+          "title": "AD高尔夫鞋",
+          "score": 0.660341550887168,
+          "image_path": "/api/image/833/2",
+          "image_index": 2
+        }
+      ],
+      "latency_seconds": 1.082413673400879
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063684/be37fc8b66942f19.jpg",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾1 粉色板鞋",
+      "expected_product_id": "933",
+      "ranked_products": [
+        {
+          "product_id": "925",
+          "title": "勾dg 联名DunkSB低帮板鞋",
+          "score": 1.023048210144043,
+          "image_path": "/api/image/925/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "933",
+          "title": "勾1 粉色板鞋",
+          "score": 0.9762397675067866,
+          "image_path": "/api/image/933/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "924",
+          "title": "勾1 UN联名板鞋",
+          "score": 0.9295009151907113,
+          "image_path": "/api/image/924/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "930",
+          "title": "勾dg 板鞋(多色/品牌联名合集)",
+          "score": 0.8790081550799422,
+          "image_path": "/api/image/930/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "920",
+          "title": "勾3 aj3黑猫",
+          "score": 0.8591155409812927,
+          "image_path": "/api/image/920/-1",
+          "image_index": -1
+        }
+      ],
+      "latency_seconds": 0.5963122844696045
+    },
+    {
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063684/b413ed4a17244fa1.png",
+      "query": "",
+      "query_group": "discord_noise",
+      "title": "勾1 粉色板鞋",
+      "expected_product_id": "933",
+      "ranked_products": [
+        {
+          "product_id": "933",
+          "title": "勾1 粉色板鞋",
+          "score": 0.9648397880052345,
+          "image_path": "/api/image/933/-1",
+          "image_index": -1
+        },
+        {
+          "product_id": "844",
+          "title": "AD休闲鞋",
+          "score": 0.8026504397392273,
+          "image_path": "/api/image/844/4",
+          "image_index": 4
+        },
+        {
+          "product_id": "766",
+          "title": "AF板鞋",
+          "score": 0.7655480142087665,
+          "image_path": "/api/image/766/5",
+          "image_index": 5
+        },
+        {
+          "product_id": "693",
+          "title": "N-AF",
+          "score": 0.761614938100768,
+          "image_path": "/api/image/693/8",
+          "image_index": 8
+        },
+        {
+          "product_id": "759",
+          "title": "AF休闲鞋",
+          "score": 0.7591521143913269,
+          "image_path": "/api/image/759/2",
+          "image_index": 2
+        }
+      ],
+      "latency_seconds": 0.5762128829956055
+    }
+  ],
+  "failures": [],
+  "endpoint": "http://127.0.0.1:5001/search_similar"
+}

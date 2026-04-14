@@ -1,0 +1,2171 @@
+{
+  "endpoint": "http://127.0.0.1:5112/search_similar",
+  "manifest": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/shop_1774155549_manifest_v1_strict_image_only.json",
+  "scope": [
+    "Closet"
+  ],
+  "metrics": {
+    "queries": 106,
+    "hit_at_1_count": 94,
+    "hit_at_1": 0.8867924528301887,
+    "hit_at_3_count": 105,
+    "hit_at_3": 0.9905660377358491,
+    "mrr_at_5": 0.9394654088050314
+  },
+  "query_group_metrics": {
+    "clean_web": {
+      "queries": 54,
+      "hit_at_1_count": 48,
+      "hit_at_1": 0.8888888888888888,
+      "hit_at_3_count": 54,
+      "hit_at_3": 1.0,
+      "mrr_at_5": 0.9444444444444444
+    },
+    "discord_noise": {
+      "queries": 52,
+      "hit_at_1_count": 46,
+      "hit_at_1": 0.8846153846153846,
+      "hit_at_3_count": 51,
+      "hit_at_3": 0.9807692307692307,
+      "mrr_at_5": 0.9342948717948718
+    }
+  },
+  "latency_summary": {
+    "count": 106,
+    "min_seconds": 0.8784466249635443,
+    "mean_seconds": 1.5756900518767993,
+    "median_seconds": 1.8250281665241346,
+    "p90_seconds": 2.0154967920389026,
+    "p95_seconds": 2.0515867909998633,
+    "p99_seconds": 2.065964332956355,
+    "max_seconds": 2.083544541033916
+  },
+  "results": [
+    {
+      "expected_item_id": "7713998250",
+      "expected_live_id": "916",
+      "title": "勾n zoom阿尔法跑步鞋(多色合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998250/1b0e2af71f9fdc3a.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.6576947080320679,
+      "ranked_live_ids": [
+        "916",
+        "922",
+        "931",
+        "926",
+        "919"
+      ],
+      "rank": 1,
+      "top1_live_id": "916"
+    },
+    {
+      "expected_item_id": "7713998250",
+      "expected_live_id": "916",
+      "title": "勾n zoom阿尔法跑步鞋(多色合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998250/c40493d2062cf9e0.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.5868112909956835,
+      "ranked_live_ids": [
+        "916",
+        "921",
+        "925",
+        "924",
+        "933"
+      ],
+      "rank": 1,
+      "top1_live_id": "916"
+    },
+    {
+      "expected_item_id": "7713998250",
+      "expected_live_id": "916",
+      "title": "勾n zoom阿尔法跑步鞋(多色合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998250/0ce3eba47649e5bc.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.8047500000102445,
+      "ranked_live_ids": [
+        "916",
+        "931",
+        "932",
+        "924",
+        "933"
+      ],
+      "rank": 1,
+      "top1_live_id": "916"
+    },
+    {
+      "expected_item_id": "7713998250",
+      "expected_live_id": "916",
+      "title": "勾n zoom阿尔法跑步鞋(多色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998250/b266b45ebfb5e262.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.9102102920296602,
+      "ranked_live_ids": [
+        "916",
+        "931",
+        "926",
+        "932",
+        "922"
+      ],
+      "rank": 1,
+      "top1_live_id": "916"
+    },
+    {
+      "expected_item_id": "7713998250",
+      "expected_live_id": "916",
+      "title": "勾n zoom阿尔法跑步鞋(多色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998250/9e76530913c20677.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.8648968749912456,
+      "ranked_live_ids": [
+        "916",
+        "922",
+        "923",
+        "930",
+        "919"
+      ],
+      "rank": 1,
+      "top1_live_id": "916"
+    },
+    {
+      "expected_item_id": "7713998250",
+      "expected_live_id": "916",
+      "title": "勾n zoom阿尔法跑步鞋(多色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998250/8f355ce96d5b1e89.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.7560414589825086,
+      "ranked_live_ids": [
+        "916",
+        "931",
+        "918",
+        "932",
+        "919"
+      ],
+      "rank": 1,
+      "top1_live_id": "916"
+    },
+    {
+      "expected_item_id": "7716766172",
+      "expected_live_id": "917",
+      "title": "勾1 JOR*AN 1 D*I*O*R联名",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716766172/8b297c68242f1207.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.9231585420202464,
+      "ranked_live_ids": [
+        "917",
+        "924",
+        "933",
+        "930",
+        "926"
+      ],
+      "rank": 1,
+      "top1_live_id": "917"
+    },
+    {
+      "expected_item_id": "7716766172",
+      "expected_live_id": "917",
+      "title": "勾1 JOR*AN 1 D*I*O*R联名",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716766172/38593ab4301314f2.jpg",
+      "response_status": 200,
+      "latency_seconds": 2.025906666996889,
+      "ranked_live_ids": [
+        "917",
+        "924",
+        "933",
+        "922",
+        "926"
+      ],
+      "rank": 1,
+      "top1_live_id": "917"
+    },
+    {
+      "expected_item_id": "7716766172",
+      "expected_live_id": "917",
+      "title": "勾1 JOR*AN 1 D*I*O*R联名",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716766172/c69d223a6182ee9a.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.833582999999635,
+      "ranked_live_ids": [
+        "917",
+        "924",
+        "933",
+        "926",
+        "929"
+      ],
+      "rank": 1,
+      "top1_live_id": "917"
+    },
+    {
+      "expected_item_id": "7716766172",
+      "expected_live_id": "917",
+      "title": "勾1 JOR*AN 1 D*I*O*R联名",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716766172/1729ca92d5a20d78.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.8839324999717064,
+      "ranked_live_ids": [
+        "917",
+        "930",
+        "924",
+        "933",
+        "919"
+      ],
+      "rank": 1,
+      "top1_live_id": "917"
+    },
+    {
+      "expected_item_id": "7716766172",
+      "expected_live_id": "917",
+      "title": "勾1 JOR*AN 1 D*I*O*R联名",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716766172/fb76cecc279ca121.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.974853916966822,
+      "ranked_live_ids": [
+        "917",
+        "924",
+        "930",
+        "920",
+        "922"
+      ],
+      "rank": 1,
+      "top1_live_id": "917"
+    },
+    {
+      "expected_item_id": "7716766172",
+      "expected_live_id": "917",
+      "title": "勾1 JOR*AN 1 D*I*O*R联名",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716766172/e44c54f2194c9bc5.JPG",
+      "response_status": 200,
+      "latency_seconds": 1.721255416981876,
+      "ranked_live_ids": [
+        "917",
+        "933",
+        "924",
+        "926",
+        "920"
+      ],
+      "rank": 1,
+      "top1_live_id": "917"
+    },
+    {
+      "expected_item_id": "7713967326",
+      "expected_live_id": "918",
+      "title": "勾n HotStep2气垫运动鞋(基础色合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967326/54980143b801fd87.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.9655275420518592,
+      "ranked_live_ids": [
+        "931",
+        "918",
+        "932",
+        "923",
+        "919"
+      ],
+      "rank": 2,
+      "top1_live_id": "931"
+    },
+    {
+      "expected_item_id": "7713967326",
+      "expected_live_id": "918",
+      "title": "勾n HotStep2气垫运动鞋(基础色合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967326/322d928c40fe2a69.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.8940120830084197,
+      "ranked_live_ids": [
+        "918",
+        "933",
+        "931",
+        "932",
+        "919"
+      ],
+      "rank": 1,
+      "top1_live_id": "918"
+    },
+    {
+      "expected_item_id": "7713967326",
+      "expected_live_id": "918",
+      "title": "勾n HotStep2气垫运动鞋(基础色合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967326/2437e668f296dc0f.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.9762980420491658,
+      "ranked_live_ids": [
+        "918",
+        "931",
+        "932",
+        "923",
+        "919"
+      ],
+      "rank": 1,
+      "top1_live_id": "918"
+    },
+    {
+      "expected_item_id": "7713967326",
+      "expected_live_id": "918",
+      "title": "勾n HotStep2气垫运动鞋(基础色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967326/288d55a24d5b8f06.jpg",
+      "response_status": 200,
+      "latency_seconds": 2.0290562080335803,
+      "ranked_live_ids": [
+        "918",
+        "932",
+        "928",
+        "931",
+        "919"
+      ],
+      "rank": 1,
+      "top1_live_id": "918"
+    },
+    {
+      "expected_item_id": "7713967326",
+      "expected_live_id": "918",
+      "title": "勾n HotStep2气垫运动鞋(基础色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967326/a0c1f05f9aa6244a.jpg",
+      "response_status": 200,
+      "latency_seconds": 2.0515867909998633,
+      "ranked_live_ids": [
+        "918",
+        "931",
+        "923",
+        "932",
+        "919"
+      ],
+      "rank": 1,
+      "top1_live_id": "918"
+    },
+    {
+      "expected_item_id": "7713967326",
+      "expected_live_id": "918",
+      "title": "勾n HotStep2气垫运动鞋(基础色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967326/2e506e064cc071d5.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.8608558749547228,
+      "ranked_live_ids": [
+        "918",
+        "931",
+        "923",
+        "932",
+        "925"
+      ],
+      "rank": 1,
+      "top1_live_id": "918"
+    },
+    {
+      "expected_item_id": "7713673587",
+      "expected_live_id": "919",
+      "title": "勾n ly联名 A*ir *orce 1 Low series",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713673587/a3d0672f970fd57a.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.883064583002124,
+      "ranked_live_ids": [
+        "919",
+        "926",
+        "924",
+        "931",
+        "933"
+      ],
+      "rank": 1,
+      "top1_live_id": "919"
+    },
+    {
+      "expected_item_id": "7713673587",
+      "expected_live_id": "919",
+      "title": "勾n ly联名 A*ir *orce 1 Low series",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713673587/dba7bd012d374fb9.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.9342265419545583,
+      "ranked_live_ids": [
+        "919",
+        "926",
+        "924",
+        "933",
+        "931"
+      ],
+      "rank": 1,
+      "top1_live_id": "919"
+    },
+    {
+      "expected_item_id": "7713673587",
+      "expected_live_id": "919",
+      "title": "勾n ly联名 A*ir *orce 1 Low series",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713673587/3a80b5206ee9e931.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.8067032920080237,
+      "ranked_live_ids": [
+        "919",
+        "926",
+        "924",
+        "931",
+        "933"
+      ],
+      "rank": 1,
+      "top1_live_id": "919"
+    },
+    {
+      "expected_item_id": "7713673587",
+      "expected_live_id": "919",
+      "title": "勾n ly联名 A*ir *orce 1 Low series",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713673587/dcd460efe9171a88.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.948387541982811,
+      "ranked_live_ids": [
+        "919",
+        "933",
+        "924",
+        "926",
+        "920"
+      ],
+      "rank": 1,
+      "top1_live_id": "919"
+    },
+    {
+      "expected_item_id": "7712698523",
+      "expected_live_id": "920",
+      "title": "勾3 aj3黑猫",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7712698523/95c683ab465ccd15.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.9461720419931225,
+      "ranked_live_ids": [
+        "920",
+        "929",
+        "928",
+        "924",
+        "933"
+      ],
+      "rank": 1,
+      "top1_live_id": "920"
+    },
+    {
+      "expected_item_id": "7712698523",
+      "expected_live_id": "920",
+      "title": "勾3 aj3黑猫",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7712698523/f9a8521e10b384ba.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.9038348330068402,
+      "ranked_live_ids": [
+        "920",
+        "928",
+        "924",
+        "930",
+        "922"
+      ],
+      "rank": 1,
+      "top1_live_id": "920"
+    },
+    {
+      "expected_item_id": "7712698523",
+      "expected_live_id": "920",
+      "title": "勾3 aj3黑猫",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7712698523/2753c4eb41c7392d.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.9812060000258498,
+      "ranked_live_ids": [
+        "920",
+        "924",
+        "928",
+        "929",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "920"
+    },
+    {
+      "expected_item_id": "7712698523",
+      "expected_live_id": "920",
+      "title": "勾3 aj3黑猫",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7712698523/3f90dce4d303ffde.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.798766334017273,
+      "ranked_live_ids": [
+        "920",
+        "930",
+        "933",
+        "925",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "920"
+    },
+    {
+      "expected_item_id": "7712698523",
+      "expected_live_id": "920",
+      "title": "勾3 aj3黑猫",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7712698523/0fef6b921924ab15.jpg",
+      "response_status": 200,
+      "latency_seconds": 2.0272263329825364,
+      "ranked_live_ids": [
+        "920",
+        "924",
+        "929",
+        "928",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "920"
+    },
+    {
+      "expected_item_id": "7712698523",
+      "expected_live_id": "920",
+      "title": "勾3 aj3黑猫",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7712698523/5e4b421e6f11ae6e.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.947028374997899,
+      "ranked_live_ids": [
+        "920",
+        "929",
+        "928",
+        "924",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "920"
+    },
+    {
+      "expected_item_id": "7714063870",
+      "expected_live_id": "921",
+      "title": "勾n HotStepTerra运动跑步鞋",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063870/8e92896e5b2df532.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.8835979999857955,
+      "ranked_live_ids": [
+        "921",
+        "931",
+        "916",
+        "918",
+        "932"
+      ],
+      "rank": 1,
+      "top1_live_id": "921"
+    },
+    {
+      "expected_item_id": "7714063870",
+      "expected_live_id": "921",
+      "title": "勾n HotStepTerra运动跑步鞋",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063870/830f3d524a634225.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.8715010000159964,
+      "ranked_live_ids": [
+        "921",
+        "931",
+        "918",
+        "925",
+        "932"
+      ],
+      "rank": 1,
+      "top1_live_id": "921"
+    },
+    {
+      "expected_item_id": "7714063870",
+      "expected_live_id": "921",
+      "title": "勾n HotStepTerra运动跑步鞋",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063870/aedc6d7d65357f1f.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.8778802920132875,
+      "ranked_live_ids": [
+        "921",
+        "931",
+        "918",
+        "916",
+        "930"
+      ],
+      "rank": 1,
+      "top1_live_id": "921"
+    },
+    {
+      "expected_item_id": "7714063870",
+      "expected_live_id": "921",
+      "title": "勾n HotStepTerra运动跑步鞋",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063870/00044fd276ab8203.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.907351124973502,
+      "ranked_live_ids": [
+        "921",
+        "918",
+        "931",
+        "916",
+        "925"
+      ],
+      "rank": 1,
+      "top1_live_id": "921"
+    },
+    {
+      "expected_item_id": "7714063870",
+      "expected_live_id": "921",
+      "title": "勾n HotStepTerra运动跑步鞋",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063870/d10212d51f7883e2.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.8811193750007078,
+      "ranked_live_ids": [
+        "921",
+        "916",
+        "931",
+        "918",
+        "922"
+      ],
+      "rank": 1,
+      "top1_live_id": "921"
+    },
+    {
+      "expected_item_id": "7714063870",
+      "expected_live_id": "921",
+      "title": "勾n HotStepTerra运动跑步鞋",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063870/9f998f5a37a72245.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.8224545000120997,
+      "ranked_live_ids": [
+        "921",
+        "916",
+        "925",
+        "922",
+        "926"
+      ],
+      "rank": 1,
+      "top1_live_id": "921"
+    },
+    {
+      "expected_item_id": "7713996934",
+      "expected_live_id": "922",
+      "title": "勾k SB板鞋(多色合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713996934/ecf131401fd4e22b.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.9797305829706602,
+      "ranked_live_ids": [
+        "922",
+        "927",
+        "924",
+        "925",
+        "926"
+      ],
+      "rank": 1,
+      "top1_live_id": "922"
+    },
+    {
+      "expected_item_id": "7713996934",
+      "expected_live_id": "922",
+      "title": "勾k SB板鞋(多色合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713996934/1aee4e3cadca1627.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.8956812909455039,
+      "ranked_live_ids": [
+        "922",
+        "924",
+        "926",
+        "927",
+        "925"
+      ],
+      "rank": 1,
+      "top1_live_id": "922"
+    },
+    {
+      "expected_item_id": "7713996934",
+      "expected_live_id": "922",
+      "title": "勾k SB板鞋(多色合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713996934/0f98433067157a54.jpg",
+      "response_status": 200,
+      "latency_seconds": 2.0656800409778953,
+      "ranked_live_ids": [
+        "922",
+        "919",
+        "924",
+        "925",
+        "932"
+      ],
+      "rank": 1,
+      "top1_live_id": "922"
+    },
+    {
+      "expected_item_id": "7713996934",
+      "expected_live_id": "922",
+      "title": "勾k SB板鞋(多色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713996934/9e76530913c20677.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.8563353749923408,
+      "ranked_live_ids": [
+        "916",
+        "922",
+        "923",
+        "930",
+        "919"
+      ],
+      "rank": 2,
+      "top1_live_id": "916"
+    },
+    {
+      "expected_item_id": "7713996934",
+      "expected_live_id": "922",
+      "title": "勾k SB板鞋(多色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713996934/85d38493899d836e.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.8276018330361694,
+      "ranked_live_ids": [
+        "922",
+        "925",
+        "924",
+        "933",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "922"
+    },
+    {
+      "expected_item_id": "7713996934",
+      "expected_live_id": "922",
+      "title": "勾k SB板鞋(多色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713996934/1c9a89478e2619ca.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.9962602920131758,
+      "ranked_live_ids": [
+        "922",
+        "924",
+        "933",
+        "926",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "922"
+    },
+    {
+      "expected_item_id": "7711058275",
+      "expected_live_id": "923",
+      "title": "勾n shoxRide2运动鞋(四色合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711058275/cc78e308e6bfb881.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.6482148750219494,
+      "ranked_live_ids": [
+        "923",
+        "922",
+        "925",
+        "919",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "923"
+    },
+    {
+      "expected_item_id": "7711058275",
+      "expected_live_id": "923",
+      "title": "勾n shoxRide2运动鞋(四色合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711058275/4d4bfeaf38ac1e3b.jpg",
+      "response_status": 200,
+      "latency_seconds": 2.049179458001163,
+      "ranked_live_ids": [
+        "923",
+        "921",
+        "918",
+        "932",
+        "922"
+      ],
+      "rank": 1,
+      "top1_live_id": "923"
+    },
+    {
+      "expected_item_id": "7711058275",
+      "expected_live_id": "923",
+      "title": "勾n shoxRide2运动鞋(四色合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711058275/53a83ec6e9f08cf1.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.847644749970641,
+      "ranked_live_ids": [
+        "923",
+        "932",
+        "919",
+        "921",
+        "931"
+      ],
+      "rank": 1,
+      "top1_live_id": "923"
+    },
+    {
+      "expected_item_id": "7711058275",
+      "expected_live_id": "923",
+      "title": "勾n shoxRide2运动鞋(四色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711058275/67f7e1cd22c6420c.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.9365399169619195,
+      "ranked_live_ids": [
+        "923",
+        "927",
+        "918",
+        "921",
+        "932"
+      ],
+      "rank": 1,
+      "top1_live_id": "923"
+    },
+    {
+      "expected_item_id": "7711058275",
+      "expected_live_id": "923",
+      "title": "勾n shoxRide2运动鞋(四色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711058275/8b47d0dd60446dc4.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.9626299170195125,
+      "ranked_live_ids": [
+        "923",
+        "918",
+        "926",
+        "932",
+        "930"
+      ],
+      "rank": 1,
+      "top1_live_id": "923"
+    },
+    {
+      "expected_item_id": "7711058275",
+      "expected_live_id": "923",
+      "title": "勾n shoxRide2运动鞋(四色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711058275/09e368d500ca5692.jpg",
+      "response_status": 200,
+      "latency_seconds": 2.055660957994405,
+      "ranked_live_ids": [
+        "923",
+        "922",
+        "919",
+        "933",
+        "916"
+      ],
+      "rank": 1,
+      "top1_live_id": "923"
+    },
+    {
+      "expected_item_id": "7714044088",
+      "expected_live_id": "924",
+      "title": "勾1 UN联名板鞋",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714044088/1aee4e3cadca1627.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.8982978330459446,
+      "ranked_live_ids": [
+        "922",
+        "924",
+        "926",
+        "927",
+        "925"
+      ],
+      "rank": 2,
+      "top1_live_id": "922"
+    },
+    {
+      "expected_item_id": "7714044088",
+      "expected_live_id": "924",
+      "title": "勾1 UN联名板鞋",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714044088/a89aea1813445312.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.7512721249950118,
+      "ranked_live_ids": [
+        "924",
+        "933",
+        "925",
+        "920",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "924"
+    },
+    {
+      "expected_item_id": "7714044088",
+      "expected_live_id": "924",
+      "title": "勾1 UN联名板鞋",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714044088/d69961ab16a2d754.jpg",
+      "response_status": 200,
+      "latency_seconds": 2.065964332956355,
+      "ranked_live_ids": [
+        "924",
+        "919",
+        "926",
+        "930",
+        "932"
+      ],
+      "rank": 1,
+      "top1_live_id": "924"
+    },
+    {
+      "expected_item_id": "7714044088",
+      "expected_live_id": "924",
+      "title": "勾1 UN联名板鞋",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714044088/937529e8356d9552.png",
+      "response_status": 200,
+      "latency_seconds": 1.9363081670016982,
+      "ranked_live_ids": [
+        "924",
+        "932",
+        "922",
+        "916",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "924"
+    },
+    {
+      "expected_item_id": "7714044088",
+      "expected_live_id": "924",
+      "title": "勾1 UN联名板鞋",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714044088/3eca5c2716dc8a60.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.7590420420165174,
+      "ranked_live_ids": [
+        "924",
+        "921",
+        "932",
+        "931",
+        "929"
+      ],
+      "rank": 1,
+      "top1_live_id": "924"
+    },
+    {
+      "expected_item_id": "7714044088",
+      "expected_live_id": "924",
+      "title": "勾1 UN联名板鞋",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714044088/08fba8688a2ab2e8.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.8916748330229893,
+      "ranked_live_ids": [
+        "924",
+        "930",
+        "926",
+        "925",
+        "919"
+      ],
+      "rank": 1,
+      "top1_live_id": "924"
+    },
+    {
+      "expected_item_id": "7714032296",
+      "expected_live_id": "925",
+      "title": "勾dg 联名DunkSB低帮板鞋",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714032296/f9b0a4ac60e8ee78.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.8932697499985807,
+      "ranked_live_ids": [
+        "927",
+        "925",
+        "930",
+        "919",
+        "917"
+      ],
+      "rank": 2,
+      "top1_live_id": "927"
+    },
+    {
+      "expected_item_id": "7714032296",
+      "expected_live_id": "925",
+      "title": "勾dg 联名DunkSB低帮板鞋",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714032296/be37fc8b66942f19.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.945736958005,
+      "ranked_live_ids": [
+        "925",
+        "933",
+        "924",
+        "930",
+        "920"
+      ],
+      "rank": 1,
+      "top1_live_id": "925"
+    },
+    {
+      "expected_item_id": "7714032296",
+      "expected_live_id": "925",
+      "title": "勾dg 联名DunkSB低帮板鞋",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714032296/8e7fe3aa2e7984f8.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.7999271670123562,
+      "ranked_live_ids": [
+        "925",
+        "924",
+        "930",
+        "933",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "925"
+    },
+    {
+      "expected_item_id": "7714032296",
+      "expected_live_id": "925",
+      "title": "勾dg 联名DunkSB低帮板鞋",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714032296/c6e3e821cf9c507d.png",
+      "response_status": 200,
+      "latency_seconds": 1.889186249987688,
+      "ranked_live_ids": [
+        "925",
+        "922",
+        "933",
+        "924",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "925"
+    },
+    {
+      "expected_item_id": "7714032296",
+      "expected_live_id": "925",
+      "title": "勾dg 联名DunkSB低帮板鞋",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714032296/61a4f88e3a96d27d.jpg",
+      "response_status": 200,
+      "latency_seconds": 2.060165375005454,
+      "ranked_live_ids": [
+        "925",
+        "933",
+        "922",
+        "930",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "925"
+    },
+    {
+      "expected_item_id": "7714032296",
+      "expected_live_id": "925",
+      "title": "勾dg 联名DunkSB低帮板鞋",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714032296/a6d3c21c65349621.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.7749915829626843,
+      "ranked_live_ids": [
+        "925",
+        "926",
+        "924",
+        "919",
+        "933"
+      ],
+      "rank": 1,
+      "top1_live_id": "925"
+    },
+    {
+      "expected_item_id": "7711016729",
+      "expected_live_id": "926",
+      "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711016729/677e799d6ac9e884.jpg",
+      "response_status": 200,
+      "latency_seconds": 2.083544541033916,
+      "ranked_live_ids": [
+        "926",
+        "925",
+        "924",
+        "930",
+        "933"
+      ],
+      "rank": 1,
+      "top1_live_id": "926"
+    },
+    {
+      "expected_item_id": "7711016729",
+      "expected_live_id": "926",
+      "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711016729/656d02b5efe712b0.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.923919000022579,
+      "ranked_live_ids": [
+        "926",
+        "932",
+        "927",
+        "924",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "926"
+    },
+    {
+      "expected_item_id": "7711016729",
+      "expected_live_id": "926",
+      "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711016729/799dc80c678a9731.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.8808485829504207,
+      "ranked_live_ids": [
+        "933",
+        "926",
+        "924",
+        "917",
+        "920"
+      ],
+      "rank": 2,
+      "top1_live_id": "933"
+    },
+    {
+      "expected_item_id": "7711016729",
+      "expected_live_id": "926",
+      "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711016729/1aee4e3cadca1627.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.98205145803513,
+      "ranked_live_ids": [
+        "922",
+        "924",
+        "926",
+        "927",
+        "925"
+      ],
+      "rank": 3,
+      "top1_live_id": "922"
+    },
+    {
+      "expected_item_id": "7711016729",
+      "expected_live_id": "926",
+      "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711016729/35c93219eab5747f.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.9427258339710534,
+      "ranked_live_ids": [
+        "926",
+        "925",
+        "924",
+        "933",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "926"
+    },
+    {
+      "expected_item_id": "7711016729",
+      "expected_live_id": "926",
+      "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711016729/d6743cf893ef6ed1.jpg",
+      "response_status": 200,
+      "latency_seconds": 2.0154967920389026,
+      "ranked_live_ids": [
+        "926",
+        "933",
+        "924",
+        "917",
+        "931"
+      ],
+      "rank": 1,
+      "top1_live_id": "926"
+    },
+    {
+      "expected_item_id": "7710979345",
+      "expected_live_id": "927",
+      "title": "勾dg 板鞋(三色合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7710979345/1f7803c6fd5c490f.png",
+      "response_status": 200,
+      "latency_seconds": 1.9522640409995802,
+      "ranked_live_ids": [
+        "927",
+        "930",
+        "925",
+        "921",
+        "919"
+      ],
+      "rank": 1,
+      "top1_live_id": "927"
+    },
+    {
+      "expected_item_id": "7710979345",
+      "expected_live_id": "927",
+      "title": "勾dg 板鞋(三色合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7710979345/f9b0a4ac60e8ee78.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.7566420410294086,
+      "ranked_live_ids": [
+        "927",
+        "925",
+        "930",
+        "919",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "927"
+    },
+    {
+      "expected_item_id": "7710979345",
+      "expected_live_id": "927",
+      "title": "勾dg 板鞋(三色合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7710979345/97dcc0cb919cb1e7.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.9288441659882665,
+      "ranked_live_ids": [
+        "927",
+        "920",
+        "922",
+        "926",
+        "916"
+      ],
+      "rank": 1,
+      "top1_live_id": "927"
+    },
+    {
+      "expected_item_id": "7710979345",
+      "expected_live_id": "927",
+      "title": "勾dg 板鞋(三色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7710979345/67f7e1cd22c6420c.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.1147107910364866,
+      "ranked_live_ids": [
+        "923",
+        "927",
+        "918",
+        "921",
+        "932"
+      ],
+      "rank": 2,
+      "top1_live_id": "923"
+    },
+    {
+      "expected_item_id": "7710979345",
+      "expected_live_id": "927",
+      "title": "勾dg 板鞋(三色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7710979345/53fd70566f021833.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.0517867079470307,
+      "ranked_live_ids": [
+        "927",
+        "920",
+        "919",
+        "929",
+        "922"
+      ],
+      "rank": 1,
+      "top1_live_id": "927"
+    },
+    {
+      "expected_item_id": "7710979345",
+      "expected_live_id": "927",
+      "title": "勾dg 板鞋(三色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7710979345/1aee4e3cadca1627.jpg",
+      "response_status": 200,
+      "latency_seconds": 0.9252049589995295,
+      "ranked_live_ids": [
+        "922",
+        "924",
+        "926",
+        "927",
+        "925"
+      ],
+      "rank": 4,
+      "top1_live_id": "922"
+    },
+    {
+      "expected_item_id": "7716671474",
+      "expected_live_id": "928",
+      "title": "勾6 JOR*AN 6 （Series)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716671474/cc0f415031efa596.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.033610583981499,
+      "ranked_live_ids": [
+        "928",
+        "929",
+        "924",
+        "920",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "928"
+    },
+    {
+      "expected_item_id": "7716671474",
+      "expected_live_id": "928",
+      "title": "勾6 JOR*AN 6 （Series)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716671474/7c506a7acd4f97b8.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.0494702499709092,
+      "ranked_live_ids": [
+        "928",
+        "924",
+        "929",
+        "920",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "928"
+    },
+    {
+      "expected_item_id": "7716671474",
+      "expected_live_id": "928",
+      "title": "勾6 JOR*AN 6 （Series)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716671474/9a9cb1e1794d95d7.jpg",
+      "response_status": 200,
+      "latency_seconds": 0.9442671249853447,
+      "ranked_live_ids": [
+        "928",
+        "924",
+        "920",
+        "929",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "928"
+    },
+    {
+      "expected_item_id": "7716671474",
+      "expected_live_id": "928",
+      "title": "勾6 JOR*AN 6 （Series)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716671474/bd8e415954e47d88.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.079383708012756,
+      "ranked_live_ids": [
+        "928",
+        "929",
+        "920",
+        "924",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "928"
+    },
+    {
+      "expected_item_id": "7716671474",
+      "expected_live_id": "928",
+      "title": "勾6 JOR*AN 6 （Series)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716671474/f8826c75ed1d042a.jpg",
+      "response_status": 200,
+      "latency_seconds": 0.9276365829864517,
+      "ranked_live_ids": [
+        "928",
+        "929",
+        "924",
+        "933",
+        "926"
+      ],
+      "rank": 1,
+      "top1_live_id": "928"
+    },
+    {
+      "expected_item_id": "7716671474",
+      "expected_live_id": "928",
+      "title": "勾6 JOR*AN 6 （Series)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716671474/68e254b70d6b2c98.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.057818082976155,
+      "ranked_live_ids": [
+        "928",
+        "929",
+        "924",
+        "933",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "928"
+    },
+    {
+      "expected_item_id": "7716745908",
+      "expected_live_id": "929",
+      "title": "勾11 JOR*AN 11 （Series)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716745908/bb36002d7d1d8f82.jpg",
+      "response_status": 200,
+      "latency_seconds": 0.973486041999422,
+      "ranked_live_ids": [
+        "929",
+        "924",
+        "928",
+        "920",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "929"
+    },
+    {
+      "expected_item_id": "7716745908",
+      "expected_live_id": "929",
+      "title": "勾11 JOR*AN 11 （Series)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716745908/7de772c5a50710fe.jpg",
+      "response_status": 200,
+      "latency_seconds": 0.8801345000392757,
+      "ranked_live_ids": [
+        "929",
+        "920",
+        "928",
+        "924",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "929"
+    },
+    {
+      "expected_item_id": "7716745908",
+      "expected_live_id": "929",
+      "title": "勾11 JOR*AN 11 （Series)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716745908/581e551514722699.jpg",
+      "response_status": 200,
+      "latency_seconds": 0.9313152499962598,
+      "ranked_live_ids": [
+        "929",
+        "920",
+        "924",
+        "928",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "929"
+    },
+    {
+      "expected_item_id": "7716745908",
+      "expected_live_id": "929",
+      "title": "勾11 JOR*AN 11 （Series)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716745908/89fbb5996e50ee70.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.0604605830158107,
+      "ranked_live_ids": [
+        "929",
+        "928",
+        "933",
+        "919",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "929"
+    },
+    {
+      "expected_item_id": "7716745908",
+      "expected_live_id": "929",
+      "title": "勾11 JOR*AN 11 （Series)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716745908/6773c9224deadc6a.jpg",
+      "response_status": 200,
+      "latency_seconds": 0.9129465419682674,
+      "ranked_live_ids": [
+        "929",
+        "924",
+        "928",
+        "920",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "929"
+    },
+    {
+      "expected_item_id": "7716745908",
+      "expected_live_id": "929",
+      "title": "勾11 JOR*AN 11 （Series)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7716745908/731d2926a372b88c.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.0238069589831866,
+      "ranked_live_ids": [
+        "929",
+        "920",
+        "928",
+        "924",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "929"
+    },
+    {
+      "expected_item_id": "7713998068",
+      "expected_live_id": "930",
+      "title": "勾dg 板鞋(多色/品牌联名合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998068/b01c66549efc1c88.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.329142582952045,
+      "ranked_live_ids": [
+        "930",
+        "923",
+        "932",
+        "927",
+        "925"
+      ],
+      "rank": 1,
+      "top1_live_id": "930"
+    },
+    {
+      "expected_item_id": "7713998068",
+      "expected_live_id": "930",
+      "title": "勾dg 板鞋(多色/品牌联名合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998068/1f7803c6fd5c490f.png",
+      "response_status": 200,
+      "latency_seconds": 1.1919999159872532,
+      "ranked_live_ids": [
+        "927",
+        "930",
+        "925",
+        "921",
+        "919"
+      ],
+      "rank": 2,
+      "top1_live_id": "927"
+    },
+    {
+      "expected_item_id": "7713998068",
+      "expected_live_id": "930",
+      "title": "勾dg 板鞋(多色/品牌联名合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998068/e526f3aedafbdb94.jpg",
+      "response_status": 200,
+      "latency_seconds": 0.9347174169961363,
+      "ranked_live_ids": [
+        "930",
+        "925",
+        "933",
+        "922",
+        "920"
+      ],
+      "rank": 1,
+      "top1_live_id": "930"
+    },
+    {
+      "expected_item_id": "7713998068",
+      "expected_live_id": "930",
+      "title": "勾dg 板鞋(多色/品牌联名合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998068/c357fd2f090aa8d2.png",
+      "response_status": 200,
+      "latency_seconds": 1.071515499963425,
+      "ranked_live_ids": [
+        "930",
+        "927",
+        "925",
+        "921",
+        "924"
+      ],
+      "rank": 1,
+      "top1_live_id": "930"
+    },
+    {
+      "expected_item_id": "7713998068",
+      "expected_live_id": "930",
+      "title": "勾dg 板鞋(多色/品牌联名合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998068/181f8583b9caa9fb.png",
+      "response_status": 200,
+      "latency_seconds": 1.1313880420057103,
+      "ranked_live_ids": [
+        "930",
+        "927",
+        "925",
+        "933",
+        "924"
+      ],
+      "rank": 1,
+      "top1_live_id": "930"
+    },
+    {
+      "expected_item_id": "7713998068",
+      "expected_live_id": "930",
+      "title": "勾dg 板鞋(多色/品牌联名合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998068/d451efbeb6f13be3.png",
+      "response_status": 200,
+      "latency_seconds": 1.0025831250241026,
+      "ranked_live_ids": [
+        "930",
+        "927",
+        "925",
+        "921",
+        "920"
+      ],
+      "rank": 1,
+      "top1_live_id": "930"
+    },
+    {
+      "expected_item_id": "7713979464",
+      "expected_live_id": "931",
+      "title": "勾n VapormaxFlyknit气垫鞋",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713979464/55442a1fb0827e59.gif",
+      "response_status": 200,
+      "latency_seconds": 0.9518173340475187,
+      "ranked_live_ids": [
+        "931",
+        "918",
+        "921",
+        "916",
+        "919"
+      ],
+      "rank": 1,
+      "top1_live_id": "931"
+    },
+    {
+      "expected_item_id": "7713979464",
+      "expected_live_id": "931",
+      "title": "勾n VapormaxFlyknit气垫鞋",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713979464/00f0972d3f5a583a.jpg",
+      "response_status": 200,
+      "latency_seconds": 0.8784466249635443,
+      "ranked_live_ids": [
+        "931",
+        "918",
+        "932",
+        "923",
+        "926"
+      ],
+      "rank": 1,
+      "top1_live_id": "931"
+    },
+    {
+      "expected_item_id": "7713979464",
+      "expected_live_id": "931",
+      "title": "勾n VapormaxFlyknit气垫鞋",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713979464/54980143b801fd87.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.0299158749985509,
+      "ranked_live_ids": [
+        "931",
+        "918",
+        "932",
+        "923",
+        "919"
+      ],
+      "rank": 1,
+      "top1_live_id": "931"
+    },
+    {
+      "expected_item_id": "7713979464",
+      "expected_live_id": "931",
+      "title": "勾n VapormaxFlyknit气垫鞋",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713979464/6302df787a03e76d.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.0317618339904584,
+      "ranked_live_ids": [
+        "931",
+        "921",
+        "916",
+        "918",
+        "932"
+      ],
+      "rank": 1,
+      "top1_live_id": "931"
+    },
+    {
+      "expected_item_id": "7713979464",
+      "expected_live_id": "931",
+      "title": "勾n VapormaxFlyknit气垫鞋",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713979464/f0edd27733fd949b.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.101550541992765,
+      "ranked_live_ids": [
+        "931",
+        "932",
+        "924",
+        "928",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "931"
+    },
+    {
+      "expected_item_id": "7713979464",
+      "expected_live_id": "931",
+      "title": "勾n VapormaxFlyknit气垫鞋",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713979464/f54a3a9758cc281d.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.0754552090074867,
+      "ranked_live_ids": [
+        "931",
+        "932",
+        "918",
+        "919",
+        "926"
+      ],
+      "rank": 1,
+      "top1_live_id": "931"
+    },
+    {
+      "expected_item_id": "7713967542",
+      "expected_live_id": "932",
+      "title": "勾n Max90气垫运动鞋(多色合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967542/fe4f26f03e517d92.jpg",
+      "response_status": 200,
+      "latency_seconds": 0.9282122090226039,
+      "ranked_live_ids": [
+        "932",
+        "923",
+        "931",
+        "924",
+        "933"
+      ],
+      "rank": 1,
+      "top1_live_id": "932"
+    },
+    {
+      "expected_item_id": "7713967542",
+      "expected_live_id": "932",
+      "title": "勾n Max90气垫运动鞋(多色合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967542/56217b28bf7a4ac7.jpg",
+      "response_status": 200,
+      "latency_seconds": 0.9632035419926979,
+      "ranked_live_ids": [
+        "932",
+        "918",
+        "924",
+        "931",
+        "922"
+      ],
+      "rank": 1,
+      "top1_live_id": "932"
+    },
+    {
+      "expected_item_id": "7713967542",
+      "expected_live_id": "932",
+      "title": "勾n Max90气垫运动鞋(多色合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967542/6d84289a72fc1107.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.0435630840365775,
+      "ranked_live_ids": [
+        "932",
+        "931",
+        "924",
+        "923",
+        "918"
+      ],
+      "rank": 1,
+      "top1_live_id": "932"
+    },
+    {
+      "expected_item_id": "7713967542",
+      "expected_live_id": "932",
+      "title": "勾n Max90气垫运动鞋(多色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967542/315aeaf8d46a273a.jpg",
+      "response_status": 200,
+      "latency_seconds": 0.9695018749916926,
+      "ranked_live_ids": [
+        "932",
+        "931",
+        "923",
+        "920",
+        "917"
+      ],
+      "rank": 1,
+      "top1_live_id": "932"
+    },
+    {
+      "expected_item_id": "7713967542",
+      "expected_live_id": "932",
+      "title": "勾n Max90气垫运动鞋(多色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967542/628bfc21797e26c7.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.0205231659929268,
+      "ranked_live_ids": [
+        "932",
+        "931",
+        "918",
+        "923",
+        "919"
+      ],
+      "rank": 1,
+      "top1_live_id": "932"
+    },
+    {
+      "expected_item_id": "7713967542",
+      "expected_live_id": "932",
+      "title": "勾n Max90气垫运动鞋(多色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967542/f0edd27733fd949b.jpg",
+      "response_status": 200,
+      "latency_seconds": 0.9202641249867156,
+      "ranked_live_ids": [
+        "931",
+        "932",
+        "924",
+        "928",
+        "917"
+      ],
+      "rank": 2,
+      "top1_live_id": "931"
+    },
+    {
+      "expected_item_id": "7714063684",
+      "expected_live_id": "933",
+      "title": "勾1 粉色板鞋",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063684/a89aea1813445312.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.072221000038553,
+      "ranked_live_ids": [
+        "924",
+        "933",
+        "925",
+        "920",
+        "917"
+      ],
+      "rank": 2,
+      "top1_live_id": "924"
+    },
+    {
+      "expected_item_id": "7714063684",
+      "expected_live_id": "933",
+      "title": "勾1 粉色板鞋",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063684/0bca6d72dc14e6b4.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.0058254160103388,
+      "ranked_live_ids": [
+        "933",
+        "926",
+        "930",
+        "925",
+        "923"
+      ],
+      "rank": 1,
+      "top1_live_id": "933"
+    },
+    {
+      "expected_item_id": "7714063684",
+      "expected_live_id": "933",
+      "title": "勾1 粉色板鞋",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063684/799dc80c678a9731.jpg",
+      "response_status": 200,
+      "latency_seconds": 0.9839467499987222,
+      "ranked_live_ids": [
+        "933",
+        "926",
+        "924",
+        "917",
+        "920"
+      ],
+      "rank": 1,
+      "top1_live_id": "933"
+    },
+    {
+      "expected_item_id": "7714063684",
+      "expected_live_id": "933",
+      "title": "勾1 粉色板鞋",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063684/cbf72677cc466398.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.0798083749832585,
+      "ranked_live_ids": [
+        "933",
+        "919",
+        "925",
+        "926",
+        "927"
+      ],
+      "rank": 1,
+      "top1_live_id": "933"
+    },
+    {
+      "expected_item_id": "7714063684",
+      "expected_live_id": "933",
+      "title": "勾1 粉色板鞋",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063684/be37fc8b66942f19.jpg",
+      "response_status": 200,
+      "latency_seconds": 0.9585617079865187,
+      "ranked_live_ids": [
+        "925",
+        "933",
+        "924",
+        "930",
+        "920"
+      ],
+      "rank": 2,
+      "top1_live_id": "925"
+    },
+    {
+      "expected_item_id": "7714063684",
+      "expected_live_id": "933",
+      "title": "勾1 粉色板鞋",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063684/b413ed4a17244fa1.png",
+      "response_status": 200,
+      "latency_seconds": 0.9868980410392396,
+      "ranked_live_ids": [
+        "933",
+        "919",
+        "924",
+        "922",
+        "918"
+      ],
+      "rank": 1,
+      "top1_live_id": "933"
+    }
+  ],
+  "misses": [
+    {
+      "expected_item_id": "7713967326",
+      "expected_live_id": "918",
+      "title": "勾n HotStep2气垫运动鞋(基础色合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967326/54980143b801fd87.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.9655275420518592,
+      "ranked_live_ids": [
+        "931",
+        "918",
+        "932",
+        "923",
+        "919"
+      ],
+      "rank": 2,
+      "top1_live_id": "931"
+    },
+    {
+      "expected_item_id": "7713996934",
+      "expected_live_id": "922",
+      "title": "勾k SB板鞋(多色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713996934/9e76530913c20677.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.8563353749923408,
+      "ranked_live_ids": [
+        "916",
+        "922",
+        "923",
+        "930",
+        "919"
+      ],
+      "rank": 2,
+      "top1_live_id": "916"
+    },
+    {
+      "expected_item_id": "7714044088",
+      "expected_live_id": "924",
+      "title": "勾1 UN联名板鞋",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714044088/1aee4e3cadca1627.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.8982978330459446,
+      "ranked_live_ids": [
+        "922",
+        "924",
+        "926",
+        "927",
+        "925"
+      ],
+      "rank": 2,
+      "top1_live_id": "922"
+    },
+    {
+      "expected_item_id": "7714032296",
+      "expected_live_id": "925",
+      "title": "勾dg 联名DunkSB低帮板鞋",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714032296/f9b0a4ac60e8ee78.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.8932697499985807,
+      "ranked_live_ids": [
+        "927",
+        "925",
+        "930",
+        "919",
+        "917"
+      ],
+      "rank": 2,
+      "top1_live_id": "927"
+    },
+    {
+      "expected_item_id": "7711016729",
+      "expected_live_id": "926",
+      "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711016729/799dc80c678a9731.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.8808485829504207,
+      "ranked_live_ids": [
+        "933",
+        "926",
+        "924",
+        "917",
+        "920"
+      ],
+      "rank": 2,
+      "top1_live_id": "933"
+    },
+    {
+      "expected_item_id": "7711016729",
+      "expected_live_id": "926",
+      "title": "勾af 联名OFF休闲防滑板鞋(多色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7711016729/1aee4e3cadca1627.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.98205145803513,
+      "ranked_live_ids": [
+        "922",
+        "924",
+        "926",
+        "927",
+        "925"
+      ],
+      "rank": 3,
+      "top1_live_id": "922"
+    },
+    {
+      "expected_item_id": "7710979345",
+      "expected_live_id": "927",
+      "title": "勾dg 板鞋(三色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7710979345/67f7e1cd22c6420c.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.1147107910364866,
+      "ranked_live_ids": [
+        "923",
+        "927",
+        "918",
+        "921",
+        "932"
+      ],
+      "rank": 2,
+      "top1_live_id": "923"
+    },
+    {
+      "expected_item_id": "7710979345",
+      "expected_live_id": "927",
+      "title": "勾dg 板鞋(三色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7710979345/1aee4e3cadca1627.jpg",
+      "response_status": 200,
+      "latency_seconds": 0.9252049589995295,
+      "ranked_live_ids": [
+        "922",
+        "924",
+        "926",
+        "927",
+        "925"
+      ],
+      "rank": 4,
+      "top1_live_id": "922"
+    },
+    {
+      "expected_item_id": "7713998068",
+      "expected_live_id": "930",
+      "title": "勾dg 板鞋(多色/品牌联名合集)",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713998068/1f7803c6fd5c490f.png",
+      "response_status": 200,
+      "latency_seconds": 1.1919999159872532,
+      "ranked_live_ids": [
+        "927",
+        "930",
+        "925",
+        "921",
+        "919"
+      ],
+      "rank": 2,
+      "top1_live_id": "927"
+    },
+    {
+      "expected_item_id": "7713967542",
+      "expected_live_id": "932",
+      "title": "勾n Max90气垫运动鞋(多色合集)",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7713967542/f0edd27733fd949b.jpg",
+      "response_status": 200,
+      "latency_seconds": 0.9202641249867156,
+      "ranked_live_ids": [
+        "931",
+        "932",
+        "924",
+        "928",
+        "917"
+      ],
+      "rank": 2,
+      "top1_live_id": "931"
+    },
+    {
+      "expected_item_id": "7714063684",
+      "expected_live_id": "933",
+      "title": "勾1 粉色板鞋",
+      "query_group": "clean_web",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063684/a89aea1813445312.jpg",
+      "response_status": 200,
+      "latency_seconds": 1.072221000038553,
+      "ranked_live_ids": [
+        "924",
+        "933",
+        "925",
+        "920",
+        "917"
+      ],
+      "rank": 2,
+      "top1_live_id": "924"
+    },
+    {
+      "expected_item_id": "7714063684",
+      "expected_live_id": "933",
+      "title": "勾1 粉色板鞋",
+      "query_group": "discord_noise",
+      "query_image_path": "/Users/wanghaixin/.config/superpowers/worktrees/discord-marketing-system/feat-accuracy-autoresearch/backend/benchmarks/data/queries/7714063684/be37fc8b66942f19.jpg",
+      "response_status": 200,
+      "latency_seconds": 0.9585617079865187,
+      "ranked_live_ids": [
+        "925",
+        "933",
+        "924",
+        "930",
+        "920"
+      ],
+      "rank": 2,
+      "top1_live_id": "925"
+    }
+  ]
+}

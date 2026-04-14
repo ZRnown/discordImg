@@ -24,10 +24,6 @@ wheels/
 *.egg
 MANIFEST
 
-# Frontend source files under frontend/lib must stay versioned.
-!frontend/lib/
-!frontend/lib/*.ts
-
 # Virtual environments
 .env
 .venv
@@ -39,9 +35,6 @@ venv.bak/
 .conda/
 
 # ============== Backend Data (CRITICAL) ==============
-# 运行时数据目录（数据库、抓图缓存、上传图片、临时文件等）
-backend/data/
-
 # 数据库文件
 backend/data/*.db
 backend/data/*.db-*
@@ -73,13 +66,6 @@ backend/data/yolov8*.pt
 # 临时文件
 backend/data/*.tmp
 backend/data/*.temp
-
-# Benchmark 运行结果与本地测试数据
-backend/benchmarks/data/
-backend/benchmarks/results/
-
-# 本地调试/部署脚本（不提交）
-backend/scripts/*.sh
 
 # ============== Frontend / Next.js ==============
 # Next.js build output
@@ -300,18 +286,15 @@ discord_token.txt
 bot_config.json
 webhook_urls.txt
 
+# Keep desktop frontend shared libs tracked
+!frontend/lib/
+!frontend/lib/*.ts
+
 # Test files and data
 test_*.py
 *_test.py
 tests/
 test_data/
-!backend/tests/
-backend/tests/*
-!backend/tests/test_message_filter_helpers.py
-!backend/tests/test_keyword_search_filters.py
-!backend/tests/test_keyword_search_terms.py
-!backend/tests/test_keyword_model_matching.py
-!backend/tests/test_bot_timeouts.py
 
 # Development notes and planning
 *.plan.md

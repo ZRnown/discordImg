@@ -16,6 +16,7 @@ class WeidianScraper:
     def __init__(self):
         self.session = requests.Session()
         self.session.trust_env = False
+        self.proxy_config = {'http': None, 'https': None}
 
         # [新增] 优化连接池，防止多线程抓取时连接数不够
         from requests.adapters import HTTPAdapter
@@ -49,6 +50,48 @@ class WeidianScraper:
             '__spider__sessionid': 'e0e858ac8efb20a2'
         })
 
+        self.apply_proxy_settings()
+
+    def _resolve_proxy_config(self) -> Dict[str, Optional[str]]:
+        try:
+            try:
+                from config import config
+            except ImportError:
+                from .config import config
+
+            if hasattr(config, 'get_request_proxies'):
+                proxies = config.get_request_proxies()
+            else:
+                http_proxy = (getattr(config, 'HTTP_PROXY', '') or '').strip()
+                https_proxy = (getattr(config, 'HTTPS_PROXY', '') or '').strip()
+                if not http_proxy and not https_proxy:
+                    proxies = {'http': None, 'https': None}
+                else:
+                    proxies = {
+                        'http': http_proxy or https_proxy,
+                        'https': https_proxy or http_proxy,
+                    }
+
+            return {
+                'http': proxies.get('http') or None,
+                'https': proxies.get('https') or None,
+            }
+        except Exception:
+            return {'http': None, 'https': None}
+
+    def apply_proxy_settings(self) -> None:
+        self.proxy_config = self._resolve_proxy_config()
+        self.session.proxies.clear()
+        if self.proxy_config.get('http'):
+            self.session.proxies['http'] = self.proxy_config['http']
+        if self.proxy_config.get('https'):
+            self.session.proxies['https'] = self.proxy_config['https']
+        logger.info(
+            "Weidian 代理配置: http=%s https=%s",
+            self.proxy_config.get('http') or '-',
+            self.proxy_config.get('https') or '-',
+        )
+
     def _request_with_retry(
         self,
         url: str,
@@ -67,7 +110,7 @@ class WeidianScraper:
                     headers=headers,
                     cookies=cookies,
                     timeout=current_timeout,
-                    proxies={'http': None, 'https': None}
+                    proxies=self.proxy_config
                 )
                 response.raise_for_status()
                 return response
@@ -97,7 +140,7 @@ class WeidianScraper:
                     headers=headers,
                     cookies=cookies,
                     timeout=current_timeout,
-                    proxies={'http': None, 'https': None}
+                    proxies=self.proxy_config
                 )
                 response.raise_for_status()
                 return response.json()
@@ -501,7 +544,7 @@ class WeidianScraper:
                 'query': text[:200]  # 限制长度
             }
 
-            response = self.session.get(url, params=params, timeout=10, proxies={'http': None, 'https': None})
+            response = self.session.get(url, params=params, timeout=10, proxies=self.proxy_config)
             response.raise_for_status()
 
             data = response.json()
@@ -540,7 +583,7 @@ class WeidianScraper:
                 'q': text[:500]  # 限制长度
             }
 
-            response = self.session.get(url, params=params, timeout=10, proxies={'http': None, 'https': None})
+            response = self.session.get(url, params=params, timeout=10, proxies=self.proxy_config)
             response.raise_for_status()
 
             # Google返回的是JSON数组
@@ -613,7 +656,7 @@ class WeidianScraper:
                 thread_session.headers.update(self.session.headers)
                 thread_session.cookies.update(self.session.cookies)
 
-                response = thread_session.get(img_url, timeout=10, proxies={'http': None, 'https': None})
+                response = thread_session.get(img_url, timeout=10, proxies=self.proxy_config)
                 response.raise_for_status()
 
                 # 保存图片
