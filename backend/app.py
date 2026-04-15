@@ -990,7 +990,7 @@ def initialize_runtime():
             print(f"⚠️ [后台] AI预热失败: {e}")
             ai_model_ready = False
 
-    if DESKTOP_SKIP_AI_WARMUP:
+    if DESKTOP_SINGLE_USER or DESKTOP_SKIP_AI_WARMUP:
         ai_model_ready = False
         print("⏭️ [系统] 桌面模式已跳过 AI 启动预热，基础功能将先启动")
     else:
