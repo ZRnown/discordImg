@@ -27,9 +27,12 @@ export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }
   const [currentView, setCurrentView] = useState("dashboard")
   const [currentUser, setCurrentUser] = useState<UserData | null>(null)
   const [loading, setLoading] = useState(true)
+  const [desktopBootstrapError, setDesktopBootstrapError] = useState<string | null>(null)
   const [botStatus, setBotStatus] = useState<"stopped" | "starting" | "running" | "stopping">("stopped")
   const hasFetchedUser = useRef(false)
-  const effectiveUser = resolveDesktopUser({ desktopMode, currentUser })
+  const effectiveUser = desktopMode
+    ? currentUser
+    : resolveDesktopUser({ desktopMode, currentUser })
 
   useEffect(() => {
     if (!hasFetchedUser.current) {
@@ -85,9 +88,14 @@ export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }
       const user = await waitForDesktopUser()
       if (user) {
         setCurrentUser(user)
+        setDesktopBootstrapError(null)
+      } else {
+        setCurrentUser(null)
+        setDesktopBootstrapError("桌面后端未就绪，当前不能执行添加账号、添加店铺等操作。请检查 5001 端口是否被占用，或稍后重试。")
       }
     } catch (_) {
-      // ignored
+      setCurrentUser(null)
+      setDesktopBootstrapError("桌面后端启动失败，当前无法建立本地会话。请重启桌面端后重试。")
     } finally {
       setLoading(false)
     }
@@ -197,6 +205,30 @@ export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }
 
   if (!desktopMode && !currentUser) {
     return <LoginView onLogin={handleLogin} />
+  }
+
+  if (desktopMode && desktopBootstrapError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6 bg-muted/20">
+        <div className="w-full max-w-xl rounded-lg border bg-background p-6 shadow-sm space-y-4">
+          <div>
+            <h1 className="text-xl font-semibold">桌面后端未连接</h1>
+            <p className="mt-2 text-sm text-muted-foreground">{desktopBootstrapError}</p>
+          </div>
+          <div className="flex gap-3">
+            <Button
+              onClick={() => {
+                setLoading(true)
+                setDesktopBootstrapError(null)
+                void initializeSession()
+              }}
+            >
+              重试连接
+            </Button>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   if (!effectiveUser) {

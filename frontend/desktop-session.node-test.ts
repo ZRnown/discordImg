@@ -1,5 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 
 import {
   DESKTOP_FALLBACK_USER,
@@ -88,4 +89,11 @@ test('waitForDesktopUser returns null after exhausting retries', async () => {
 
   assert.equal(attempts, 3)
   assert.equal(user, null)
+})
+
+test('desktop app source waits for a real backend user instead of rendering with the fallback user', () => {
+  const source = readFileSync(new URL('./components/app-page-client.tsx', import.meta.url), 'utf8')
+
+  assert.match(source, /const effectiveUser = desktopMode\s*\?\s*currentUser\s*:\s*resolveDesktopUser\(\{ desktopMode, currentUser \}\)/)
+  assert.match(source, /if \(!effectiveUser\) \{\s*return null\s*\}/)
 })
