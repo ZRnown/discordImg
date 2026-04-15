@@ -8,10 +8,17 @@ import { ShopsView } from "@/components/shops-view"
 import { ImageSearchView } from "@/components/image-search-view"
 import { LogsView } from "@/components/logs-view"
 import { LoginView } from "@/components/login-view"
+import { DesktopBootstrapPanel } from "@/components/desktop-bootstrap-panel"
 import { AppSidebar } from "@/components/app-sidebar"
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
 import { Separator } from "@/components/ui/separator"
 import { Button } from "@/components/ui/button"
+import { toBackendUrl } from "@/lib/desktop-api"
+import {
+  formatDesktopBootstrapDiagnostics,
+  type DesktopBootstrapLogEntry,
+  type DesktopHealthInfo,
+} from "@/lib/desktop-bootstrap-diagnostics"
 import { resolveDesktopUser, waitForDesktopUser } from "@/lib/desktop-session"
 import { LogOut, User, Play, Square } from "lucide-react"
 import { toast } from "sonner"
@@ -28,6 +35,11 @@ export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }
   const [currentUser, setCurrentUser] = useState<UserData | null>(null)
   const [loading, setLoading] = useState(true)
   const [desktopBootstrapError, setDesktopBootstrapError] = useState<string | null>(null)
+  const [backendHealthy, setBackendHealthy] = useState(false)
+  const [desktopHealth, setDesktopHealth] = useState<DesktopHealthInfo | null>(null)
+  const [startupLogs, setStartupLogs] = useState<DesktopBootstrapLogEntry[]>([])
+  const [startupStartedAt, setStartupStartedAt] = useState(() => Date.now())
+  const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const [botStatus, setBotStatus] = useState<"stopped" | "starting" | "running" | "stopping">("stopped")
   const hasFetchedUser = useRef(false)
   const effectiveUser = desktopMode
@@ -46,6 +58,19 @@ export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }
   }, [botStatus])
 
   useEffect(() => {
+    if (!desktopMode) {
+      return
+    }
+
+    const timer = window.setInterval(() => {
+      setElapsedSeconds(Math.max(0, Math.floor((Date.now() - startupStartedAt) / 1000)))
+    }, 1000)
+
+    setElapsedSeconds(Math.max(0, Math.floor((Date.now() - startupStartedAt) / 1000)))
+    return () => window.clearInterval(timer)
+  }, [desktopMode, startupStartedAt])
+
+  useEffect(() => {
     const handleShopsUpdated = () => {
       if (desktopMode) {
         void hydrateDesktopUser()
@@ -56,6 +81,80 @@ export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }
 
     window.addEventListener("shops-updated", handleShopsUpdated)
     return () => window.removeEventListener("shops-updated", handleShopsUpdated)
+  }, [desktopMode])
+
+  useEffect(() => {
+    if (!desktopMode) {
+      return
+    }
+
+    let cancelled = false
+    let eventSource: EventSource | null = null
+
+    const loadDesktopDiagnostics = async () => {
+      const [healthResult, desktopHealthResult, logsResult] = await Promise.allSettled([
+        fetch("/api/health", { credentials: "include" }),
+        fetch("/api/desktop/health", { credentials: "include" }),
+        fetch("/api/logs/recent", { credentials: "include" }),
+      ])
+
+      if (cancelled) {
+        return
+      }
+
+      if (healthResult.status === "fulfilled" && healthResult.value.ok) {
+        setBackendHealthy(true)
+      } else {
+        setBackendHealthy(false)
+      }
+
+      if (desktopHealthResult.status === "fulfilled" && desktopHealthResult.value.ok) {
+        const data = await desktopHealthResult.value.json().catch(() => null)
+        if (!cancelled) {
+          setDesktopHealth(data)
+        }
+      }
+
+      if (logsResult.status === "fulfilled" && logsResult.value.ok) {
+        const data = await logsResult.value.json().catch(() => null)
+        if (!cancelled) {
+          setStartupLogs((data?.logs || []).slice(-40))
+        }
+      }
+    }
+
+    const connectLogStream = () => {
+      eventSource = new EventSource(toBackendUrl("/api/logs/stream"))
+
+      eventSource.onmessage = (event) => {
+        try {
+          const entry = JSON.parse(event.data)
+          if (entry?.type === "heartbeat") {
+            return
+          }
+          setStartupLogs((prev) => [...prev, entry].slice(-40))
+        } catch {
+          // ignored
+        }
+      }
+
+      eventSource.onerror = () => {
+        eventSource?.close()
+      }
+    }
+
+    void loadDesktopDiagnostics()
+    connectLogStream()
+
+    const interval = window.setInterval(() => {
+      void loadDesktopDiagnostics()
+    }, 1500)
+
+    return () => {
+      cancelled = true
+      window.clearInterval(interval)
+      eventSource?.close()
+    }
   }, [desktopMode])
 
   const initializeSession = async () => {
@@ -195,11 +294,40 @@ export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }
     }
   }
 
+  const resetDesktopBootstrap = () => {
+    setLoading(true)
+    setCurrentUser(null)
+    setDesktopBootstrapError(null)
+    setBackendHealthy(false)
+    setDesktopHealth(null)
+    setStartupLogs([])
+    setStartupStartedAt(Date.now())
+    void initializeSession()
+  }
+
+  const desktopDiagnosticText = formatDesktopBootstrapDiagnostics({
+    loading,
+    elapsedSeconds,
+    backendHealthy,
+    sessionReady: Boolean(currentUser),
+    bootstrapError: desktopBootstrapError,
+    desktopHealth,
+    logs: startupLogs,
+  })
+
   if (loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-      </div>
+      <DesktopBootstrapPanel
+        loading={loading}
+        elapsedSeconds={elapsedSeconds}
+        backendHealthy={backendHealthy}
+        sessionReady={Boolean(currentUser)}
+        bootstrapError={desktopBootstrapError}
+        desktopHealth={desktopHealth}
+        logs={startupLogs}
+        diagnosticText={desktopDiagnosticText}
+        onRetry={resetDesktopBootstrap}
+      />
     )
   }
 
@@ -209,25 +337,17 @@ export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }
 
   if (desktopMode && desktopBootstrapError) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-6 bg-muted/20">
-        <div className="w-full max-w-xl rounded-lg border bg-background p-6 shadow-sm space-y-4">
-          <div>
-            <h1 className="text-xl font-semibold">桌面后端未连接</h1>
-            <p className="mt-2 text-sm text-muted-foreground">{desktopBootstrapError}</p>
-          </div>
-          <div className="flex gap-3">
-            <Button
-              onClick={() => {
-                setLoading(true)
-                setDesktopBootstrapError(null)
-                void initializeSession()
-              }}
-            >
-              重试连接
-            </Button>
-          </div>
-        </div>
-      </div>
+      <DesktopBootstrapPanel
+        loading={false}
+        elapsedSeconds={elapsedSeconds}
+        backendHealthy={backendHealthy}
+        sessionReady={Boolean(currentUser)}
+        bootstrapError={desktopBootstrapError}
+        desktopHealth={desktopHealth}
+        logs={startupLogs}
+        diagnosticText={desktopDiagnosticText}
+        onRetry={resetDesktopBootstrap}
+      />
     )
   }
 
