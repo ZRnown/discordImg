@@ -19,6 +19,20 @@ test("inferDesktopBootstrapHint identifies Hugging Face retry stalls", () => {
   assert.match(hint, /hugging face/i)
 })
 
+test("inferDesktopBootstrapHint explains when backend missed desktop single-user mode", () => {
+  const hint = inferDesktopBootstrapHint({
+    desktopHealth: {
+      desktop_backend: true,
+      single_user: false,
+      license_required: true,
+      pid: 123,
+    },
+    logs: [],
+  })
+
+  assert.match(hint, /单用户模式/)
+})
+
 test("buildDesktopBootstrapSummary marks backend and session as done when desktop session is ready", () => {
   const summary = buildDesktopBootstrapSummary({
     loading: false,

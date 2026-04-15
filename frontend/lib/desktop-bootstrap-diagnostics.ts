@@ -11,6 +11,10 @@ export type DesktopHealthInfo = {
   license_required?: boolean
   ai_model_ready?: boolean
   feature_extractor_error?: string | null
+  desktop_mode_source?: string
+  desktop_backend_process?: boolean
+  frozen?: boolean
+  executable_name?: string
   pid?: number
 }
 
@@ -46,6 +50,10 @@ export function inferDesktopBootstrapHint({
 
   if (desktopHealth?.feature_extractor_error) {
     return `AI 初始化报错：${desktopHealth.feature_extractor_error}`
+  }
+
+  if (desktopHealth?.desktop_backend && desktopHealth?.single_user === false) {
+    return "后端已响应，但当前进程没有进入桌面单用户模式，/api/auth/me 不会自动返回桌面用户。"
   }
 
   if (
@@ -122,6 +130,12 @@ export function buildDesktopBootstrapSummary({
         detail: "已经拿到 /api/auth/me，主界面可进入。",
         state: "done",
       }
+    : backendHealthy && desktopHealth?.single_user === false
+      ? {
+          label: "桌面会话",
+          detail: "后端已启动，但当前进程没有进入桌面单用户模式。",
+          state: loading ? "active" : "error",
+        }
     : backendHealthy
       ? {
           label: "桌面会话",

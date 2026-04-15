@@ -48,6 +48,13 @@ except ModuleNotFoundError as e:
     else:
         raise
 try:
+    from runtime_mode import resolve_runtime_mode
+except ModuleNotFoundError as e:
+    if e.name == 'runtime_mode':
+        from .runtime_mode import resolve_runtime_mode
+    else:
+        raise
+try:
     from license_manager import LicenseManager
 except ModuleNotFoundError as e:
     if e.name == 'license_manager':
@@ -228,11 +235,12 @@ except ModuleNotFoundError as e:
     else:
         raise
 
-DESKTOP_SINGLE_USER = os.getenv('DESKTOP_SINGLE_USER', '0') == '1'
-DESKTOP_SKIP_AI_WARMUP = os.getenv('DESKTOP_SKIP_AI_WARMUP', '0') == '1'
+DESKTOP_RUNTIME_MODE = resolve_runtime_mode()
+DESKTOP_SINGLE_USER = DESKTOP_RUNTIME_MODE.desktop_single_user
+DESKTOP_SKIP_AI_WARMUP = DESKTOP_RUNTIME_MODE.desktop_skip_ai_warmup
 DESKTOP_USER_ID = int(os.getenv('DESKTOP_USER_ID', '1'))
 DESKTOP_USERNAME = os.getenv('DESKTOP_USERNAME', 'desktop')
-LICENSE_REQUIRED = os.getenv('LICENSE_REQUIRED', '1') == '1'
+LICENSE_REQUIRED = DESKTOP_RUNTIME_MODE.license_required
 
 # === 全局状态变量 ===
 ai_model_ready = False  # AI模型是否已就绪
@@ -753,6 +761,14 @@ feature_extractor_failed_at = 0.0
 feature_extractor_last_error = None
 
 
+def is_ai_model_ready():
+    return bool(
+        ai_model_ready
+        and feature_extractor_instance is not None
+        and not feature_extractor_last_error
+    )
+
+
 def _load_feature_extractor_class():
     try:
         from feature_extractor import DINOv2FeatureExtractor as extractor_class
@@ -862,6 +878,20 @@ def initialize_runtime():
     """
     global ai_model_ready
     print(f"🔧 [系统] 正在初始化运行时环境 (PID: {os.getpid()})...")
+    print(
+        "🖥️ [系统] 运行模式: "
+        f"single_user={DESKTOP_SINGLE_USER} "
+        f"skip_ai_warmup={DESKTOP_SKIP_AI_WARMUP} "
+        f"license_required={LICENSE_REQUIRED} "
+        f"source={DESKTOP_RUNTIME_MODE.desktop_mode_source} "
+        f"frozen={DESKTOP_RUNTIME_MODE.frozen} "
+        f"executable={DESKTOP_RUNTIME_MODE.executable_name or 'unknown'}"
+    )
+    if (
+        DESKTOP_RUNTIME_MODE.desktop_mode_source == 'packaged-backend-default'
+        and DESKTOP_RUNTIME_MODE.desktop_backend_process
+    ):
+        print("ℹ️ [系统] 未检测到桌面环境变量，已根据打包 sidecar 进程自动启用桌面模式")
 
     # 1. 加载系统配置
     load_system_config()
@@ -915,8 +945,9 @@ def initialize_runtime():
         global ai_model_ready
         try:
             print("🤖 [后台] 正在预热AI模型...")
-            get_global_feature_extractor()
-            ai_model_ready = True
+            extractor = get_global_feature_extractor()
+            if extractor is None:
+                raise RuntimeError(feature_extractor_last_error or "特征提取器初始化失败")
             try:
                 strategy_name = getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank')
                 try:
@@ -986,6 +1017,7 @@ def initialize_runtime():
                 _start_auto_retrieval_cache_backfill()
             except Exception as cache_error:
                 logger.warning("商品检索缓存预热失败: %s", cache_error)
+            ai_model_ready = True
         except Exception as e:
             print(f"⚠️ [后台] AI预热失败: {e}")
             ai_model_ready = False
@@ -1996,6 +2028,7 @@ def get_license_status():
     status = license_manager.status()
     status['required'] = DESKTOP_SINGLE_USER and LICENSE_REQUIRED
     status['desktop_backend'] = True
+    status['desktop_mode_source'] = DESKTOP_RUNTIME_MODE.desktop_mode_source
     return jsonify(status)
 
 
@@ -2005,8 +2038,12 @@ def desktop_health():
         'desktop_backend': True,
         'single_user': DESKTOP_SINGLE_USER,
         'license_required': LICENSE_REQUIRED,
-        'ai_model_ready': ai_model_ready,
+        'ai_model_ready': is_ai_model_ready(),
         'feature_extractor_error': feature_extractor_last_error,
+        'desktop_mode_source': DESKTOP_RUNTIME_MODE.desktop_mode_source,
+        'desktop_backend_process': DESKTOP_RUNTIME_MODE.desktop_backend_process,
+        'frozen': DESKTOP_RUNTIME_MODE.frozen,
+        'executable_name': DESKTOP_RUNTIME_MODE.executable_name,
         'pid': os.getpid(),
     })
 
@@ -3185,7 +3222,8 @@ def health_check():
     return jsonify({
         'status': 'ok',
         'backend': 'running',
-        'ai_ready': ai_model_ready,
+        'ai_ready': is_ai_model_ready(),
+        'desktop_mode_source': DESKTOP_RUNTIME_MODE.desktop_mode_source,
         'timestamp': datetime.now().isoformat()
     })
 
