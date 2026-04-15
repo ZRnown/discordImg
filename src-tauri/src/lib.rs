@@ -19,6 +19,7 @@ fn start_backend(app: &tauri::AppHandle) -> Result<(), String> {
       .current_dir(project_root)
       .arg("backend/app.py")
       .env("DESKTOP_SINGLE_USER", "1")
+      .env("DESKTOP_SKIP_AI_WARMUP", "1")
       .env("LICENSE_REQUIRED", "0")
       .env("BACKEND_HOST", "127.0.0.1")
       .env("BACKEND_PORT", "5001")
@@ -36,6 +37,7 @@ fn start_backend(app: &tauri::AppHandle) -> Result<(), String> {
     .sidecar("backend-api")
     .map_err(|e| format!("failed to prepare backend sidecar: {e}"))?
     .env("DESKTOP_SINGLE_USER", "1")
+    .env("DESKTOP_SKIP_AI_WARMUP", "1")
     .env("LICENSE_REQUIRED", "0")
     .env("BACKEND_HOST", "127.0.0.1")
     .env("BACKEND_PORT", "5001")

@@ -229,6 +229,7 @@ except ModuleNotFoundError as e:
         raise
 
 DESKTOP_SINGLE_USER = os.getenv('DESKTOP_SINGLE_USER', '0') == '1'
+DESKTOP_SKIP_AI_WARMUP = os.getenv('DESKTOP_SKIP_AI_WARMUP', '0') == '1'
 DESKTOP_USER_ID = int(os.getenv('DESKTOP_USER_ID', '1'))
 DESKTOP_USERNAME = os.getenv('DESKTOP_USERNAME', 'desktop')
 LICENSE_REQUIRED = os.getenv('LICENSE_REQUIRED', '1') == '1'
@@ -859,6 +860,7 @@ def initialize_runtime():
     初始化运行时环境 (日志、配置等)
     只在主进程中执行，防止子进程重复初始化
     """
+    global ai_model_ready
     print(f"🔧 [系统] 正在初始化运行时环境 (PID: {os.getpid()})...")
 
     # 1. 加载系统配置
@@ -988,9 +990,13 @@ def initialize_runtime():
             print(f"⚠️ [后台] AI预热失败: {e}")
             ai_model_ready = False
 
-    ai_warmup_thread = threading.Thread(target=async_warmup_ai, daemon=True)
-    ai_warmup_thread.start()
-    print("🚀 [系统] AI模型正在后台预热，Flask服务即将启动...")
+    if DESKTOP_SKIP_AI_WARMUP:
+        ai_model_ready = False
+        print("⏭️ [系统] 桌面模式已跳过 AI 启动预热，基础功能将先启动")
+    else:
+        ai_warmup_thread = threading.Thread(target=async_warmup_ai, daemon=True)
+        ai_warmup_thread.start()
+        print("🚀 [系统] AI模型正在后台预热，Flask服务即将启动...")
 
     # 5. 启动后台清理线程
     cleanup_thread = threading.Thread(target=run_cleanup_task, daemon=True)
