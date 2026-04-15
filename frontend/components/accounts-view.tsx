@@ -971,27 +971,27 @@ const formatWebsiteForEdit = (website: any) => ({
 
     // 先获取当前用户，再决定是否获取用户列表
     const init = async () => {
-        if (providedUser) {
-            setCurrentUser(providedUser);
-            fetchAccounts();
-            if (providedUser.role === 'admin') {
-                fetchUsers();
-            }
-            return;
+      if (providedUser) {
+        setCurrentUser(providedUser)
+        await fetchAccounts(true)
+        if (providedUser.role === 'admin') {
+          fetchUsers()
         }
+        return
+      }
 
-        const userRes = await fetch('/api/auth/me', { credentials: 'include' });
-        if (userRes.ok) {
-            const userData = await userRes.json();
-            setCurrentUser(userData.user);
+      const userRes = await fetch('/api/auth/me', { credentials: 'include' })
+      if (userRes.ok) {
+        const userData = await userRes.json()
+        setCurrentUser(userData.user)
 
-            fetchAccounts();
+        await fetchAccounts(true)
 
-            if (userData.user.role === 'admin') {
-                fetchUsers();
-            }
+        if (userData.user.role === 'admin') {
+          fetchUsers()
         }
-    };
+      }
+    }
     init();
     fetchSettings();
     fetchWebsites(true); // 强制刷新，清除旧的缓存数据
@@ -1258,15 +1258,17 @@ const formatWebsiteForEdit = (website: any) => ({
   }
 
   const fetchAccounts = async (forceRefresh = false) => {
-          try {
+    try {
       console.log('获取账号列表...')
-      const cacheKey = '/api/accounts'
       if (forceRefresh) {
-        // 强制刷新：清除缓存
-        sessionStorage.removeItem(`cache_${cacheKey}`)
+        invalidateCache('/api/accounts')
       }
-      const data = await cachedFetch('/api/accounts', { credentials: 'include' })
-            setAccounts(data.accounts || [])
+      const data = await cachedFetch('/api/accounts', {
+        credentials: 'include',
+        cache: forceRefresh ? 'no-store' : 'default',
+        force: forceRefresh,
+      })
+      setAccounts(data.accounts || [])
     } catch (error) {
       console.error('获取账号列表出错:', error)
       toast.error(getApiErrorMessage(error, '获取账号列表失败'))
@@ -1316,7 +1318,8 @@ const formatWebsiteForEdit = (website: any) => ({
         toast.success("账号添加成功")
         setNewAccount({ token: "" })
         setShowAddDialog(false)
-        fetchAccounts()
+        await fetchAccounts(true)
+        setAccountPage(1)
       } else {
         const error = await response.json()
         toast.error(error.error || "添加账号失败")
@@ -1341,7 +1344,7 @@ const formatWebsiteForEdit = (website: any) => ({
 
       if (response.ok) {
         toast.success("账号删除成功")
-        fetchAccounts()
+        await fetchAccounts(true)
         setDeleteAccountConfirm(null)
       } else {
         const error = await response.json()

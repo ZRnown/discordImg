@@ -6,23 +6,29 @@ interface CacheEntry {
   timestamp: number
 }
 
+export interface CachedFetchOptions extends RequestInit {
+  force?: boolean
+}
+
 export function useApiCache(cacheDuration: number = 30000) {
   const cacheRef = useRef<{[key: string]: CacheEntry}>({})
 
-  const cachedFetch = useCallback(async (url: string, options?: RequestInit): Promise<any> => {
+  const cachedFetch = useCallback(async (url: string, options?: CachedFetchOptions): Promise<any> => {
     const cacheKey = `${options?.method || 'GET'}:${url}`
     const now = Date.now()
+    const shouldBypassCache = options?.force === true
 
     // 检查缓存
     const cached = cacheRef.current[cacheKey]
-    if (cached && (now - cached.timestamp) < cacheDuration) {
+    if (!shouldBypassCache && cached && (now - cached.timestamp) < cacheDuration) {
       console.log(`使用缓存数据: ${cacheKey}`)
       return cached.data
     }
 
     // 发起新请求
     console.log(`发起API请求: ${cacheKey}`)
-    const response = await fetch(url, options)
+    const { force: _force, ...requestOptions } = options || {}
+    const response = await fetch(url, requestOptions)
     const text = await response.text()
     let data: any = {}
     if (text.trim()) {
