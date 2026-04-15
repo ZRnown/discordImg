@@ -260,7 +260,7 @@ function CooldownTimer({ remaining }: { remaining: number }) {
   )
 }
 
-export function AccountsView({ isActive = true }: { isActive?: boolean }) {
+export function AccountsView({ currentUser: providedUser = null, isActive = true }: { currentUser?: any; isActive?: boolean }) {
   const [accounts, setAccounts] = useState<any[]>([])
   const [accountPage, setAccountPage] = useState(1)
   const accountsPerPage = 5
@@ -287,7 +287,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
   const barkAutoSaveLastPayloadRef = useRef('')
 
   // 新增：当前用户信息状态
-  const [currentUser, setCurrentUser] = useState<any>(null)
+  const [currentUser, setCurrentUser] = useState<any>(providedUser)
   const [deleteAccountConfirm, setDeleteAccountConfirm] = useState<any>(null)
 
   // 使用API缓存hook
@@ -359,6 +359,13 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
   const websiteReplyDelaySaveTimersRef = useRef<{[key: number]: ReturnType<typeof setTimeout> | undefined}>({})
   const websiteReplyDelayInputsRef = useRef<{[key: number]: { min: string, max: string }}>({})
   const websiteKeywordMatchSaveTimersRef = useRef<{[key: number]: ReturnType<typeof setTimeout> | undefined}>({})
+
+  useEffect(() => {
+    if (providedUser) {
+      setCurrentUser(providedUser)
+    }
+  }, [providedUser])
+
   const formatThresholdForInput = (value: any) => {
     if (value === null || value === undefined || value === '') return ''
     const num = Number(value)
@@ -964,15 +971,22 @@ const formatWebsiteForEdit = (website: any) => ({
 
     // 先获取当前用户，再决定是否获取用户列表
     const init = async () => {
+        if (providedUser) {
+            setCurrentUser(providedUser);
+            fetchAccounts();
+            if (providedUser.role === 'admin') {
+                fetchUsers();
+            }
+            return;
+        }
+
         const userRes = await fetch('/api/auth/me', { credentials: 'include' });
         if (userRes.ok) {
             const userData = await userRes.json();
             setCurrentUser(userData.user);
 
-            // 并行获取数据
-            fetchAccounts(); // 所有人都能获取账号(自己的)
+            fetchAccounts();
 
-            // 只有管理员才获取用户列表
             if (userData.user.role === 'admin') {
                 fetchUsers();
             }
@@ -1008,7 +1022,7 @@ const formatWebsiteForEdit = (website: any) => ({
       clearInterval(cooldownInterval);
       window.removeEventListener('bot-status-changed', handleStatusChange)
     }
-  }, [isActive])
+  }, [isActive, providedUser])
 
   useEffect(() => {
     if (!editingFilter) return

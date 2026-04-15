@@ -102,6 +102,7 @@ export function DashboardView({ currentUser, isActive = true }: { currentUser: a
       const res = await fetch('/api/announcements', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(newAnnouncement)
       })
       if (res.ok) {
@@ -124,6 +125,7 @@ export function DashboardView({ currentUser, isActive = true }: { currentUser: a
       const res = await fetch(`/api/announcements/${editingAnnouncement.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           title: editingAnnouncement.title,
           content: editingAnnouncement.content,
@@ -146,7 +148,10 @@ export function DashboardView({ currentUser, isActive = true }: { currentUser: a
   const handleDeleteAnnouncement = async (announcement: Announcement) => {
     if (!confirm(`确定要删除公告 "${announcement.title}" 吗？`)) return
     try {
-      const res = await fetch(`/api/announcements/${announcement.id}`, { method: 'DELETE' })
+      const res = await fetch(`/api/announcements/${announcement.id}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      })
       if (res.ok) {
         toast.success('公告删除成功')
         fetchAnnouncements()

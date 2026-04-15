@@ -12,6 +12,7 @@ import { AppSidebar } from "@/components/app-sidebar"
 import { SidebarProvider, SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
 import { Separator } from "@/components/ui/separator"
 import { Button } from "@/components/ui/button"
+import { resolveDesktopUser, waitForDesktopUser } from "@/lib/desktop-session"
 import { LogOut, User, Play, Square } from "lucide-react"
 import { toast } from "sonner"
 
@@ -25,28 +26,15 @@ interface UserData {
 export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }) {
   const [currentView, setCurrentView] = useState("dashboard")
   const [currentUser, setCurrentUser] = useState<UserData | null>(null)
-  const [loading, setLoading] = useState(!desktopMode)
+  const [loading, setLoading] = useState(true)
   const [botStatus, setBotStatus] = useState<"stopped" | "starting" | "running" | "stopping">("stopped")
   const hasFetchedUser = useRef(false)
-  const desktopFallbackUser: UserData | null = desktopMode
-    ? {
-        id: 1,
-        username: "desktop",
-        role: "admin",
-        shops: [],
-      }
-    : null
-  const effectiveUser = currentUser ?? desktopFallbackUser
+  const effectiveUser = resolveDesktopUser({ desktopMode, currentUser })
 
   useEffect(() => {
     if (!hasFetchedUser.current) {
       hasFetchedUser.current = true
-      if (desktopMode) {
-        void hydrateDesktopUser()
-      } else {
-        void checkLoginStatus()
-      }
-      fetchBotStatus()
+      void initializeSession()
     }
   }, [desktopMode])
 
@@ -67,6 +55,15 @@ export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }
     return () => window.removeEventListener("shops-updated", handleShopsUpdated)
   }, [desktopMode])
 
+  const initializeSession = async () => {
+    if (desktopMode) {
+      await hydrateDesktopUser()
+    } else {
+      await checkLoginStatus()
+    }
+    await fetchBotStatus()
+  }
+
   const checkLoginStatus = async () => {
     try {
       const response = await fetch("/api/auth/me", {
@@ -85,19 +82,14 @@ export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }
 
   const hydrateDesktopUser = async () => {
     try {
-      const response = await fetch("/api/auth/me", {
-        credentials: "include",
-      })
-      if (!response.ok) {
-        return
-      }
-
-      const data = await response.json()
-      if (data?.user) {
-        setCurrentUser(data.user)
+      const user = await waitForDesktopUser()
+      if (user) {
+        setCurrentUser(user)
       }
     } catch (_) {
       // ignored
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -291,7 +283,7 @@ export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }
           </div>
 
           <div style={{ display: currentView === "accounts" ? "block" : "none", height: "100%" }}>
-            <AccountsView isActive={currentView === "accounts"} />
+            <AccountsView currentUser={effectiveUser} isActive={currentView === "accounts"} />
           </div>
 
           <div style={{ display: currentView === "shops" ? "block" : "none", height: "100%" }}>
