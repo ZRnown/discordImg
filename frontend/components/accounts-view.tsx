@@ -1224,7 +1224,7 @@ const formatWebsiteForEdit = (website: any) => ({
       // 先尝试保存当前配置，避免“测试后重启看起来丢失”
       await saveBarkSettings(settings, { silent: true }).catch(() => null)
 
-      const response = await fetch('/internal-api/bark-test', {
+      const response = await fetch('/api/user/bark-test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
