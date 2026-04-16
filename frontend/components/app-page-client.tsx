@@ -20,7 +20,7 @@ import {
   type DesktopHealthInfo,
 } from "@/lib/desktop-bootstrap-diagnostics"
 import { resolveDesktopUser, waitForDesktopUser } from "@/lib/desktop-session"
-import { LogOut, User, Play, Square } from "lucide-react"
+import { LogOut, User, Play, RefreshCcw, Square } from "lucide-react"
 import { toast } from "sonner"
 
 interface UserData {
@@ -30,8 +30,19 @@ interface UserData {
   shops: string[]
 }
 
+type AppView = "dashboard" | "accounts" | "shops" | "scraper" | "image-search" | "logs"
+
+const INITIAL_VIEW_REFRESH_TOKENS: Record<AppView, number> = {
+  dashboard: 0,
+  accounts: 0,
+  shops: 0,
+  scraper: 0,
+  "image-search": 0,
+  logs: 0,
+}
+
 export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }) {
-  const [currentView, setCurrentView] = useState("dashboard")
+  const [currentView, setCurrentView] = useState<AppView>("dashboard")
   const [currentUser, setCurrentUser] = useState<UserData | null>(null)
   const [loading, setLoading] = useState(true)
   const [desktopBootstrapError, setDesktopBootstrapError] = useState<string | null>(null)
@@ -41,6 +52,10 @@ export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }
   const [startupStartedAt, setStartupStartedAt] = useState(() => Date.now())
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const [botStatus, setBotStatus] = useState<"stopped" | "starting" | "running" | "stopping">("stopped")
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [viewRefreshTokens, setViewRefreshTokens] = useState<Record<AppView, number>>(() => ({
+    ...INITIAL_VIEW_REFRESH_TOKENS,
+  }))
   const hasFetchedUser = useRef(false)
   const effectiveUser = desktopMode
     ? currentUser
@@ -157,6 +172,28 @@ export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }
     }
   }, [desktopMode])
 
+  useEffect(() => {
+    if (!desktopMode) {
+      return
+    }
+
+    const handleRefreshShortcut = (event: KeyboardEvent) => {
+      const loweredKey = event.key.toLowerCase()
+      const isRefreshShortcut =
+        event.key === "F5" || ((event.ctrlKey || event.metaKey) && loweredKey === "r")
+
+      if (!isRefreshShortcut || isRefreshing) {
+        return
+      }
+
+      event.preventDefault()
+      void handleManualRefresh()
+    }
+
+    window.addEventListener("keydown", handleRefreshShortcut)
+    return () => window.removeEventListener("keydown", handleRefreshShortcut)
+  }, [desktopMode, currentView, isRefreshing])
+
   const initializeSession = async () => {
     if (desktopMode) {
       await hydrateDesktopUser()
@@ -207,6 +244,8 @@ export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }
         const data = await response.json()
         if (data.running) {
           setBotStatus("running")
+        } else {
+          setBotStatus("stopped")
         }
       }
     } catch (error) {
@@ -294,6 +333,27 @@ export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }
     }
   }
 
+  const handleManualRefresh = async () => {
+    if (isRefreshing) {
+      return
+    }
+
+    setIsRefreshing(true)
+
+    try {
+      await initializeSession()
+      setViewRefreshTokens((previous) => ({
+        ...previous,
+        [currentView]: previous[currentView] + 1,
+      }))
+      toast.success("已刷新当前页面数据")
+    } catch (_) {
+      toast.error("刷新失败，请稍后重试")
+    } finally {
+      setIsRefreshing(false)
+    }
+  }
+
   const resetDesktopBootstrap = () => {
     setLoading(true)
     setCurrentUser(null)
@@ -369,6 +429,13 @@ export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }
           <h1 className="text-lg font-semibold">{desktopMode ? "LinkRadar 桌面版" : "LinkRadar 链接雷达"}</h1>
           <div className="flex-1" />
           <div className="flex items-center gap-3">
+            {desktopMode && (
+              <Button variant="outline" size="sm" onClick={handleManualRefresh} disabled={isRefreshing}>
+                <RefreshCcw className={`size-4 mr-1 ${isRefreshing ? "animate-spin" : ""}`} />
+                刷新数据
+              </Button>
+            )}
+
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
               <User className="size-4" />
               <span>{effectiveUser.username}</span>
@@ -431,27 +498,39 @@ export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }
         </header>
         <main className="flex-1 overflow-auto p-6">
           <div style={{ display: currentView === "dashboard" ? "block" : "none", height: "100%" }}>
-            <DashboardView currentUser={effectiveUser} isActive={currentView === "dashboard"} />
+            <DashboardView
+              key={`dashboard-${viewRefreshTokens.dashboard}`}
+              currentUser={effectiveUser}
+              isActive={currentView === "dashboard"}
+            />
           </div>
 
           <div style={{ display: currentView === "accounts" ? "block" : "none", height: "100%" }}>
-            <AccountsView currentUser={effectiveUser} isActive={currentView === "accounts"} />
+            <AccountsView
+              key={`accounts-${viewRefreshTokens.accounts}`}
+              currentUser={effectiveUser}
+              isActive={currentView === "accounts"}
+            />
           </div>
 
           <div style={{ display: currentView === "shops" ? "block" : "none", height: "100%" }}>
-            <ShopsView currentUser={effectiveUser} />
+            <ShopsView key={`shops-${viewRefreshTokens.shops}`} currentUser={effectiveUser} />
           </div>
 
           <div style={{ display: currentView === "scraper" ? "block" : "none", height: "100%" }}>
-            <ScraperView currentUser={effectiveUser} isActive={currentView === "scraper"} />
+            <ScraperView
+              key={`scraper-${viewRefreshTokens.scraper}`}
+              currentUser={effectiveUser}
+              isActive={currentView === "scraper"}
+            />
           </div>
 
           <div style={{ display: currentView === "image-search" ? "block" : "none", height: "100%" }}>
-            <ImageSearchView />
+            <ImageSearchView key={`image-search-${viewRefreshTokens["image-search"]}`} />
           </div>
 
           <div style={{ display: currentView === "logs" ? "block" : "none", height: "100%" }}>
-            <LogsView isActive={currentView === "logs"} />
+            <LogsView key={`logs-${viewRefreshTokens.logs}`} isActive={currentView === "logs"} />
           </div>
         </main>
       </SidebarInset>
