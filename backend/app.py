@@ -66,6 +66,7 @@ import subprocess
 from urllib.parse import quote
 import hashlib
 import uuid
+import re
 try:
     from settings_validation import validate_reply_delay_range
 except ModuleNotFoundError as e:
@@ -4683,6 +4684,11 @@ def send_bark_test_notification():
         if not bark_server_url.startswith(('http://', 'https://')):
             bark_server_url = f'https://{bark_server_url}'
 
+        raw_bark_key = bark_device_key
+
+        def _is_likely_bark_device_token(value):
+            return bool(re.fullmatch(r'[a-fA-F0-9]{64}', str(value or '').strip()))
+
         peer_content = '@jerry_selfbot_01 这双AJ4有39码吗？'
         title = peer_content
         now_text = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -4716,8 +4722,49 @@ def send_bark_test_notification():
                 timeout=8,
                 proxies={'http': None, 'https': None}
             )
+            response_text = response.text[:500]
 
-        response_text = response.text[:500]
+            if (
+                response.status_code >= 400
+                and _is_likely_bark_device_token(raw_bark_key)
+                and response.status_code == 400
+                and 'failed to get device token' in response_text.lower()
+            ):
+                register_response = session_obj.post(
+                    f'{bark_server_url}/register',
+                    json={'device_token': raw_bark_key},
+                    headers={'Content-Type': 'application/json; charset=utf-8'},
+                    timeout=8,
+                    proxies={'http': None, 'https': None}
+                )
+                register_payload = None
+                try:
+                    register_payload = register_response.json()
+                except ValueError:
+                    register_payload = None
+
+                converted_device_key = str(
+                    (register_payload or {}).get('data', {}).get('device_key')
+                    or (register_payload or {}).get('data', {}).get('key')
+                    or ''
+                ).strip()
+
+                if register_response.status_code < 400 and converted_device_key:
+                    bark_device_key = converted_device_key
+                    push_url = (
+                        f"{bark_server_url}/"
+                        f"{quote(bark_device_key, safe='')}/"
+                        f"{quote(title, safe='')}/"
+                        f"{quote(body, safe='')}"
+                    )
+                    response = session_obj.get(
+                        push_url,
+                        params=params,
+                        timeout=8,
+                        proxies={'http': None, 'https': None}
+                    )
+                    response_text = response.text[:500]
+
         if response.status_code >= 400:
             logger.warning(
                 f"Bark测试推送失败: status={response.status_code}, body={response_text}"
@@ -4733,7 +4780,13 @@ def send_bark_test_notification():
         return jsonify({
             'success': True,
             'message': '测试推送已发送，请检查 iPhone 的 Bark 通知',
-            'server_url': bark_server_url
+            'server_url': bark_server_url,
+            'device_key_updated': bark_device_key if bark_device_key != raw_bark_key else None,
+            'hint': (
+                '检测到你填写的是 DeviceToken，已自动转换为 DeviceKey。请保存新的 DeviceKey。'
+                if bark_device_key != raw_bark_key
+                else None
+            ),
         })
     except Exception as e:
         logger.error(f"Bark测试推送异常: {e}")

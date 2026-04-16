@@ -3350,10 +3350,14 @@ class DiscordBotClient(discord.Client):
         channel_name = getattr(channel, 'name', None) or str(getattr(channel, 'id', '未知频道'))
         account_name = getattr(getattr(self, 'user', None), 'name', None) or f'账号#{self.account_id}'
         preview = self._message_preview(message)
-        logger.debug(
+        log_message = (
             f'⏭️ [跳过] 账号:{account_name} | 原因:{reason} | 作者:{author_name}({author_id}) '
             f'| 频道:{channel_name} | 内容:"{preview}"'
         )
+        if self._is_plain_text_keyword_trigger_candidate(message):
+            logger.info(log_message)
+        else:
+            logger.debug(log_message)
 
     def _should_filter_message(self, message):
         """检查消息是否应该被过滤"""
@@ -3639,6 +3643,14 @@ class DiscordBotClient(discord.Client):
         # 屏蔽活动通知/系统消息以及 @everyone/@here 广播
         if self._should_ignore_mass_or_activity_message(message):
             return
+
+        if self._is_plain_text_keyword_trigger_candidate(message):
+            logger.info(
+                f'📨 [收到关键词候选] 账号:{getattr(self.user, "name", f"账号#{self.account_id}")} '
+                f'| 作者:{getattr(message.author, "name", "未知作者")}({getattr(message.author, "id", None)}) '
+                f'| 频道:{getattr(message.channel, "name", getattr(message.channel, "id", "未知频道"))} '
+                f'| 内容:"{self._message_preview(message, limit=80)}"'
+            )
 
         # 1. 所有账号都可触发互动通知（无需频道绑定）
         try:
@@ -4168,7 +4180,7 @@ class DiscordBotClient(discord.Client):
             # 检查频道是否绑定了网站配置（必须绑定才能回复）
             website_configs = await self.get_website_configs_by_channel_async(message.channel)
             if not website_configs:
-                logger.debug(f"频道 {message.channel.id} 未绑定网站配置，跳过关键词回复")
+                logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过关键词回复: {search_query}")
                 return
 
             db = None
