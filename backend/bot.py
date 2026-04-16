@@ -1351,7 +1351,7 @@ class DiscordBotClient(discord.Client):
     async def _run_message_stage_with_timeout(self, message, stage_name, coro, timeout_seconds):
         start_time = time.monotonic()
         try:
-            await asyncio.wait_for(coro, timeout=timeout_seconds)
+            result = await asyncio.wait_for(coro, timeout=timeout_seconds)
         except asyncio.TimeoutError:
             logger.error(
                 f"⏱️ 消息处理超时: stage={stage_name} | message_id={message.id} "
@@ -1371,7 +1371,7 @@ class DiscordBotClient(discord.Client):
                 f"🐢 消息处理耗时较长: stage={stage_name} | message_id={message.id} "
                 f"| channel_id={message.channel.id} | elapsed={elapsed:.2f}s"
             )
-        return True
+        return True if result is None else result
 
     async def _refresh_channel_cache(self):
         """【新增】刷新频道白名单缓存（60秒TTL）
@@ -3634,17 +3634,22 @@ class DiscordBotClient(discord.Client):
             MESSAGE_FORWARD_TIMEOUT_SECONDS,
         )
 
+        keyword_reply_matched = False
+
         # 处理关键词搜索
         if keyword_reply_enabled:
-            await self._run_message_stage_with_timeout(
+            keyword_reply_matched = bool(await self._run_message_stage_with_timeout(
                 message,
                 'keyword_search',
                 self.handle_keyword_search(message),
                 MESSAGE_KEYWORD_SEARCH_TIMEOUT_SECONDS,
-            )
+            ))
 
         # 处理图片
         if image_reply_enabled and message.attachments:
+            if keyword_reply_matched:
+                logger.debug("消息已命中关键词回复，跳过图片识别阶段")
+                return
             for attachment in message.attachments:
                 content_type = (getattr(attachment, 'content_type', '') or '').lower()
                 filename = (getattr(attachment, 'filename', '') or '').lower()
@@ -4042,25 +4047,24 @@ class DiscordBotClient(discord.Client):
     async def handle_keyword_search(self, message):
         """处理关键词商品搜索"""
         try:
-            # 只处理纯文字消息（不包含图片的）
-            if not message.content or message.attachments:
-                return
+            if not message.content:
+                return False
 
             search_query = message.content.strip()
             if not search_query:
-                return
+                return False
 
             # 移除自定义表情，避免表情ID/名称误触发关键词
             cleaned_query = re.sub(r'<a?:\w+:\d+>', ' ', search_query)
             cleaned_query = re.sub(r'\s+', ' ', cleaned_query).strip()
             if not cleaned_query:
-                return
+                return False
             if not re.search(r'\w', cleaned_query):
-                return
+                return False
             search_query = cleaned_query
 
             if _should_ignore_keyword_search_query(search_query):
-                return
+                return False
 
             # 调用搜索API
             result = await self.search_products_by_keyword(search_query)
@@ -4071,7 +4075,7 @@ class DiscordBotClient(discord.Client):
 
             if not all_products:
                 logger.debug(f'关键词搜索无结果: {search_query}')
-                return
+                return False
 
             if self.user_shops:
                 allowed_shops = {_normalize_keyword_search_text(s) for s in self.user_shops if s}
@@ -4413,10 +4417,12 @@ class DiscordBotClient(discord.Client):
 
             if not any_reply_scheduled:
                 logger.info(f'关键词搜索无可用回复内容: {search_query}')
+            return any_reply_scheduled
 
         except Exception as e:
             logger.error(f'Error handling keyword search: {e}')
             # 不发送错误消息到Discord，只记录日志
+            return False
 
     async def search_products_by_keyword(self, keyword):
         """根据关键词搜索商品"""

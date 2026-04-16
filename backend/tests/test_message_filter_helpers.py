@@ -76,7 +76,9 @@ class ManagedAccountMessageGuardTestCase(unittest.IsolatedAsyncioTestCase):
             user=SimpleNamespace(id=999999),
             user_id=42,
             role='both',
+            _should_allow_managed_account_trigger=lambda message: False,
             _should_ignore_mass_or_activity_message=lambda message: False,
+            _log_message_skip=lambda message, reason: None,
             _notify_direct_interaction_if_needed=AsyncMock(),
             _is_account_bound_in_channel=AsyncMock(return_value=(True, None)),
         )
@@ -119,7 +121,7 @@ class ManagedAccountMessageGuardTestCase(unittest.IsolatedAsyncioTestCase):
             await DiscordBotClient.on_message(client, message)
 
         client._notify_direct_interaction_if_needed.assert_awaited_once()
-        client._is_account_bound_in_channel.assert_awaited_once_with(message.channel)
+        client._is_account_bound_in_channel.assert_awaited_once_with(message.channel, include_sender=True)
         mark_processed.assert_called_once_with(message.id, client.user_id)
 
 
