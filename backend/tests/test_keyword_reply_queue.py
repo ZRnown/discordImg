@@ -4,7 +4,7 @@ import tempfile
 import uuid
 import asyncio
 from types import MethodType, SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from backend.bot import (
     DiscordBotClient,
@@ -616,6 +616,85 @@ class KeywordSearchMatchingTestCase(unittest.IsolatedAsyncioTestCase):
             self.channel = KeywordSearchMatchingTestCase._Channel(channel_id)
             self.author = KeywordSearchMatchingTestCase._Author(author_id)
 
+    async def test_keyword_search_still_schedules_reply_when_message_has_images(self):
+        scheduled_jobs = []
+        background_tasks = []
+
+        async def search_products_by_keyword(_query):
+            return {
+                "success": True,
+                "products": [
+                    {
+                        "id": 1,
+                        "english_title": "B22",
+                        "weidianUrl": "https://weidian.com/item.html?itemID=111",
+                        "autoReplyEnabled": True,
+                    },
+                ],
+            }
+
+        async def get_website_configs_by_channel_async(_channel_id):
+            return [
+                {
+                    "id": 21,
+                    "name": "acbuy",
+                    "display_name": "ACBUY",
+                    "reply_template": "{url}",
+                    "url_template": "https://www.acbuy.com/product/?id={id}",
+                }
+            ]
+
+        async def get_keyword_window_settings(_website_config, sender_count=0):
+            self.assertEqual(sender_count, 1)
+            return (180, 0, 0, "rotation", "immediate")
+
+        async def enqueue_or_dispatch_keyword_reply(_message, product, custom_reply, website_config):
+            scheduled_jobs.append(
+                {
+                    "website_id": website_config["id"],
+                    "product_id": product["id"],
+                    "content": (custom_reply or {}).get("content", ""),
+                }
+            )
+            return True
+
+        def start_keyword_reply_background_task(coro, task_name):
+            task = asyncio.create_task(coro, name=task_name)
+            background_tasks.append(task)
+            return task
+
+        client = SimpleNamespace(
+            user_id=456,
+            user_shops=[],
+            search_products_by_keyword=search_products_by_keyword,
+            get_website_configs_by_channel_async=get_website_configs_by_channel_async,
+            _get_keyword_window_settings=get_keyword_window_settings,
+            _enqueue_or_dispatch_keyword_reply=enqueue_or_dispatch_keyword_reply,
+            _start_keyword_reply_background_task=start_keyword_reply_background_task,
+            _get_custom_reply=lambda: None,
+        )
+        client._generate_reply_content = MethodType(DiscordBotClient._generate_reply_content, client)
+        client._get_user_settings_safe = MethodType(DiscordBotClient._get_user_settings_safe, client)
+        client._parse_message_filters = MethodType(DiscordBotClient._parse_message_filters, client)
+
+        fake_db = SimpleNamespace(
+            get_user_settings=lambda _user_id: {"keyword_match_limit": 0},
+            get_website_senders=lambda _website_id, _user_id: [999],
+            get_message_filters=lambda: [],
+            get_user_website_settings=lambda _user_id, _website_id: {},
+        )
+
+        message = self._Message("b22")
+        message.attachments = [SimpleNamespace(filename="sample.jpg")]
+
+        with patch.object(database_module, "db", fake_db):
+            await DiscordBotClient.handle_keyword_search(client, message)
+            if background_tasks:
+                await asyncio.gather(*background_tasks)
+
+        self.assertEqual(len(scheduled_jobs), 1)
+        self.assertEqual(scheduled_jobs[0]["product_id"], 1)
+
     async def test_keyword_match_limit_blocks_when_distinct_keyword_count_exceeds_limit(self):
         scheduled = []
 
@@ -725,6 +804,7 @@ class KeywordSearchMatchingTestCase(unittest.IsolatedAsyncioTestCase):
             _get_keyword_window_settings=get_keyword_window_settings,
             _enqueue_or_dispatch_keyword_reply=enqueue_or_dispatch_keyword_reply,
             _start_keyword_reply_background_task=start_keyword_reply_background_task,
+            _get_custom_reply=lambda: None,
         )
         client._generate_reply_content = MethodType(DiscordBotClient._generate_reply_content, client)
         client._get_user_settings_safe = MethodType(DiscordBotClient._get_user_settings_safe, client)
@@ -814,6 +894,7 @@ class KeywordSearchMatchingTestCase(unittest.IsolatedAsyncioTestCase):
             _get_keyword_window_settings=get_keyword_window_settings,
             _enqueue_or_dispatch_keyword_reply=enqueue_or_dispatch_keyword_reply,
             _start_keyword_reply_background_task=start_keyword_reply_background_task,
+            _get_custom_reply=lambda: None,
         )
         client._generate_reply_content = MethodType(DiscordBotClient._generate_reply_content, client)
         client._get_user_settings_safe = MethodType(DiscordBotClient._get_user_settings_safe, client)
@@ -836,6 +917,54 @@ class KeywordSearchMatchingTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIn("7653365800", scheduled_payloads[0]["content"])
         self.assertIn("7653304418", scheduled_payloads[0]["content"])
         self.assertNotIn("7681248139", scheduled_payloads[0]["content"])
+
+
+class OnMessageKeywordImagePriorityTestCase(unittest.IsolatedAsyncioTestCase):
+    async def test_on_message_skips_image_stage_when_keyword_reply_already_matched(self):
+        client = SimpleNamespace(
+            running=True,
+            user=SimpleNamespace(id=999999, name="listener"),
+            user_id=42,
+            role='both',
+            _should_ignore_mass_or_activity_message=lambda message: False,
+            _notify_direct_interaction_if_needed=AsyncMock(),
+            _is_account_bound_in_channel=AsyncMock(return_value=(True, None)),
+            _should_filter_message=lambda message: False,
+            _get_user_settings_safe=AsyncMock(
+                return_value={"keyword_reply_enabled": 1, "image_reply_enabled": 1}
+            ),
+            handle_keyword_forward=AsyncMock(return_value=None),
+            handle_keyword_search=AsyncMock(return_value=True),
+            handle_image=AsyncMock(return_value=None),
+            _message_preview=lambda message, limit=50: message.content[:limit],
+        )
+        client._run_message_stage_with_timeout = MethodType(
+            DiscordBotClient._run_message_stage_with_timeout,
+            client,
+        )
+
+        message = SimpleNamespace(
+            author=SimpleNamespace(id=222, bot=False),
+            webhook_id=None,
+            guild=SimpleNamespace(id=1),
+            mentions=[],
+            reference=None,
+            id=123456789,
+            channel=SimpleNamespace(id=987654321, name='finds'),
+            content='b22 sample',
+            attachments=[
+                SimpleNamespace(
+                    filename='sample.jpg',
+                    content_type='image/jpeg',
+                )
+            ],
+        )
+
+        with patch('backend.bot.mark_message_as_processed', return_value=True):
+            await DiscordBotClient.on_message(client, message)
+
+        client.handle_keyword_search.assert_awaited_once_with(message)
+        client.handle_image.assert_not_awaited()
 
 
 if __name__ == "__main__":

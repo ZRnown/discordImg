@@ -1407,7 +1407,7 @@ class DiscordBotClient(discord.Client):
     async def _run_message_stage_with_timeout(self, message, stage_name, coro, timeout_seconds):
         start_time = time.monotonic()
         try:
-            await asyncio.wait_for(coro, timeout=timeout_seconds)
+            result = await asyncio.wait_for(coro, timeout=timeout_seconds)
         except asyncio.TimeoutError:
             logger.error(
                 f"⏱️ 消息处理超时: stage={stage_name} | message_id={message.id} "
@@ -1427,7 +1427,7 @@ class DiscordBotClient(discord.Client):
                 f"🐢 消息处理耗时较长: stage={stage_name} | message_id={message.id} "
                 f"| channel_id={message.channel.id} | elapsed={elapsed:.2f}s"
             )
-        return True
+        return True if result is None else result
 
     async def _refresh_channel_cache(self):
         """【新增】刷新频道白名单缓存（60秒TTL）
@@ -4797,6 +4797,7 @@ class DiscordBotClient(discord.Client):
 
             if not any_reply_scheduled and not keyword_image_job_created:
                 logger.info(f'关键词搜索无可用回复内容: {search_query}')
+            return any_reply_scheduled
 
             return any_reply_scheduled
 
