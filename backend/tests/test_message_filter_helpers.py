@@ -68,6 +68,44 @@ class MessageFilterHelperTestCase(unittest.TestCase):
 
         self.assertEqual(limit, 2)
 
+    def test_ocr_contains_filter_matches_image_text_keywords(self):
+        message = self._make_message()
+
+        blocked = filters_block_message(
+            message,
+            [
+                {
+                    "filter_type": "ocr_contains",
+                    "filter_value": "nike, aj4，black cat",
+                }
+            ],
+            match_context={
+                "type": "image",
+                "ocr_text": "This poster says AJ4 Black Cat in stock now",
+            },
+        )
+
+        self.assertTrue(blocked)
+
+    def test_ocr_contains_filter_ignores_non_image_context(self):
+        message = self._make_message()
+
+        blocked = filters_block_message(
+            message,
+            [
+                {
+                    "filter_type": "ocr_contains",
+                    "filter_value": "nike, aj4",
+                }
+            ],
+            match_context={
+                "type": "text",
+                "ocr_text": "aj4",
+            },
+        )
+
+        self.assertFalse(blocked)
+
 
 class ManagedAccountMessageGuardTestCase(unittest.IsolatedAsyncioTestCase):
     def _build_client(self):

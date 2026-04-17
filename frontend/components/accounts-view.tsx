@@ -55,6 +55,21 @@ type NumericRangeFilterValue = {
   max: string
 }
 
+const WEBSITE_KEYWORD_FILTER_TYPES = new Set([
+  'user_id',
+  'role_id',
+  'ocr_contains',
+  'website_block_user_trigger',
+])
+
+const getKeywordFilterTypeLabel = (filterType: string) => {
+  if (filterType === 'user_id') return '用户ID'
+  if (filterType === 'role_id') return '身份组ID'
+  if (filterType === 'ocr_contains') return '图片OCR关键词'
+  if (filterType === 'website_block_user_trigger') return '网站拉黑触发词'
+  return '过滤值'
+}
+
 const parseNumericRangeFilterValue = (value: string): NumericRangeFilterValue => {
   if (!value) {
     return { keyword: '', min: '', max: '' }
@@ -108,6 +123,12 @@ const formatMessageFilterLabel = (filter: any) => {
   if (filter.filter_type === 'role_id') {
     return `身份组ID: ${filter.filter_value}`
   }
+  if (filter.filter_type === 'ocr_contains') {
+    return `图片OCR关键词: ${filter.filter_value}`
+  }
+  if (filter.filter_type === 'website_block_user_trigger') {
+    return `网站拉黑触发词: ${filter.filter_value}`
+  }
   return `${filter.filter_type} "${filter.filter_value}"`
 }
 
@@ -133,6 +154,12 @@ const getFilterValuePlaceholder = (filterType: string) => {
   }
   if (filterType === 'role_id') {
     return '输入身份组ID，多个用逗号分隔'
+  }
+  if (filterType === 'ocr_contains') {
+    return '输入 OCR 关键词，多个用逗号分隔'
+  }
+  if (filterType === 'website_block_user_trigger') {
+    return '输入拉黑触发词，多个用逗号分隔'
   }
   if (filterType === 'keyword_match_limit') {
     return '输入上限，例如 2'
@@ -320,6 +347,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
 
   // 网站过滤规则相关状态
   const [websiteFilters, setWebsiteFilters] = useState<{[key: number]: any[]}>({})
+  const [websiteBlockedUsers, setWebsiteBlockedUsers] = useState<{[key: number]: any[]}>({})
   const [showAddWebsiteFilter, setShowAddWebsiteFilter] = useState<number | null>(null)
   const [websiteSimilarityInputs, setWebsiteSimilarityInputs] = useState<{[key: number]: string}>({})
   const [websiteReplyDelayInputs, setWebsiteReplyDelayInputs] = useState<{[key: number]: { min: string, max: string }}>({})
@@ -548,11 +576,23 @@ const formatWebsiteForEdit = (website: any) => ({
         }
       })
 
+      const blockedUsersEntries = await Promise.all(
+        websites.map(async (website: any) => {
+          const blockedUsers = await requestWebsiteBlockedUsers(website.id, { silent: true })
+          return [website.id, blockedUsers] as const
+        })
+      )
+      const blockedUsersMap: {[key: number]: any[]} = {}
+      blockedUsersEntries.forEach(([websiteId, blockedUsers]) => {
+        blockedUsersMap[websiteId] = blockedUsers
+      })
+
       startTransition(() => {
         setWebsites(websites)
         setWebsiteChannels(channels)
         setWebsiteAccounts(accounts)
         setWebsiteFilters(filters)
+        setWebsiteBlockedUsers(blockedUsersMap)
         setReplyModes(replyModes)
         setRotationInputs(rotationInputs)
         setKeywordIntervalInputs(keywordIntervalInputs)
@@ -672,6 +712,46 @@ const formatWebsiteForEdit = (website: any) => ({
       toast.error(getApiErrorMessage(e, '获取网站过滤规则失败'))
     }
     return null
+  }
+
+  const requestWebsiteBlockedUsers = async (websiteId: number, options?: { silent?: boolean }) => {
+    try {
+      const res = await fetch(`/api/websites/${websiteId}/blocked-users`, { credentials: 'include' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        if (!options?.silent) {
+          toast.error(getApiErrorMessage(data, '获取拉黑用户失败'))
+        }
+        return []
+      }
+      return data.blocked_users || []
+    } catch (e) {
+      if (!options?.silent) {
+        toast.error(getApiErrorMessage(e, '获取拉黑用户失败'))
+      }
+      return []
+    }
+  }
+
+  const handleDeleteWebsiteBlockedUser = async (websiteId: number, discordUserId: string) => {
+    try {
+      const res = await fetch(`/api/websites/${websiteId}/blocked-users/${discordUserId}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(getApiErrorMessage(data, '删除拉黑用户失败'))
+        return
+      }
+      setWebsiteBlockedUsers(prev => ({
+        ...prev,
+        [websiteId]: (prev[websiteId] || []).filter((item: any) => String(item.discord_user_id) !== String(discordUserId))
+      }))
+      toast.success('已删除拉黑用户')
+    } catch (e) {
+      toast.error(getApiErrorMessage(e, '删除拉黑用户失败'))
+    }
   }
 
   const uploadWebsiteFilterImages = async (websiteId: number, filterId: string, files: File[]) => {
@@ -1887,10 +1967,10 @@ const formatWebsiteForEdit = (website: any) => ({
         payload = { filter_type: 'image', filter_value: '' }
       }
 
-      if (websiteNewFilter.filter_type === 'role_id' || websiteNewFilter.filter_type === 'user_id') {
+      if (WEBSITE_KEYWORD_FILTER_TYPES.has(websiteNewFilter.filter_type)) {
         const normalized = normalizeMultiValueFilterInput(websiteNewFilter.filter_value)
         if (!normalized) {
-          toast.error(websiteNewFilter.filter_type === 'role_id' ? '身份组ID不能为空' : '用户ID不能为空')
+          toast.error(`${getKeywordFilterTypeLabel(websiteNewFilter.filter_type)}不能为空`)
           return
         }
         payload = { filter_type: websiteNewFilter.filter_type, filter_value: normalized }
@@ -2011,10 +2091,10 @@ const formatWebsiteForEdit = (website: any) => ({
         filter.filter_value = ''
       }
 
-      if (filter.filter_type === 'role_id' || filter.filter_type === 'user_id') {
+      if (WEBSITE_KEYWORD_FILTER_TYPES.has(filter.filter_type)) {
         const normalized = normalizeMultiValueFilterInput(filter.filter_value)
         if (!normalized) {
-          toast.error(filter.filter_type === 'role_id' ? '身份组ID不能为空' : '用户ID不能为空')
+          toast.error(`${getKeywordFilterTypeLabel(filter.filter_type)}不能为空`)
           return
         }
         filter.filter_value = normalized
@@ -3893,6 +3973,8 @@ const formatWebsiteForEdit = (website: any) => ({
                                     <SelectItem value="numeric_range">数字范围</SelectItem>
                                     <SelectItem value="user_repeat">用户重复发送</SelectItem>
                                     <SelectItem value="keyword_match_limit">关键词命中上限</SelectItem>
+                                    <SelectItem value="ocr_contains">图片OCR关键词</SelectItem>
+                                    <SelectItem value="website_block_user_trigger">网站拉黑触发词</SelectItem>
                                   </SelectContent>
                                 </Select>
                               </div>
@@ -4055,6 +4137,44 @@ const formatWebsiteForEdit = (website: any) => ({
                           </div>
                         ))}
                       </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Hash className="w-4 h-4" />
+                        <span className="text-sm font-medium">已拉黑用户</span>
+                      </div>
+                      {(websiteBlockedUsers[website.id] || []).length === 0 ? (
+                        <div className="text-xs text-muted-foreground">
+                          暂无永久拉黑用户
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {(websiteBlockedUsers[website.id] || []).map((blockedUser: any) => (
+                            <div
+                              key={`${website.id}-${blockedUser.discord_user_id}`}
+                              className="flex items-center justify-between gap-3 rounded border px-3 py-2"
+                            >
+                              <div className="min-w-0">
+                                <div className="text-sm font-medium truncate">
+                                  {blockedUser.discord_username || blockedUser.discord_user_id}
+                                </div>
+                                <div className="text-xs text-muted-foreground truncate">
+                                  ID: {blockedUser.discord_user_id}
+                                  {blockedUser.trigger_keyword ? ` · 触发词: ${blockedUser.trigger_keyword}` : ''}
+                                </div>
+                              </div>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => handleDeleteWebsiteBlockedUser(website.id, String(blockedUser.discord_user_id))}
+                              >
+                                删除
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
 
                   </div>
@@ -4273,6 +4393,8 @@ const formatWebsiteForEdit = (website: any) => ({
                       <SelectItem value="numeric_range">数字范围</SelectItem>
                       <SelectItem value="user_repeat">用户重复发送</SelectItem>
                       <SelectItem value="keyword_match_limit">关键词命中上限</SelectItem>
+                      <SelectItem value="ocr_contains">图片OCR关键词</SelectItem>
+                      <SelectItem value="website_block_user_trigger">网站拉黑触发词</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
