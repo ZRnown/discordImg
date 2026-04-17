@@ -148,5 +148,14 @@ def filters_block_message(
                 similarity = 0
             if similarity >= threshold:
                 return True
+        elif filter_type == "ocr_contains":
+            if not match_context or match_context.get("type") != "image":
+                continue
+            ocr_text = str(match_context.get("ocr_text") or "").lower()
+            if not ocr_text:
+                continue
+            for keyword in split_filter_values(filter_value):
+                if keyword and keyword in ocr_text:
+                    return True
 
     return False
