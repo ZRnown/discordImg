@@ -668,6 +668,22 @@ class Database:
                 )
             ''')
 
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS website_blocked_users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    website_id INTEGER NOT NULL,
+                    discord_user_id TEXT NOT NULL,
+                    discord_username TEXT DEFAULT '',
+                    trigger_keyword TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+                    FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE,
+                    UNIQUE(user_id, website_id, discord_user_id)
+                )
+            ''')
+
             # 创建用户回复统计表（累计）
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS user_reply_stats (
@@ -4552,6 +4568,141 @@ class Database:
         except Exception as e:
             logger.error(f"获取用户网站过滤失败: {e}")
             return []
+
+    def upsert_website_blocked_user(
+        self,
+        *,
+        user_id: int,
+        website_id: int,
+        discord_user_id: str,
+        discord_username: str,
+        trigger_keyword: str = '',
+    ) -> bool:
+        try:
+            normalized_discord_user_id = str(discord_user_id or '').strip()
+            if not normalized_discord_user_id:
+                return False
+
+            normalized_username = str(discord_username or '').strip()
+            normalized_trigger_keyword = str(trigger_keyword or '').strip()
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    INSERT INTO website_blocked_users (
+                        user_id,
+                        website_id,
+                        discord_user_id,
+                        discord_username,
+                        trigger_keyword
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(user_id, website_id, discord_user_id) DO UPDATE SET
+                        discord_username = excluded.discord_username,
+                        trigger_keyword = excluded.trigger_keyword,
+                        updated_at = CURRENT_TIMESTAMP
+                    ''',
+                    (
+                        user_id,
+                        website_id,
+                        normalized_discord_user_id,
+                        normalized_username,
+                        normalized_trigger_keyword,
+                    ),
+                )
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"写入网站拉黑用户失败: {e}")
+            return False
+
+    def get_website_blocked_users(self, user_id: int, website_id: int) -> List[Dict]:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    SELECT
+                        id,
+                        user_id,
+                        website_id,
+                        discord_user_id,
+                        discord_username,
+                        trigger_keyword,
+                        created_at,
+                        updated_at
+                    FROM website_blocked_users
+                    WHERE user_id = ? AND website_id = ?
+                    ORDER BY updated_at DESC, id DESC
+                    ''',
+                    (user_id, website_id),
+                )
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"获取网站拉黑用户失败: {e}")
+            return []
+
+    def delete_website_blocked_user(self, user_id: int, website_id: int, discord_user_id: str) -> bool:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    DELETE FROM website_blocked_users
+                    WHERE user_id = ? AND website_id = ? AND discord_user_id = ?
+                    ''',
+                    (user_id, website_id, str(discord_user_id or '').strip()),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"删除网站拉黑用户失败: {e}")
+            return False
+
+    def get_blocked_website_ids_for_discord_user(
+        self,
+        *,
+        user_id: int,
+        discord_user_id: str,
+        candidate_website_ids: Optional[Sequence[int]] = None,
+    ) -> set[int]:
+        try:
+            normalized_discord_user_id = str(discord_user_id or '').strip()
+            if not normalized_discord_user_id:
+                return set()
+
+            website_ids: Optional[List[int]] = None
+            if candidate_website_ids is not None:
+                website_ids = [
+                    int(website_id)
+                    for website_id in candidate_website_ids
+                    if website_id is not None and str(website_id).strip()
+                ]
+                if not website_ids:
+                    return set()
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                query = '''
+                    SELECT website_id
+                    FROM website_blocked_users
+                    WHERE user_id = ? AND discord_user_id = ?
+                '''
+                params: List[Any] = [user_id, normalized_discord_user_id]
+                if website_ids is not None:
+                    placeholders = ','.join('?' * len(website_ids))
+                    query += f' AND website_id IN ({placeholders})'
+                    params.extend(website_ids)
+                cursor.execute(query, params)
+                return {
+                    int(row['website_id'])
+                    for row in cursor.fetchall()
+                    if row['website_id'] is not None
+                }
+        except Exception as e:
+            logger.error(f"获取用户命中网站拉黑列表失败: {e}")
+            return set()
 
     def has_user_website_filter_images(self, user_id: int) -> bool:
         """指定用户是否存在网站级图片过滤图"""

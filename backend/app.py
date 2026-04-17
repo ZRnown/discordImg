@@ -277,10 +277,17 @@ def _normalize_message_filter_value(filter_type, filter_value):
     if filter_type == 'image' and not filter_value:
         return ''
 
-    if filter_type in {'user_id', 'role_id'}:
+    if filter_type in {'user_id', 'role_id', 'ocr_contains', 'website_block_user_trigger'}:
         normalized_values = split_filter_values(filter_value)
         if not normalized_values:
-            label = '用户ID' if filter_type == 'user_id' else '身份组ID'
+            if filter_type == 'user_id':
+                label = '用户ID'
+            elif filter_type == 'role_id':
+                label = '身份组ID'
+            elif filter_type == 'ocr_contains':
+                label = '图片OCR关键词'
+            else:
+                label = '网站拉黑触发词'
             raise ValueError(f'{label}不能为空')
         return ','.join(normalized_values)
 
@@ -3069,6 +3076,40 @@ def update_website_filters(config_id):
             return jsonify({'error': '更新失败'}), 500
     except Exception as e:
         logger.error(f"更新网站过滤条件失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/websites/<int:config_id>/blocked-users', methods=['GET'])
+def get_website_blocked_users(config_id):
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        current_user = get_current_user()
+        blocked_users = db.get_website_blocked_users(current_user['id'], config_id)
+        return jsonify({'blocked_users': blocked_users})
+    except Exception as e:
+        logger.error(f"获取网站拉黑用户失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/websites/<int:config_id>/blocked-users/<discord_user_id>', methods=['DELETE'])
+def delete_website_blocked_user(config_id, discord_user_id):
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        current_user = get_current_user()
+        deleted = db.delete_website_blocked_user(
+            current_user['id'],
+            config_id,
+            discord_user_id,
+        )
+        if not deleted:
+            return jsonify({'error': '拉黑用户不存在'}), 404
+        return jsonify({'success': True, 'message': '已删除拉黑用户'})
+    except Exception as e:
+        logger.error(f"删除网站拉黑用户失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/websites/<int:config_id>/filters/<filter_id>/images', methods=['GET'])

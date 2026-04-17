@@ -220,7 +220,7 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
           <div className="flex gap-3">
             <div className="flex-1">
               <Input
-                placeholder="输入店铺ID (例如: 1713062461)"
+                placeholder="输入店铺ID (1713062461)"
                 value={newShopId}
                 onChange={(e) => setNewShopId(e.target.value)}
                 disabled={isAddingShop}

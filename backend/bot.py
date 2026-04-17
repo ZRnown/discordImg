@@ -100,6 +100,10 @@ except ImportError:
         normalize_keyword_image_search_max_images,
         normalize_keyword_image_search_mode,
     )
+try:
+    from ocr_service import ocr_service
+except ImportError:
+    from .ocr_service import ocr_service
 
 
 def _apply_discord_presence_compat_patch():
@@ -1507,6 +1511,186 @@ class DiscordBotClient(discord.Client):
             message_has_image=self._message_has_image,
         )
 
+    @staticmethod
+    def _get_message_author_name(message):
+        author = getattr(message, 'author', None)
+        return (
+            getattr(author, 'display_name', None)
+            or getattr(author, 'name', None)
+            or str(getattr(author, 'id', '未知用户'))
+        )
+
+    @staticmethod
+    def _find_filter_keyword_match(source_text, filters, filter_type):
+        normalized_source = str(source_text or '').strip().lower()
+        if not normalized_source:
+            return None
+
+        for filter_rule in filters or []:
+            if (filter_rule or {}).get('filter_type') != filter_type:
+                continue
+            for keyword in split_filter_values((filter_rule or {}).get('filter_value')):
+                normalized_keyword = str(keyword or '').strip().lower()
+                if normalized_keyword and normalized_keyword in normalized_source:
+                    return normalized_keyword
+        return None
+
+    async def _get_user_website_settings_map_for_configs(self, website_configs):
+        if not self.user_id:
+            return {}
+
+        website_ids = [
+            website_config.get('id')
+            for website_config in (website_configs or [])
+            if website_config.get('id')
+        ]
+        if not website_ids:
+            return {}
+
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+            return await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: db.get_user_website_settings_map(self.user_id, website_ids),
+            )
+        except Exception as e:
+            logger.error(f"获取网站设置映射失败(user_id={self.user_id}): {e}")
+            return {}
+
+    async def _exclude_blocked_website_configs(self, message, website_configs):
+        if not self.user_id or not website_configs:
+            return list(website_configs or [])
+
+        author_id = getattr(getattr(message, 'author', None), 'id', None)
+        if author_id is None:
+            return list(website_configs)
+
+        candidate_website_ids = [
+            website_config.get('id')
+            for website_config in website_configs
+            if website_config.get('id') is not None
+        ]
+        if not candidate_website_ids:
+            return list(website_configs)
+
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+            blocked_website_ids = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: db.get_blocked_website_ids_for_discord_user(
+                    user_id=self.user_id,
+                    discord_user_id=str(author_id),
+                    candidate_website_ids=candidate_website_ids,
+                ),
+            )
+        except Exception as e:
+            logger.error(f"查询网站拉黑用户失败(user_id={self.user_id}, author_id={author_id}): {e}")
+            return list(website_configs)
+
+        if not blocked_website_ids:
+            return list(website_configs)
+
+        blocked_names = [
+            website_config.get('display_name') or website_config.get('name') or str(website_config.get('id'))
+            for website_config in website_configs
+            if website_config.get('id') in blocked_website_ids
+        ]
+        logger.info(
+            "🚫 网站拉黑用户命中: 作者=%s(%s) | 网站=%s",
+            self._get_message_author_name(message),
+            author_id,
+            ', '.join(blocked_names) or ', '.join(str(item) for item in blocked_website_ids),
+        )
+        return [
+            website_config
+            for website_config in website_configs
+            if website_config.get('id') not in blocked_website_ids
+        ]
+
+    async def _apply_website_block_user_triggers(
+        self,
+        message,
+        website_configs,
+        user_website_settings_map=None,
+    ):
+        if not self.user_id or not website_configs:
+            return set()
+
+        message_content = str(getattr(message, 'content', None) or '').strip().lower()
+        if not message_content:
+            return set()
+
+        author = getattr(message, 'author', None)
+        author_id = getattr(author, 'id', None)
+        if author_id is None:
+            return set()
+
+        if user_website_settings_map is None:
+            user_website_settings_map = await self._get_user_website_settings_map_for_configs(website_configs)
+
+        author_name = self._get_message_author_name(message)
+        triggered_website_ids = set()
+
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+        except Exception as e:
+            logger.error(f"导入数据库模块失败，无法写入网站拉黑用户: {e}")
+            return set()
+
+        for website_config in website_configs:
+            website_id = website_config.get('id')
+            if not website_id:
+                continue
+            website_settings = user_website_settings_map.get(website_id) or {}
+            website_filters = self._parse_message_filters(website_settings.get('message_filters', '[]'))
+            matched_keyword = self._find_filter_keyword_match(
+                message_content,
+                website_filters,
+                'website_block_user_trigger',
+            )
+            if not matched_keyword:
+                continue
+
+            try:
+                saved = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: db.upsert_website_blocked_user(
+                        user_id=self.user_id,
+                        website_id=website_id,
+                        discord_user_id=str(author_id),
+                        discord_username=author_name,
+                        trigger_keyword=matched_keyword,
+                    ),
+                )
+            except Exception as e:
+                logger.error(
+                    f"写入网站拉黑用户失败(user_id={self.user_id}, website_id={website_id}, author_id={author_id}): {e}"
+                )
+                continue
+
+            if not saved:
+                continue
+
+            triggered_website_ids.add(website_id)
+            logger.info(
+                "🚫 网站拉黑触发: 作者=%s(%s) | 网站=%s | 触发词=%s",
+                author_name,
+                author_id,
+                website_config.get('display_name') or website_config.get('name') or website_id,
+                matched_keyword,
+            )
+
+        return triggered_website_ids
+
     def _get_repeat_product_ids(self, product, custom_reply=None):
         product_id = product.get('id') if isinstance(product, dict) else None
         repeat_product_ids = []
@@ -2393,9 +2577,22 @@ class DiscordBotClient(discord.Client):
             global_min_delay = user_settings.get('global_reply_min_delay', 1.0)
             global_max_delay = user_settings.get('global_reply_max_delay', 3.0)
 
-            website_configs = website_configs_override or await self.get_website_configs_by_channel_async(message.channel)
+            website_configs = (
+                website_configs_override
+                if website_configs_override is not None
+                else await self.get_website_configs_by_channel_async(message.channel)
+            )
             if not website_configs:
                 logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过回复")
+                return False
+
+            website_configs = await self._exclude_blocked_website_configs(message, website_configs)
+            if not website_configs:
+                logger.info(
+                    "作者 %s(%s) 当前网站均已拉黑，跳过回复",
+                    self._get_message_author_name(message),
+                    getattr(getattr(message, 'author', None), 'id', None),
+                )
                 return False
 
             prevalidated_batch = bool(
@@ -3659,8 +3856,9 @@ class DiscordBotClient(discord.Client):
             _log_rate_limited_bark_issue("处理 @/回复 Bark 通知失败", _summarize_exception_for_log(e))
 
         # 2. 所有绑定账号都可进入自动回复链路；真正执行搜索的账号由去重锁选出
+        website_configs = None
         try:
-            listener_allowed, _ = await self._is_account_bound_in_channel(message.channel, include_sender=True)
+            listener_allowed, website_configs = await self._is_account_bound_in_channel(message.channel, include_sender=True)
             if not listener_allowed:
                 if self._is_plain_text_keyword_trigger_candidate(message):
                     self._log_message_skip(message, '当前账号未绑定该频道')
@@ -3714,17 +3912,55 @@ class DiscordBotClient(discord.Client):
             MESSAGE_FORWARD_TIMEOUT_SECONDS,
         )
 
+        website_configs_to_process = list(website_configs or [])
+        if not website_configs_to_process:
+            website_configs_to_process = await self.get_website_configs_by_channel_async(message.channel)
+
+        website_configs_to_process = await self._exclude_blocked_website_configs(
+            message,
+            website_configs_to_process,
+        )
+
+        if website_configs_to_process:
+            user_website_settings_map = await self._get_user_website_settings_map_for_configs(
+                website_configs_to_process
+            )
+            triggered_website_ids = await self._apply_website_block_user_triggers(
+                message,
+                website_configs_to_process,
+                user_website_settings_map=user_website_settings_map,
+            )
+            if triggered_website_ids:
+                website_configs_to_process = [
+                    website_config
+                    for website_config in website_configs_to_process
+                    if website_config.get('id') not in triggered_website_ids
+                ]
+
+        if not website_configs_to_process:
+            logger.info(
+                "⏭️ [跳过] 作者 %s(%s) 当前网站均已被过滤或拉黑",
+                self._get_message_author_name(message),
+                getattr(getattr(message, 'author', None), 'id', None),
+            )
+            return
+
         # 处理关键词搜索
+        keyword_search_hit = False
         if keyword_reply_enabled:
-            await self._run_message_stage_with_timeout(
+            keyword_search_hit = bool(await self._run_message_stage_with_timeout(
                 message,
                 'keyword_search',
-                self.handle_keyword_search(message),
+                self.handle_keyword_search(
+                    message,
+                    website_configs_override=website_configs_to_process,
+                    allow_keyword_image_search=not bool(getattr(message, 'attachments', None)),
+                ),
                 MESSAGE_KEYWORD_SEARCH_TIMEOUT_SECONDS,
-            )
+            ))
 
         # 处理图片
-        if image_reply_enabled and message.attachments:
+        if image_reply_enabled and message.attachments and not keyword_search_hit:
             for attachment in message.attachments:
                 content_type = (getattr(attachment, 'content_type', '') or '').lower()
                 filename = (getattr(attachment, 'filename', '') or '').lower()
@@ -3739,7 +3975,11 @@ class DiscordBotClient(discord.Client):
                     await self._run_message_stage_with_timeout(
                         message,
                         f'image_reply:{attachment.filename}',
-                        self.handle_image(message, attachment),
+                        self.handle_image(
+                            message,
+                            attachment,
+                            website_configs_override=website_configs_to_process,
+                        ),
                         MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS,
                     )
 
@@ -3890,8 +4130,33 @@ class DiscordBotClient(discord.Client):
         self._mark_dm_alert(channel_id)
         logger.info(f"📱 Bark通知已发送: 账号:{account_name} | 类型:发起私信 | 发送者:{sender_name}")
 
-    async def handle_image(self, message, attachment):
+    async def handle_image(self, message, attachment, website_configs_override=None):
         try:
+            website_configs = (
+                website_configs_override
+                if website_configs_override is not None
+                else await self.get_website_configs_by_channel_async(message.channel)
+            )
+            if not website_configs:
+                return
+
+            user_website_settings_map = await self._get_user_website_settings_map_for_configs(
+                website_configs
+            )
+            should_run_ocr = False
+            for website_config in website_configs:
+                website_id = website_config.get('id')
+                if not website_id:
+                    continue
+                website_settings = user_website_settings_map.get(website_id) or {}
+                website_filters = self._parse_message_filters(website_settings.get('message_filters', '[]'))
+                if any(
+                    (filter_rule or {}).get('filter_type') == 'ocr_contains'
+                    for filter_rule in website_filters
+                ):
+                    should_run_ocr = True
+                    break
+
             # 【增强稳定性】增加超时时间，添加代理支持
             timeout = aiohttp.ClientTimeout(total=30, connect=10)  # 30秒总超时，10秒连接超时
             image_data = None
@@ -3928,6 +4193,15 @@ class DiscordBotClient(discord.Client):
             if image_data is None:
                 logger.error("图片下载失败，已达到最大重试次数")
                 return  # 静默失败，不发送错误消息
+
+            ocr_text = ''
+            if should_run_ocr:
+                ocr_text = await asyncio.to_thread(ocr_service.extract_text, image_data)
+                if ocr_text:
+                    logger.debug(
+                        "📝 图片 OCR 文本: %s",
+                        ocr_text.replace('\n', ' ')[:200],
+                    )
 
             # 【新增】AI并发限制：最多同时2个AI推理任务
             # 使用Semaphore控制并发，防止CPU饱和导致Flask主线程阻塞
@@ -4053,8 +4327,10 @@ class DiscordBotClient(discord.Client):
                         'type': 'image',
                         'similarity': similarity,
                         'base_threshold': user_threshold,
-                        'website_filter_matches': blocked_website_filter_matches
-                    }
+                        'website_filter_matches': blocked_website_filter_matches,
+                        'ocr_text': ocr_text,
+                    },
+                    website_configs_override=website_configs,
                 )
 
                 logger.debug(f'图片识别完成，相似度: {similarity:.4f}')
@@ -4119,28 +4395,32 @@ class DiscordBotClient(discord.Client):
         except Exception as e:
             logger.error(f'Error handling keyword forward: {e}')
 
-    async def handle_keyword_search(self, message):
+    async def handle_keyword_search(
+        self,
+        message,
+        website_configs_override=None,
+        allow_keyword_image_search=True,
+    ):
         """处理关键词商品搜索"""
         try:
-            # 只处理纯文字消息（不包含图片的）
-            if not message.content or message.attachments:
-                return
+            if not message.content:
+                return False
 
             search_query = message.content.strip()
             if not search_query:
-                return
+                return False
 
             # 移除自定义表情，避免表情ID/名称误触发关键词
             cleaned_query = re.sub(r'<a?:\w+:\d+>', ' ', search_query)
             cleaned_query = re.sub(r'\s+', ' ', cleaned_query).strip()
             if not cleaned_query:
-                return
+                return False
             if not re.search(r'\w', cleaned_query):
-                return
+                return False
             search_query = cleaned_query
 
             if _should_ignore_keyword_search_query(search_query):
-                return
+                return False
 
             # 调用搜索API
             result = await self.search_products_by_keyword(search_query)
@@ -4178,10 +4458,14 @@ class DiscordBotClient(discord.Client):
             query_keyword_candidates = _build_query_keyword_candidates(query_normalized)
 
             # 检查频道是否绑定了网站配置（必须绑定才能回复）
-            website_configs = await self.get_website_configs_by_channel_async(message.channel)
+            website_configs = (
+                website_configs_override
+                if website_configs_override is not None
+                else await self.get_website_configs_by_channel_async(message.channel)
+            )
             if not website_configs:
                 logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过关键词回复: {search_query}")
-                return
+                return False
 
             db = None
             global_filters = []
@@ -4489,7 +4773,7 @@ class DiscordBotClient(discord.Client):
                     ),
                 )
 
-            if db is not None:
+            if allow_keyword_image_search and db is not None:
                 for website_config in website_configs:
                     website_id = website_config.get('id')
                     if not website_id or website_id in matched_website_ids:
@@ -4514,9 +4798,12 @@ class DiscordBotClient(discord.Client):
             if not any_reply_scheduled and not keyword_image_job_created:
                 logger.info(f'关键词搜索无可用回复内容: {search_query}')
 
+            return any_reply_scheduled
+
         except Exception as e:
             logger.error(f'Error handling keyword search: {e}')
             # 不发送错误消息到Discord，只记录日志
+            return False
 
     async def search_products_by_keyword(self, keyword):
         """根据关键词搜索商品"""
