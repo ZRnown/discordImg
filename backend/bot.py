@@ -4286,6 +4286,7 @@ class DiscordBotClient(discord.Client):
         allow_keyword_image_search=True,
     ):
         """处理关键词商品搜索"""
+        keyword_triggered = False
         try:
             if not message.content:
                 return False
@@ -4382,6 +4383,7 @@ class DiscordBotClient(discord.Client):
 
             website_match_contexts = []
             matched_product_ids = set()
+            keyword_triggered = False
             for website_config in website_configs:
                 reply_languages = get_effective_reply_languages(
                     website_config.get('reply_language')
@@ -4403,6 +4405,7 @@ class DiscordBotClient(discord.Client):
                     'match_reasons': match_reasons,
                     'matched_keyword_set': matched_keyword_set,
                 })
+                keyword_triggered = True
                 matched_product_ids.update(
                     product.get('id')
                     for product in matched_products
@@ -4660,13 +4663,16 @@ class DiscordBotClient(discord.Client):
                 )
 
             if not any_reply_scheduled:
-                logger.info(f'关键词搜索无可用回复内容: {search_query}')
-            return any_reply_scheduled
+                if keyword_triggered:
+                    logger.info(f'关键词已命中但无可用回复内容: {search_query}')
+                else:
+                    logger.info(f'关键词搜索无可用回复内容: {search_query}')
+            return keyword_triggered or any_reply_scheduled
 
         except Exception as e:
             logger.error(f'Error handling keyword search: {e}')
             # 不发送错误消息到Discord，只记录日志
-            return False
+            return keyword_triggered
 
     async def search_products_by_keyword(self, keyword):
         """根据关键词搜索商品"""

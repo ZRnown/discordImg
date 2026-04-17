@@ -697,6 +697,80 @@ class KeywordSearchMatchingTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(scheduled_jobs), 1)
         self.assertEqual(scheduled_jobs[0]["product_id"], 1)
 
+    async def test_keyword_search_hit_without_generated_reply_still_counts_as_hit(self):
+        scheduled_jobs = []
+
+        async def search_products_by_keyword(_query):
+            return {
+                "success": True,
+                "products": [
+                    {
+                        "id": 1,
+                        "english_title": "B22",
+                        "weidianUrl": "https://weidian.com/item.html?itemID=111",
+                        "autoReplyEnabled": True,
+                    },
+                    {
+                        "id": 2,
+                        "english_title": "B30",
+                        "weidianUrl": "https://weidian.com/item.html?itemID=222",
+                        "autoReplyEnabled": True,
+                    },
+                ],
+            }
+
+        async def get_website_configs_by_channel_async(_channel_id):
+            return [
+                {
+                    "id": 21,
+                    "name": "acbuy",
+                    "display_name": "ACBUY",
+                    "reply_template": "{url}",
+                    "url_template": "https://www.acbuy.com/product/?id={id}",
+                }
+            ]
+
+        async def get_keyword_window_settings(_website_config, sender_count=0):
+            return (180, 0, 0, "rotation", "immediate")
+
+        def start_keyword_reply_background_task(coro, task_name):
+            scheduled_jobs.append(task_name)
+            coro.close()
+            return None
+
+        client = SimpleNamespace(
+            user_id=456,
+            user_shops=[],
+            search_products_by_keyword=search_products_by_keyword,
+            get_website_configs_by_channel_async=get_website_configs_by_channel_async,
+            _get_keyword_window_settings=get_keyword_window_settings,
+            _start_keyword_reply_background_task=start_keyword_reply_background_task,
+            _get_custom_reply=lambda: None,
+        )
+        client._generate_reply_content = MethodType(lambda self, *args, **kwargs: "", client)
+        client._get_user_settings_safe = MethodType(DiscordBotClient._get_user_settings_safe, client)
+        client._parse_message_filters = MethodType(DiscordBotClient._parse_message_filters, client)
+
+        fake_db = SimpleNamespace(
+            get_user_settings=lambda _user_id: {"keyword_match_limit": 0},
+            get_website_senders=lambda _website_id, _user_id: [999],
+            get_message_filters=lambda: [],
+            get_user_website_settings=lambda _user_id, _website_id: {},
+        )
+
+        with patch.object(database_module, "db", fake_db), patch(
+            "backend.bot._find_query_keyword_match",
+            return_value={
+                "phrase": "match",
+                "source": "title",
+                "canonical_keyword": "match",
+            },
+        ):
+            result = await DiscordBotClient.handle_keyword_search(client, self._Message("match"))
+
+        self.assertTrue(result)
+        self.assertEqual(scheduled_jobs, [])
+
     async def test_keyword_match_limit_blocks_when_distinct_keyword_count_exceeds_limit(self):
         scheduled = []
 
