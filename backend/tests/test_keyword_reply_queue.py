@@ -1003,7 +1003,7 @@ class OnMessageKeywordImagePriorityTestCase(unittest.IsolatedAsyncioTestCase):
             _should_ignore_mass_or_activity_message=lambda message: False,
             _notify_direct_interaction_if_needed=AsyncMock(),
             _is_account_bound_in_channel=AsyncMock(return_value=(True, None)),
-            _should_filter_message=lambda message: False,
+            _should_filter_message=lambda message, ignore_image_filters=False: False,
             _get_user_settings_safe=AsyncMock(
                 return_value={"keyword_reply_enabled": 1, "image_reply_enabled": 1}
             ),
@@ -1064,6 +1064,162 @@ class OnMessageKeywordImagePriorityTestCase(unittest.IsolatedAsyncioTestCase):
                     "url_template": "https://www.acbuy.com/product/?id={id}",
                 }
             ],
+            allow_keyword_image_search=False,
+        )
+        client.handle_image.assert_not_awaited()
+
+    async def test_on_message_allows_keyword_stage_for_keyword_plus_image_when_image_filter_exists(self):
+        website_configs = [
+            {
+                "id": 21,
+                "name": "acbuy",
+                "display_name": "ACBUY",
+                "reply_template": "{url}",
+                "url_template": "https://www.acbuy.com/product/?id={id}",
+            }
+        ]
+        client = SimpleNamespace(
+            running=True,
+            user=SimpleNamespace(id=999999, name="listener"),
+            user_id=42,
+            role='both',
+            _should_ignore_mass_or_activity_message=lambda message: False,
+            _notify_direct_interaction_if_needed=AsyncMock(),
+            _is_account_bound_in_channel=AsyncMock(return_value=(True, website_configs)),
+            _get_user_settings_safe=AsyncMock(
+                return_value={"keyword_reply_enabled": 1, "image_reply_enabled": 1}
+            ),
+            get_website_configs_by_channel_async=AsyncMock(return_value=website_configs),
+            _exclude_blocked_website_configs=AsyncMock(return_value=website_configs),
+            _get_user_website_settings_map_for_configs=AsyncMock(return_value={}),
+            _apply_website_block_user_triggers=AsyncMock(return_value=set()),
+            handle_keyword_forward=AsyncMock(return_value=None),
+            handle_keyword_search=AsyncMock(return_value=True),
+            handle_image=AsyncMock(return_value=None),
+            _message_preview=lambda message, limit=50: message.content[:limit],
+            _log_message_skip=lambda message, reason: None,
+        )
+        client._run_message_stage_with_timeout = MethodType(
+            DiscordBotClient._run_message_stage_with_timeout,
+            client,
+        )
+        client._should_filter_message = MethodType(DiscordBotClient._should_filter_message, client)
+        client._message_has_image = MethodType(DiscordBotClient._message_has_image, client)
+
+        message = SimpleNamespace(
+            author=SimpleNamespace(id=222, name='buyer', bot=False),
+            webhook_id=None,
+            guild=SimpleNamespace(id=1),
+            mentions=[],
+            reference=None,
+            id=22334455,
+            channel=SimpleNamespace(id=987654321, name='finds'),
+            content='b22 sample',
+            attachments=[
+                SimpleNamespace(
+                    filename='sample.jpg',
+                    content_type='image/jpeg',
+                )
+            ],
+        )
+
+        fake_db = SimpleNamespace(
+            get_user_settings=lambda _user_id: {},
+            get_message_filters=lambda: [
+                {
+                    "filter_type": "image",
+                    "filter_value": "",
+                }
+            ],
+        )
+
+        with patch.object(database_module, "db", fake_db), patch(
+            'backend.bot.mark_message_as_processed',
+            return_value=True,
+        ):
+            await DiscordBotClient.on_message(client, message)
+
+        client.handle_keyword_search.assert_awaited_once_with(
+            message,
+            website_configs_override=website_configs,
+            allow_keyword_image_search=False,
+        )
+        client.handle_image.assert_not_awaited()
+
+    async def test_on_message_blocks_image_stage_after_keyword_miss_when_image_filter_exists(self):
+        website_configs = [
+            {
+                "id": 21,
+                "name": "acbuy",
+                "display_name": "ACBUY",
+                "reply_template": "{url}",
+                "url_template": "https://www.acbuy.com/product/?id={id}",
+            }
+        ]
+        client = SimpleNamespace(
+            running=True,
+            user=SimpleNamespace(id=999999, name="listener"),
+            user_id=42,
+            role='both',
+            _should_ignore_mass_or_activity_message=lambda message: False,
+            _notify_direct_interaction_if_needed=AsyncMock(),
+            _is_account_bound_in_channel=AsyncMock(return_value=(True, website_configs)),
+            _get_user_settings_safe=AsyncMock(
+                return_value={"keyword_reply_enabled": 1, "image_reply_enabled": 1}
+            ),
+            get_website_configs_by_channel_async=AsyncMock(return_value=website_configs),
+            _exclude_blocked_website_configs=AsyncMock(return_value=website_configs),
+            _get_user_website_settings_map_for_configs=AsyncMock(return_value={}),
+            _apply_website_block_user_triggers=AsyncMock(return_value=set()),
+            handle_keyword_forward=AsyncMock(return_value=None),
+            handle_keyword_search=AsyncMock(return_value=False),
+            handle_image=AsyncMock(return_value=None),
+            _message_preview=lambda message, limit=50: message.content[:limit],
+            _log_message_skip=lambda message, reason: None,
+        )
+        client._run_message_stage_with_timeout = MethodType(
+            DiscordBotClient._run_message_stage_with_timeout,
+            client,
+        )
+        client._should_filter_message = MethodType(DiscordBotClient._should_filter_message, client)
+        client._message_has_image = MethodType(DiscordBotClient._message_has_image, client)
+
+        message = SimpleNamespace(
+            author=SimpleNamespace(id=222, name='buyer', bot=False),
+            webhook_id=None,
+            guild=SimpleNamespace(id=1),
+            mentions=[],
+            reference=None,
+            id=99887766,
+            channel=SimpleNamespace(id=987654321, name='finds'),
+            content='unknown keyword',
+            attachments=[
+                SimpleNamespace(
+                    filename='sample.jpg',
+                    content_type='image/jpeg',
+                )
+            ],
+        )
+
+        fake_db = SimpleNamespace(
+            get_user_settings=lambda _user_id: {},
+            get_message_filters=lambda: [
+                {
+                    "filter_type": "image",
+                    "filter_value": "",
+                }
+            ],
+        )
+
+        with patch.object(database_module, "db", fake_db), patch(
+            'backend.bot.mark_message_as_processed',
+            return_value=True,
+        ):
+            await DiscordBotClient.on_message(client, message)
+
+        client.handle_keyword_search.assert_awaited_once_with(
+            message,
+            website_configs_override=website_configs,
             allow_keyword_image_search=False,
         )
         client.handle_image.assert_not_awaited()

@@ -3484,7 +3484,7 @@ class DiscordBotClient(discord.Client):
             f'| 频道:{channel_name} | 内容:"{preview}"'
         )
 
-    def _should_filter_message(self, message):
+    def _should_filter_message(self, message, ignore_image_filters=False):
         """检查消息是否应该被过滤"""
         try:
             try:
@@ -3610,6 +3610,8 @@ class DiscordBotClient(discord.Client):
                             logger.debug(f'消息被过滤: 用户 {message.author.name} 命中身份组过滤')
                             return True
                 elif filter_type == 'image':
+                    if ignore_image_filters:
+                        continue
                     if self._message_has_image(message):
                         logger.debug('消息被过滤: 图片消息')
                         return True
@@ -3806,7 +3808,7 @@ class DiscordBotClient(discord.Client):
             return
 
         # 6. 触发内容过滤规则
-        if self._should_filter_message(message):
+        if self._should_filter_message(message, ignore_image_filters=True):
             return
 
         logger.debug(
@@ -3881,6 +3883,8 @@ class DiscordBotClient(discord.Client):
 
         # 处理图片
         if image_reply_enabled and message.attachments and not keyword_search_hit:
+            if self._should_filter_message(message):
+                return
             for attachment in message.attachments:
                 content_type = (getattr(attachment, 'content_type', '') or '').lower()
                 filename = (getattr(attachment, 'filename', '') or '').lower()
