@@ -61,12 +61,14 @@ try:
     from message_filter_utils import (
         filters_block_message,
         resolve_keyword_match_limit,
+        should_run_ocr_for_image_reply,
         split_filter_values,
     )
 except ImportError:
     from .message_filter_utils import (
         filters_block_message,
         resolve_keyword_match_limit,
+        should_run_ocr_for_image_reply,
         split_filter_values,
     )
 try:
@@ -1595,6 +1597,122 @@ class DiscordBotClient(discord.Client):
 
         return triggered_website_ids
 
+    async def _is_globally_blocked_author(self, message):
+        author_id = getattr(getattr(message, 'author', None), 'id', None)
+        if author_id is None:
+            return False
+
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+            global_filters = await asyncio.get_event_loop().run_in_executor(None, db.get_message_filters)
+        except Exception as e:
+            logger.error(f"获取全局拉黑触发规则失败(author_id={author_id}): {e}")
+            return False
+
+        candidate_filter_ids = [
+            int(filter_rule.get('id'))
+            for filter_rule in (global_filters or [])
+            if filter_rule.get('filter_type') == 'website_block_user_trigger'
+            and filter_rule.get('id') is not None
+        ]
+        if not candidate_filter_ids:
+            return False
+
+        try:
+            blocked_filter_ids = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: db.get_blocked_message_filter_ids_for_discord_user(
+                    discord_user_id=str(author_id),
+                    candidate_filter_ids=candidate_filter_ids,
+                ),
+            )
+        except Exception as e:
+            logger.error(f"查询全局拉黑用户失败(author_id={author_id}): {e}")
+            return False
+
+        if not blocked_filter_ids:
+            return False
+
+        logger.info(
+            "🚫 全局拉黑用户命中: 作者=%s(%s) | 规则=%s",
+            self._get_message_author_name(message),
+            author_id,
+            ', '.join(str(item) for item in sorted(blocked_filter_ids)),
+        )
+        return True
+
+    async def _apply_global_block_user_triggers(self, message):
+        message_content = str(getattr(message, 'content', None) or '').strip().lower()
+        if not message_content:
+            return set()
+
+        author = getattr(message, 'author', None)
+        author_id = getattr(author, 'id', None)
+        if author_id is None:
+            return set()
+
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+            global_filters = await asyncio.get_event_loop().run_in_executor(None, db.get_message_filters)
+        except Exception as e:
+            logger.error(f"获取全局拉黑触发规则失败(author_id={author_id}): {e}")
+            return set()
+
+        author_name = self._get_message_author_name(message)
+        triggered_filter_ids = set()
+
+        for filter_rule in global_filters or []:
+            if filter_rule.get('filter_type') != 'website_block_user_trigger':
+                continue
+
+            filter_id = filter_rule.get('id')
+            if filter_id is None:
+                continue
+
+            matched_keyword = self._find_filter_keyword_match(
+                message_content,
+                [filter_rule],
+                'website_block_user_trigger',
+            )
+            if not matched_keyword:
+                continue
+
+            try:
+                saved = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: db.upsert_message_filter_blocked_user(
+                        filter_id=int(filter_id),
+                        discord_user_id=str(author_id),
+                        discord_username=author_name,
+                        trigger_keyword=matched_keyword,
+                    ),
+                )
+            except Exception as e:
+                logger.error(
+                    f"写入全局拉黑用户失败(filter_id={filter_id}, author_id={author_id}): {e}"
+                )
+                continue
+
+            if not saved:
+                continue
+
+            triggered_filter_ids.add(int(filter_id))
+            logger.info(
+                "🚫 全局拉黑触发: 作者=%s(%s) | 规则=%s | 触发词=%s",
+                author_name,
+                author_id,
+                filter_id,
+                matched_keyword,
+            )
+
+        return triggered_filter_ids
+
     def _get_repeat_product_ids(self, product, custom_reply=None):
         product_id = product.get('id') if isinstance(product, dict) else None
         repeat_product_ids = []
@@ -1699,7 +1817,9 @@ class DiscordBotClient(discord.Client):
                     from .database import db
                 global_filters = await asyncio.get_event_loop().run_in_executor(None, db.get_message_filters)
                 global_image_filters = [
-                    f for f in (global_filters or []) if f.get('filter_type') == 'image_similarity'
+                    f
+                    for f in (global_filters or [])
+                    if f.get('filter_type') in {'image_similarity', 'ocr_contains'}
                 ]
             except Exception as e:
                 logger.error(f"获取全局过滤规则失败: {e}")
@@ -2549,7 +2669,9 @@ class DiscordBotClient(discord.Client):
                 try:
                     global_filters = await asyncio.get_event_loop().run_in_executor(None, db.get_message_filters)
                     global_image_filters = [
-                        f for f in (global_filters or []) if f.get('filter_type') == 'image_similarity'
+                        f
+                        for f in (global_filters or [])
+                        if f.get('filter_type') in {'image_similarity', 'ocr_contains'}
                     ]
                 except Exception as e:
                     logger.error(f"获取全局过滤规则失败: {e}")
@@ -3771,37 +3893,18 @@ class DiscordBotClient(discord.Client):
             logger.error(f"消息去重检查失败: {e}")
             return
 
-        # 6. 触发内容过滤规则
-        if self._should_filter_message(message, ignore_image_filters=True):
-            return
-
-        logger.debug(
-            f'📨 [接收] 账号:{self.user.name} | 频道:{message.channel.name} | 内容: "{self._message_preview(message, limit=50)}"'
-        )
-
-        # 获取用户设置
-        keyword_reply_enabled = True
-        image_reply_enabled = True
-        if self.user_id:
-            try:
-                user_settings = await self._get_user_settings_safe()
-                keyword_reply_enabled = user_settings.get('keyword_reply_enabled', 1) in (1, True, "1", "true", "True")
-                image_reply_enabled = user_settings.get('image_reply_enabled', 1) in (1, True, "1", "true", "True")
-            except Exception as e:
-                logger.error(f'获取用户回复开关设置失败: {e}')
-
-        # 处理关键词消息转发
-        await self._run_message_stage_with_timeout(
-            message,
-            'keyword_forward',
-            self.handle_keyword_forward(message),
-            MESSAGE_FORWARD_TIMEOUT_SECONDS,
-        )
-
         website_configs_to_process = list(website_configs or [])
         if not website_configs_to_process:
             website_configs_to_process = await self.get_website_configs_by_channel_async(message.channel)
 
+        if await self._is_globally_blocked_author(message):
+            return
+
+        triggered_global_filter_ids = await self._apply_global_block_user_triggers(message)
+        if triggered_global_filter_ids:
+            return
+
+        user_website_settings_map = {}
         website_configs_to_process = await self._exclude_blocked_website_configs(
             message,
             website_configs_to_process,
@@ -3830,6 +3933,33 @@ class DiscordBotClient(discord.Client):
                 getattr(getattr(message, 'author', None), 'id', None),
             )
             return
+
+        # 6. 触发内容过滤规则
+        if self._should_filter_message(message, ignore_image_filters=True):
+            return
+
+        logger.debug(
+            f'📨 [接收] 账号:{self.user.name} | 频道:{message.channel.name} | 内容: "{self._message_preview(message, limit=50)}"'
+        )
+
+        # 获取用户设置
+        keyword_reply_enabled = True
+        image_reply_enabled = True
+        if self.user_id:
+            try:
+                user_settings = await self._get_user_settings_safe()
+                keyword_reply_enabled = user_settings.get('keyword_reply_enabled', 1) in (1, True, "1", "true", "True")
+                image_reply_enabled = user_settings.get('image_reply_enabled', 1) in (1, True, "1", "true", "True")
+            except Exception as e:
+                logger.error(f'获取用户回复开关设置失败: {e}')
+
+        # 处理关键词消息转发
+        await self._run_message_stage_with_timeout(
+            message,
+            'keyword_forward',
+            self.handle_keyword_forward(message),
+            MESSAGE_FORWARD_TIMEOUT_SECONDS,
+        )
 
         # 处理关键词搜索
         keyword_search_hit = False
@@ -4031,19 +4161,14 @@ class DiscordBotClient(discord.Client):
             user_website_settings_map = await self._get_user_website_settings_map_for_configs(
                 website_configs
             )
-            should_run_ocr = False
+            website_filters_map = {}
             for website_config in website_configs:
                 website_id = website_config.get('id')
                 if not website_id:
                     continue
                 website_settings = user_website_settings_map.get(website_id) or {}
                 website_filters = self._parse_message_filters(website_settings.get('message_filters', '[]'))
-                if any(
-                    (filter_rule or {}).get('filter_type') == 'ocr_contains'
-                    for filter_rule in website_filters
-                ):
-                    should_run_ocr = True
-                    break
+                website_filters_map[int(website_id)] = website_filters
 
             # 【增强稳定性】增加超时时间，添加代理支持
             timeout = aiohttp.ClientTimeout(total=30, connect=10)  # 30秒总超时，10秒连接超时
@@ -4081,15 +4206,6 @@ class DiscordBotClient(discord.Client):
             if image_data is None:
                 logger.error("图片下载失败，已达到最大重试次数")
                 return  # 静默失败，不发送错误消息
-
-            ocr_text = ''
-            if should_run_ocr:
-                ocr_text = await asyncio.to_thread(ocr_service.extract_text, image_data)
-                if ocr_text:
-                    logger.debug(
-                        "📝 图片 OCR 文本: %s",
-                        ocr_text.replace('\n', ' ')[:200],
-                    )
 
             # 【新增】AI并发限制：最多同时2个AI推理任务
             # 使用Semaphore控制并发，防止CPU饱和导致Flask主线程阻塞
@@ -4154,6 +4270,32 @@ class DiscordBotClient(discord.Client):
                 logger.info(
                     f'📷 图片匹配: 商品 {product.get("id")} {product_title} | 相似度 {similarity:.2f} | 频道: {message.channel.name}'
                 )
+
+                ocr_text = ''
+                global_filters = []
+                try:
+                    try:
+                        from database import db
+                    except ImportError:
+                        from .database import db
+                    global_filters = await asyncio.get_event_loop().run_in_executor(None, db.get_message_filters)
+                except Exception as e:
+                    logger.error(f'获取全局 OCR 过滤规则失败: {e}')
+
+                should_run_ocr = should_run_ocr_for_image_reply(
+                    website_configs,
+                    website_filters_map,
+                    global_filters=global_filters,
+                    similarity=similarity,
+                    base_threshold=user_threshold,
+                )
+                if should_run_ocr:
+                    ocr_text = await asyncio.to_thread(ocr_service.extract_text, image_data)
+                    if ocr_text:
+                        logger.debug(
+                            "📝 图片 OCR 文本: %s",
+                            ocr_text.replace('\n', ' ')[:200],
+                        )
 
                 product_rule_enabled = product.get('ruleEnabled', True)
                 if isinstance(product_rule_enabled, str):

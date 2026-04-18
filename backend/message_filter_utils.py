@@ -53,6 +53,62 @@ def resolve_keyword_match_limit(
     return filter_limit
 
 
+def has_filter_type(
+    filters: list[dict[str, Any]] | None,
+    filter_type: str,
+) -> bool:
+    target = str(filter_type or "").strip()
+    if not target:
+        return False
+    return any((rule or {}).get("filter_type") == target for rule in (filters or []))
+
+
+def _coerce_float(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def should_run_ocr_for_image_reply(
+    website_configs: list[dict[str, Any]] | None,
+    website_filters_map: dict[int, list[dict[str, Any]]] | None,
+    *,
+    global_filters: list[dict[str, Any]] | None = None,
+    similarity: Any,
+    base_threshold: Any,
+) -> bool:
+    normalized_similarity = _coerce_float(similarity)
+    if normalized_similarity is None:
+        return False
+
+    normalized_base_threshold = _coerce_float(base_threshold)
+    if normalized_base_threshold is None:
+        normalized_base_threshold = 0.0
+
+    if has_filter_type(global_filters, "ocr_contains") and normalized_similarity >= normalized_base_threshold:
+        return True
+
+    filters_map = website_filters_map or {}
+    for website_config in website_configs or []:
+        website_id = website_config.get("id")
+        if website_id is None:
+            continue
+
+        website_filters = filters_map.get(int(website_id)) or []
+        if not has_filter_type(website_filters, "ocr_contains"):
+            continue
+
+        website_threshold = _coerce_float((website_config or {}).get("image_similarity_threshold"))
+        threshold_to_use = website_threshold if website_threshold is not None else normalized_base_threshold
+        if normalized_similarity >= threshold_to_use:
+            return True
+
+    return False
+
+
 def filters_block_message(
     message: Any,
     filters: list[dict[str, Any]] | None,

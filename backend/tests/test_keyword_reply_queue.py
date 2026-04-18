@@ -4,7 +4,7 @@ import tempfile
 import uuid
 import asyncio
 from types import MethodType, SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from backend.bot import (
     DiscordBotClient,
@@ -995,6 +995,123 @@ class KeywordSearchMatchingTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("7681248139", scheduled_payloads[0]["content"])
 
 
+class ImageReplyFilterIntegrationTestCase(unittest.IsolatedAsyncioTestCase):
+    @patch("backend.bot.get_response_url_for_channel", return_value="https://weidian.com/item.html?itemID=123")
+    async def test_build_keyword_reply_job_blocks_image_reply_when_global_ocr_filter_matches(
+        self,
+        mocked_get_url,
+    ):
+        client = SimpleNamespace(user_id=456)
+        client._generate_reply_content = MethodType(DiscordBotClient._generate_reply_content, client)
+        client._get_user_website_settings_safe = AsyncMock(return_value={})
+        client._parse_message_filters = MethodType(DiscordBotClient._parse_message_filters, client)
+        client._filters_block_message = MethodType(DiscordBotClient._filters_block_message, client)
+        client._get_repeat_product_ids = MethodType(DiscordBotClient._get_repeat_product_ids, client)
+        client._message_has_image = lambda message: bool(getattr(message, "attachments", None))
+
+        message = SimpleNamespace(
+            author=SimpleNamespace(id=222, name="buyer"),
+            channel=SimpleNamespace(id=987654321),
+            attachments=[SimpleNamespace(filename="sample.jpg")],
+        )
+        product = {
+            "id": 1,
+            "weidianUrl": "https://weidian.com/item.html?itemID=123",
+        }
+        website_config = {
+            "id": 21,
+            "name": "weidian",
+            "display_name": "微店",
+            "reply_template": "{url}",
+            "url_template": "https://weidian.com/item.html?itemID={id}",
+        }
+
+        fake_db = SimpleNamespace(
+            get_message_filters=lambda: [
+                {"id": 91, "filter_type": "ocr_contains", "filter_value": "nike"},
+            ],
+            get_website_config_by_channel=lambda *_args, **_kwargs: website_config,
+        )
+
+        with patch.object(database_module, "db", fake_db):
+            job = await DiscordBotClient._build_keyword_reply_job(
+                client,
+                message,
+                product,
+                None,
+                website_config,
+                match_context={
+                    "type": "image",
+                    "similarity": 0.91,
+                    "base_threshold": 0.6,
+                    "ocr_text": "Nike Air on image",
+                    "website_filter_matches": [],
+                },
+            )
+
+        self.assertIsNone(job)
+        mocked_get_url.assert_called_once()
+
+
+class GlobalBlockUserTriggerTestCase(unittest.IsolatedAsyncioTestCase):
+    async def test_apply_global_block_user_triggers_records_matching_author(self):
+        blocked_records = []
+        client = SimpleNamespace(user_id=1)
+        client._apply_global_block_user_triggers = MethodType(
+            DiscordBotClient._apply_global_block_user_triggers,
+            client,
+        )
+        client._get_message_author_name = DiscordBotClient._get_message_author_name
+        client._find_filter_keyword_match = DiscordBotClient._find_filter_keyword_match
+
+        message = SimpleNamespace(
+            author=SimpleNamespace(id=222, name="buyer", display_name="buyer"),
+            content="https://weidian.com/item.html?itemID=7653365800",
+        )
+
+        fake_db = SimpleNamespace(
+            get_message_filters=lambda: [
+                {"id": 91, "filter_type": "website_block_user_trigger", "filter_value": "https"},
+                {"id": 92, "filter_type": "contains", "filter_value": "http"},
+            ],
+            upsert_message_filter_blocked_user=lambda **kwargs: blocked_records.append(kwargs) or True,
+        )
+
+        with patch.object(database_module, "db", fake_db):
+            triggered_filter_ids = await DiscordBotClient._apply_global_block_user_triggers(client, message)
+
+        self.assertEqual(triggered_filter_ids, {91})
+        self.assertEqual(len(blocked_records), 1)
+        self.assertEqual(blocked_records[0]["filter_id"], 91)
+        self.assertEqual(blocked_records[0]["discord_user_id"], "222")
+        self.assertEqual(blocked_records[0]["trigger_keyword"], "https")
+
+    async def test_is_globally_blocked_author_matches_active_trigger_filters(self):
+        client = SimpleNamespace(user_id=1)
+        client._is_globally_blocked_author = MethodType(
+            DiscordBotClient._is_globally_blocked_author,
+            client,
+        )
+        client._get_message_author_name = DiscordBotClient._get_message_author_name
+
+        message = SimpleNamespace(
+            author=SimpleNamespace(id=222, name="buyer"),
+        )
+
+        fake_db = SimpleNamespace(
+            get_message_filters=lambda: [
+                {"id": 91, "filter_type": "website_block_user_trigger", "filter_value": "https"},
+                {"id": 92, "filter_type": "contains", "filter_value": "http"},
+            ],
+            get_blocked_message_filter_ids_for_discord_user=lambda **kwargs: {91},
+        )
+
+        with patch.object(database_module, "db", fake_db):
+            blocked = await DiscordBotClient._is_globally_blocked_author(client, message)
+
+        self.assertTrue(blocked)
+
+
 class OnMessageKeywordImagePriorityTestCase(unittest.IsolatedAsyncioTestCase):
     async def test_on_message_skips_image_stage_when_keyword_reply_already_matched(self):
         website_configs = [{"id": 7, "name": "finds"}]
@@ -1016,6 +1133,8 @@ class OnMessageKeywordImagePriorityTestCase(unittest.IsolatedAsyncioTestCase):
             _exclude_blocked_website_configs=AsyncMock(return_value=website_configs),
             _get_user_website_settings_map_for_configs=AsyncMock(return_value={}),
             _apply_website_block_user_triggers=AsyncMock(return_value=set()),
+            _is_globally_blocked_author=AsyncMock(return_value=False),
+            _apply_global_block_user_triggers=AsyncMock(return_value=set()),
             _log_message_skip=lambda message, reason: None,
             handle_keyword_forward=AsyncMock(return_value=None),
             handle_keyword_search=AsyncMock(return_value=True),
@@ -1054,6 +1173,231 @@ class OnMessageKeywordImagePriorityTestCase(unittest.IsolatedAsyncioTestCase):
         )
         client.handle_image.assert_not_awaited()
 
+    async def test_on_message_applies_website_block_trigger_before_global_http_filter(self):
+        blocked_records = []
+        website_configs = [
+            {
+                "id": 293,
+                "name": "weidian",
+                "display_name": "微店",
+                "reply_template": "{url}",
+                "url_template": "https://weidian.com/item.html?itemID={id}",
+            }
+        ]
+        client = SimpleNamespace(
+            running=True,
+            user=SimpleNamespace(id=999999, name="listener"),
+            user_id=1,
+            account_id=3,
+            role='both',
+            _is_plain_text_keyword_trigger_candidate=lambda message: True,
+            _should_ignore_mass_or_activity_message=lambda message: False,
+            _notify_direct_interaction_if_needed=AsyncMock(),
+            _is_account_bound_in_channel=AsyncMock(return_value=(True, website_configs)),
+            _get_user_settings_safe=AsyncMock(
+                return_value={"keyword_reply_enabled": 1, "image_reply_enabled": 1}
+            ),
+            get_website_configs_by_channel_async=AsyncMock(return_value=website_configs),
+            _exclude_blocked_website_configs=AsyncMock(
+                side_effect=lambda _message, website_configs: website_configs
+            ),
+            _get_user_website_settings_map_for_configs=AsyncMock(
+                return_value={
+                    293: {
+                        "message_filters": (
+                            '[{"id":"wf-1","filter_type":"website_block_user_trigger","filter_value":"https"}]'
+                        )
+                    }
+                }
+            ),
+            handle_keyword_forward=AsyncMock(return_value=None),
+            handle_keyword_search=AsyncMock(return_value=False),
+            handle_image=AsyncMock(return_value=None),
+            _message_preview=lambda message, limit=50: message.content[:limit],
+            _log_message_skip=lambda message, reason: None,
+        )
+        client._run_message_stage_with_timeout = MethodType(
+            DiscordBotClient._run_message_stage_with_timeout,
+            client,
+        )
+        client._should_filter_message = MethodType(DiscordBotClient._should_filter_message, client)
+        client._message_has_image = MethodType(DiscordBotClient._message_has_image, client)
+        client._parse_message_filters = MethodType(DiscordBotClient._parse_message_filters, client)
+        client._apply_website_block_user_triggers = MethodType(
+            DiscordBotClient._apply_website_block_user_triggers,
+            client,
+        )
+        client._get_message_author_name = DiscordBotClient._get_message_author_name
+        client._find_filter_keyword_match = DiscordBotClient._find_filter_keyword_match
+        client._is_globally_blocked_author = AsyncMock(return_value=False)
+        client._apply_global_block_user_triggers = AsyncMock(return_value=set())
+
+        message = SimpleNamespace(
+            author=SimpleNamespace(id=222, name='buyer', display_name='buyer', bot=False),
+            webhook_id=None,
+            guild=SimpleNamespace(id=1),
+            mentions=[],
+            reference=None,
+            id=77889911,
+            channel=SimpleNamespace(id=987654321, name='finds'),
+            content='https://weidian.com/item.html?itemID=7653365800',
+            attachments=[],
+        )
+
+        def upsert_website_blocked_user(**kwargs):
+            blocked_records.append(kwargs)
+            return True
+
+        fake_db = SimpleNamespace(
+            get_user_settings=lambda _user_id: {},
+            get_message_filters=lambda: [
+                {
+                    "filter_type": "contains",
+                    "filter_value": "http",
+                }
+            ],
+            upsert_website_blocked_user=upsert_website_blocked_user,
+        )
+
+        with patch.object(database_module, "db", fake_db), patch(
+            'backend.bot.mark_message_as_processed',
+            return_value=True,
+        ):
+            await DiscordBotClient.on_message(client, message)
+
+        self.assertEqual(len(blocked_records), 1)
+        self.assertEqual(blocked_records[0]["website_id"], 293)
+        self.assertEqual(blocked_records[0]["discord_user_id"], "222")
+        self.assertEqual(blocked_records[0]["trigger_keyword"], "https")
+        client.handle_keyword_search.assert_not_awaited()
+        client.handle_image.assert_not_awaited()
+
+    async def test_on_message_applies_global_block_trigger_before_global_http_filter(self):
+        website_configs = [
+            {
+                "id": 293,
+                "name": "weidian",
+                "display_name": "微店",
+                "reply_template": "{url}",
+                "url_template": "https://weidian.com/item.html?itemID={id}",
+            }
+        ]
+        client = SimpleNamespace(
+            running=True,
+            user=SimpleNamespace(id=999999, name="listener"),
+            user_id=1,
+            account_id=3,
+            role='both',
+            _is_plain_text_keyword_trigger_candidate=lambda message: True,
+            _should_ignore_mass_or_activity_message=lambda message: False,
+            _notify_direct_interaction_if_needed=AsyncMock(),
+            _is_account_bound_in_channel=AsyncMock(return_value=(True, website_configs)),
+            _get_user_settings_safe=AsyncMock(
+                return_value={"keyword_reply_enabled": 1, "image_reply_enabled": 1}
+            ),
+            get_website_configs_by_channel_async=AsyncMock(return_value=website_configs),
+            _exclude_blocked_website_configs=AsyncMock(
+                side_effect=lambda _message, website_configs: website_configs
+            ),
+            _get_user_website_settings_map_for_configs=AsyncMock(return_value={}),
+            _apply_website_block_user_triggers=AsyncMock(return_value=set()),
+            _is_globally_blocked_author=AsyncMock(return_value=False),
+            _apply_global_block_user_triggers=AsyncMock(return_value={91}),
+            _should_filter_message=Mock(side_effect=AssertionError("global block trigger should short-circuit first")),
+            handle_keyword_forward=AsyncMock(return_value=None),
+            handle_keyword_search=AsyncMock(return_value=False),
+            handle_image=AsyncMock(return_value=None),
+            _message_preview=lambda message, limit=50: message.content[:limit],
+            _log_message_skip=lambda message, reason: None,
+        )
+        client._run_message_stage_with_timeout = MethodType(
+            DiscordBotClient._run_message_stage_with_timeout,
+            client,
+        )
+
+        message = SimpleNamespace(
+            author=SimpleNamespace(id=222, name='buyer', display_name='buyer', bot=False),
+            webhook_id=None,
+            guild=SimpleNamespace(id=1),
+            mentions=[],
+            reference=None,
+            id=77889912,
+            channel=SimpleNamespace(id=987654321, name='finds'),
+            content='https://weidian.com/item.html?itemID=7653365800',
+            attachments=[],
+        )
+
+        with patch('backend.bot.mark_message_as_processed', return_value=True):
+            await DiscordBotClient.on_message(client, message)
+
+        client._is_globally_blocked_author.assert_awaited_once_with(message)
+        client._apply_global_block_user_triggers.assert_awaited_once_with(message)
+        client.handle_keyword_search.assert_not_awaited()
+        client.handle_image.assert_not_awaited()
+
+    async def test_on_message_skips_globally_blocked_author_before_reply_pipeline(self):
+        website_configs = [
+            {
+                "id": 293,
+                "name": "weidian",
+                "display_name": "微店",
+                "reply_template": "{url}",
+                "url_template": "https://weidian.com/item.html?itemID={id}",
+            }
+        ]
+        client = SimpleNamespace(
+            running=True,
+            user=SimpleNamespace(id=999999, name="listener"),
+            user_id=1,
+            account_id=3,
+            role='both',
+            _is_plain_text_keyword_trigger_candidate=lambda message: True,
+            _should_ignore_mass_or_activity_message=lambda message: False,
+            _notify_direct_interaction_if_needed=AsyncMock(),
+            _is_account_bound_in_channel=AsyncMock(return_value=(True, website_configs)),
+            _get_user_settings_safe=AsyncMock(
+                return_value={"keyword_reply_enabled": 1, "image_reply_enabled": 1}
+            ),
+            get_website_configs_by_channel_async=AsyncMock(return_value=website_configs),
+            _exclude_blocked_website_configs=AsyncMock(
+                side_effect=lambda _message, website_configs: website_configs
+            ),
+            _get_user_website_settings_map_for_configs=AsyncMock(return_value={}),
+            _apply_website_block_user_triggers=AsyncMock(return_value=set()),
+            _is_globally_blocked_author=AsyncMock(return_value=True),
+            _apply_global_block_user_triggers=AsyncMock(return_value=set()),
+            _should_filter_message=Mock(side_effect=AssertionError("globally blocked authors should exit earlier")),
+            handle_keyword_forward=AsyncMock(return_value=None),
+            handle_keyword_search=AsyncMock(return_value=False),
+            handle_image=AsyncMock(return_value=None),
+            _message_preview=lambda message, limit=50: message.content[:limit],
+            _log_message_skip=lambda message, reason: None,
+        )
+        client._run_message_stage_with_timeout = MethodType(
+            DiscordBotClient._run_message_stage_with_timeout,
+            client,
+        )
+
+        message = SimpleNamespace(
+            author=SimpleNamespace(id=222, name='buyer', display_name='buyer', bot=False),
+            webhook_id=None,
+            guild=SimpleNamespace(id=1),
+            mentions=[],
+            reference=None,
+            id=77889913,
+            channel=SimpleNamespace(id=987654321, name='finds'),
+            content='another message',
+            attachments=[],
+        )
+
+        with patch('backend.bot.mark_message_as_processed', return_value=True):
+            await DiscordBotClient.on_message(client, message)
+
+        client._is_globally_blocked_author.assert_awaited_once_with(message)
+        client._apply_global_block_user_triggers.assert_not_awaited()
+        client.handle_keyword_search.assert_not_awaited()
+        client.handle_image.assert_not_awaited()
+
     async def test_on_message_allows_keyword_stage_for_keyword_plus_image_when_image_filter_exists(self):
         website_configs = [
             {
@@ -1081,6 +1425,8 @@ class OnMessageKeywordImagePriorityTestCase(unittest.IsolatedAsyncioTestCase):
             _exclude_blocked_website_configs=AsyncMock(return_value=website_configs),
             _get_user_website_settings_map_for_configs=AsyncMock(return_value={}),
             _apply_website_block_user_triggers=AsyncMock(return_value=set()),
+            _is_globally_blocked_author=AsyncMock(return_value=False),
+            _apply_global_block_user_triggers=AsyncMock(return_value=set()),
             handle_keyword_forward=AsyncMock(return_value=None),
             handle_keyword_search=AsyncMock(return_value=True),
             handle_image=AsyncMock(return_value=None),
@@ -1161,6 +1507,8 @@ class OnMessageKeywordImagePriorityTestCase(unittest.IsolatedAsyncioTestCase):
             _exclude_blocked_website_configs=AsyncMock(return_value=website_configs),
             _get_user_website_settings_map_for_configs=AsyncMock(return_value={}),
             _apply_website_block_user_triggers=AsyncMock(return_value=set()),
+            _is_globally_blocked_author=AsyncMock(return_value=False),
+            _apply_global_block_user_triggers=AsyncMock(return_value=set()),
             handle_keyword_forward=AsyncMock(return_value=None),
             handle_keyword_search=AsyncMock(return_value=False),
             handle_image=AsyncMock(return_value=None),

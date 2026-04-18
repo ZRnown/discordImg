@@ -3477,6 +3477,34 @@ def get_message_filter_images(filter_id: int):
         return jsonify({'error': '获取失败'}), 500
 
 
+@app.route('/api/message-filters/<int:filter_id>/blocked-users', methods=['GET'])
+def get_message_filter_blocked_users(filter_id: int):
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        blocked_users = db.get_message_filter_blocked_users(filter_id)
+        return jsonify({'blocked_users': blocked_users})
+    except Exception as e:
+        logger.error(f"获取全局拉黑用户失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/message-filters/<int:filter_id>/blocked-users/<discord_user_id>', methods=['DELETE'])
+def delete_message_filter_blocked_user(filter_id: int, discord_user_id: str):
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        deleted = db.delete_message_filter_blocked_user(filter_id, discord_user_id)
+        if not deleted:
+            return jsonify({'error': '拉黑用户不存在'}), 404
+        return jsonify({'success': True, 'message': '已删除拉黑用户'})
+    except Exception as e:
+        logger.error(f"删除全局拉黑用户失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/message-filters/<int:filter_id>/images', methods=['POST'])
 def add_message_filter_image(filter_id: int):
     """上传并添加过滤图片"""
