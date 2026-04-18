@@ -30,7 +30,7 @@ const baseMenuItems = [
   { id: "image-search", icon: ImageIcon, label: "以图搜图" },
   { id: "shops", icon: Store, label: "店铺管理" },
   { id: "logs", icon: ScrollText, label: "实时日志" },
-  { id: "system-settings", icon: Settings, label: "绯荤粺璁剧疆" },
+  { id: "system-settings", icon: Settings, label: "系统设置" },
 ]
 
 export function AppSidebar({
@@ -49,7 +49,7 @@ export function AppSidebar({
           <Bot className="size-6 text-primary" />
           <div>
             <h2 className="text-lg font-bold">LinkRadar</h2>
-            <p className="text-xs text-muted-foreground">链接雷达</p>
+            <p className="text-xs text-muted-foreground">Discord 营销桌面端</p>
           </div>
         </div>
       </SidebarHeader>
@@ -71,7 +71,7 @@ export function AppSidebar({
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="border-t p-4">
-        <p className="text-xs text-muted-foreground text-center">v1.0.0 • 技术支持</p>
+        <p className="text-xs text-muted-foreground text-center">v1.0.0 · 技术支持</p>
         <p className="text-xs text-muted-foreground text-center mt-1">微信: OceanSeaWang</p>
         <p className="text-xs text-muted-foreground text-center mt-1">Discord: zrnown</p>
       </SidebarFooter>
