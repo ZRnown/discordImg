@@ -304,14 +304,14 @@ export function DashboardView({ currentUser }: { currentUser: any }) {
                 <Label>公告标题</Label>
                 <Input
                   value={editingAnnouncement.title}
-                  onChange={e => setEditingAnnouncement(prev => ({ ...prev, title: e.target.value }))}
+                  onChange={e => setEditingAnnouncement(prev => (prev ? { ...prev, title: e.target.value } : prev))}
                 />
               </div>
               <div>
                 <Label>公告内容</Label>
                 <Textarea
                   value={editingAnnouncement.content}
-                  onChange={e => setEditingAnnouncement(prev => ({ ...prev, content: e.target.value }))}
+                  onChange={e => setEditingAnnouncement(prev => (prev ? { ...prev, content: e.target.value } : prev))}
                   rows={4}
                 />
               </div>

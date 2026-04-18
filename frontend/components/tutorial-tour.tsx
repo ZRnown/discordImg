@@ -1,11 +1,12 @@
 "use client"
 
 import { useEffect, useMemo, useRef, useState } from "react"
-import Joyride, {
+import {
   ACTIONS,
-  CallBackProps,
   EVENTS,
   STATUS,
+  Joyride,
+  type EventHandler,
   type Placement,
   type Step as JoyrideStep,
   type TooltipRenderProps,
@@ -115,9 +116,7 @@ function TutorialTooltip({
 
   return (
     <div
-      ref={tooltipProps.ref}
-      role={tooltipProps.role}
-      aria-modal={tooltipProps["aria-modal"]}
+      {...tooltipProps}
       className={cn(
         "relative w-[min(430px,calc(100vw-1rem))] overflow-hidden rounded-2xl border bg-white text-slate-900 shadow-[0_20px_80px_rgba(15,23,42,0.14)]",
         tone.border,
@@ -240,9 +239,7 @@ export function TutorialTour({
       placement: step.placement ?? placementByView[step.view] ?? "bottom",
       disableBeacon: true,
       hideFooter: true,
-      spotlightClicks: false,
       spotlightPadding: step.spotlightPadding ?? (index === 0 ? 14 : 10),
-      disableScrolling: false,
       isFixed: true,
       data: {
         shape: step.shape ?? "card",
@@ -339,7 +336,7 @@ export function TutorialTour({
     })
   }, [open, ready, currentStep])
 
-  const handleJoyrideCallback = (data: CallBackProps) => {
+  const handleJoyrideCallback: EventHandler = (data) => {
     const { action, index, status, type } = data
 
     if (status === STATUS.FINISHED || status === STATUS.SKIPPED) {
@@ -374,25 +371,22 @@ export function TutorialTour({
   return (
     <Joyride
       continuous
-      callback={handleJoyrideCallback}
+      onEvent={handleJoyrideCallback}
       run={open && ready}
       scrollToFirstStep
-      scrollOffset={120}
-      showProgress
-      showSkipButton
       stepIndex={stepIndex}
       steps={joyrideSteps}
-      disableOverlayClose
-      disableCloseOnEsc={false}
-      spotlightClicks={false}
-      styles={{
-        options: {
-          zIndex: 240,
-          primaryColor: "#0f172a",
-          textColor: "#0f172a",
-          overlayColor: "rgba(15, 23, 42, 0.18)",
-          spotlightShadow: "0 0 0 1px rgba(148, 163, 184, 0.16), 0 0 0 9999px rgba(15, 23, 42, 0.18)",
-        },
+      options={{
+        blockTargetInteraction: true,
+        buttons: ["back", "close", "primary", "skip"],
+        dismissKeyAction: false,
+        overlayClickAction: false,
+        overlayColor: "rgba(15, 23, 42, 0.18)",
+        primaryColor: "#0f172a",
+        scrollOffset: 120,
+        showProgress: true,
+        textColor: "#0f172a",
+        zIndex: 240,
       }}
       tooltipComponent={TutorialTooltip}
     />

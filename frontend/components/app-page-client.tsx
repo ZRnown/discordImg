@@ -122,35 +122,37 @@ export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }
     let cancelled = false
     let eventSource: EventSource | null = null
 
-    const loadDesktopDiagnostics = async () => {
-      const [healthResult, desktopHealthResult, logsResult] = await Promise.allSettled([
-        fetch("/api/health", { credentials: "include" }),
-        fetch("/api/desktop/health", { credentials: "include" }),
-        fetch("/api/logs/recent", { credentials: "include" }),
+    const loadDesktopDiagnostics = async ({ includeLogs = false }: { includeLogs?: boolean } = {}) => {
+      const [healthResponse, desktopHealthResponse] = await Promise.all([
+        fetch("/api/health", { credentials: "include" }).catch(() => null),
+        fetch("/api/desktop/health", { credentials: "include" }).catch(() => null),
       ])
 
       if (cancelled) {
         return
       }
 
-      if (healthResult.status === "fulfilled" && healthResult.value.ok) {
-        setBackendHealthy(true)
-      } else {
-        setBackendHealthy(false)
-      }
+      setBackendHealthy(Boolean(healthResponse?.ok))
 
-      if (desktopHealthResult.status === "fulfilled" && desktopHealthResult.value.ok) {
-        const data = await desktopHealthResult.value.json().catch(() => null)
+      if (desktopHealthResponse?.ok) {
+        const data = await desktopHealthResponse.json().catch(() => null)
         if (!cancelled) {
           setDesktopHealth(data)
         }
       }
 
-      if (logsResult.status === "fulfilled" && logsResult.value.ok) {
-        const data = await logsResult.value.json().catch(() => null)
-        if (!cancelled) {
-          setStartupLogs((data?.logs || []).slice(-40))
-        }
+      if (!includeLogs) {
+        return
+      }
+
+      const logsResponse = await fetch("/api/logs/recent", { credentials: "include" }).catch(() => null)
+      if (cancelled || !logsResponse?.ok) {
+        return
+      }
+
+      const data = await logsResponse.json().catch(() => null)
+      if (!cancelled) {
+        setStartupLogs((data?.logs || []).slice(-40))
       }
     }
 
@@ -174,19 +176,20 @@ export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }
       }
     }
 
-    void loadDesktopDiagnostics()
+    void loadDesktopDiagnostics({ includeLogs: true })
     connectLogStream()
 
+    const intervalMs = desktopBootstrapComplete ? 10000 : 3000
     const interval = window.setInterval(() => {
       void loadDesktopDiagnostics()
-    }, 1500)
+    }, intervalMs)
 
     return () => {
       cancelled = true
       window.clearInterval(interval)
       eventSource?.close()
     }
-  }, [desktopMode])
+  }, [desktopMode, desktopBootstrapComplete])
 
   useEffect(() => {
     if (!desktopMode) {

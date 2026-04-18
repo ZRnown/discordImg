@@ -1,5 +1,6 @@
 type WebsiteFilter = {
   filter_type?: string | null
+  filter_value?: string | null
 }
 
 const hasFilterType = (filters: WebsiteFilter[] | null | undefined, filterType: string) =>
