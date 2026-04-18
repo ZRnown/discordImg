@@ -968,6 +968,12 @@ def initialize_runtime():
     logging.getLogger('urllib3').setLevel(logging.ERROR)
     logging.getLogger('urllib3.connectionpool').setLevel(logging.ERROR)
 
+    # 2.5. 确保核心数据库 schema 已就绪
+    try:
+        db.ensure_schema_ready()
+    except Exception as schema_error:
+        logger.warning("数据库 schema 预检查失败: %s", schema_error)
+
     # 3. 重置数据库状态
     print("🧹 [系统] 正在重置抓取任务状态...")
     try:
@@ -1998,11 +2004,24 @@ def scrape_product():
 def get_current_user():
     """获取当前登录用户"""
     if DESKTOP_SINGLE_USER:
-        user = db.get_user_by_id(DESKTOP_USER_ID)
-        if user:
-            return user
+        def _fallback_desktop_user():
+            return {
+                'id': DESKTOP_USER_ID,
+                'username': DESKTOP_USERNAME,
+                'role': 'admin',
+                'is_active': 1,
+                'shops': [],
+            }
 
         try:
+            if not db.ensure_schema_ready():
+                logger.warning("桌面单用户数据库尚未就绪，临时使用内存用户")
+                return _fallback_desktop_user()
+
+            user = db.get_user_by_id(DESKTOP_USER_ID)
+            if user:
+                return user
+
             from werkzeug.security import generate_password_hash
             with db.get_connection() as conn:
                 cursor = conn.cursor()
@@ -2016,8 +2035,11 @@ def get_current_user():
                 conn.commit()
             return db.get_user_by_id(DESKTOP_USER_ID)
         except Exception as e:
+            if 'no such table: users' in str(e).lower():
+                logger.warning("桌面单用户表尚未初始化，临时使用内存用户")
+                return _fallback_desktop_user()
             logger.error(f"创建桌面单用户失败: {e}")
-            return None
+            return _fallback_desktop_user()
 
     user_id = session.get('user_id')
     if user_id:

@@ -3,6 +3,7 @@ import numpy as np
 import os
 import logging
 import json
+import time
 from time import perf_counter
 from typing import List, Dict, Any, Optional, Sequence, Tuple
 from contextlib import contextmanager
@@ -63,6 +64,21 @@ class Database:
         conn.execute('PRAGMA busy_timeout=60000;')
         conn.execute('PRAGMA synchronous=NORMAL;')
         conn.execute('PRAGMA cache_size=-64000;')
+
+    def _has_required_tables(self) -> bool:
+        required_tables = {'users', 'shops', 'system_config', 'discord_accounts'}
+        try:
+            with sqlite3.connect(self.db_path, timeout=5.0) as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?, ?, ?, ?)",
+                    tuple(required_tables),
+                )
+                existing_tables = {str(row[0]) for row in cursor.fetchall()}
+                return required_tables.issubset(existing_tables)
+        except Exception as e:
+            logger.debug("检查数据库表结构失败: %s", e)
+            return False
 
     def _migrate_legacy_product_images_schema(self, conn, cursor):
         columns = self._get_table_columns(cursor, 'product_images')
@@ -1015,6 +1031,26 @@ class Database:
             ''')
 
             conn.commit()
+
+    def ensure_schema_ready(self, retries: int = 3, retry_delay_seconds: float = 0.2) -> bool:
+        """确保核心表已就绪，兼容旧库或半初始化状态。"""
+        if self._has_required_tables():
+            return True
+
+        attempts = max(1, int(retries))
+        for attempt in range(attempts):
+            try:
+                self.init_sqlite_database()
+            except Exception as e:
+                logger.warning("数据库 schema 初始化失败，第 %s/%s 次: %s", attempt + 1, attempts, e)
+
+            if self._has_required_tables():
+                return True
+
+            if attempt < attempts - 1:
+                time.sleep(max(0.0, float(retry_delay_seconds)))
+
+        return self._has_required_tables()
 
     def cleanup_processed_messages(self):
         """清理旧的消息处理记录，只保留最近1小时的记录"""
