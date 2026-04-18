@@ -192,6 +192,18 @@ export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }
   }, [desktopMode, desktopBootstrapComplete])
 
   useEffect(() => {
+    if (botStatus !== "starting") {
+      return
+    }
+
+    const interval = window.setInterval(() => {
+      void fetchBotStatus()
+    }, 2000)
+
+    return () => window.clearInterval(interval)
+  }, [botStatus])
+
+  useEffect(() => {
     if (!desktopMode) {
       return
     }
@@ -258,11 +270,13 @@ export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }
 
   const fetchBotStatus = async () => {
     try {
-      const response = await fetch("/api/bot/status")
+      const response = await fetch("/api/bot/status", { cache: "no-store" })
       if (response.ok) {
         const data = await response.json()
-        if (data.running) {
+        if (data.status === "running") {
           setBotStatus("running")
+        } else if (data.status === "starting") {
+          setBotStatus("starting")
         } else {
           setBotStatus("stopped")
         }
@@ -312,8 +326,9 @@ export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }
 
       if (response.ok) {
         console.log("设置状态为running")
-        setBotStatus("running")
-        setTimeout(() => fetchBotStatus(), 100)
+        const data = await response.json().catch(() => ({}))
+        setBotStatus(data.status === "running" ? "running" : "starting")
+        setTimeout(() => fetchBotStatus(), 1000)
         toast.success("Discord账号已启动")
         window.dispatchEvent(new Event("bot-status-changed"))
       } else {

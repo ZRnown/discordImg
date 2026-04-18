@@ -2722,9 +2722,17 @@ const formatWebsiteForEdit = (website: any) => ({
               </div>
               <div className="flex items-center gap-2">
                 <div className={`px-2 py-1 rounded text-sm ${
-                  account.status === 'online' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
+                  (account.runtime_status || account.status) === 'running'
+                    ? 'bg-green-100 text-green-800'
+                    : (account.runtime_status || account.status) === 'starting'
+                      ? 'bg-yellow-100 text-yellow-800'
+                      : 'bg-gray-100 text-gray-800'
                 }`}>
-                  {account.status === 'online' ? '在线' : '离线'}
+                  {(account.runtime_status || account.status) === 'running'
+                    ? '在线'
+                    : (account.runtime_status || account.status) === 'starting'
+                      ? '启动中'
+                      : '离线'}
                 </div>
                 <Button
                   variant="outline"
@@ -3863,7 +3871,7 @@ const formatWebsiteForEdit = (website: any) => ({
                                               account_ids: toggleAccountBindingSelection(prev.account_ids, account.id.toString()),
                                             }))}
                                           />
-                                          <span className="text-sm">{account.username} ({account.status})</span>
+                                          <span className="text-sm">{account.username} ({account.runtime_status || account.status})</span>
                                         </label>
                                       )
                                     })}

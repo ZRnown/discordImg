@@ -486,6 +486,7 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
         page: String(page),
         limit: String(itemsPerPage)
       })
+      params.set('_ts', String(Date.now()))
       if (keywordSearch.trim()) {
         params.set('keyword', keywordSearch.trim())
         params.set('search_type', searchType)
@@ -494,7 +495,7 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
         params.set('shop_name', shopFilter)
       }
 
-      const res = await fetch(`/api/products?${params.toString()}`)
+      const res = await fetch(`/api/products?${params.toString()}`, { cache: 'no-store' })
       const data = await res.json()
       if (fetchSeq !== productsFetchSeqRef.current) return
 
@@ -540,7 +541,7 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
 
   const fetchProductsCount = async () => {
     try {
-      const data = await cachedFetch('/api/products/count')
+      const data = await fetch('/api/products/count', { cache: 'no-store' }).then((res) => res.json())
       setTotalProductsCount(data.count || 0)
     } catch (e) {
       console.error('获取商品数量失败:', e)
@@ -549,7 +550,7 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
 
   const fetchScrapeStatus = async () => {
     try {
-      const res = await fetch('/api/scrape/shop/status')
+      const res = await fetch('/api/scrape/shop/status', { cache: 'no-store' })
       if (res.ok) {
         const text = await res.text()
         if (text.trim()) {
@@ -581,7 +582,8 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
           }
           // 如果抓取完成，刷新商品列表
           if (!status.is_scraping && status.completed) {
-            fetchProducts()
+            setCurrentPage(1)
+            fetchProducts(1)
             fetchProductsCount()
           }
         }

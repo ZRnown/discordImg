@@ -314,7 +314,7 @@ export function ImageSearchView() {
       formData.append('limit', maxResults.toString()); // 返回结果数量
 
       // 发送到后端进行向量搜索
-      const searchRes = await fetch('/api/search_similar', {
+      const searchRes = await fetch('/search_similar', {
         method: 'POST',
         body: formData
       });

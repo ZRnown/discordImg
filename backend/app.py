@@ -702,6 +702,70 @@ def refresh_running_bot_user_shops(user_id):
     return updated_clients, scoped_shops
 
 
+def _call_runtime_flag(target, attr_name):
+    attr = getattr(target, attr_name, None)
+    if callable(attr):
+        try:
+            return bool(attr())
+        except Exception:
+            return False
+    return bool(attr)
+
+
+def _resolve_account_runtime_status(account, runtime_entry):
+    db_status = str((account or {}).get('status') or 'offline').lower()
+    if not runtime_entry:
+        return 'running' if db_status == 'online' else 'stopped'
+
+    client = runtime_entry.get('client')
+    task = runtime_entry.get('task')
+    is_ready = _call_runtime_flag(client, 'is_ready')
+    is_closed = _call_runtime_flag(client, 'is_closed')
+    task_done = _call_runtime_flag(task, 'done')
+
+    if is_ready and not is_closed:
+        return 'running'
+    if not is_closed and not task_done:
+        return 'starting'
+    return 'stopped'
+
+
+def _augment_accounts_with_runtime(accounts):
+    normalized_accounts = [dict(account) for account in (accounts or [])]
+    if not normalized_accounts:
+        return []
+
+    with bot_runtime_lock:
+        runtime_entries = build_bot_runtime_entries(bot_clients, bot_tasks)
+
+    merged_accounts = []
+    for account in normalized_accounts:
+        account_id = int(account.get('id', 0) or 0)
+        runtime_status = _resolve_account_runtime_status(account, runtime_entries.get(account_id))
+        merged = dict(account)
+        merged['db_status'] = str(account.get('status') or 'offline').lower()
+        merged['runtime_status'] = runtime_status
+        merged['status'] = 'online' if runtime_status == 'running' else 'offline'
+        merged_accounts.append(merged)
+
+    return merged_accounts
+
+
+def _build_bot_status_payload(accounts):
+    merged_accounts = _augment_accounts_with_runtime(accounts)
+    ready_accounts = sum(1 for account in merged_accounts if account.get('runtime_status') == 'running')
+    starting_accounts = sum(1 for account in merged_accounts if account.get('runtime_status') == 'starting')
+    status = 'running' if ready_accounts > 0 else 'starting' if starting_accounts > 0 else 'stopped'
+    return {
+        'running': status in {'running', 'starting'},
+        'status': status,
+        'totalAccounts': len(merged_accounts),
+        'readyAccounts': ready_accounts,
+        'startingAccounts': starting_accounts,
+        'accounts': merged_accounts,
+    }
+
+
 def _remove_bot_runtime_indices(indices_to_remove):
     if not indices_to_remove:
         return 0
@@ -1385,6 +1449,7 @@ def _start_auto_retrieval_cache_backfill():
         AUTO_BACKFILL_THREAD.start()
 
 @app.route('/search_similar', methods=['POST'])
+@app.route('/api/search_similar', methods=['POST'])
 def search_similar():
     """搜索相似图像并按商品级别返回排序结果"""
     request_started_at = time.perf_counter()
@@ -3849,7 +3914,11 @@ def get_accounts():
         # 所有用户（包括管理员）只能看到自己的账号
         accounts = db.get_discord_accounts_by_user(current_user['id'])
 
-        return jsonify({'accounts': accounts})
+        response = jsonify({'accounts': _augment_accounts_with_runtime(accounts)})
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
     except Exception as e:
         logger.error(f"获取账号列表失败: {e}")
         return jsonify({'error': str(e)}), 500
@@ -3901,7 +3970,9 @@ def list_products():
 
         # 添加缓存头以优化性能（5分钟缓存）
         response = jsonify(response_data)
-        response.headers['Cache-Control'] = 'private, max-age=300'
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
         return response
     except Exception as e:
         logger.error(f"列出商品失败: {e}")
@@ -6409,10 +6480,14 @@ def start_bot():
             logger.info(f"用户 {user_id} 的机器人已在运行中，共有 {len(user_accounts)} 个账号")
         else:
             logger.info(f"用户 {user_id} 启动机器人成功，新增 {started_count} 个账号，共有 {len(user_accounts)} 个账号")
+        status_payload = _build_bot_status_payload(user_accounts)
         return jsonify({
             'message': '账号启动成功' if started_count > 0 else '账号已在运行',
             'totalAccounts': len(user_accounts),
-            'startedAccounts': started_count
+            'startedAccounts': started_count,
+            'status': status_payload['status'],
+            'readyAccounts': status_payload['readyAccounts'],
+            'startingAccounts': status_payload['startingAccounts']
         })
 
     except Exception as e:
@@ -6446,18 +6521,16 @@ def stop_bot():
 @app.route('/api/bot/status', methods=['GET'])
 def get_bot_status():
     """获取Discord机器人全局运行状态"""
+    if not require_login():
+        return jsonify({'error': '需要登录', 'running': False, 'status': 'stopped'}), 401
+
     try:
-        # 通过检查数据库中是否有账号状态为online来确定机器人是否在运行
-        # 这样可以避免依赖内存中的全局变量，在多进程环境下更可靠
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM discord_accounts WHERE status = 'online'")
-            online_count = cursor.fetchone()[0]
-            is_running = online_count > 0
-        return jsonify({'running': is_running})
+        current_user = get_current_user()
+        accounts = db.get_discord_accounts_by_user(current_user['id'])
+        return jsonify(_build_bot_status_payload(accounts))
     except Exception as e:
         logger.error(f"获取机器人状态失败: {e}")
-        return jsonify({'running': False}), 500
+        return jsonify({'running': False, 'status': 'stopped'}), 500
 
 @app.route('/api/shop-info', methods=['GET'])
 def get_shop_info():
