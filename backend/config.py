@@ -147,6 +147,18 @@ class Config:
     # === 路径 ===
     BASE_DIR = os.path.dirname(os.path.dirname(__file__))
     DATA_DIR = os.getenv('APP_DATA_DIR') or os.path.join(BASE_DIR, 'backend', 'data')
+    CACHE_DIR = os.path.join(DATA_DIR, 'cache')
+    HF_HOME = os.path.join(CACHE_DIR, 'huggingface')
+    HF_HUB_CACHE = os.path.join(HF_HOME, 'hub')
+    TRANSFORMERS_CACHE = os.path.join(HF_HOME, 'transformers')
+    TORCH_HOME = os.path.join(CACHE_DIR, 'torch')
+    XDG_CACHE_HOME = os.path.join(CACHE_DIR, 'xdg')
+    os.environ.setdefault('HF_HOME', HF_HOME)
+    os.environ.setdefault('HUGGINGFACE_HUB_CACHE', HF_HUB_CACHE)
+    os.environ.setdefault('HF_HUB_CACHE', HF_HUB_CACHE)
+    os.environ.setdefault('TRANSFORMERS_CACHE', TRANSFORMERS_CACHE)
+    os.environ.setdefault('TORCH_HOME', TORCH_HOME)
+    os.environ.setdefault('XDG_CACHE_HOME', XDG_CACHE_HOME)
     # 确保这些路径是绝对路径
     IMAGE_SAVE_DIR = os.path.join(DATA_DIR, 'scraped_images')
     MESSAGE_FILTER_IMAGE_DIR = os.path.join(DATA_DIR, 'message_filter_images')
@@ -177,6 +189,12 @@ class Config:
     def init_dirs(cls):
         for dir_path in [
             cls.DATA_DIR,
+            cls.CACHE_DIR,
+            cls.HF_HOME,
+            cls.HF_HUB_CACHE,
+            cls.TRANSFORMERS_CACHE,
+            cls.TORCH_HOME,
+            cls.XDG_CACHE_HOME,
             cls.IMAGE_SAVE_DIR,
             cls.MESSAGE_FILTER_IMAGE_DIR,
             cls.WEBSITE_FILTER_IMAGE_DIR,

@@ -11,11 +11,23 @@ export type DesktopHealthInfo = {
   license_required?: boolean
   ai_model_ready?: boolean
   feature_extractor_error?: string | null
+  bootstrap_state?: DesktopBootstrapState
   desktop_mode_source?: string
   desktop_backend_process?: boolean
   frozen?: boolean
   executable_name?: string
   pid?: number
+}
+
+export type DesktopBootstrapState = {
+  stage?: string
+  title?: string
+  message?: string
+  current_task?: string
+  progress?: number
+  completed?: boolean
+  error?: string | null
+  updated_at?: string
 }
 
 type StepState = "done" | "active" | "pending" | "error"
@@ -36,6 +48,9 @@ export type DesktopBootstrapSummary = {
 const getLogLine = (entry: DesktopBootstrapLogEntry) =>
   String(entry.raw_line || entry.message || "").trim()
 
+const getBootstrapState = (desktopHealth?: DesktopHealthInfo | null) =>
+  desktopHealth?.bootstrap_state
+
 export function inferDesktopBootstrapHint({
   bootstrapError,
   desktopHealth,
@@ -50,6 +65,11 @@ export function inferDesktopBootstrapHint({
 
   if (desktopHealth?.feature_extractor_error) {
     return `AI 初始化报错：${desktopHealth.feature_extractor_error}`
+  }
+
+  const bootstrapState = getBootstrapState(desktopHealth)
+  if (bootstrapState?.message) {
+    return bootstrapState.message
   }
 
   if (desktopHealth?.desktop_backend && desktopHealth?.single_user === false) {

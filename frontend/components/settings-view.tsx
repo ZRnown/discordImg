@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { toast } from "sonner"
-import { Settings, Save } from "lucide-react"
+import { Copy, Database, Folder, HardDrive, RefreshCw, Settings, Save } from "lucide-react"
 import {
   getMinimumReplyMaxDelay,
   normalizeReplyDelayRange,
@@ -45,6 +45,39 @@ interface SystemSettings {
   feature_extract_threads: number
 }
 
+interface DirectoryInfo {
+  path: string
+  exists: boolean
+  size_bytes: number
+  file_count: number
+}
+
+interface StorageInfo {
+  app_data_dir: string
+  database_path: string
+  cache_dir: string
+  hf_home: string
+  hf_hub_cache: string
+  transformers_cache: string
+  torch_home: string
+  image_save_dir: string
+  message_filter_image_dir: string
+  website_filter_image_dir: string
+  log_dir: string
+  directories: Record<string, DirectoryInfo>
+  model_candidates: Array<{ path: string; exists: boolean; size_bytes: number }>
+  bootstrap_state?: {
+    stage?: string
+    title?: string
+    message?: string
+    current_task?: string
+    progress?: number
+    completed?: boolean
+    error?: string | null
+    updated_at?: string
+  }
+}
+
 export function SettingsView() {
   const [settings, setSettings] = useState<UserSettings>({
     discord_similarity_threshold: 0.6,
@@ -64,6 +97,7 @@ export function SettingsView() {
     download_threads: 4,
     feature_extract_threads: 4,
   })
+  const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [savingSystem, setSavingSystem] = useState(false)
@@ -77,6 +111,7 @@ export function SettingsView() {
   useEffect(() => {
     fetchSettings()
     fetchSystemSettings()
+    fetchStorageInfo()
   }, [])
 
   const fetchSettings = async () => {
@@ -159,6 +194,18 @@ export function SettingsView() {
       })
     } catch (error) {
       console.error('Failed to fetch system settings:', error)
+    }
+  }
+
+  const fetchStorageInfo = async () => {
+    try {
+      const response = await fetch('/api/system/storage', { credentials: 'include' })
+      if (response.ok) {
+        const data = await response.json()
+        setStorageInfo(data)
+      }
+    } catch (error) {
+      console.error('Failed to fetch storage info:', error)
     }
   }
 
@@ -251,6 +298,24 @@ export function SettingsView() {
     }
   }
 
+  const formatBytes = (value?: number) => {
+    const bytes = Number(value || 0)
+    if (bytes <= 0) return "0 B"
+    const units = ["B", "KB", "MB", "GB", "TB"]
+    const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1)
+    return `${(bytes / Math.pow(1024, index)).toFixed(index === 0 ? 0 : 1)} ${units[index]}`
+  }
+
+  const copyText = async (text: string) => {
+    if (!text) return
+    try {
+      await navigator.clipboard.writeText(text)
+      toast.success("已复制")
+    } catch {
+      toast.error("复制失败")
+    }
+  }
+
   if (loading) {
     return (
       <div className="space-y-8">
@@ -266,10 +331,14 @@ export function SettingsView() {
     <div className="space-y-8">
       <div className="flex justify-between items-center">
         <div>
-          <h2 className="text-4xl font-extrabold tracking-tight">个人设置</h2>
-          <p className="text-sm text-muted-foreground mt-1">配置您的个性化运行参数</p>
+          <h2 className="text-4xl font-extrabold tracking-tight">系统设置</h2>
+          <p className="text-sm text-muted-foreground mt-1">查看数据存储、模型缓存和当前运行参数</p>
         </div>
         <div className="flex gap-2">
+          <Button onClick={fetchStorageInfo} variant="outline">
+            <RefreshCw className="w-4 h-4 mr-2" />
+            刷新存储信息
+          </Button>
           <Button onClick={handleSave} disabled={saving} variant="outline">
             <Save className="w-4 h-4 mr-2" />
             {saving ? "保存用户设置..." : "保存用户设置"}

@@ -18,6 +18,26 @@ os.environ.setdefault("TORCH_CPP_LOG_LEVEL", "ERROR")
 os.environ.setdefault("TORCH_SHOW_CPP_STACKTRACES", "0")
 os.environ.setdefault("GLOG_minloglevel", "2")
 
+def _force_utf8_console() -> None:
+    import sys as _sys
+
+    os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+    os.environ.setdefault("PYTHONUTF8", "1")
+
+    for stream_name in ("stdout", "stderr"):
+        stream = getattr(_sys, stream_name, None)
+        if stream is None:
+            continue
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace")
+            except Exception:
+                pass
+
+
+_force_utf8_console()
+
 from flask import Flask, request, jsonify, Response, session
 import numpy as np
 import logging
@@ -59,6 +79,13 @@ try:
 except ModuleNotFoundError as e:
     if e.name == 'license_manager':
         from .license_manager import LicenseManager
+    else:
+        raise
+try:
+    from bootstrap_state import get_bootstrap_state, update_bootstrap_state
+except ModuleNotFoundError as e:
+    if e.name == 'bootstrap_state':
+        from .bootstrap_state import get_bootstrap_state, update_bootstrap_state
     else:
         raise
 import requests
@@ -245,6 +272,15 @@ LICENSE_REQUIRED = DESKTOP_RUNTIME_MODE.license_required
 
 # === 全局状态变量 ===
 ai_model_ready = False  # AI模型是否已就绪
+update_bootstrap_state(
+    stage='starting',
+    title='正在启动',
+    message='正在初始化桌面后端',
+    current_task='准备环境',
+    progress=0,
+    completed=False,
+    error=None,
+)
 # 全局 AI 并发控制（跨商品），避免 CPU 被同时推理任务打满
 GLOBAL_AI_SEMAPHORE = threading.Semaphore(4)
 MAX_LOG_HISTORY = 5000
@@ -895,6 +931,7 @@ def initialize_runtime():
         f"frozen={DESKTOP_RUNTIME_MODE.frozen} "
         f"executable={DESKTOP_RUNTIME_MODE.executable_name or 'unknown'}"
     )
+    update_bootstrap_state(stage='starting', title='正在启动', message='正在初始化桌面后端', current_task='加载系统配置', progress=5, completed=False, error=None)
     if (
         DESKTOP_RUNTIME_MODE.desktop_mode_source == 'packaged-backend-default'
         and DESKTOP_RUNTIME_MODE.desktop_backend_process
@@ -953,6 +990,7 @@ def initialize_runtime():
         global ai_model_ready
         try:
             print("🤖 [后台] 正在预热AI模型...")
+            update_bootstrap_state(stage='loading_model', message='正在准备 AI 模型缓存', current_task='加载 YOLO-World 和 DINOv2', progress=10, completed=False, error=None)
             extractor = get_global_feature_extractor()
             if extractor is None:
                 raise RuntimeError(feature_extractor_last_error or "特征提取器初始化失败")
@@ -976,6 +1014,7 @@ def initialize_runtime():
                     startup_limit = get_backfill_limit(config, 'RETRIEVAL_CACHE_STARTUP_LIMIT')
                     batch_text = f" limit={startup_limit}" if startup_limit else ""
                     print(f"🧠 [后台] 正在预热 {strategy_name} 商品缓存{batch_text}...")
+                    update_bootstrap_state(stage='warming_cache', message=f'正在预热 {strategy_name} 商品缓存', current_task=f'预热 {strategy_name} 商品缓存', progress=70, completed=False, error=None)
                     summary = backfill_product_image_retrieval_cache(
                         db,
                         strategy_name,
@@ -998,6 +1037,7 @@ def initialize_runtime():
                             raise
 
                     print(f"🧠 [后台] 正在预热 {strategy_name} 实时检索目录...")
+                    update_bootstrap_state(stage='warming_cache', message=f'正在预热 {strategy_name} 实时检索目录', current_task=f'预热 {strategy_name} 实时检索目录', progress=85, completed=False, error=None)
                     warm_summary = warm_live_image_retriever(db, strategy_name)
                     print(
                         f"✅ [后台] {strategy_name} 实时检索目录预热完成: "
@@ -1025,13 +1065,16 @@ def initialize_runtime():
                 _start_auto_retrieval_cache_backfill()
             except Exception as cache_error:
                 logger.warning("商品检索缓存预热失败: %s", cache_error)
+            update_bootstrap_state(stage='ready', title='启动完成', message='AI 模型和缓存预热完成', current_task='等待用户操作', progress=100, completed=True, error=None)
             ai_model_ready = True
         except Exception as e:
             print(f"⚠️ [后台] AI预热失败: {e}")
+            update_bootstrap_state(stage='error', title='模型预热失败', message=str(e), current_task='AI 预热失败', progress=0, completed=False, error=str(e))
             ai_model_ready = False
 
-    if DESKTOP_SINGLE_USER or DESKTOP_SKIP_AI_WARMUP:
+    if DESKTOP_SKIP_AI_WARMUP:
         ai_model_ready = False
+        update_bootstrap_state(stage='skipped', title='已跳过预热', message='已跳过 AI 启动预热', current_task='等待手动触发', progress=0, completed=True, error=None)
         print("⏭️ [系统] 桌面模式已跳过 AI 启动预热，基础功能将先启动")
     else:
         ai_warmup_thread = threading.Thread(target=async_warmup_ai, daemon=True)
@@ -2048,11 +2091,82 @@ def desktop_health():
         'license_required': LICENSE_REQUIRED,
         'ai_model_ready': is_ai_model_ready(),
         'feature_extractor_error': feature_extractor_last_error,
+        'bootstrap_state': get_bootstrap_state(),
         'desktop_mode_source': DESKTOP_RUNTIME_MODE.desktop_mode_source,
         'desktop_backend_process': DESKTOP_RUNTIME_MODE.desktop_backend_process,
         'frozen': DESKTOP_RUNTIME_MODE.frozen,
         'executable_name': DESKTOP_RUNTIME_MODE.executable_name,
         'pid': os.getpid(),
+    })
+
+
+def _describe_directory(path: str) -> dict:
+    total_size = 0
+    file_count = 0
+    exists = os.path.exists(path)
+    if exists:
+        for root, _, files in os.walk(path):
+            for file_name in files:
+                file_path = os.path.join(root, file_name)
+                try:
+                    total_size += os.path.getsize(file_path)
+                    file_count += 1
+                except OSError:
+                    continue
+
+    return {
+        'path': path,
+        'exists': exists,
+        'size_bytes': total_size,
+        'file_count': file_count,
+    }
+
+
+@app.route('/api/system/storage', methods=['GET'])
+def get_system_storage():
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    directories = {
+        'app_data': _describe_directory(config.DATA_DIR),
+        'cache': _describe_directory(config.CACHE_DIR),
+        'huggingface': _describe_directory(config.HF_HOME),
+        'huggingface_hub': _describe_directory(config.HF_HUB_CACHE),
+        'transformers': _describe_directory(config.TRANSFORMERS_CACHE),
+        'torch': _describe_directory(config.TORCH_HOME),
+        'images': _describe_directory(config.IMAGE_SAVE_DIR),
+        'message_filters': _describe_directory(config.MESSAGE_FILTER_IMAGE_DIR),
+        'website_filters': _describe_directory(config.WEBSITE_FILTER_IMAGE_DIR),
+        'logs': _describe_directory(config.LOG_DIR),
+    }
+
+    model_candidates = []
+    for candidate in (
+        getattr(config, 'YOLO_MODEL_PATH', ''),
+        os.path.join(config.DATA_DIR, 'yolov8s-world.pt'),
+    ):
+        if candidate and candidate not in {item.get('path') for item in model_candidates}:
+            model_candidates.append({
+                'path': candidate,
+                'exists': os.path.exists(candidate),
+                'size_bytes': os.path.getsize(candidate) if os.path.exists(candidate) else 0,
+            })
+
+    return jsonify({
+        'app_data_dir': config.DATA_DIR,
+        'database_path': config.DATABASE_PATH,
+        'cache_dir': config.CACHE_DIR,
+        'hf_home': config.HF_HOME,
+        'hf_hub_cache': config.HF_HUB_CACHE,
+        'transformers_cache': config.TRANSFORMERS_CACHE,
+        'torch_home': config.TORCH_HOME,
+        'image_save_dir': config.IMAGE_SAVE_DIR,
+        'message_filter_image_dir': config.MESSAGE_FILTER_IMAGE_DIR,
+        'website_filter_image_dir': config.WEBSITE_FILTER_IMAGE_DIR,
+        'log_dir': config.LOG_DIR,
+        'directories': directories,
+        'model_candidates': model_candidates,
+        'bootstrap_state': get_bootstrap_state(),
     })
 
 
@@ -6450,6 +6564,7 @@ def add_shop():
                 'success': True,
                 'message': '店铺添加成功',
                 'shopId': shop_id,
+                'shop': db.get_shop_by_id(shop_id),
                 'autoAssigned': bool(owner_user_id),
             })
         else:

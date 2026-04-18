@@ -10,6 +10,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DIST_DIR = ROOT / "dist"
 BIN_DIR = ROOT / "src-tauri" / "binaries"
+MODEL_CANDIDATES = (
+    ROOT / "backend" / "yolov8s-world.pt",
+    ROOT / "yolov8s-world.pt",
+)
 
 
 def detect_target_triple() -> str:
@@ -29,7 +33,7 @@ def detect_target_triple() -> str:
 
 
 def build() -> None:
-    model_path = ROOT / "yolov8s-world.pt"
+    model_path = next((candidate for candidate in MODEL_CANDIDATES if candidate.exists()), None)
     pyinstaller_cmd = [
         sys.executable,
         "-m",
@@ -40,10 +44,11 @@ def build() -> None:
         "--name",
         "backend-api",
     ]
-    if model_path.exists():
+    if model_path is not None:
         pyinstaller_cmd.extend(["--add-data", f"{model_path}{os.pathsep}."])
     else:
-        print(f"[build-sidecar] warning: model file not found, skipping bundle: {model_path}")
+        searched = ", ".join(str(candidate) for candidate in MODEL_CANDIDATES)
+        print(f"[build-sidecar] warning: model file not found, skipping bundle: {searched}")
 
     pyinstaller_cmd.append(str(ROOT / "backend" / "app.py"))
 

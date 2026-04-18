@@ -6,6 +6,7 @@ import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Progress } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   buildDesktopBootstrapSummary,
@@ -54,6 +55,7 @@ export function DesktopBootstrapPanel({
     desktopHealth,
     logs,
   })
+  const bootstrapState = desktopHealth?.bootstrap_state
 
   const handleCopy = async () => {
     try {
@@ -79,6 +81,19 @@ export function DesktopBootstrapPanel({
             <div className="rounded-md border bg-muted/40 p-4 text-sm text-foreground">
               {summary.hint}
             </div>
+
+            {bootstrapState && (
+              <div className="space-y-2 rounded-md border p-4">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-medium">{bootstrapState.title || "启动进度"}</span>
+                  <span className="text-muted-foreground">{bootstrapState.progress ?? 0}%</span>
+                </div>
+                <Progress value={bootstrapState.progress ?? 0} />
+                <div className="text-sm text-muted-foreground">
+                  {bootstrapState.current_task || bootstrapState.message || "正在准备中"}
+                </div>
+              </div>
+            )}
 
             <div className="space-y-3">
               {summary.steps.map((step) => (

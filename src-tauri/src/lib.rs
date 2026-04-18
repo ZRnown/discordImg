@@ -4,26 +4,57 @@ use std::process::Command;
 use tauri::Manager;
 use tauri_plugin_shell::ShellExt;
 
+fn resolve_python_interpreter(project_root: &std::path::Path) -> String {
+  let env_candidates = ["PYTHON_INTERPRETER", "PYTHON", "PYTHON_EXE"];
+  for key in env_candidates {
+    if let Ok(value) = std::env::var(key) {
+      if !value.trim().is_empty() {
+        return value;
+      }
+    }
+  }
+
+  let candidates = [
+    project_root.join(".venv").join("Scripts").join("python.exe"),
+    project_root.join(".venv").join("bin").join("python"),
+    project_root.join("backend").join(".venv").join("Scripts").join("python.exe"),
+    project_root.join("backend").join(".venv").join("bin").join("python"),
+    PathBuf::from(r"python"),
+    PathBuf::from(r"python3"),
+  ];
+
+  for candidate in candidates {
+    if candidate.exists() {
+      return candidate.to_string_lossy().to_string();
+    }
+  }
+
+  "python".to_string()
+}
+
 fn start_backend(app: &tauri::AppHandle) -> Result<(), String> {
   let app_data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
   let license_server = std::env::var("LICENSE_SERVER_URL")
     .unwrap_or_else(|_| "http://107.172.1.7:8888".to_string());
   std::fs::create_dir_all(&app_data_dir).map_err(|e| e.to_string())?;
 
+  let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+  let project_root = manifest_dir.parent().ok_or("failed to resolve project root")?;
+
   if cfg!(debug_assertions) {
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let project_root = manifest_dir.parent().ok_or("failed to resolve project root")?;
-    let python = std::env::var("PYTHON").unwrap_or_else(|_| "python".to_string());
+    let python = resolve_python_interpreter(project_root);
     let mut command = Command::new(python);
     command
       .current_dir(project_root)
       .arg("backend/app.py")
       .env("DESKTOP_SINGLE_USER", "1")
-      .env("DESKTOP_SKIP_AI_WARMUP", "1")
+      .env("DESKTOP_SKIP_AI_WARMUP", "0")
       .env("LICENSE_REQUIRED", "0")
       .env("BACKEND_HOST", "127.0.0.1")
       .env("BACKEND_PORT", "5001")
       .env("LICENSE_SERVER_URL", &license_server)
+      .env("PYTHONIOENCODING", "utf-8")
+      .env("PYTHONUTF8", "1")
       .env("APP_DATA_DIR", app_data_dir.to_string_lossy().to_string());
 
     command
@@ -37,11 +68,13 @@ fn start_backend(app: &tauri::AppHandle) -> Result<(), String> {
     .sidecar("backend-api")
     .map_err(|e| format!("failed to prepare backend sidecar: {e}"))?
     .env("DESKTOP_SINGLE_USER", "1")
-    .env("DESKTOP_SKIP_AI_WARMUP", "1")
+    .env("DESKTOP_SKIP_AI_WARMUP", "0")
     .env("LICENSE_REQUIRED", "0")
     .env("BACKEND_HOST", "127.0.0.1")
     .env("BACKEND_PORT", "5001")
     .env("LICENSE_SERVER_URL", &license_server)
+    .env("PYTHONIOENCODING", "utf-8")
+    .env("PYTHONUTF8", "1")
     .env("APP_DATA_DIR", app_data_dir.to_string_lossy().to_string());
 
   sidecar_command

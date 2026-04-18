@@ -392,7 +392,7 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
   useEffect(() => {
     if (!isActive) return
     fetchIndexedIds()
-    fetchAvailableShops()
+    fetchAvailableShops(true)
     fetchWebsites()
     fetchProductsCount()
     fetchScrapeStatus() // 初始化时检查抓取状态，恢复进度显示
@@ -404,7 +404,7 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
     const handleShopsUpdated = () => {
       // 清除店铺缓存并重新获取
       invalidateCache('/api/shops')
-      fetchAvailableShops()
+      fetchAvailableShops(true)
     }
     window.addEventListener('shops-updated', handleShopsUpdated)
     return () => window.removeEventListener('shops-updated', handleShopsUpdated)
@@ -520,9 +520,9 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
     }
   }
 
-  const fetchAvailableShops = async () => {
+  const fetchAvailableShops = async (force = false) => {
     try {
-      const data = await cachedFetch('/api/shops')
+      const data = await cachedFetch('/api/shops', force ? { force: true } : undefined)
       setAvailableShops(data.shops || [])
     } catch (e) {
       console.error('获取店铺列表失败:', e)

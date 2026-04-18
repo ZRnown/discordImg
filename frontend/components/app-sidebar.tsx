@@ -1,6 +1,6 @@
 "use client"
 
-import { BarChart3, Bot, ImageIcon, ScrollText, Search, Store, Users } from "lucide-react"
+import { BarChart3, Bot, ImageIcon, ScrollText, Search, Settings, Store, Users } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -21,6 +21,8 @@ interface User {
   shops: string[]
 }
 
+type AppView = "dashboard" | "accounts" | "shops" | "scraper" | "image-search" | "logs" | "system-settings"
+
 const baseMenuItems = [
   { id: "dashboard", icon: BarChart3, label: "仪表盘" },
   { id: "accounts", icon: Users, label: "账号与规则" },
@@ -28,6 +30,7 @@ const baseMenuItems = [
   { id: "image-search", icon: ImageIcon, label: "以图搜图" },
   { id: "shops", icon: Store, label: "店铺管理" },
   { id: "logs", icon: ScrollText, label: "实时日志" },
+  { id: "system-settings", icon: Settings, label: "绯荤粺璁剧疆" },
 ]
 
 export function AppSidebar({
@@ -35,8 +38,8 @@ export function AppSidebar({
   setCurrentView,
   currentUser,
 }: {
-  currentView: string
-  setCurrentView: (view: string) => void
+  currentView: AppView
+  setCurrentView: (view: AppView) => void
   currentUser: User | null
 }) {
   return (
@@ -57,7 +60,7 @@ export function AppSidebar({
             <SidebarMenu>
               {baseMenuItems.map((item) => (
                 <SidebarMenuItem key={item.id}>
-                  <SidebarMenuButton onClick={() => setCurrentView(item.id)} isActive={currentView === item.id}>
+                  <SidebarMenuButton onClick={() => setCurrentView(item.id as AppView)} isActive={currentView === item.id}>
                     <item.icon />
                     <span>{item.label}</span>
                   </SidebarMenuButton>
