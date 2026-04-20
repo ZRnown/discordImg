@@ -62,6 +62,7 @@ _GENERIC_TOKENS = {
     "long", "sleeve", "sleeves", "cardigan", "coat", "pants", "jeans", "denim", "stand",
     "collar", "hot", "step",
 }
+_RESAMPLING = getattr(Image, "Resampling", Image)
 
 
 def _normalize_embedding(embedding) -> Optional[np.ndarray]:
