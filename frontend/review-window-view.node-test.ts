@@ -25,3 +25,26 @@ test('review window toolbar stays bottom aligned without manual top padding', ()
   assert.match(source, /sm:items-end/)
   assert.doesNotMatch(source, /pt-5 sm:pt-0/)
 })
+
+test('review window uses Shanghai timezone and the updated message labels', () => {
+  const source = readSource()
+
+  assert.match(source, /timeZone:\s*"Asia\/Shanghai"/)
+  assert.match(source, /发送内容/)
+  assert.match(source, /发送账号/)
+  assert.doesNotMatch(source, /保留原始发送文本/)
+})
+
+test('review window removes the badge summary row and keeps original message above sent content', () => {
+  const source = readSource()
+
+  assert.doesNotMatch(source, /消息 #\{item\.id\}/)
+  assert.doesNotMatch(source, /<Badge/)
+
+  const sourceMessageIndex = source.indexOf('原始消息')
+  const sendContentIndex = source.indexOf('发送内容')
+
+  assert.notEqual(sourceMessageIndex, -1)
+  assert.notEqual(sendContentIndex, -1)
+  assert.ok(sourceMessageIndex < sendContentIndex)
+})

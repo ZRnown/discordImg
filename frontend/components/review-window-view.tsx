@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 import { getApiErrorMessage } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -36,7 +35,7 @@ const formatReviewTime = (value: unknown) => {
   if (Number.isNaN(parsed.getTime())) {
     return text
   }
-  return parsed.toLocaleString("zh-CN", { hour12: false })
+  return parsed.toLocaleString("zh-CN", { hour12: false, timeZone: "Asia/Shanghai" })
 }
 
 const normalizeReviewAccounts = (value: unknown) => {
@@ -313,7 +312,7 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
                 </div>
               ) : null}
 
-              {items.map((item, index) => {
+              {items.map((item) => {
                 const accountNames = normalizeReviewAccounts(item.account_names)
                 const selected = selectedIds.includes(item.id)
                 const content = String(item.content || "").trim() || "（无文本内容）"
@@ -330,42 +329,26 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
                     </div>
 
                     <div className="space-y-3">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant="secondary">{websiteLabel}</Badge>
-                        <Badge variant="outline">{item.position || "位置未记录"}</Badge>
-                        <Badge variant="outline">消息 #{item.id}</Badge>
-                      </div>
-
                       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
                         <div className="rounded-lg border bg-muted/20 px-3 py-2">
-                          <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">账号</div>
-                          <div className="mt-1 text-sm font-medium">{accountNames.join(" / ") || "未记录"}</div>
+                          <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">网站</div>
+                          <div className="mt-1 text-sm font-medium">{websiteLabel}</div>
                         </div>
                         <div className="rounded-lg border bg-muted/20 px-3 py-2">
                           <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">发送者</div>
                           <div className="mt-1 text-sm font-medium">{item.sender_name || "未记录"}</div>
                         </div>
                         <div className="rounded-lg border bg-muted/20 px-3 py-2">
-                          <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">位置</div>
-                          <div className="mt-1 text-sm font-medium">{item.position || "未记录"}</div>
-                        </div>
-                        <div className="rounded-lg border bg-muted/20 px-3 py-2">
-                          <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">时间</div>
-                          <div className="mt-1 text-sm font-medium">{formatReviewTime(item.message_time || item.created_at)}</div>
+                          <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">发送账号</div>
+                          <div className="mt-1 text-sm font-medium">{accountNames.join(" / ") || "未记录"}</div>
                         </div>
                         <div className="rounded-lg border bg-muted/20 px-3 py-2">
                           <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">来源</div>
                           <div className="mt-1 text-sm font-medium">{item.guild_name || "服务器"} / #{item.channel_name || "频道"}</div>
                         </div>
-                      </div>
-
-                      <div className="rounded-lg border bg-muted/10 px-4 py-3">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">内容</div>
-                          <div className="text-[11px] text-muted-foreground">保留原始发送文本</div>
-                        </div>
-                        <div className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap break-words text-sm leading-6">
-                          {content}
+                        <div className="rounded-lg border bg-muted/20 px-3 py-2">
+                          <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">时间</div>
+                          <div className="mt-1 text-sm font-medium">{formatReviewTime(item.message_time || item.created_at)}</div>
                         </div>
                       </div>
 
@@ -377,6 +360,13 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
                           </div>
                         </div>
                       ) : null}
+
+                      <div className="rounded-lg border bg-muted/10 px-4 py-3">
+                        <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">发送内容</div>
+                        <div className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap break-words text-sm leading-6">
+                          {content}
+                        </div>
+                      </div>
                     </div>
 
                     <div className="flex items-start gap-2 lg:flex-col lg:items-stretch">

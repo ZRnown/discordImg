@@ -509,6 +509,64 @@ def _build_keyword_direct_send_payload(
     return payload
 
 
+def _strip_review_reply_mentions(reply_content):
+    if not reply_content:
+        return ''
+
+    cleaned_lines = []
+    for raw_line in str(reply_content).splitlines():
+        line = re.sub(r'^<@!?\d+>\s*', '', raw_line.strip())
+        if line:
+            cleaned_lines.append(line)
+
+    return '\n'.join(cleaned_lines).strip()
+
+
+def _prepare_review_dispatch_custom_reply(custom_reply):
+    if not isinstance(custom_reply, dict):
+        return custom_reply
+
+    prepared = dict(custom_reply)
+    content = prepared.get('content')
+    if isinstance(content, str) and content.strip():
+        prepared['content'] = _strip_review_reply_mentions(content)
+
+    return prepared
+
+
+def _build_message_reference(message, reply_target_channel):
+    if message is None or reply_target_channel is None:
+        return None
+
+    message_id = _coerce_int(getattr(message, 'id', None), None)
+    if message_id is None:
+        return None
+
+    get_partial_message = getattr(reply_target_channel, 'get_partial_message', None)
+    if callable(get_partial_message):
+        try:
+            return get_partial_message(message_id)
+        except Exception:
+            pass
+
+    channel_id = _coerce_int(getattr(reply_target_channel, 'id', None), None)
+    if channel_id is None:
+        channel_id = _coerce_int(getattr(getattr(message, 'channel', None), 'id', None), None)
+    guild_id = _coerce_int(getattr(getattr(reply_target_channel, 'guild', None), 'id', None), None)
+    if guild_id is None:
+        guild_id = _coerce_int(getattr(getattr(message, 'guild', None), 'id', None), None)
+
+    try:
+        return discord.MessageReference(
+            message_id=message_id,
+            channel_id=channel_id,
+            guild_id=guild_id,
+            fail_if_not_exists=False,
+        )
+    except Exception:
+        return message
+
+
 def _build_keyword_review_message_proxy(review_item):
     payload = review_item.get('payload') or {}
     message_payload = payload.get('message') or {}
@@ -666,7 +724,7 @@ async def dispatch_keyword_review_item(review_item):
 
         message = _build_keyword_review_message_proxy(review_item)
         product = payload.get('product') or {}
-        custom_reply = payload.get('custom_reply')
+        custom_reply = _prepare_review_dispatch_custom_reply(payload.get('custom_reply'))
         match_context = payload.get('match_context')
 
         success = await client.schedule_reply(
@@ -678,7 +736,7 @@ async def dispatch_keyword_review_item(review_item):
             skip_filters=True,
             skip_repeat_checks=True,
             skip_review_check=True,
-            force_plain_send=True,
+            force_reference_reply=True,
         )
         if item_id:
             db.update_keyword_reply_review_item_status(
@@ -3231,6 +3289,7 @@ class DiscordBotClient(discord.Client):
         skip_repeat_checks=False,
         skip_review_check=False,
         force_plain_send=False,
+        force_reference_reply=False,
     ):
         """调度回复到合适的发送账号 (增强版：带详细状态诊断)"""
 
@@ -3638,11 +3697,13 @@ class DiscordBotClient(discord.Client):
                                     continue
     
                                 explicit_mentions = bool(active_custom_reply and active_custom_reply.get('explicit_mentions'))
-                                send_plain_message = force_plain_send or _should_send_plain_keyword_message(
-                                    prevalidated_batch=prevalidated_batch,
-                                    explicit_mentions=explicit_mentions,
-                                    reply_mode=reply_mode,
-                                )
+                                send_plain_message = False
+                                if not force_reference_reply:
+                                    send_plain_message = force_plain_send or _should_send_plain_keyword_message(
+                                        prevalidated_batch=prevalidated_batch,
+                                        explicit_mentions=explicit_mentions,
+                                        reply_mode=reply_mode,
+                                    )
                                 if (
                                     send_plain_message
                                     and response_content
@@ -3668,7 +3729,9 @@ class DiscordBotClient(discord.Client):
                                     )
                                 else:
                                     if not used_thread_reply:
-                                        send_kwargs['reference'] = message
+                                        message_reference = _build_message_reference(message, reply_target_channel)
+                                        if message_reference is not None:
+                                            send_kwargs['reference'] = message_reference
                                         send_kwargs['mention_author'] = _should_mention_reply_author(
                                             explicit_mentions=explicit_mentions,
                                             reply_mode=reply_mode,

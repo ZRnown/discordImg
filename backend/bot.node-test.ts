@@ -25,3 +25,10 @@ test('reaction bark notification ignores missing messages instead of logging the
   assert.match(source, /except discord\.NotFound/)
   assert.match(source, /return/)
 })
+
+test('approved review dispatch does not force plain sends', () => {
+  const source = readSource()
+
+  assert.match(source, /async def dispatch_keyword_review_item/)
+  assert.doesNotMatch(source, /force_plain_send=True/)
+})

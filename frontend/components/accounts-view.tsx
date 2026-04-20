@@ -3990,9 +3990,6 @@ const formatWebsiteForEdit = (website: any) => ({
                             <div key={binding.id} className="flex flex-col items-start bg-muted rounded px-2 py-1 border">
                               <div className="flex items-center gap-1">
                                 <span className="text-xs">{binding.username}</span>
-                                <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">
-                                  {binding.role === 'listener' ? '监听' : binding.role === 'sender' ? '发送' : '两者'}
-                                </Badge>
                                 <Button
                                   variant="ghost"
                                   size="sm"
