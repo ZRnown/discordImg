@@ -859,7 +859,6 @@ def initialize_runtime():
         try:
             print("🤖 [系统] 正在预热AI模型...")
             get_global_feature_extractor()
-            ai_model_ready = True
             try:
                 strategy_name = getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank')
                 try:
@@ -908,6 +907,11 @@ def initialize_runtime():
                         f"catalog_size={warm_summary.get('catalog_size', 0)}"
                     )
 
+                ai_model_ready = not strategy_requires_persisted_catalog_cache(strategy_name) or getattr(
+                    config,
+                    'LIVE_IMAGE_SEARCH_STARTUP_PREPARE_CATALOG',
+                    True,
+                )
                 print("✅ [系统] AI模型预热完成，系统已就绪")
 
                 if should_run_startup_cache_compaction(config, strategy_name):
@@ -1514,6 +1518,7 @@ def search_similar():
                 db,
                 getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank'),
             )
+            strategy_name = getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank')
             filter_stage_elapsed = time.perf_counter() - filter_stage_started_at
             retrieval_timeout_seconds = _get_live_search_queue_timeout_seconds()
             release_live_search_slot = LIVE_SEARCH_REQUEST_GATE.try_acquire(
@@ -1537,20 +1542,48 @@ def search_similar():
 
             retrieval_started_at = time.perf_counter()
             try:
-                try:
-                    retrieval_result = retriever.search(
-                        image_path=image_path,
-                        query_text=query_text,
-                        top_k=limit,
-                        threshold=threshold,
-                        user_shops=user_shops,
-                    )
-                except live_retrieval_module.LiveCatalogPreparingError:
-                    logger.warning(
-                        "search_similar warming up: user_id=%s shops=%s",
-                        user_id,
-                        user_shops,
-                    )
+                retrieval_result = None
+                for warm_attempt in range(2):
+                    try:
+                        retrieval_result = retriever.search(
+                            image_path=image_path,
+                            query_text=query_text,
+                            top_k=limit,
+                            threshold=threshold,
+                            user_shops=user_shops,
+                        )
+                        break
+                    except live_retrieval_module.LiveCatalogPreparingError:
+                        logger.warning(
+                            "search_similar warming up: user_id=%s shops=%s attempt=%s",
+                            user_id,
+                            user_shops,
+                            warm_attempt + 1,
+                        )
+                        if warm_attempt > 0:
+                            return jsonify(
+                                {
+                                    'error': 'search warming up',
+                                    'retryable': True,
+                                    'message': '图搜服务预热中，请稍后重试',
+                                }
+                            ), 503
+
+                        try:
+                            warm_summary = live_retrieval_module.warm_live_image_retriever(db, strategy_name)
+                            logger.info(
+                                "search_similar on-demand warmup completed: strategy=%s catalog_size=%s",
+                                strategy_name,
+                                warm_summary.get('catalog_size', 0),
+                            )
+                        except Exception as warm_error:
+                            logger.warning(
+                                "search_similar on-demand warmup failed: strategy=%s error=%s",
+                                strategy_name,
+                                warm_error,
+                            )
+                        retriever = live_retrieval_module.get_live_image_retriever(db, strategy_name)
+                if retrieval_result is None:
                     return jsonify(
                         {
                             'error': 'search warming up',
@@ -6160,7 +6193,8 @@ def schedule_keyword_review_item_dispatch(review_item):
     global bot_loop
 
     try:
-        if bot_loop is None or not bot_loop.is_running():
+        is_running = getattr(bot_loop, 'is_running', None)
+        if bot_loop is None or not callable(is_running) or not is_running():
             return False, '机器人事件循环未运行'
 
         import asyncio

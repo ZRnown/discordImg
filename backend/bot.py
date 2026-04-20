@@ -2446,6 +2446,7 @@ class DiscordBotClient(discord.Client):
             channel = getattr(message, 'channel', None)
             guild = getattr(message, 'guild', None)
             author = getattr(message, 'author', None)
+            parent_channel = getattr(channel, 'parent', None)
 
             account_names = []
             for client in target_clients or []:
@@ -2498,6 +2499,8 @@ class DiscordBotClient(discord.Client):
                     'author_display_name': getattr(author, 'display_name', None) or getattr(author, 'name', None) or '',
                     'channel_id': getattr(channel, 'id', None),
                     'channel_name': getattr(channel, 'name', None) or '',
+                    'parent_channel_id': getattr(channel, 'parent_id', None) or getattr(parent_channel, 'id', None),
+                    'parent_channel_name': getattr(parent_channel, 'name', None) or '',
                     'guild_id': getattr(guild, 'id', None),
                     'guild_name': getattr(guild, 'name', None) or '',
                 },
@@ -5246,9 +5249,6 @@ class DiscordBotClient(discord.Client):
             # 与图片消息阶段超时保持一致，避免内部请求先于外层保护提前中断。
             timeout = aiohttp.ClientTimeout(total=IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                # 准备图片数据
-                form_data = aiohttp.FormData()
-                form_data.add_field('image', image_data, filename='image.jpg', content_type='image/jpeg')
                 # 使用配置的阈值
                 # 使用用户个性化阈值，如果没有则使用全局默认值
                 api_threshold = config.DISCORD_SIMILARITY_THRESHOLD
@@ -5265,19 +5265,24 @@ class DiscordBotClient(discord.Client):
                     except Exception as e:
                         logger.error(f'获取用户相似度设置失败: {e}')
 
-                form_data.add_field('threshold', str(api_threshold))
-                form_data.add_field('limit', '1')  # Discord只返回最相似的一个结果
-                if self.user_id:
-                    form_data.add_field('user_id', str(self.user_id))
-
-                # 如果指定了用户店铺权限，添加到请求中
-                if user_shops:
-                    form_data.add_field('user_shops', json.dumps(user_shops))
-
                 # 调用后端实时图片检索服务。
                 request_url = f'{config.BACKEND_API_URL.replace("/api", "")}/search_similar'
-                for attempt in range(2):
-                    async with session.post(request_url, data=form_data) as resp:
+                max_attempts = 5
+                retry_delay = 1.0
+
+                def _build_form_data():
+                    form = aiohttp.FormData()
+                    form.add_field('image', image_data, filename='image.jpg', content_type='image/jpeg')
+                    form.add_field('threshold', str(api_threshold))
+                    form.add_field('limit', '1')  # Discord只返回最相似的一个结果
+                    if self.user_id:
+                        form.add_field('user_id', str(self.user_id))
+                    if user_shops:
+                        form.add_field('user_shops', json.dumps(user_shops))
+                    return form
+
+                for attempt in range(max_attempts):
+                    async with session.post(request_url, data=_build_form_data()) as resp:
                         if resp.status == 200:
                             result = await resp.json()
                             return result
@@ -5290,8 +5295,9 @@ class DiscordBotClient(discord.Client):
                             attempt + 1,
                             compact_response_text or '<empty>',
                         )
-                        if resp.status in {429, 503} and attempt == 0:
-                            await asyncio.sleep(1.0)
+                        if resp.status in {429, 503} and attempt < max_attempts - 1:
+                            await asyncio.sleep(retry_delay)
+                            retry_delay = min(retry_delay * 1.8, 6.0)
                             continue
                         return None
 

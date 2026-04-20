@@ -270,6 +270,94 @@ class SearchSimilarTextApiTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
 
+    def test_search_similar_recovers_from_catalog_warming_up(self):
+        from backend import live_retrieval as live_retrieval_module
+
+        class WarmableRetriever:
+            def __init__(self):
+                self.warmed = False
+
+            def search(self, image_path, query_text="", top_k=5, threshold=0.0, user_shops=None):
+                if not self.warmed:
+                    raise live_retrieval_module.LiveCatalogPreparingError(
+                        "live catalog is warming up"
+                    )
+                return {
+                    "strategy": "dummy",
+                    "catalog_size": 1,
+                    "ranked_products": [
+                        {
+                            "product_id": 3,
+                            "image_index": 0,
+                            "score": 0.98,
+                        }
+                    ],
+                    "top1_score": 0.98,
+                    "top1_margin": 0.0,
+                }
+
+        warmable_retriever = WarmableRetriever()
+
+        def warm_live_image_retriever(*args, **kwargs):
+            warmable_retriever.warmed = True
+            return {"catalog_size": 1}
+
+        with patch.object(app_module.db, "get_connection", self._fake_get_connection), patch.object(
+            app_module,
+            "get_current_user",
+            return_value=None,
+        ), patch.object(
+            app_module,
+            "build_user_shop_scope",
+            return_value=["Store  No.1"],
+        ), patch.object(
+            app_module.db,
+            "has_global_image_filter_images",
+            return_value=False,
+            create=True,
+        ), patch.object(
+            app_module.db,
+            "has_user_website_filter_images",
+            return_value=False,
+            create=True,
+        ), patch.object(
+            app_module.db,
+            "get_total_indexed_images",
+            return_value=0,
+        ), patch.object(
+            app_module.db,
+            "generate_website_urls",
+            return_value=[],
+            create=True,
+        ), patch.object(
+            app_module.db,
+            "add_search_history",
+            return_value=1,
+            create=True,
+        ), patch(
+            "backend.live_retrieval.get_live_image_retriever",
+            return_value=warmable_retriever,
+        ), patch(
+            "backend.live_retrieval.warm_live_image_retriever",
+            side_effect=warm_live_image_retriever,
+        ):
+            response = self.client.post(
+                "/search_similar",
+                data={
+                    "threshold": "0.2",
+                    "limit": "5",
+                    "user_id": "123",
+                    "image": (io.BytesIO(b"fake-image-bytes"), "query.jpg"),
+                },
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data["success"])
+        self.assertEqual(data["totalResults"], 1)
+        self.assertEqual(data["results"][0]["product"]["id"], 3)
+
     def test_text_search_preserves_shop_name_whitespace_in_scope_filter(self):
         with patch.object(app_module.db, "get_connection", self._fake_get_connection), patch.object(
             app_module,
