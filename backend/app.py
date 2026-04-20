@@ -4744,12 +4744,15 @@ def update_user_settings():
         keyword_reply = data.get('keyword_reply_enabled')
         image_reply = data.get('image_reply_enabled')
         bark_enabled = data.get('bark_enabled')
+        keyword_reply_send_best_match_image = data.get('keyword_reply_send_best_match_image')
         if keyword_reply is not None:
             keyword_reply = 1 if keyword_reply else 0
         if image_reply is not None:
             image_reply = 1 if image_reply else 0
         if bark_enabled is not None:
             bark_enabled = 1 if bark_enabled else 0
+        if keyword_reply_send_best_match_image is not None:
+            keyword_reply_send_best_match_image = 1 if keyword_reply_send_best_match_image else 0
 
         success = db.update_user_settings(
             user_id=user['id'],
@@ -4770,6 +4773,7 @@ def update_user_settings():
             bark_enabled=bark_enabled,
             bark_server_url=data.get('bark_server_url'),
             bark_device_key=data.get('bark_device_key'),
+            keyword_reply_send_best_match_image=keyword_reply_send_best_match_image,
         )
 
         if success:
@@ -5579,6 +5583,25 @@ def get_search_history():
         logger.error(f"获取搜索历史失败: {e}")
         return jsonify({'error': str(e)}), 500
 
+
+@app.route('/api/skipped_image_history', methods=['GET'])
+def get_skipped_image_history():
+    """获取被略过的图片历史记录（支持分页）"""
+    try:
+        limit = int(request.args.get('limit', 20))
+        limit = max(1, min(limit, 100))
+        offset = max(int(request.args.get('offset', 0)), 0)
+        page = max(int(request.args.get('page', 1)), 1)
+
+        if 'page' in request.args and 'offset' not in request.args:
+            offset = (page - 1) * limit
+
+        result = db.get_skipped_image_history(limit, offset)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"获取略过图片历史失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/search_similar_text', methods=['POST'])
 def search_similar_text():
     """根据文字关键词搜索相似商品"""
@@ -5891,6 +5914,18 @@ def delete_search_history(history_id):
         logger.error(f"删除搜索历史失败: {e}")
         return jsonify({'error': str(e)}), 500
 
+
+@app.route('/api/skipped_image_history/<int:history_id>', methods=['DELETE'])
+def delete_skipped_image_history(history_id):
+    """删除单条略过图片历史"""
+    try:
+        if db.delete_skipped_image_history(history_id):
+            return jsonify({'success': True})
+        return jsonify({'error': '记录不存在'}), 404
+    except Exception as e:
+        logger.error(f"删除略过图片历史失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/search_history', methods=['DELETE'])
 def clear_search_history():
     """清空所有搜索历史"""
@@ -5901,6 +5936,18 @@ def clear_search_history():
             return jsonify({'error': '清空失败'}), 500
     except Exception as e:
         logger.error(f"清空搜索历史失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/skipped_image_history', methods=['DELETE'])
+def clear_skipped_image_history():
+    """清空所有略过图片历史"""
+    try:
+        if db.clear_skipped_image_history():
+            return jsonify({'success': True})
+        return jsonify({'error': '清空失败'}), 500
+    except Exception as e:
+        logger.error(f"清空略过图片历史失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/logs/stream')

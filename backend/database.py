@@ -389,6 +389,30 @@ class Database:
             except Exception:
                 pass
 
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS skipped_image_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    query_image_path TEXT NOT NULL,
+                    matched_product_id INTEGER,
+                    matched_image_index INTEGER,
+                    similarity REAL NOT NULL,
+                    threshold REAL NOT NULL,
+                    discord_message_id TEXT,
+                    discord_channel_id TEXT,
+                    discord_channel_name TEXT DEFAULT '',
+                    discord_author_id TEXT,
+                    discord_author_name TEXT DEFAULT '',
+                    message_content TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (matched_product_id) REFERENCES products (id) ON DELETE SET NULL
+                )
+            ''')
+
+            try:
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_skipped_image_history_time ON skipped_image_history(created_at DESC)')
+            except Exception:
+                pass
+
             # 创建全局延迟配置表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS global_reply_config (
@@ -878,6 +902,11 @@ class Database:
 
             try:
                 cursor.execute('ALTER TABLE user_settings ADD COLUMN bark_device_key TEXT DEFAULT \'\'')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN keyword_reply_send_best_match_image INTEGER DEFAULT 0')
             except sqlite3.OperationalError:
                 pass
 
@@ -2276,6 +2305,143 @@ class Database:
                 return True
         except Exception as e:
             logger.error(f"清空搜索历史失败: {e}")
+            return False
+
+    def add_skipped_image_history(
+        self,
+        query_image_path: str,
+        similarity: float,
+        threshold: float,
+        discord_message_id: Optional[str] = None,
+        discord_channel_id: Optional[str] = None,
+        discord_channel_name: str = '',
+        discord_author_id: Optional[str] = None,
+        discord_author_name: str = '',
+        message_content: str = '',
+        matched_product_id: Optional[int] = None,
+        matched_image_index: Optional[int] = None,
+    ) -> Optional[int]:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    INSERT INTO skipped_image_history (
+                        query_image_path, matched_product_id, matched_image_index,
+                        similarity, threshold, discord_message_id, discord_channel_id,
+                        discord_channel_name, discord_author_id, discord_author_name,
+                        message_content
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''',
+                    (
+                        query_image_path,
+                        matched_product_id,
+                        matched_image_index,
+                        similarity,
+                        threshold,
+                        discord_message_id,
+                        discord_channel_id,
+                        discord_channel_name or '',
+                        discord_author_id,
+                        discord_author_name or '',
+                        message_content or '',
+                    ),
+                )
+                conn.commit()
+                return cursor.lastrowid
+        except Exception as e:
+            logger.error(f"保存略过图片历史失败: {e}")
+            return None
+
+    def get_skipped_image_history(self, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT COUNT(*) FROM skipped_image_history')
+                total = cursor.fetchone()[0]
+
+                cursor.execute(
+                    '''
+                    SELECT
+                        sih.id,
+                        sih.query_image_path,
+                        sih.matched_product_id,
+                        sih.matched_image_index,
+                        sih.similarity,
+                        sih.threshold,
+                        sih.discord_message_id,
+                        sih.discord_channel_id,
+                        sih.discord_channel_name,
+                        sih.discord_author_id,
+                        sih.discord_author_name,
+                        sih.message_content,
+                        sih.created_at,
+                        p.title,
+                        p.english_title,
+                        p.product_url AS weidian_url
+                    FROM skipped_image_history sih
+                    LEFT JOIN products p ON sih.matched_product_id = p.id
+                    ORDER BY sih.created_at DESC, sih.id DESC
+                    LIMIT ? OFFSET ?
+                    ''',
+                    (limit, offset),
+                )
+                rows = cursor.fetchall()
+                history = []
+                for row in rows:
+                    history.append({
+                        'id': row[0],
+                        'query_image_path': row[1],
+                        'matched_product_id': row[2],
+                        'matched_image_index': row[3],
+                        'similarity': float(row[4]),
+                        'threshold': float(row[5]),
+                        'discord_message_id': row[6] or '',
+                        'discord_channel_id': row[7] or '',
+                        'discord_channel_name': row[8] or '',
+                        'discord_author_id': row[9] or '',
+                        'discord_author_name': row[10] or '',
+                        'message_content': row[11] or '',
+                        'created_at': row[12],
+                        'title': row[13] or '',
+                        'english_title': row[14] or '',
+                        'weidian_url': row[15] or '',
+                    })
+
+                return {
+                    'history': history,
+                    'total': total,
+                    'has_more': offset + limit < total,
+                }
+        except Exception as e:
+            logger.error(f"获取略过图片历史失败: {e}")
+            return {
+                'history': [],
+                'total': 0,
+                'has_more': False,
+            }
+
+    def delete_skipped_image_history(self, history_id: int) -> bool:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('DELETE FROM skipped_image_history WHERE id = ?', (history_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"删除略过图片历史失败: {e}")
+            return False
+
+    def clear_skipped_image_history(self) -> bool:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('DELETE FROM skipped_image_history')
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"清空略过图片历史失败: {e}")
             return False
 
     # ===== 用户权限管理方法 =====
@@ -5294,7 +5460,8 @@ class Database:
                            global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
                            keyword_reply_enabled, image_reply_enabled, keyword_match_limit,
                            global_reply_template, numeric_filter_keyword, filter_size_min, filter_size_max,
-                           bark_enabled, bark_server_url, bark_device_key
+                           bark_enabled, bark_server_url, bark_device_key,
+                           keyword_reply_send_best_match_image
                     FROM user_settings WHERE user_id = ?
                 ''', (user_id,))
                 row = cursor.fetchone()
@@ -5318,6 +5485,7 @@ class Database:
                         'bark_enabled': row[14] if row[14] is not None else 0,
                         'bark_server_url': row[15] or 'https://api.day.app',
                         'bark_device_key': row[16] or '',
+                        'keyword_reply_send_best_match_image': row[17] if row[17] is not None else 0,
                     }
                 # 如果用户没有设置，返回默认值
                 return {
@@ -5338,6 +5506,7 @@ class Database:
                     'bark_enabled': 0,
                     'bark_server_url': 'https://api.day.app',
                     'bark_device_key': '',
+                    'keyword_reply_send_best_match_image': 0,
                 }
         except Exception as e:
             logger.error(f"获取用户设置失败: {e}")
@@ -5359,6 +5528,7 @@ class Database:
                 'bark_enabled': 0,
                 'bark_server_url': 'https://api.day.app',
                 'bark_device_key': '',
+                'keyword_reply_send_best_match_image': 0,
             }
 
     def update_user_settings(self, user_id: int, download_threads: int = None,
@@ -5370,7 +5540,8 @@ class Database:
                            global_reply_template: str = None, numeric_filter_keyword: str = None,
                            filter_size_min: int = None, filter_size_max: int = None,
                            bark_enabled: int = None, bark_server_url: str = None,
-                           bark_device_key: str = None) -> bool:
+                           bark_device_key: str = None,
+                           keyword_reply_send_best_match_image: int = None) -> bool:
         """更新用户个性化设置"""
         try:
             with self.get_connection() as conn:
@@ -5453,6 +5624,10 @@ class Database:
                         update_fields.append('bark_device_key = ?')
                         params.append(bark_device_key)
 
+                    if keyword_reply_send_best_match_image is not None:
+                        update_fields.append('keyword_reply_send_best_match_image = ?')
+                        params.append(keyword_reply_send_best_match_image)
+
                     if update_fields:
                         update_fields.append('updated_at = CURRENT_TIMESTAMP')
                         sql = f'UPDATE user_settings SET {", ".join(update_fields)} WHERE user_id = ?'
@@ -5465,8 +5640,9 @@ class Database:
                         (user_id, download_threads, feature_extract_threads, discord_similarity_threshold,
                          global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
                          keyword_reply_enabled, image_reply_enabled, keyword_match_limit, global_reply_template,
-                         numeric_filter_keyword, filter_size_min, filter_size_max, bark_enabled, bark_server_url, bark_device_key)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         numeric_filter_keyword, filter_size_min, filter_size_max, bark_enabled, bark_server_url, bark_device_key,
+                         keyword_reply_send_best_match_image)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         user_id,
                         download_threads or 4,
@@ -5486,6 +5662,7 @@ class Database:
                         bark_enabled if bark_enabled is not None else 0,
                         bark_server_url if bark_server_url is not None else 'https://api.day.app',
                         bark_device_key or '',
+                        keyword_reply_send_best_match_image if keyword_reply_send_best_match_image is not None else 0,
                     ))
 
                 conn.commit()

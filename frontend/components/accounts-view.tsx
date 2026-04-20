@@ -309,6 +309,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
     global_reply_min_delay: 1.0,
     global_reply_max_delay: 3.0,
     keyword_match_limit: 0,
+    keyword_reply_send_best_match_image: false,
     bark_enabled: false,
     bark_server_url: 'https://api.day.app',
     bark_device_key: '',
@@ -461,6 +462,9 @@ const formatWebsiteForEdit = (website: any) => ({
       global_reply_min_delay: delayRange.minDelay,
       global_reply_max_delay: delayRange.maxDelay,
       keyword_match_limit: Number(data?.keyword_match_limit ?? prev.keyword_match_limit ?? 0),
+      keyword_reply_send_best_match_image: hasOwn(data, 'keyword_reply_send_best_match_image')
+        ? toBoolean(data.keyword_reply_send_best_match_image)
+        : toBoolean(prev.keyword_reply_send_best_match_image),
     }
 
     if (hasOwn(data, 'bark_enabled')) {
@@ -2948,6 +2952,23 @@ const formatWebsiteForEdit = (website: any) => ({
             </div>
 
             <div className="space-y-4 border-t pt-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label htmlFor="keyword-best-match-image" className="text-sm font-medium">发送最相似商品图</Label>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    开启后，图片命中商品时会额外带上该商品里和客户来图最相似的一张图
+                  </p>
+                </div>
+                <Switch
+                  id="keyword-best-match-image"
+                  checked={settings.keyword_reply_send_best_match_image}
+                  onCheckedChange={(checked) => setSettings(prev => ({
+                    ...prev,
+                    keyword_reply_send_best_match_image: checked,
+                  }))}
+                />
+              </div>
+
               <div className="flex items-center justify-between">
                 <div>
                   <Label htmlFor="bark-enabled" className="text-sm font-medium">iPhone Bark 通知</Label>

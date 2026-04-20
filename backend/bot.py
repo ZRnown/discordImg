@@ -2933,6 +2933,293 @@ class DiscordBotClient(discord.Client):
             f"📱 Bark通知已发送: 账号:{account_name} | 类型:{interaction_label} | 发送者:{sender_name}"
         )
 
+    @staticmethod
+    def _coerce_list(value):
+        if not value:
+            return []
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                return []
+            return parsed if isinstance(parsed, list) else []
+        return []
+
+    async def _download_file_to_discord(
+        self,
+        session,
+        url,
+        *,
+        filename=None,
+        error_label='下载图片失败',
+    ):
+        try:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.read()
+        except Exception as e:
+            logger.error(f"{error_label}: {e}")
+            return None
+
+        safe_filename = filename or (url.split('/')[-1] or 'image.jpg')
+        return discord.File(io.BytesIO(data), safe_filename)
+
+    async def _build_product_image_file(
+        self,
+        session,
+        product_id,
+        image_index,
+        image_path_map=None,
+    ):
+        if product_id is None or image_index is None:
+            return None
+
+        idx_key = image_index
+        try:
+            idx_key = int(image_index)
+        except (TypeError, ValueError):
+            idx_key = image_index
+
+        if image_path_map is None:
+            image_path_map = {}
+            try:
+                try:
+                    from database import db
+                except ImportError:
+                    from .database import db
+                product_images = db.get_product_images(product_id)
+                image_path_map = {
+                    img.get('image_index'): img.get('image_path')
+                    for img in product_images
+                }
+            except Exception as e:
+                logger.error(f"获取商品图片路径失败: {e}")
+
+        image_path = image_path_map.get(idx_key)
+        if image_path and os.path.exists(image_path):
+            return discord.File(image_path, f"{product_id}_{idx_key}.jpg")
+
+        img_url = f"{config.BACKEND_API_URL}/api/image/{product_id}/{idx_key}"
+        return await self._download_file_to_discord(
+            session,
+            img_url,
+            filename=f"{product_id}_{idx_key}.jpg",
+            error_label='下载商品图片失败',
+        )
+
+    async def _collect_best_match_reply_files(self, session, product, match_context):
+        if not isinstance(match_context, dict) or match_context.get('type') != 'image':
+            return []
+
+        product_id = product.get('id') if isinstance(product, dict) else None
+        matched_index = match_context.get('best_match_image_index')
+        if product_id is None or matched_index is None:
+            return []
+
+        best_file = await self._build_product_image_file(session, product_id, matched_index)
+        return [best_file] if best_file is not None else []
+
+    async def _collect_custom_reply_files(
+        self,
+        session,
+        product,
+        custom_reply,
+        website_config,
+        channel_id,
+    ):
+        files = []
+        skip_images = bool(custom_reply and custom_reply.get('skip_images'))
+        reply_type = custom_reply.get('reply_type') if isinstance(custom_reply, dict) else None
+        is_custom_mode = bool(custom_reply) and reply_type in {
+            'custom_only',
+            'text',
+            'text_and_link',
+            'image',
+        }
+        is_product_custom_mode = bool(
+            isinstance(custom_reply, dict) and custom_reply.get('product_data') is not None
+        )
+
+        if is_custom_mode and not _should_send_product_custom_images(
+            custom_reply,
+            product,
+            channel_id,
+            website_config=website_config,
+        ):
+            skip_images = True
+
+        if not is_custom_mode or skip_images:
+            return files
+
+        if not is_product_custom_mode:
+            image_url = str(custom_reply.get('image_url') or '').strip()
+            if not image_url:
+                return files
+            downloaded = await self._download_file_to_discord(
+                session,
+                image_url,
+                error_label='下载全局自定义回复图片失败',
+            )
+            return [downloaded] if downloaded is not None else []
+
+        image_source = product.get('imageSource') or product.get('image_source') or 'product'
+        product_id = product.get('id')
+
+        if image_source == 'custom':
+            for url in self._coerce_list(product.get('customImageUrls') or product.get('custom_image_urls'))[:10]:
+                downloaded = await self._download_file_to_discord(
+                    session,
+                    url,
+                    error_label='下载自定义图片失败',
+                )
+                if downloaded is not None:
+                    files.append(downloaded)
+            return files
+
+        if image_source == 'upload':
+            for filename in self._coerce_list(product.get('uploaded_reply_images'))[:10]:
+                img_url = f"{config.BACKEND_API_URL}/api/custom_reply_image/{product_id}/{filename}"
+                downloaded = await self._download_file_to_discord(
+                    session,
+                    img_url,
+                    filename=filename,
+                    error_label='下载上传的自定义回复图片失败',
+                )
+                if downloaded is not None:
+                    files.append(downloaded)
+            return files
+
+        indexes = self._coerce_list(product.get('selectedImageIndexes') or product.get('custom_reply_images'))
+        if not product_id or not indexes:
+            return files
+
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+            product_images = db.get_product_images(product_id)
+            image_path_map = {
+                img.get('image_index'): img.get('image_path')
+                for img in product_images
+            }
+        except Exception as e:
+            logger.error(f"获取商品图片路径失败: {e}")
+            image_path_map = {}
+
+        for index in indexes[:10]:
+            downloaded = await self._build_product_image_file(
+                session,
+                product_id,
+                index,
+                image_path_map=image_path_map,
+            )
+            if downloaded is not None:
+                files.append(downloaded)
+
+        return files
+
+    async def _collect_reply_files(
+        self,
+        *,
+        product,
+        custom_reply,
+        website_config,
+        channel_id,
+        match_context,
+        user_settings,
+    ):
+        image_download_timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=image_download_timeout) as session:
+            if (
+                isinstance(match_context, dict)
+                and match_context.get('type') == 'image'
+                and bool(user_settings.get('keyword_reply_send_best_match_image'))
+            ):
+                best_match_files = await self._collect_best_match_reply_files(
+                    session,
+                    product,
+                    match_context,
+                )
+                if best_match_files:
+                    return best_match_files
+
+            return await self._collect_custom_reply_files(
+                session,
+                product,
+                custom_reply,
+                website_config,
+                channel_id,
+            )
+
+    def _resolve_image_skip_threshold(self, website_configs, base_threshold):
+        thresholds = []
+        for website_config in website_configs or []:
+            website_threshold = _coerce_float(website_config.get('image_similarity_threshold'))
+            thresholds.append(website_threshold if website_threshold is not None else base_threshold)
+        thresholds = [value for value in thresholds if value is not None]
+        return min(thresholds) if thresholds else base_threshold
+
+    def _store_skipped_query_image(self, image_bytes, filename):
+        ext = os.path.splitext(filename or '')[1].lower()
+        if not ext:
+            ext = '.jpg'
+        target_dir = os.path.join(config.DATA_DIR, 'skipped_image_queries')
+        os.makedirs(target_dir, exist_ok=True)
+        basename = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{random.randint(1000, 9999)}{ext}"
+        target_path = os.path.join(target_dir, basename)
+        with open(target_path, 'wb') as f:
+            f.write(image_bytes)
+        return target_path
+
+    async def _record_skipped_image_history(
+        self,
+        *,
+        image_data,
+        attachment,
+        message,
+        similarity,
+        threshold,
+        best_match=None,
+    ):
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+
+            query_image_path = await asyncio.to_thread(
+                self._store_skipped_query_image,
+                image_data,
+                getattr(attachment, 'filename', 'query.jpg'),
+            )
+            matched_product = best_match.get('product') if isinstance(best_match, dict) else None
+            matched_product_id = matched_product.get('id') if isinstance(matched_product, dict) else None
+            matched_image_index = None
+            if isinstance(best_match, dict):
+                matched_image_index = best_match.get('imageIndex', best_match.get('image_index'))
+
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                db.add_skipped_image_history,
+                query_image_path,
+                float(similarity),
+                float(threshold),
+                str(getattr(message, 'id', '') or ''),
+                str(getattr(getattr(message, 'channel', None), 'id', '') or ''),
+                str(getattr(getattr(message, 'channel', None), 'name', '') or ''),
+                str(getattr(getattr(message, 'author', None), 'id', '') or ''),
+                self._get_message_author_name(message),
+                str(getattr(message, 'content', '') or ''),
+                matched_product_id,
+                matched_image_index,
+            )
+        except Exception as e:
+            logger.error(f"记录略过图片历史失败: {e}")
+
     async def schedule_reply(
         self,
         message,
@@ -3334,146 +3621,14 @@ class DiscordBotClient(discord.Client):
                             # 必须用 target_channel.send(..., reference=message) 才会使用 target_client(Sender) 的 token
                             try:
                                 # === 1. 收集所有要发送的图片文件 ===
-                                files = []
-                                image_download_timeout = aiohttp.ClientTimeout(total=10)
-
-                                # 检查是否是自定义模式，且有图片
-                                skip_images = bool(active_custom_reply and active_custom_reply.get('skip_images'))
-                                reply_type = active_custom_reply.get('reply_type') if isinstance(active_custom_reply, dict) else None
-                                is_custom_mode = bool(active_custom_reply) and reply_type in {
-                                    'custom_only',
-                                    'text',
-                                    'text_and_link',
-                                    'image',
-                                }
-                                is_product_custom_mode = bool(
-                                    isinstance(active_custom_reply, dict) and active_custom_reply.get('product_data') is not None
-                                )
-                                if is_custom_mode and not _should_send_product_custom_images(
-                                    active_custom_reply,
-                                    active_product,
-                                    message.channel.id,
+                                files = await self._collect_reply_files(
+                                    product=active_product,
+                                    custom_reply=active_custom_reply,
                                     website_config=website_config,
-                                ):
-                                    skip_images = True
-    
-                                if is_custom_mode and not skip_images:
-                                    if is_product_custom_mode:
-                                        # 获取图片信息
-                                        # 注意：如果是从 search_similar_text 返回的 product，字段名可能已经格式化
-                                        # 需要兼容处理
-    
-                                        # 1. 尝试获取自定义图片链接
-                                        custom_urls = active_product.get('customImageUrls', []) or active_product.get('custom_image_urls', [])
-                                        if isinstance(custom_urls, str):
-                                            try:
-                                                custom_urls = json.loads(custom_urls)
-                                            except Exception:
-                                                custom_urls = []
-    
-                                        image_source = active_product.get('imageSource') or active_product.get('image_source') or 'product'
-    
-                                        # 收集图片文件（Discord限制最多10个文件）
-                                        if image_source == 'custom' and custom_urls:
-                                            for url in custom_urls[:10]:  # 限制最多10张
-                                                if len(files) >= 10:
-                                                    break
-                                                try:
-                                                    async with aiohttp.ClientSession(timeout=image_download_timeout) as session:
-                                                        async with session.get(url) as resp:
-                                                            if resp.status == 200:
-                                                                data = await resp.read()
-                                                                filename = url.split('/')[-1] or 'image.jpg'
-                                                                files.append(discord.File(io.BytesIO(data), filename))
-                                                except Exception as e:
-                                                    logger.error(f"下载自定义图片失败: {e}")
-    
-                                        elif image_source == 'upload':
-                                            # 处理上传的自定义回复图片
-                                            pid = active_product.get('id')
-    
-                                            # 从 uploaded_reply_images 字段获取上传的图片文件名列表
-                                            uploaded_filenames = active_product.get('uploaded_reply_images', [])
-                                            if isinstance(uploaded_filenames, str):
-                                                try:
-                                                    uploaded_filenames = json.loads(uploaded_filenames)
-                                                except Exception:
-                                                    # 如果解析失败，且它本身就是列表，则保持原样，否则置空
-                                                    uploaded_filenames = uploaded_filenames if isinstance(uploaded_filenames, list) else []
-    
-                                            if pid and uploaded_filenames:
-                                                # 使用新的API端点获取上传的自定义回复图片
-                                                for filename in uploaded_filenames[:10]:  # 限制最多10张
-                                                    if len(files) >= 10:
-                                                        break
-                                                    img_url = f"{config.BACKEND_API_URL}/api/custom_reply_image/{pid}/{filename}"
-                                                    try:
-                                                        async with aiohttp.ClientSession(timeout=image_download_timeout) as session:
-                                                            async with session.get(img_url) as resp:
-                                                                if resp.status == 200:
-                                                                    data = await resp.read()
-                                                                    files.append(discord.File(io.BytesIO(data), filename))
-                                                    except Exception as e:
-                                                        logger.error(f"下载上传的自定义回复图片失败: {e}")
-    
-                                        elif image_source == 'product':
-                                            # 处理商品图集中的图片
-                                            pid = active_product.get('id')
-                                            indexes = active_product.get('selectedImageIndexes', []) or active_product.get('custom_reply_images', [])
-    
-                                            if isinstance(indexes, str):
-                                                try:
-                                                    indexes = json.loads(indexes)
-                                                except Exception:
-                                                    indexes = []
-    
-                                            if pid and indexes:
-                                                image_path_map = {}
-                                                try:
-                                                    product_images = db.get_product_images(pid)
-                                                    image_path_map = {
-                                                        img.get('image_index'): img.get('image_path')
-                                                        for img in product_images
-                                                    }
-                                                except Exception as e:
-                                                    logger.error(f"获取商品图片路径失败: {e}")
-    
-                                                # 优先使用本地图片路径，失败再回退到HTTP获取
-                                                for idx in indexes[:10]:  # 限制最多10张
-                                                    if len(files) >= 10:
-                                                        break
-                                                    idx_key = idx
-                                                    try:
-                                                        idx_key = int(idx)
-                                                    except (TypeError, ValueError):
-                                                        idx_key = idx
-    
-                                                    image_path = image_path_map.get(idx_key)
-                                                    if image_path and os.path.exists(image_path):
-                                                        files.append(discord.File(image_path, f"{pid}_{idx_key}.jpg"))
-                                                        continue
-    
-                                                    img_url = f"{config.BACKEND_API_URL}/api/image/{pid}/{idx_key}"
-                                                    try:
-                                                        async with aiohttp.ClientSession(timeout=image_download_timeout) as session:
-                                                            async with session.get(img_url) as resp:
-                                                                if resp.status == 200:
-                                                                    data = await resp.read()
-                                                                    files.append(discord.File(io.BytesIO(data), f"{pid}_{idx_key}.jpg"))
-                                                    except Exception as e:
-                                                        logger.error(f"下载商品图片失败: {e}")
-                                    else:
-                                        image_url = str(active_custom_reply.get('image_url') or '').strip()
-                                        if image_url:
-                                            try:
-                                                async with aiohttp.ClientSession(timeout=image_download_timeout) as session:
-                                                    async with session.get(image_url) as resp:
-                                                        if resp.status == 200:
-                                                            data = await resp.read()
-                                                            filename = image_url.split('/')[-1] or 'image.jpg'
-                                                            files.append(discord.File(io.BytesIO(data), filename))
-                                            except Exception as e:
-                                                logger.error(f"下载全局自定义回复图片失败: {e}")
+                                    channel_id=message.channel.id,
+                                    match_context=match_context,
+                                    user_settings=user_settings,
+                                )
     
                                 # === 2. 发送文字和所有图片（合并为一条消息） ===
                                 if not response_content and not files:
@@ -4622,6 +4777,20 @@ class DiscordBotClient(discord.Client):
                 f'results_count={len(result.get("results", [])) if result else 0}'
             )
 
+            user_settings = {}
+            user_threshold = config.DISCORD_SIMILARITY_THRESHOLD
+            if self.user_id:
+                try:
+                    try:
+                        from database import db
+                    except ImportError:
+                        from .database import db
+                    user_settings = await asyncio.get_event_loop().run_in_executor(None, db.get_user_settings, self.user_id)
+                    if user_settings and user_settings.get('discord_similarity_threshold') is not None:
+                        user_threshold = user_settings['discord_similarity_threshold']
+                except Exception as e:
+                    logger.error(f'获取用户相似度设置失败: {e}')
+
             if result:
                 blocked_filter_match = result.get('blocked_filter_match')
                 blocked_website_filter_matches = result.get('blocked_website_filter_matches') or []
@@ -4638,28 +4807,28 @@ class DiscordBotClient(discord.Client):
                 except Exception:
                     pass
 
+            skip_threshold = self._resolve_image_skip_threshold(website_configs, user_threshold)
+
             if result and result.get('success') and result.get('results'):
                 # 获取最佳匹配结果
                 best_match = result['results'][0]
                 similarity = best_match.get('similarity', 0)
 
-                # 获取用户个性化相似度阈值，如果没有则使用全局默认值
-                user_threshold = config.DISCORD_SIMILARITY_THRESHOLD  # 默认值
-                if self.user_id:
-                    try:
-                        try:
-                            from database import db
-                        except ImportError:
-                            from .database import db
-                        # 异步获取用户设置
-                        user_settings = await asyncio.get_event_loop().run_in_executor(None, db.get_user_settings, self.user_id)
-                        if user_settings:
-                            if user_settings.get('discord_similarity_threshold') is not None:
-                                user_threshold = user_settings['discord_similarity_threshold']
-                    except Exception as e:
-                        logger.error(f'获取用户相似度设置失败: {e}')
-
                 logger.debug(f'最佳匹配相似度: {similarity:.4f}, 用户阈值: {user_threshold:.4f}')
+
+                if similarity < skip_threshold:
+                    await self._record_skipped_image_history(
+                        image_data=image_data,
+                        attachment=attachment,
+                        message=message,
+                        similarity=similarity,
+                        threshold=skip_threshold,
+                        best_match=best_match,
+                    )
+                    logger.info(
+                        f'⏭️ 图片命中未过阈值，已记录历史: 相似度 {similarity:.3f} < {skip_threshold:.3f} | 频道: {message.channel.name}'
+                    )
+                    return
 
                 product = best_match.get('product', {})
                 product_title = (product.get('title') or '').strip()
@@ -4699,34 +4868,21 @@ class DiscordBotClient(discord.Client):
                 elif isinstance(product_rule_enabled, (int, float)):
                     product_rule_enabled = bool(product_rule_enabled)
 
-                def _coerce_list(value):
-                    if not value:
-                        return []
-                    if isinstance(value, list):
-                        return value
-                    if isinstance(value, str):
-                        try:
-                            parsed = json.loads(value)
-                        except json.JSONDecodeError:
-                            return []
-                        return parsed if isinstance(parsed, list) else []
-                    return []
-
                 custom_reply = None
                 image_source = product.get('imageSource') or product.get('image_source') or 'product'
                 has_custom_images = False
 
                 if image_source == 'upload':
-                    uploaded_imgs = _coerce_list(product.get('uploaded_reply_images'))
+                    uploaded_imgs = self._coerce_list(product.get('uploaded_reply_images'))
                     product['uploaded_reply_images'] = uploaded_imgs
                     has_custom_images = bool(uploaded_imgs)
                 elif image_source == 'custom':
-                    custom_urls = _coerce_list(product.get('customImageUrls') or product.get('custom_image_urls'))
+                    custom_urls = self._coerce_list(product.get('customImageUrls') or product.get('custom_image_urls'))
                     if custom_urls:
                         product['customImageUrls'] = custom_urls
                     has_custom_images = bool(custom_urls)
                 elif image_source == 'product':
-                    selected_indexes = _coerce_list(product.get('selectedImageIndexes') or product.get('custom_reply_images'))
+                    selected_indexes = self._coerce_list(product.get('selectedImageIndexes') or product.get('custom_reply_images'))
                     if selected_indexes:
                         product['selectedImageIndexes'] = selected_indexes
                     has_custom_images = bool(selected_indexes)
@@ -4753,6 +4909,7 @@ class DiscordBotClient(discord.Client):
                         'type': 'image',
                         'similarity': similarity,
                         'base_threshold': user_threshold,
+                        'best_match_image_index': best_match.get('imageIndex', best_match.get('image_index')),
                         'website_filter_matches': blocked_website_filter_matches,
                         'ocr_text': ocr_text,
                     },
@@ -4761,6 +4918,18 @@ class DiscordBotClient(discord.Client):
                 )
 
                 logger.debug(f'图片识别完成，相似度: {similarity:.4f}')
+            elif result and result.get('success'):
+                await self._record_skipped_image_history(
+                    image_data=image_data,
+                    attachment=attachment,
+                    message=message,
+                    similarity=0.0,
+                    threshold=skip_threshold,
+                    best_match=None,
+                )
+                logger.info(
+                    f'⏭️ 图片未命中任何商品，已记录历史: 阈值 {skip_threshold:.3f} | 频道: {message.channel.name}'
+                )
 
         except Exception as e:
             logger.error(f'Error handling image: {e}')
