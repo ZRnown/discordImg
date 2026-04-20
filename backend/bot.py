@@ -11,6 +11,7 @@ import sqlite3
 import re
 import sys
 from datetime import datetime
+from types import SimpleNamespace
 from urllib.parse import quote
 
 try:
@@ -506,6 +507,202 @@ def _build_keyword_direct_send_payload(
         payload['repeat_product_ids'] = list(repeat_product_ids)
 
     return payload
+
+
+def _build_keyword_review_message_proxy(review_item):
+    payload = review_item.get('payload') or {}
+    message_payload = payload.get('message') or {}
+
+    def _parse_message_time(value):
+        if isinstance(value, datetime):
+            return value
+        if not value:
+            return datetime.now().astimezone()
+        text = str(value).strip()
+        if not text:
+            return datetime.now().astimezone()
+        normalized = text.replace('Z', '+00:00')
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return datetime.now().astimezone()
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=datetime.now().astimezone().tzinfo)
+        return parsed
+
+    guild_id = _coerce_int(message_payload.get('guild_id') or review_item.get('guild_id'), None)
+    channel_id = _coerce_int(message_payload.get('channel_id') or review_item.get('channel_id'), None)
+    parent_channel_id = _coerce_int(message_payload.get('parent_channel_id'), None)
+    author_id = _coerce_int(
+        message_payload.get('author_id')
+        or review_item.get('sender_id')
+        or review_item.get('author_id'),
+        None,
+    )
+
+    guild_name = (
+        message_payload.get('guild_name')
+        or review_item.get('guild_name')
+        or ''
+    )
+    channel_name = (
+        message_payload.get('channel_name')
+        or review_item.get('channel_name')
+        or ''
+    )
+    parent_channel_name = (
+        message_payload.get('parent_channel_name')
+        or review_item.get('parent_channel_name')
+        or ''
+    )
+    author_name = (
+        message_payload.get('author_display_name')
+        or message_payload.get('author_name')
+        or review_item.get('sender_name')
+        or ''
+    )
+
+    guild = SimpleNamespace(
+        id=guild_id,
+        name=guild_name,
+    )
+    parent_channel = None
+    if parent_channel_id is not None:
+        parent_channel = SimpleNamespace(
+            id=parent_channel_id,
+            name=parent_channel_name,
+            guild=guild,
+        )
+
+    channel = SimpleNamespace(
+        id=channel_id,
+        name=channel_name,
+        guild=guild,
+        parent_id=parent_channel_id,
+        parent=parent_channel,
+    )
+
+    author = SimpleNamespace(
+        id=author_id,
+        name=message_payload.get('author_name') or author_name,
+        display_name=author_name,
+        bot=False,
+    )
+
+    message_content = (
+        message_payload.get('content')
+        or review_item.get('source_content')
+        or ''
+    )
+    message = SimpleNamespace(
+        id=_coerce_int(message_payload.get('id') or review_item.get('message_id'), None),
+        content=message_content,
+        clean_content=message_payload.get('clean_content') or message_content,
+        created_at=_parse_message_time(message_payload.get('created_at')),
+        author=author,
+        channel=channel,
+        guild=guild,
+        jump_url=message_payload.get('jump_url') or '',
+        mentions=[],
+        mention_everyone=False,
+        reference=None,
+        type=getattr(discord.MessageType, 'default', None),
+    )
+    return message
+
+
+def _select_keyword_review_dispatch_client(review_item):
+    user_id = _coerce_int(review_item.get('user_id'), None)
+    if user_id is None:
+        return None
+
+    preferred_account_ids = {
+        _coerce_int(account_id, None)
+        for account_id in (review_item.get('account_ids') or [])
+        if _coerce_int(account_id, None) is not None
+    }
+
+    running_clients = []
+    for client in bot_clients:
+        if getattr(client, 'user_id', None) != user_id:
+            continue
+        if not getattr(client, 'running', False):
+            continue
+        is_closed = getattr(client, 'is_closed', None)
+        if callable(is_closed) and is_closed():
+            continue
+        running_clients.append(client)
+    if not running_clients:
+        return None
+
+    for client in running_clients:
+        if preferred_account_ids and getattr(client, 'account_id', None) in preferred_account_ids:
+            return client
+
+    return running_clients[0]
+
+
+async def dispatch_keyword_review_item(review_item):
+    """审批通过后，按当前网站配置和账号状态发送待审关键词回复。"""
+    item_id = _coerce_int(review_item.get('id'), None)
+    try:
+        try:
+            from database import db
+        except ImportError:
+            from .database import db
+
+        client = _select_keyword_review_dispatch_client(review_item)
+        if client is None:
+            raise RuntimeError('没有可用的在线机器人账号来发送审核通过的消息')
+
+        payload = review_item.get('payload') or {}
+        website_config = payload.get('website_config') or {}
+        if not isinstance(website_config, dict):
+            website_config = {}
+        if not website_config.get('id'):
+            website_config = {
+                'id': review_item.get('website_id'),
+            }
+
+        message = _build_keyword_review_message_proxy(review_item)
+        product = payload.get('product') or {}
+        custom_reply = payload.get('custom_reply')
+        match_context = payload.get('match_context')
+
+        success = await client.schedule_reply(
+            message,
+            product,
+            custom_reply,
+            match_context,
+            website_configs_override=[website_config],
+            skip_filters=True,
+            skip_repeat_checks=True,
+            skip_review_check=True,
+            force_plain_send=True,
+        )
+        if item_id:
+            db.update_keyword_reply_review_item_status(
+                item_id,
+                'sent' if success else 'failed',
+                error_message=None if success else '审批后发送失败',
+            )
+        return success
+    except Exception as e:
+        logger.error(f"审批后发送关键词回复失败: {e}")
+        if item_id:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+            try:
+                db.update_keyword_reply_review_item_status(
+                    item_id,
+                    'failed',
+                    error_message=str(e),
+                )
+            except Exception:
+                pass
+        return False
 
 
 def _build_multi_reply_content(author_id, reply_contents, reply_mode):
@@ -2220,6 +2417,119 @@ class DiscordBotClient(discord.Client):
         )
         return False
 
+    def _queue_keyword_review_item(
+        self,
+        *,
+        message,
+        product,
+        custom_reply,
+        website_config,
+        reply_content,
+        target_clients,
+        selected_sender_ids,
+        reply_mode,
+        files=None,
+        match_context=None,
+        prevalidated_batch=False,
+        broadcast_mode=False,
+        thread_reply_enabled=False,
+        cooldown_channel_id=None,
+        batch_repeat_records=None,
+        repeat_product_ids=None,
+    ) -> int:
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+
+            channel = getattr(message, 'channel', None)
+            guild = getattr(message, 'guild', None)
+            author = getattr(message, 'author', None)
+
+            account_names = []
+            for client in target_clients or []:
+                client_user = getattr(client, 'user', None)
+                client_name = getattr(client_user, 'name', None) or getattr(client, 'account_id', None)
+                if client_name is not None:
+                    account_names.append(str(client_name))
+
+            if not account_names and selected_sender_ids:
+                account_names = [str(item) for item in selected_sender_ids if item is not None]
+
+            preview_text = (reply_content or '').strip()
+            if not preview_text:
+                file_count = len(files or [])
+                preview_text = f"[图片 {file_count}]" if file_count else ''
+
+            message_time = getattr(message, 'created_at', None)
+            if isinstance(message_time, datetime):
+                try:
+                    message_time = message_time.astimezone()
+                except Exception:
+                    pass
+                message_time_text = message_time.isoformat()
+            else:
+                message_time_text = ''
+
+            payload = {
+                'product': product,
+                'custom_reply': custom_reply,
+                'website_config': website_config,
+                'match_context': match_context,
+                'selected_sender_ids': list(selected_sender_ids or []),
+                'reply_mode': reply_mode,
+                'files_count': len(files or []),
+                'prevalidated_batch': bool(prevalidated_batch),
+                'broadcast_mode': bool(broadcast_mode),
+                'thread_reply_enabled': bool(thread_reply_enabled),
+                'cooldown_channel_id': cooldown_channel_id,
+                'batch_repeat_records': [
+                    list(item)
+                    for item in (batch_repeat_records or [])
+                ],
+                'repeat_product_ids': list(repeat_product_ids or []),
+                'message': {
+                    'id': getattr(message, 'id', None),
+                    'content': getattr(message, 'content', None) or '',
+                    'created_at': message_time_text,
+                    'author_id': getattr(author, 'id', None),
+                    'author_name': getattr(author, 'name', None) or '',
+                    'author_display_name': getattr(author, 'display_name', None) or getattr(author, 'name', None) or '',
+                    'channel_id': getattr(channel, 'id', None),
+                    'channel_name': getattr(channel, 'name', None) or '',
+                    'guild_id': getattr(guild, 'id', None),
+                    'guild_name': getattr(guild, 'name', None) or '',
+                },
+            }
+
+            review_item = {
+                'user_id': self.user_id,
+                'website_id': website_config.get('id'),
+                'channel_id': str(getattr(channel, 'id', '') or ''),
+                'guild_id': str(getattr(guild, 'id', '') or ''),
+                'guild_name': str(getattr(guild, 'name', '') or ''),
+                'channel_name': str(getattr(channel, 'name', '') or ''),
+                'account_ids': list(selected_sender_ids or []),
+                'account_names': account_names,
+                'sender_id': getattr(author, 'id', None),
+                'sender_name': (
+                    getattr(author, 'display_name', None)
+                    or getattr(author, 'name', None)
+                    or ''
+                ),
+                'content': preview_text,
+                'source_content': getattr(message, 'content', None) or '',
+                'message_id': getattr(message, 'id', None),
+                'reply_mode': reply_mode,
+                'status': 'pending',
+                'payload': payload,
+            }
+            return db.add_keyword_reply_review_item(review_item)
+        except Exception as e:
+            logger.error(f"写入关键词人工审核队列失败: {e}")
+            return 0
+
     def _should_ignore_mass_or_activity_message(self, message):
         """屏蔽 @everyone/@here 与 Discord 活动/系统类消息。"""
         if message is None:
@@ -2627,6 +2937,10 @@ class DiscordBotClient(discord.Client):
         custom_reply=None,
         match_context=None,
         website_configs_override=None,
+        skip_filters=False,
+        skip_repeat_checks=False,
+        skip_review_check=False,
+        force_plain_send=False,
     ):
         """调度回复到合适的发送账号 (增强版：带详细状态诊断)"""
 
@@ -2703,7 +3017,13 @@ class DiscordBotClient(discord.Client):
                     if website_repeat_window > channel_repeat_window:
                         channel_repeat_window = website_repeat_window
 
-            if not prevalidated_batch and channel_repeat_window and author_id and repeat_product_ids:
+            if (
+                not skip_repeat_checks
+                and not prevalidated_batch
+                and channel_repeat_window
+                and author_id
+                and repeat_product_ids
+            ):
                 for pid in repeat_product_ids:
                     if await _is_recent_repeat(author_id, pid, message.channel.id, channel_repeat_window):
                         logger.info(
@@ -2713,7 +3033,7 @@ class DiscordBotClient(discord.Client):
                         return False
 
             global_image_filters = []
-            if not prevalidated_batch and match_context and match_context.get('type') == 'image':
+            if not skip_filters and not prevalidated_batch and match_context and match_context.get('type') == 'image':
                 try:
                     global_filters = await asyncio.get_event_loop().run_in_executor(None, db.get_message_filters)
                     global_image_filters = [
@@ -2735,7 +3055,7 @@ class DiscordBotClient(discord.Client):
                 ):
                     logger.debug("消息被过滤(全局图片相似度)")
                     return False
-                if not prevalidated_batch and match_context and match_context.get('type') == 'image':
+                if not skip_filters and not prevalidated_batch and match_context and match_context.get('type') == 'image':
                     website_filter_matches = match_context.get('website_filter_matches') or []
                     matched_filter = next(
                         (m for m in website_filter_matches if str(m.get('website_id')) == str(website_config.get('id'))),
@@ -2753,7 +3073,7 @@ class DiscordBotClient(discord.Client):
                                 continue
                         except Exception:
                             continue
-                if not prevalidated_batch and match_context and match_context.get('type') == 'image':
+                if not skip_filters and not prevalidated_batch and match_context and match_context.get('type') == 'image':
                     similarity = _coerce_float(match_context.get('similarity')) or 0.0
                     base_threshold = _coerce_float(match_context.get('base_threshold'))
                     if base_threshold is None:
@@ -2864,7 +3184,8 @@ class DiscordBotClient(discord.Client):
                         f"thread_reply_enabled={1 if thread_reply_enabled else 0}"
                     )
                     if (
-                        not prevalidated_batch
+                        not skip_filters
+                        and not prevalidated_batch
                         and website_filters
                         and self._filters_block_message(message, website_filters, match_context=match_context)
                     ):
@@ -2967,6 +3288,39 @@ class DiscordBotClient(discord.Client):
                                 thread_reply_enabled=thread_reply_enabled,
                             )
                             reply_target_channel = reply_target_channel or target_channel
+
+                            if (
+                                website_config
+                                and _coerce_bool(website_config.get('keyword_review_enabled', 0), False)
+                                and not skip_review_check
+                            ):
+                                queued_review_id = await asyncio.to_thread(
+                                    self._queue_keyword_review_item,
+                                    message=message,
+                                    product=active_product,
+                                    custom_reply=active_custom_reply,
+                                    website_config=website_config,
+                                    reply_content=response_content,
+                                    target_clients=[target_client],
+                                    selected_sender_ids=selected_sender_ids,
+                                    reply_mode=reply_mode,
+                                    files=None,
+                                    match_context=match_context,
+                                    prevalidated_batch=prevalidated_batch,
+                                    broadcast_mode=broadcast_mode,
+                                    thread_reply_enabled=thread_reply_enabled,
+                                    cooldown_channel_id=cooldown_channel_id,
+                                    batch_repeat_records=batch_repeat_records,
+                                    repeat_product_ids=repeat_product_ids,
+                                )
+                                if queued_review_id:
+                                    logger.info(
+                                        f"📝 [进入人工审核] 网站:{website_config.get('name')} "
+                                        f"频道:{message.channel.id} 队列ID:{queued_review_id}"
+                                    )
+                                    sent_any = True
+                                    continue
+
                             should_apply_delay = not (broadcast_mode and target_index > 0)
                             if should_apply_delay:
                                 async with reply_target_channel.typing():
@@ -3126,7 +3480,7 @@ class DiscordBotClient(discord.Client):
                                     continue
     
                                 explicit_mentions = bool(active_custom_reply and active_custom_reply.get('explicit_mentions'))
-                                send_plain_message = _should_send_plain_keyword_message(
+                                send_plain_message = force_plain_send or _should_send_plain_keyword_message(
                                     prevalidated_batch=prevalidated_batch,
                                     explicit_mentions=explicit_mentions,
                                     reply_mode=reply_mode,
@@ -3142,7 +3496,7 @@ class DiscordBotClient(discord.Client):
                                         response_content,
                                     )
                                     response_content = direct_payload['content']
-    
+
                                 send_kwargs = {
                                     'content': response_content if response_content else None,
                                     'files': files if files else None,
@@ -4397,6 +4751,7 @@ class DiscordBotClient(discord.Client):
                         'ocr_text': ocr_text,
                     },
                     website_configs_override=website_configs,
+                    skip_review_check=True,
                 )
 
                 logger.debug(f'图片识别完成，相似度: {similarity:.4f}')

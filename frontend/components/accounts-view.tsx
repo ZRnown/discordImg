@@ -50,7 +50,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
-import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit, Clock, ChevronDown, ChevronRight } from "lucide-react"
+import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit, Clock, ChevronDown, ChevronRight, ShieldCheck } from "lucide-react"
 
 type NumericRangeFilterValue = {
   keyword: string
@@ -334,6 +334,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
   const [editingWebsite, setEditingWebsite] = useState<any>(null)
   const [newWebsite, setNewWebsite] = useState(createWebsiteConfigFromTemplateKey(DEFAULT_WEBSITE_TEMPLATE_KEY))
   const [websiteChannels, setWebsiteChannels] = useState<{[key: number]: string[]}>({})
+  const [websiteChannelBindings, setWebsiteChannelBindings] = useState<{[key: number]: any[]}>({})
   const [channelInputs, setChannelInputs] = useState<{[key: number]: string}>({})
   const [channelToRemove, setChannelToRemove] = useState<{webId: number, chanId: string} | null>(null)
   const [replyModes, setReplyModes] = useState<{[key: number]: string}>({})
@@ -549,6 +550,7 @@ const formatWebsiteForEdit = (website: any) => ({
 
       // 后端已包含channels和accounts信息
       const channels: {[key: number]: string[]} = {}
+      const channelBindings: {[key: number]: any[]} = {}
       const accounts: {[key: number]: any[]} = {}
       const filters: {[key: number]: any[]} = {}
       const replyModes: {[key: number]: string} = {}
@@ -562,6 +564,7 @@ const formatWebsiteForEdit = (website: any) => ({
 
       websites.forEach((website: any) => {
         channels[website.id] = website.channels || []
+        channelBindings[website.id] = website.channel_bindings || []
         accounts[website.id] = website.accounts || []
         replyModes[website.id] = website.reply_mode ?? 'rotation'
         rotationInputs[website.id] = String(website.rotation_interval ?? 180)
@@ -606,6 +609,7 @@ const formatWebsiteForEdit = (website: any) => ({
       startTransition(() => {
         setWebsites(websites)
         setWebsiteChannels(channels)
+        setWebsiteChannelBindings(channelBindings)
         setWebsiteAccounts(accounts)
         setWebsiteFilters(filters)
         setWebsiteBlockedUsers(blockedUsersMap)
@@ -1821,6 +1825,20 @@ const formatWebsiteForEdit = (website: any) => ({
     }, 450)
   }
 
+  const applyWebsiteChannelBindingsState = (websiteId: number, bindings: any[]) => {
+    const nextBindings = Array.isArray(bindings) ? bindings : []
+    setWebsiteChannelBindings(prev => ({
+      ...prev,
+      [websiteId]: nextBindings,
+    }))
+    setWebsiteChannels(prev => ({
+      ...prev,
+      [websiteId]: nextBindings
+        .map((binding: any) => String(binding?.channel_id ?? binding?.channelId ?? binding?.id ?? binding ?? '').trim())
+        .filter(Boolean),
+    }))
+  }
+
   const handleAddChannel = async (websiteId: number, channelId: string) => {
     if (!channelId.trim()) {
       toast.warning("频道ID不能为空")
@@ -1837,10 +1855,16 @@ const formatWebsiteForEdit = (website: any) => ({
       if (res.ok) {
         toast.success('频道绑定已添加')
         // 立即更新前端状态，而不是重新获取所有数据
-        setWebsiteChannels(prev => ({
-          ...prev,
-          [websiteId]: [...(prev[websiteId] || []), channelId.trim()]
-        }))
+        const nextBinding = {
+          id: `${websiteId}:${channelId.trim()}`,
+          website_id: websiteId,
+          channel_id: channelId.trim(),
+          keyword_review_enabled: 0,
+        }
+        applyWebsiteChannelBindingsState(websiteId, [
+          ...(websiteChannelBindings[websiteId] || []),
+          nextBinding,
+        ])
         setChannelInputs(prev => ({ ...prev, [websiteId]: '' }))
       } else {
         toast.error(getApiErrorMessage(data, '添加失败'))
@@ -1873,10 +1897,13 @@ const formatWebsiteForEdit = (website: any) => ({
       if (res.ok) {
         toast.success('频道绑定已移除')
         // 立即更新前端状态，而不是重新获取所有数据
-        setWebsiteChannels(prev => ({
-          ...prev,
-          [webId]: prev[webId]?.filter(id => id !== chanId) || []
-        }))
+        applyWebsiteChannelBindingsState(
+          webId,
+          (websiteChannelBindings[webId] || []).filter((binding: any) => {
+            const bindingChannelId = String(binding?.channel_id ?? binding?.channelId ?? binding?.id ?? '').trim()
+            return bindingChannelId !== chanId
+          }),
+        )
       } else {
         toast.error(getApiErrorMessage(data, '移除失败'))
       }
@@ -1884,6 +1911,55 @@ const formatWebsiteForEdit = (website: any) => ({
       toast.error(getApiErrorMessage(e, '网络错误'))
     } finally {
       setChannelToRemove(null)
+    }
+  }
+
+  const handleToggleChannelReviewWindow = async (websiteId: number, channelId: string, enabled: boolean) => {
+    const normalizedChannelId = channelId.includes('discord.com/channels/')
+      ? channelId.split('/').filter(Boolean).pop() || channelId
+      : channelId
+    const previousBindings = websiteChannelBindings[websiteId] || []
+    const optimisticBindings = previousBindings.map((binding: any) => {
+      const bindingChannelId = String(binding?.channel_id ?? binding?.channelId ?? binding?.id ?? '').trim()
+      if (bindingChannelId !== normalizedChannelId) {
+        return binding
+      }
+      return {
+        ...binding,
+        keyword_review_enabled: enabled ? 1 : 0,
+      }
+    })
+
+    applyWebsiteChannelBindingsState(websiteId, optimisticBindings)
+
+    try {
+      const res = await fetch(`/api/websites/${websiteId}/channels/${normalizedChannelId}/review-window`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ enabled }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        applyWebsiteChannelBindingsState(websiteId, previousBindings)
+        toast.error(getApiErrorMessage(data, '更新审核开关失败'))
+        return
+      }
+
+      if (data.binding) {
+        const nextBindings = previousBindings.map((binding: any) => {
+          const bindingChannelId = String(binding?.channel_id ?? binding?.channelId ?? binding?.id ?? '').trim()
+          if (bindingChannelId !== normalizedChannelId) {
+            return binding
+          }
+          return data.binding
+        })
+        applyWebsiteChannelBindingsState(websiteId, nextBindings)
+      }
+      toast.success(data?.message || (enabled ? '审核窗口已开启' : '审核窗口已关闭'))
+    } catch (e) {
+      applyWebsiteChannelBindingsState(websiteId, previousBindings)
+      toast.error(getApiErrorMessage(e, '网络错误'))
     }
   }
 
@@ -3790,20 +3866,34 @@ const formatWebsiteForEdit = (website: any) => ({
                       </div>
 
                       <div className="flex flex-wrap gap-2">
-                        {(websiteChannels[website.id] || []).map((channelId: string) => (
-                          <div key={channelId} className="flex items-center gap-1 bg-muted rounded px-2 py-1">
-                            <Hash className="w-3 h-3" />
-                            <span className="text-xs font-mono">{channelId}</span>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-4 w-4 p-0"
-                              onClick={() => confirmRemoveChannel(website.id, channelId)}
-                            >
-                              <X className="w-3 h-3" />
-                            </Button>
-                          </div>
-                        ))}
+                        {(websiteChannelBindings[website.id] || websiteChannels[website.id] || []).map((binding: any) => {
+                          const channelId = String(binding?.channel_id ?? binding?.channelId ?? binding?.id ?? binding ?? '').trim()
+                          const reviewEnabled = toBoolean(binding?.keyword_review_enabled)
+                          return (
+                            <div key={`${website.id}-${channelId}`} className="flex items-center gap-2 bg-muted rounded px-2 py-1 border">
+                              <Hash className="w-3 h-3" />
+                              <span className="text-xs font-mono">{channelId}</span>
+                              <div className="flex items-center gap-1 rounded bg-background/60 px-2 py-0.5">
+                                <ShieldCheck className={`w-3 h-3 ${reviewEnabled ? 'text-emerald-600' : 'text-muted-foreground'}`} />
+                                <span className="text-[10px] text-muted-foreground">审核</span>
+                                <Switch
+                                  checked={reviewEnabled}
+                                  onCheckedChange={(checked) => {
+                                    void handleToggleChannelReviewWindow(website.id, channelId, checked)
+                                  }}
+                                />
+                              </div>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-4 w-4 p-0"
+                                onClick={() => confirmRemoveChannel(website.id, channelId)}
+                              >
+                                <X className="w-3 h-3" />
+                              </Button>
+                            </div>
+                          )
+                        })}
                       </div>
                     </div>
 

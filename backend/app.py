@@ -23,6 +23,7 @@ import numpy as np
 import logging
 import sys
 from datetime import datetime
+from types import SimpleNamespace
 
 # 自动加载.env文件
 try:
@@ -582,10 +583,10 @@ enable_optional_pillow_image_plugins(log=logger)
 # 机器人相关变量
 # [修改] 从 bot 模块导入列表，确保 app.py 和 bot.py 操作同一个列表对象
 try:
-    from bot import bot_clients, bot_tasks, get_all_cooldowns
+    from bot import bot_clients, bot_tasks, get_all_cooldowns, dispatch_keyword_review_item
 except ModuleNotFoundError as import_error:
     if import_error.name == 'bot':
-        from .bot import bot_clients, bot_tasks, get_all_cooldowns
+        from .bot import bot_clients, bot_tasks, get_all_cooldowns, dispatch_keyword_review_item
     else:
         raise
 bot_running = False  # 标记机器人是否正在运行
@@ -852,12 +853,11 @@ def initialize_runtime():
     except Exception as e:
         print(f"⚠️ [系统] 状态重置失败: {e}")
 
-    # 4. 【异步】预热AI模型（不阻塞Flask启动）
-    import threading
-    def async_warmup_ai():
+    # 4. 预热AI模型与实时检索目录，确保服务对外时已经可用
+    def warmup_ai():
         global ai_model_ready
         try:
-            print("🤖 [后台] 正在预热AI模型...")
+            print("🤖 [系统] 正在预热AI模型...")
             get_global_feature_extractor()
             ai_model_ready = True
             try:
@@ -879,18 +879,18 @@ def initialize_runtime():
                 if should_run_startup_cache_warmup(config, strategy_name):
                     startup_limit = get_backfill_limit(config, 'RETRIEVAL_CACHE_STARTUP_LIMIT')
                     batch_text = f" limit={startup_limit}" if startup_limit else ""
-                    print(f"🧠 [后台] 正在预热 {strategy_name} 商品缓存{batch_text}...")
+                    print(f"🧠 [系统] 正在预热 {strategy_name} 商品缓存{batch_text}...")
                     summary = backfill_product_image_retrieval_cache(
                         db,
                         strategy_name,
                         limit=startup_limit,
                     )
                     print(
-                        f"✅ [后台] {strategy_name} 商品缓存预热完成: "
+                        f"✅ [系统] {strategy_name} 商品缓存预热完成: "
                         f"processed={summary['processed']} skipped={summary['skipped']} failed={summary['failed']}"
                     )
                 elif strategy_requires_persisted_catalog_cache(strategy_name):
-                    print(f"⏭️ [后台] 已跳过 {strategy_name} 启动缓存预热")
+                    print(f"⏭️ [系统] 已跳过 {strategy_name} 启动缓存预热")
 
                 if getattr(config, 'LIVE_IMAGE_SEARCH_STARTUP_PREPARE_CATALOG', True):
                     try:
@@ -901,14 +901,14 @@ def initialize_runtime():
                         else:
                             raise
 
-                    print(f"🧠 [后台] 正在预热 {strategy_name} 实时检索目录...")
+                    print(f"🧠 [系统] 正在预热 {strategy_name} 实时检索目录...")
                     warm_summary = warm_live_image_retriever(db, strategy_name)
                     print(
-                        f"✅ [后台] {strategy_name} 实时检索目录预热完成: "
+                        f"✅ [系统] {strategy_name} 实时检索目录预热完成: "
                         f"catalog_size={warm_summary.get('catalog_size', 0)}"
                     )
 
-                print("✅ [后台] AI模型预热完成，系统已就绪")
+                print("✅ [系统] AI模型预热完成，系统已就绪")
 
                 if should_run_startup_cache_compaction(config, strategy_name):
                     cleanup_summary = db.compact_product_image_retrieval_cache(strategy_name)
@@ -924,18 +924,17 @@ def initialize_runtime():
                             cleanup_summary.get('deleted_rows', 0),
                         )
                 elif strategy_requires_persisted_catalog_cache(strategy_name):
-                    print(f"⏭️ [后台] 已跳过 {strategy_name} 启动缓存清理")
+                    print(f"⏭️ [系统] 已跳过 {strategy_name} 启动缓存清理")
 
                 _start_auto_retrieval_cache_backfill()
             except Exception as cache_error:
                 logger.warning("商品检索缓存预热失败: %s", cache_error)
         except Exception as e:
-            print(f"⚠️ [后台] AI预热失败: {e}")
+            print(f"⚠️ [系统] AI预热失败: {e}")
             ai_model_ready = False
 
-    ai_warmup_thread = threading.Thread(target=async_warmup_ai, daemon=True)
-    ai_warmup_thread.start()
-    print("🚀 [系统] AI模型正在后台预热，Flask服务即将启动...")
+    warmup_ai()
+    print("🚀 [系统] AI模型已预热，Flask服务即将启动...")
 
     # 5. 启动后台清理线程
     cleanup_thread = threading.Thread(target=run_cleanup_task, daemon=True)
@@ -2078,6 +2077,7 @@ def get_website_configs():
         website_ids = [config['id'] for config in configs]
         account_bindings_map = db.get_website_account_bindings_map(current_user['id'])
         channel_bindings_map = db.get_website_channel_bindings_map(current_user['id'])
+        channel_bindings_details_map = db.get_website_channel_bindings_details_map(current_user['id'])
         user_settings_map = db.get_user_website_settings_map(current_user['id'], website_ids)
         user_website_stats_map = (
             db.get_user_website_reply_stats_map(current_user['id'], website_ids)
@@ -2094,6 +2094,7 @@ def get_website_configs():
 
             # 2) 频道绑定：只返回当前用户自己的绑定
             config['channels'] = channel_bindings_map.get(config_id, [])
+            config['channel_bindings'] = channel_bindings_details_map.get(config_id, [])
 
             # 2.5) 普通用户展示自己的网站回复统计，不展示管理员全局累计
             if current_user.get('role') != 'admin':
@@ -2384,6 +2385,80 @@ def remove_website_channel(config_id, channel_id):
             return jsonify({'error': '移除失败'}), 500
     except Exception as e:
         logger.error(f"移除网站频道绑定失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/websites/<int:config_id>/channels/<channel_id>/review-window', methods=['PUT'])
+def update_website_channel_review_window(config_id, channel_id):
+    """更新频道的关键词人工审核开关"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        data = request.get_json() or {}
+        enabled = data.get('enabled')
+        if enabled is None:
+            enabled = data.get('keyword_review_enabled')
+        if enabled is None:
+            return jsonify({'error': '审核开关状态不能为空'}), 400
+
+        if isinstance(enabled, str):
+            normalized_enabled = enabled.strip().lower()
+            if normalized_enabled in {'1', 'true', 'yes', 'on'}:
+                enabled = True
+            elif normalized_enabled in {'0', 'false', 'no', 'off'}:
+                enabled = False
+            else:
+                return jsonify({'error': '审核开关状态必须是布尔值'}), 400
+        else:
+            enabled = bool(enabled)
+
+        if 'discord.com/channels/' in channel_id:
+            parts = channel_id.rstrip('/').split('/')
+            if len(parts) >= 1:
+                channel_id = parts[-1]
+
+        current_user = get_current_user()
+        if current_user.get('role') == 'admin':
+            success = db.update_website_channel_binding_review_enabled(
+                config_id,
+                channel_id,
+                enabled=enabled,
+            )
+        else:
+            success = db.update_website_channel_binding_review_enabled(
+                config_id,
+                channel_id,
+                current_user['id'],
+                enabled,
+            )
+
+        if not success:
+            return jsonify({'error': '更新审核开关失败'}), 500
+
+        binding = next(
+            (
+                item
+                for item in db.get_website_channel_bindings_details(config_id, current_user['id'])
+                if str(item.get('channel_id')) == str(channel_id)
+            ),
+            None,
+        )
+        if binding is None and current_user.get('role') == 'admin':
+            binding = next(
+                (
+                    item
+                    for item in db.get_website_channel_bindings_details(config_id)
+                    if str(item.get('channel_id')) == str(channel_id)
+                ),
+                None,
+            )
+        return jsonify({
+            'success': True,
+            'message': '审核窗口已开启' if enabled else '审核窗口已关闭',
+            'binding': binding,
+        })
+    except Exception as e:
+        logger.error(f"更新频道审核窗口失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 # ===== 网站账号绑定API =====
@@ -2739,6 +2814,140 @@ def update_website_rotation(config_id):
             return jsonify({'error': '更新失败'}), 500
     except Exception as e:
         logger.error(f"更新网站轮换配置失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/keyword-review-items', methods=['GET'])
+def get_keyword_review_items():
+    """获取当前用户的关键词人工审核队列"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        current_user = get_current_user()
+        website_id = request.args.get('website_id', type=int)
+        status = (request.args.get('status') or 'pending').strip().lower()
+        if status in {'', 'all'}:
+            status = None
+
+        items = db.get_keyword_reply_review_items(
+            current_user['id'],
+            website_id=website_id,
+            status=status,
+        )
+        website_map = {
+            website['id']: website
+            for website in db.get_website_configs()
+        }
+
+        for item in items:
+            website = website_map.get(item.get('website_id')) or {}
+            item['website_name'] = website.get('display_name') or website.get('name') or ''
+            item['website_display_name'] = website.get('display_name') or ''
+            message_payload = (item.get('payload') or {}).get('message') or {}
+            item['message_time'] = message_payload.get('created_at') or item.get('created_at')
+            guild_name = item.get('guild_name') or message_payload.get('guild_name') or ''
+            channel_name = item.get('channel_name') or message_payload.get('channel_name') or ''
+            if guild_name and channel_name:
+                item['position'] = f'{guild_name} / #{channel_name}'
+            elif channel_name:
+                item['position'] = f'#{channel_name}'
+            else:
+                item['position'] = guild_name
+
+        return jsonify({'items': items})
+    except Exception as e:
+        logger.error(f"获取关键词审核队列失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/keyword-review-items/bulk-action', methods=['POST'])
+def bulk_action_keyword_review_items():
+    """批量审核关键词回复"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        current_user = get_current_user()
+        data = request.get_json() or {}
+        raw_item_ids = data.get('item_ids') or data.get('ids') or []
+        action = str(data.get('action') or '').strip().lower()
+
+        if not isinstance(raw_item_ids, list) or not raw_item_ids:
+            return jsonify({'error': '请选择要审核的消息'}), 400
+
+        normalized_action_map = {
+            'approve': 'approved',
+            'approved': 'approved',
+            'reject': 'rejected',
+            'rejected': 'rejected',
+        }
+        normalized_action = normalized_action_map.get(action)
+        if not normalized_action:
+            return jsonify({'error': '无效的审核动作'}), 400
+
+        results = []
+        for raw_item_id in raw_item_ids:
+            try:
+                item_id = int(raw_item_id)
+            except (TypeError, ValueError):
+                results.append({
+                    'item_id': raw_item_id,
+                    'success': False,
+                    'error': '无效的消息ID',
+                })
+                continue
+
+            item = db.get_keyword_reply_review_item(item_id, current_user['id'])
+            if not item:
+                results.append({
+                    'item_id': item_id,
+                    'success': False,
+                    'error': '消息不存在或无权限',
+                })
+                continue
+
+            if not db.update_keyword_reply_review_item_status(
+                item_id,
+                normalized_action,
+                reviewed_by_user_id=current_user['id'],
+            ):
+                results.append({
+                    'item_id': item_id,
+                    'success': False,
+                    'error': '更新审核状态失败',
+                })
+                continue
+
+            if normalized_action == 'approved':
+                scheduled, schedule_result = schedule_keyword_review_item_dispatch(item)
+                if not scheduled:
+                    db.update_keyword_reply_review_item_status(
+                        item_id,
+                        'failed',
+                        reviewed_by_user_id=current_user['id'],
+                        error_message=schedule_result,
+                    )
+                    results.append({
+                        'item_id': item_id,
+                        'success': False,
+                        'error': schedule_result,
+                    })
+                    continue
+
+            results.append({
+                'item_id': item_id,
+                'success': True,
+                'status': normalized_action,
+                'dispatched': normalized_action == 'approved',
+            })
+
+        failed_count = sum(1 for item in results if not item.get('success'))
+        return jsonify({
+            'success': failed_count == 0,
+            'message': '审核完成' if failed_count == 0 else '部分消息审核失败',
+            'results': results,
+        })
+    except Exception as e:
+        logger.error(f"批量审核关键词回复失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/websites/<int:config_id>/similarity', methods=['PUT'])
@@ -5325,7 +5534,9 @@ def search_similar_text():
         if not query:
             return jsonify({'error': 'Query is required'}), 400
 
-        if _should_ignore_keyword_search_query(query):
+        linked_item_id = extract_marketplace_item_id_from_text(query)
+
+        if not linked_item_id and _should_ignore_keyword_search_query(query):
             logger.debug(f'文字搜索忽略无效查询: "{query}"')
             return jsonify({
                 'success': True,
@@ -5342,7 +5553,8 @@ def search_similar_text():
         def _normalize_shop(value):
             if value is None:
                 return ''
-            return re.sub(r'\s+', ' ', str(value)).strip().lower()
+            # 保留店铺名内部空格，避免像 "Store  No.1" 这类名称在权限过滤时失配。
+            return str(value).strip().lower()
 
         scoped_shops = set()
         if isinstance(raw_user_shops, list):
@@ -5420,7 +5632,6 @@ def search_similar_text():
                 scoped_clause = f" AND LOWER(TRIM(COALESCE(shop_name, ''))) IN ({placeholders})"
                 scoped_params = tuple(scoped_shop_list)
 
-            linked_item_id = extract_marketplace_item_id_from_text(query)
             if linked_item_id:
                 cursor.execute("""
                     SELECT id, product_url, title, english_title, title_translations,
@@ -5943,6 +6154,25 @@ def stop_discord_bot(user_id=None):
 
     except Exception as e:
         logger.error(f"停止机器人流程出错: {e}")
+
+def schedule_keyword_review_item_dispatch(review_item):
+    """把审核通过的关键词回复交给机器人事件循环发送。"""
+    global bot_loop
+
+    try:
+        if bot_loop is None or not bot_loop.is_running():
+            return False, '机器人事件循环未运行'
+
+        import asyncio
+
+        future = asyncio.run_coroutine_threadsafe(
+            dispatch_keyword_review_item(review_item),
+            bot_loop,
+        )
+        return True, future
+    except Exception as e:
+        logger.error(f"调度审核通过消息失败: {e}")
+        return False, str(e)
 
 # ===== 机器人控制API =====
 

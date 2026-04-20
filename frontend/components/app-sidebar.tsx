@@ -1,6 +1,6 @@
 "use client"
 
-import { LayoutDashboard, Users, Search, ImageIcon, ListTree, ScrollText, Bot, Settings, TestTube, Store, Shield, Cog, BarChart3, Sparkles } from "lucide-react"
+import { LayoutDashboard, Users, Search, ImageIcon, ListTree, ScrollText, Bot, Settings, TestTube, Store, Shield, Cog, BarChart3, Sparkles, ShieldCheck } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -25,6 +25,7 @@ const baseMenuItems = [
   { id: "tutorial", icon: Sparkles, label: "新手教程" },
   { id: "dashboard", icon: BarChart3, label: "仪表盘" },
   { id: "accounts", icon: Users, label: "账号与规则" },
+  { id: "review-window", icon: ShieldCheck, label: "审核窗口" },
   { id: "scraper", icon: Search, label: "微店抓取" },
   { id: "image-search", icon: ImageIcon, label: "以图搜图" },
   { id: "shops", icon: Store, label: "店铺管理" },

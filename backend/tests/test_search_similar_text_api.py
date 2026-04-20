@@ -30,6 +30,8 @@ class SearchSimilarTextApiTestCase(unittest.TestCase):
                 english_title TEXT,
                 title_translations TEXT,
                 description TEXT,
+                partition_match_enabled BOOLEAN DEFAULT 0,
+                partition_match_rules TEXT,
                 ruleEnabled BOOLEAN,
                 min_delay INTEGER,
                 max_delay INTEGER,
@@ -121,6 +123,38 @@ class SearchSimilarTextApiTestCase(unittest.TestCase):
         )
         self.conn.execute(
             """
+            INSERT INTO products (
+                id, product_url, title, english_title, title_translations, description,
+                ruleEnabled, min_delay, max_delay, created_at, cnfans_url, shop_name,
+                custom_reply_text, custom_reply_images, custom_image_urls, image_source,
+                reply_scope, per_website_reply_settings, uploaded_reply_images, item_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                3,
+                "https://weidian.com/item.html?itemID=1407314815541575732",
+                "spider sweater knitwear",
+                "spider sweater knitwear",
+                json.dumps({"en": "spider sweater knitwear"}),
+                "demo spider product",
+                1,
+                1,
+                3,
+                "2026-04-06 00:00:00",
+                None,
+                "Store  No.1",
+                None,
+                None,
+                None,
+                "product",
+                "all",
+                None,
+                None,
+                "1407314815541575732",
+            ),
+        )
+        self.conn.execute(
+            """
             INSERT INTO product_images (id, product_id, image_path, image_index)
             VALUES (?, ?, ?, ?)
             """,
@@ -132,6 +166,13 @@ class SearchSimilarTextApiTestCase(unittest.TestCase):
             VALUES (?, ?, ?, ?)
             """,
             (2, 2, "/tmp/shark-0.jpg", 0),
+        )
+        self.conn.execute(
+            """
+            INSERT INTO product_images (id, product_id, image_path, image_index)
+            VALUES (?, ?, ?, ?)
+            """,
+            (3, 3, "/tmp/spider-0.jpg", 0),
         )
         self.conn.commit()
 
@@ -213,7 +254,7 @@ class SearchSimilarTextApiTestCase(unittest.TestCase):
             "get_total_indexed_images",
             return_value=0,
         ), patch(
-            "live_retrieval.get_live_image_retriever",
+            "backend.live_retrieval.get_live_image_retriever",
             return_value=DummyRetriever(),
         ):
             response = self.client.post(
@@ -228,6 +269,27 @@ class SearchSimilarTextApiTestCase(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
+
+    def test_text_search_preserves_shop_name_whitespace_in_scope_filter(self):
+        with patch.object(app_module.db, "get_connection", self._fake_get_connection), patch.object(
+            app_module,
+            "build_user_shop_scope",
+            return_value=["1773175595", "Store  No.1"],
+        ):
+            response = self.client.post(
+                "/api/search_similar_text",
+                json={
+                    "query": "spider sweater knitwear",
+                    "limit": 5,
+                    "user_id": 1,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data["success"])
+        self.assertEqual(data["total"], 1)
+        self.assertEqual(data["products"][0]["id"], 3)
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { DashboardView } from "@/components/dashboard-view"
 import { AccountsView } from "@/components/accounts-view"
+import { ReviewWindowView } from "@/components/review-window-view"
 import { ScraperView } from "@/components/scraper-view"
 import { ShopsView } from "@/components/shops-view"
 import { ImageSearchView } from "@/components/image-search-view"
@@ -276,6 +277,10 @@ export function AppPageClient() {
 
           <div style={{ display: currentView === "accounts" ? "block" : "none", height: "100%" }}>
             <AccountsView isActive={currentView === "accounts"} />
+          </div>
+
+          <div style={{ display: currentView === "review-window" ? "block" : "none", height: "100%" }}>
+            <ReviewWindowView isActive={currentView === "review-window"} />
           </div>
 
           <div style={{ display: currentView === "shops" ? "block" : "none", height: "100%" }}>

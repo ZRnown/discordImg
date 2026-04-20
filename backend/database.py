@@ -577,14 +577,23 @@ class Database:
                             website_id INTEGER NOT NULL,
                             channel_id TEXT NOT NULL,
                             user_id INTEGER,
+                            keyword_review_enabled INTEGER DEFAULT 0,
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE,
                             UNIQUE(website_id, channel_id, user_id)
                         )
                     ''')
                     cursor.execute('''
-                        INSERT OR IGNORE INTO website_channel_bindings (id, website_id, channel_id, user_id, created_at)
-                        SELECT id, website_id, channel_id, user_id, created_at FROM website_channel_bindings_old
+                        INSERT OR IGNORE INTO website_channel_bindings (
+                            id,
+                            website_id,
+                            channel_id,
+                            user_id,
+                            keyword_review_enabled,
+                            created_at
+                        )
+                        SELECT id, website_id, channel_id, user_id, 0, created_at
+                        FROM website_channel_bindings_old
                     ''')
                     cursor.execute("DROP TABLE website_channel_bindings_old")
                     logger.info("✅ 频道绑定表结构迁移完成")
@@ -598,11 +607,50 @@ class Database:
                     website_id INTEGER NOT NULL,
                     channel_id TEXT NOT NULL,
                     user_id INTEGER,
+                    keyword_review_enabled INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE,
                     UNIQUE(website_id, channel_id, user_id)
                 )
             ''')
+            try:
+                cursor.execute('ALTER TABLE website_channel_bindings ADD COLUMN keyword_review_enabled INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS keyword_reply_review_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    website_id INTEGER NOT NULL,
+                    channel_id TEXT NOT NULL,
+                    guild_id TEXT DEFAULT '',
+                    guild_name TEXT DEFAULT '',
+                    channel_name TEXT DEFAULT '',
+                    account_ids_json TEXT DEFAULT '[]',
+                    account_names TEXT DEFAULT '',
+                    sender_id TEXT DEFAULT '',
+                    sender_name TEXT DEFAULT '',
+                    content TEXT DEFAULT '',
+                    source_content TEXT DEFAULT '',
+                    message_id TEXT DEFAULT '',
+                    reply_mode TEXT DEFAULT 'keyword',
+                    status TEXT DEFAULT 'pending',
+                    payload_json TEXT NOT NULL,
+                    reviewed_by_user_id INTEGER DEFAULT NULL,
+                    error_message TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    reviewed_at TIMESTAMP DEFAULT NULL,
+                    sent_at TIMESTAMP DEFAULT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+                    FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE
+                )
+            ''')
+            try:
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_keyword_reply_review_items_user_status ON keyword_reply_review_items(user_id, status, created_at DESC)')
+            except sqlite3.OperationalError:
+                pass
 
             # 创建网站账号绑定表
             cursor.execute('''
@@ -2977,6 +3025,64 @@ class Database:
             logger.error(f"获取网站频道绑定失败: {e}")
             return []
 
+    def get_website_channel_bindings_details(self, website_id: int, user_id: int = None) -> List[Dict[str, Any]]:
+        """获取网站绑定的频道详情（包含审核开关）"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                if user_id is not None:
+                    cursor.execute(
+                        '''
+                        SELECT id, website_id, channel_id, user_id, keyword_review_enabled, created_at
+                        FROM website_channel_bindings
+                        WHERE website_id = ? AND user_id = ?
+                        ORDER BY created_at
+                        ''',
+                        (website_id, user_id),
+                    )
+                else:
+                    cursor.execute(
+                        '''
+                        SELECT id, website_id, channel_id, user_id, keyword_review_enabled, created_at
+                        FROM website_channel_bindings
+                        WHERE website_id = ?
+                        ORDER BY created_at
+                        ''',
+                        (website_id,),
+                    )
+                rows = []
+                for row in cursor.fetchall():
+                    item = dict(row)
+                    item['keyword_review_enabled'] = 1 if int(item.get('keyword_review_enabled') or 0) else 0
+                    rows.append(item)
+                return rows
+        except Exception as e:
+            logger.error(f"获取网站频道绑定详情失败: {e}")
+            return []
+
+    def get_website_channel_bindings_details_map(self, user_id: int) -> Dict[int, List[Dict[str, Any]]]:
+        """批量获取用户的网站频道绑定详情"""
+        bindings: Dict[int, List[Dict[str, Any]]] = {}
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    SELECT id, website_id, channel_id, user_id, keyword_review_enabled, created_at
+                    FROM website_channel_bindings
+                    WHERE user_id = ?
+                    ORDER BY website_id, created_at
+                    ''',
+                    (user_id,),
+                )
+                for row in cursor.fetchall():
+                    item = dict(row)
+                    item['keyword_review_enabled'] = 1 if int(item.get('keyword_review_enabled') or 0) else 0
+                    bindings.setdefault(item['website_id'], []).append(item)
+        except Exception as e:
+            logger.error(f"批量获取网站频道绑定详情失败: {e}")
+        return bindings
+
     def get_website_channel_bindings_map(self, user_id: int) -> Dict[int, List[str]]:
         """批量获取用户的网站频道绑定，避免逐站点查询"""
         bindings: Dict[int, List[str]] = {}
@@ -3009,6 +3115,48 @@ class Database:
                 return cursor.rowcount > 0
         except Exception as e:
             logger.error(f"添加网站频道绑定失败: {e}")
+            return False
+
+    def update_website_channel_binding_review_enabled(
+        self,
+        website_id: int,
+        channel_id: str,
+        user_id: int = None,
+        enabled: bool = True,
+    ) -> bool:
+        """更新网站频道的关键词人工审核开关"""
+        try:
+            normalized_channel_id = str(channel_id or '').strip()
+            if not normalized_channel_id:
+                return False
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                if user_id is None:
+                    cursor.execute(
+                        '''
+                        UPDATE website_channel_bindings
+                        SET keyword_review_enabled = ?
+                        WHERE website_id = ?
+                          AND channel_id = ?
+                        ''',
+                        (1 if enabled else 0, website_id, normalized_channel_id),
+                    )
+                else:
+                    cursor.execute(
+                        '''
+                        UPDATE website_channel_bindings
+                        SET keyword_review_enabled = ?
+                        WHERE website_id = ?
+                          AND channel_id = ?
+                          AND user_id = ?
+                        ''',
+                        (1 if enabled else 0, website_id, normalized_channel_id, user_id),
+                    )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"更新网站频道审核开关失败: {e}")
             return False
 
     def remove_website_channel_binding(self, website_id: int, channel_id: str, user_id: int) -> bool:
@@ -3079,10 +3227,11 @@ class Database:
                 for lookup_id in lookup_ids:
                     if user_id:
                         cursor.execute('''
-                            SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern,
+                        SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern,
                                    wc.badge_color, wc.reply_template, wc.reply_language,
                                    COALESCE(uws.image_similarity_threshold, wc.image_similarity_threshold) as image_similarity_threshold,
                                    COALESCE(uws.keyword_match_limit, NULL) as keyword_match_limit,
+                                   COALESCE(wcb.keyword_review_enabled, 0) as keyword_review_enabled,
                                    wc.blocked_role_ids, wc.rotation_interval, wc.rotation_enabled, wc.message_filters
                             FROM website_configs wc
                             JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
@@ -3093,8 +3242,9 @@ class Database:
                         ''', (lookup_id, user_id))
                     else:
                         cursor.execute('''
-                            SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern,
+                        SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern,
                                    wc.badge_color, wc.reply_template, wc.reply_language, wc.image_similarity_threshold, wc.blocked_role_ids,
+                                   COALESCE(wcb.keyword_review_enabled, 0) as keyword_review_enabled,
                                    wc.rotation_interval, wc.rotation_enabled, wc.message_filters
                             FROM website_configs wc
                             JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
@@ -3515,6 +3665,169 @@ class Database:
                 return cursor.rowcount > 0
         except Exception as e:
             logger.error(f"更新网站消息过滤条件失败: {e}")
+            return False
+
+    def add_keyword_reply_review_item(self, item: Dict[str, Any]) -> int:
+        """写入关键词回复人工审核队列"""
+        try:
+            payload = item.get('payload') or {}
+            account_ids = item.get('account_ids') or []
+            account_names = item.get('account_names') or []
+            payload_json = json.dumps(payload, ensure_ascii=False)
+            account_ids_json = json.dumps(account_ids, ensure_ascii=False)
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    INSERT INTO keyword_reply_review_items (
+                        user_id,
+                        website_id,
+                        channel_id,
+                        guild_id,
+                        guild_name,
+                        channel_name,
+                        account_ids_json,
+                        account_names,
+                        sender_id,
+                        sender_name,
+                        content,
+                        source_content,
+                        message_id,
+                        reply_mode,
+                        status,
+                        payload_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''',
+                    (
+                        int(item.get('user_id') or 0),
+                        int(item.get('website_id') or 0),
+                        str(item.get('channel_id') or ''),
+                        str(item.get('guild_id') or ''),
+                        str(item.get('guild_name') or ''),
+                        str(item.get('channel_name') or ''),
+                        account_ids_json,
+                        ', '.join(str(name).strip() for name in account_names if str(name).strip()),
+                        str(item.get('sender_id') or ''),
+                        str(item.get('sender_name') or ''),
+                        str(item.get('content') or ''),
+                        str(item.get('source_content') or ''),
+                        str(item.get('message_id') or ''),
+                        str(item.get('reply_mode') or 'keyword'),
+                        str(item.get('status') or 'pending'),
+                        payload_json,
+                    ),
+                )
+                conn.commit()
+                return int(cursor.lastrowid or 0)
+        except Exception as e:
+            logger.error(f"写入关键词审核队列失败: {e}")
+            return 0
+
+    def _parse_keyword_reply_review_item_row(self, row: Any) -> Dict[str, Any]:
+        item = dict(row)
+        try:
+            item['payload'] = json.loads(item.get('payload_json') or '{}')
+        except Exception:
+            item['payload'] = {}
+        try:
+            item['account_ids'] = json.loads(item.get('account_ids_json') or '[]')
+        except Exception:
+            item['account_ids'] = []
+        item['keyword_review_enabled'] = 1 if int(item.get('keyword_review_enabled') or 0) else 0
+        return item
+
+    def get_keyword_reply_review_item(self, item_id: int, user_id: int = None) -> Optional[Dict[str, Any]]:
+        """获取单条关键词审核队列记录"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                query = '''
+                    SELECT *
+                    FROM keyword_reply_review_items
+                    WHERE id = ?
+                '''
+                params: List[Any] = [item_id]
+                if user_id is not None:
+                    query += ' AND user_id = ?'
+                    params.append(user_id)
+                cursor.execute(query, params)
+                row = cursor.fetchone()
+                return self._parse_keyword_reply_review_item_row(row) if row else None
+        except Exception as e:
+            logger.error(f"获取关键词审核队列记录失败: {e}")
+            return None
+
+    def get_keyword_reply_review_items(
+        self,
+        user_id: int,
+        website_id: int = None,
+        status: str = 'pending',
+    ) -> List[Dict[str, Any]]:
+        """获取关键词审核队列列表"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                query = '''
+                    SELECT *
+                    FROM keyword_reply_review_items
+                    WHERE user_id = ?
+                '''
+                params: List[Any] = [user_id]
+                if website_id is not None:
+                    query += ' AND website_id = ?'
+                    params.append(website_id)
+                if status is not None:
+                    query += ' AND status = ?'
+                    params.append(status)
+                query += ' ORDER BY created_at DESC, id DESC'
+                cursor.execute(query, params)
+                return [self._parse_keyword_reply_review_item_row(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"获取关键词审核队列列表失败: {e}")
+            return []
+
+    def update_keyword_reply_review_item_status(
+        self,
+        item_id: int,
+        status: str,
+        reviewed_by_user_id: int = None,
+        error_message: str = None,
+    ) -> bool:
+        """更新关键词审核队列状态"""
+        try:
+            normalized_status = str(status or '').strip().lower()
+            if not normalized_status:
+                return False
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                updates = ['status = ?', 'updated_at = CURRENT_TIMESTAMP']
+                params: List[Any] = [normalized_status]
+                if reviewed_by_user_id is not None:
+                    updates.append('reviewed_by_user_id = ?')
+                    params.append(reviewed_by_user_id)
+                if error_message is not None:
+                    updates.append('error_message = ?')
+                    params.append(str(error_message))
+                if normalized_status in {'approved', 'rejected'}:
+                    updates.append('reviewed_at = CURRENT_TIMESTAMP')
+                if normalized_status in {'sent', 'failed'}:
+                    updates.append('sent_at = CURRENT_TIMESTAMP')
+                params.append(item_id)
+                cursor.execute(
+                    f'''
+                    UPDATE keyword_reply_review_items
+                    SET {', '.join(updates)}
+                    WHERE id = ?
+                    ''',
+                    params,
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"更新关键词审核队列状态失败: {e}")
             return False
 
     # ===== 用户级别的网站设置方法 =====
