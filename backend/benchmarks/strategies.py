@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 import glob
 import json
 import logging
@@ -10,7 +11,7 @@ from typing import Any, Dict, Optional, Sequence, Type
 
 import cv2
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageOps
 
 try:
     from .common import (
@@ -325,6 +326,8 @@ class CurrentDinoHybridStrategy:
 
 class _Siglip2Encoder:
     model_id = "google/siglip2-base-patch16-224"
+    query_min_side = 32
+    query_max_side = 448
 
     def __init__(self):
         import torch
@@ -345,7 +348,7 @@ class _Siglip2Encoder:
         self.center_crop_weight = float(getattr(config, "QUERY_CENTER_CROP_WEIGHT", 0.4))
         self.yolo_crop_weight = float(getattr(config, "QUERY_YOLO_CROP_WEIGHT", 0.6))
 
-        self.processor = AutoProcessor.from_pretrained(self.model_id)
+        self.processor = AutoProcessor.from_pretrained(self.model_id, use_fast=True)
         self.model = AutoModel.from_pretrained(self.model_id)
         self.model.to(self.device)
         self.model.eval()
@@ -363,6 +366,44 @@ class _Siglip2Encoder:
             self.cropper = None
 
     @staticmethod
+    def _normalize_image_for_inference(
+        image: Image.Image,
+        *,
+        min_side: int = 32,
+        max_side: int = 448,
+    ) -> Image.Image:
+        normalized = ImageOps.exif_transpose(image).convert("RGB")
+        width, height = normalized.size
+        if width <= 0 or height <= 0:
+            return normalized
+
+        max_side = max(int(max_side or 0), 1)
+        min_side = max(int(min_side or 0), 1)
+
+        longest_side = max(width, height)
+        if longest_side > max_side:
+            scale = max_side / float(longest_side)
+            resized_width = max(int(round(width * scale)), 1)
+            resized_height = max(int(round(height * scale)), 1)
+            normalized = normalized.resize(
+                (resized_width, resized_height),
+                _RESAMPLING.LANCZOS,
+            )
+            width, height = normalized.size
+
+        shortest_side = min(width, height)
+        if shortest_side < min_side:
+            scale = min_side / float(shortest_side)
+            resized_width = max(int(round(width * scale)), 1)
+            resized_height = max(int(round(height * scale)), 1)
+            normalized = normalized.resize(
+                (resized_width, resized_height),
+                _RESAMPLING.BICUBIC,
+            )
+
+        return normalized
+
+    @staticmethod
     def _fallback_center_crop(image: Image.Image) -> Image.Image:
         width, height = image.size
         left = int(width * 0.1)
@@ -371,27 +412,67 @@ class _Siglip2Encoder:
         bottom = int(height * 0.9)
         return image.crop((left, top, right, bottom))
 
-    def _prepare_image(self, image_path: str, crop_mode: str) -> Image.Image:
-        image = Image.open(image_path).convert("RGB")
+    def _prepare_image(
+        self,
+        image_path: str,
+        crop_mode: str,
+        image: Optional[Image.Image] = None,
+    ) -> Image.Image:
+        if image is None:
+            with Image.open(image_path) as source_image:
+                image = source_image.convert("RGB")
+        else:
+            image = image.convert("RGB")
+
+        image = self._normalize_image_for_inference(
+            image,
+            min_side=self.query_min_side,
+            max_side=self.query_max_side,
+        )
 
         if crop_mode == "raw":
             return image
 
         if crop_mode == "center":
             if self.cropper is not None and hasattr(self.cropper, "_center_crop"):
-                return self.cropper._center_crop(image)
-            return self._fallback_center_crop(image)
+                return self._normalize_image_for_inference(
+                    self.cropper._center_crop(image),
+                    min_side=self.query_min_side,
+                    max_side=self.query_max_side,
+                )
+            return self._normalize_image_for_inference(
+                self._fallback_center_crop(image),
+                min_side=self.query_min_side,
+                max_side=self.query_max_side,
+            )
 
         if crop_mode == "yolo":
             if self.cropper is not None and hasattr(self.cropper, "_crop_main_object"):
-                return self.cropper._crop_main_object(image_path)
-            return self._fallback_center_crop(image)
+                return self._normalize_image_for_inference(
+                    self.cropper._crop_main_object(image_path),
+                    min_side=self.query_min_side,
+                    max_side=self.query_max_side,
+                )
+            return self._normalize_image_for_inference(
+                self._fallback_center_crop(image),
+                min_side=self.query_min_side,
+                max_side=self.query_max_side,
+            )
 
         raise ValueError(f"unsupported crop_mode: {crop_mode}")
 
-    def encode_image(self, image_path: str, crop_mode: str = "raw") -> Optional[np.ndarray]:
+    def encode_image(
+        self,
+        image_path: str,
+        crop_mode: str = "raw",
+        image: Optional[Image.Image] = None,
+    ) -> Optional[np.ndarray]:
         try:
-            image = self._prepare_image(image_path, crop_mode=crop_mode)
+            image = self._prepare_image(
+                image_path,
+                crop_mode=crop_mode,
+                image=image,
+            )
             inputs = self.processor(images=image, return_tensors="pt")
             inputs = {
                 key: value.to(self.device) if hasattr(value, "to") else value
@@ -1155,7 +1236,7 @@ class Siglip2RerankStrategy:
         self._stage2_query_pair_catalog_only_classifier_signature = None
         self._stage2_query_pair_catalog_only_classifier_cache = {}
         self._stage2_catalog_query_payload_signature = None
-        self._stage2_catalog_query_payload_cache = {}
+        self._stage2_catalog_query_payload_cache = OrderedDict()
         self._stage2_dynamic_cluster_classifier_signature = None
         self._stage2_dynamic_cluster_classifier_cache = {}
         self._stage2_query_cluster_samples_signature = None
@@ -1330,12 +1411,27 @@ class Siglip2RerankStrategy:
         }
 
     def _build_query_embedding_payload(self, image_path: str) -> Dict[str, Any]:
-        raw_embedding = self.encoder.encode_image(image_path, crop_mode="raw")
+        with Image.open(image_path) as source_image:
+            loaded_image = self.encoder._normalize_image_for_inference(
+                source_image,
+                min_side=self.encoder.query_min_side,
+                max_side=self.encoder.query_max_side,
+            )
+
+        raw_embedding = self.encoder.encode_image(
+            image_path,
+            crop_mode="raw",
+            image=loaded_image,
+        )
         center_embedding = None
         yolo_embedding = None
         if self.query_fusion_enabled:
             if self.query_center_weight > 0:
-                center_embedding = self.encoder.encode_image(image_path, crop_mode="center")
+                center_embedding = self.encoder.encode_image(
+                    image_path,
+                    crop_mode="center",
+                    image=loaded_image,
+                )
             if self.query_yolo_weight > 0:
                 yolo_embedding = self.encoder.encode_image(image_path, crop_mode="yolo")
 
@@ -1981,8 +2077,19 @@ class Siglip2RerankStrategy:
         )
         if signature != getattr(self, "_stage2_catalog_query_payload_signature", None):
             self._stage2_catalog_query_payload_signature = signature
-            self._stage2_catalog_query_payload_cache = {}
-        return getattr(self, "_stage2_catalog_query_payload_cache", {})
+            self._stage2_catalog_query_payload_cache = OrderedDict()
+        cache = getattr(self, "_stage2_catalog_query_payload_cache", None)
+        if not isinstance(cache, OrderedDict):
+            cache = OrderedDict(cache or {})
+            self._stage2_catalog_query_payload_cache = cache
+        return cache
+
+    def _get_stage2_catalog_query_payload_cache_limit(self) -> int:
+        try:
+            limit = int(getattr(self, "stage2_catalog_query_payload_cache_limit", 128) or 0)
+        except (TypeError, ValueError):
+            return 128
+        return max(limit, 0)
 
     def _get_stage2_catalog_query_payload(
         self,
@@ -1997,14 +2104,21 @@ class Siglip2RerankStrategy:
         payload_cache = self._resolve_stage2_catalog_query_payload_cache(prepared_catalog)
         cached_payload = payload_cache.get(normalized_image_path)
         if cached_payload is not None:
+            payload_cache.move_to_end(normalized_image_path)
             return cached_payload or None
+
+        cache_limit = self._get_stage2_catalog_query_payload_cache_limit()
 
         try:
             payload = self._build_query_embedding_payload(normalized_image_path)
         except Exception:
             fallback_vector = _normalize_embedding(fallback_embedding)
             if fallback_vector is None:
-                payload_cache[normalized_image_path] = {}
+                if cache_limit > 0:
+                    payload_cache[normalized_image_path] = {}
+                    payload_cache.move_to_end(normalized_image_path)
+                    while len(payload_cache) > cache_limit:
+                        payload_cache.popitem(last=False)
                 return None
             payload = {
                 "embedding": fallback_vector,
@@ -2013,10 +2127,18 @@ class Siglip2RerankStrategy:
                 "yolo_embedding": None,
             }
         if payload.get("embedding") is None:
-            payload_cache[normalized_image_path] = {}
+            if cache_limit > 0:
+                payload_cache[normalized_image_path] = {}
+                payload_cache.move_to_end(normalized_image_path)
+                while len(payload_cache) > cache_limit:
+                    payload_cache.popitem(last=False)
             return None
 
-        payload_cache[normalized_image_path] = payload
+        if cache_limit > 0:
+            payload_cache[normalized_image_path] = payload
+            payload_cache.move_to_end(normalized_image_path)
+            while len(payload_cache) > cache_limit:
+                payload_cache.popitem(last=False)
         return payload
 
     @staticmethod

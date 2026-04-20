@@ -684,6 +684,20 @@ class Database:
                 )
             ''')
 
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS message_filter_blocked_users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    filter_id INTEGER NOT NULL,
+                    discord_user_id TEXT NOT NULL,
+                    discord_username TEXT DEFAULT '',
+                    trigger_keyword TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (filter_id) REFERENCES message_filters (id) ON DELETE CASCADE,
+                    UNIQUE(filter_id, discord_user_id)
+                )
+            ''')
+
             # 创建用户回复统计表（累计）
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS user_reply_stats (
@@ -4063,6 +4077,135 @@ class Database:
         except Exception as e:
             logger.error(f"删除消息过滤规则失败: {e}")
             return False
+
+    def upsert_message_filter_blocked_user(
+        self,
+        filter_id: int,
+        discord_user_id: str,
+        discord_username: str = '',
+        trigger_keyword: str = '',
+    ) -> bool:
+        try:
+            normalized_discord_user_id = str(discord_user_id or '').strip()
+            if not normalized_discord_user_id:
+                return False
+
+            normalized_username = str(discord_username or '').strip()
+            normalized_trigger_keyword = str(trigger_keyword or '').strip()
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    INSERT INTO message_filter_blocked_users (
+                        filter_id,
+                        discord_user_id,
+                        discord_username,
+                        trigger_keyword
+                    )
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(filter_id, discord_user_id) DO UPDATE SET
+                        discord_username = excluded.discord_username,
+                        trigger_keyword = excluded.trigger_keyword,
+                        updated_at = CURRENT_TIMESTAMP
+                    ''',
+                    (
+                        filter_id,
+                        normalized_discord_user_id,
+                        normalized_username,
+                        normalized_trigger_keyword,
+                    ),
+                )
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"写入全局拉黑用户失败: {e}")
+            return False
+
+    def get_message_filter_blocked_users(self, filter_id: int) -> List[Dict]:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    SELECT
+                        id,
+                        filter_id,
+                        discord_user_id,
+                        discord_username,
+                        trigger_keyword,
+                        created_at,
+                        updated_at
+                    FROM message_filter_blocked_users
+                    WHERE filter_id = ?
+                    ORDER BY updated_at DESC, id DESC
+                    ''',
+                    (filter_id,),
+                )
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"获取全局拉黑用户失败: {e}")
+            return []
+
+    def delete_message_filter_blocked_user(self, filter_id: int, discord_user_id: str) -> bool:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    DELETE FROM message_filter_blocked_users
+                    WHERE filter_id = ? AND discord_user_id = ?
+                    ''',
+                    (filter_id, str(discord_user_id or '').strip()),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"删除全局拉黑用户失败: {e}")
+            return False
+
+    def get_blocked_message_filter_ids_for_discord_user(
+        self,
+        *,
+        discord_user_id: str,
+        candidate_filter_ids: Optional[Sequence[int]] = None,
+    ) -> set[int]:
+        try:
+            normalized_discord_user_id = str(discord_user_id or '').strip()
+            if not normalized_discord_user_id:
+                return set()
+
+            filter_ids: Optional[List[int]] = None
+            if candidate_filter_ids is not None:
+                filter_ids = [
+                    int(filter_id)
+                    for filter_id in candidate_filter_ids
+                    if filter_id is not None and str(filter_id).strip()
+                ]
+                if not filter_ids:
+                    return set()
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                query = '''
+                    SELECT filter_id
+                    FROM message_filter_blocked_users
+                    WHERE discord_user_id = ?
+                '''
+                params: List[Any] = [normalized_discord_user_id]
+                if filter_ids is not None:
+                    placeholders = ','.join('?' * len(filter_ids))
+                    query += f' AND filter_id IN ({placeholders})'
+                    params.extend(filter_ids)
+                cursor.execute(query, params)
+                return {
+                    int(row['filter_id'])
+                    for row in cursor.fetchall()
+                    if row['filter_id'] is not None
+                }
+        except Exception as e:
+            logger.error(f"获取用户命中全局拉黑列表失败: {e}")
+            return set()
 
     def add_message_filter_image(self, filter_id: int, image_path: str, features: np.ndarray) -> int:
         """添加消息过滤图片，返回记录ID"""

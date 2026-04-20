@@ -7,7 +7,7 @@ import logging
 import os
 import re
 from statistics import mean
-from threading import Lock
+from threading import Lock, Thread
 from time import perf_counter
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import quote
@@ -38,6 +38,10 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 _STREAMING_PROGRESS_LOG_INTERVAL_SECONDS = 5.0
+
+
+class LiveCatalogPreparingError(RuntimeError):
+    """Raised when the live-search catalog is still warming in the background."""
 
 
 @dataclass(frozen=True)
@@ -1545,6 +1549,9 @@ class LiveImageRetriever:
         self._catalog_signature: Optional[Tuple[Any, ...]] = None
         self._prepared_catalog: List[Dict[str, Any]] = []
         self._strategy = None
+        self._catalog_refresh_required = True
+        self._prepare_inflight = False
+        self._refresh_generation = 0
 
     def _load_catalog_rows(self) -> List[Dict[str, Any]]:
         return list(
@@ -1620,41 +1627,119 @@ class LiveImageRetriever:
 
     def invalidate(self):
         with self._lock:
-            self._catalog_signature = None
-            self._prepared_catalog = []
-            self._strategy = None
+            self._refresh_generation += 1
+            self._catalog_refresh_required = True
+            if self._catalog_signature is None:
+                self._prepared_catalog = []
 
-    def _ensure_prepared_catalog(self):
+    def _has_active_catalog_locked(self) -> bool:
+        return self._strategy is not None and self._catalog_signature is not None
+
+    def _build_prepared_catalog_snapshot(self):
         try:
             from .benchmarks.strategies import create_strategy
         except ImportError:
             from benchmarks.strategies import create_strategy
 
+        rows = self._load_catalog_rows()
+        catalog_records = build_catalog_records(rows)
+        support_manifest_path = os.getenv("LIVE_IMAGE_SEARCH_PRODUCT_SUPPORT_MANIFEST", "")
+        support_signature = self._build_support_signature(support_manifest_path)
+        runtime_signature = _build_runtime_env_signature(self.strategy_name)
+        signature = self._build_signature(rows) + support_signature + runtime_signature
+        support_records = load_runtime_product_support_records(catalog_records)
+
+        strategy = create_strategy(self.strategy_name)
+        prepared_catalog = prepare_catalog_entries(
+            strategy,
+            catalog_records,
+            support_records=support_records,
+        )
+        return strategy, prepared_catalog, signature
+
+    def _apply_prepared_catalog_locked(
+        self,
+        strategy,
+        prepared_catalog: List[Dict[str, Any]],
+        signature: Tuple[Any, ...],
+        refresh_generation: int,
+    ) -> None:
+        self._strategy = strategy
+        self._catalog_signature = signature
+        self._prepared_catalog = prepared_catalog
+        self._prepare_inflight = False
+        self._catalog_refresh_required = self._refresh_generation != refresh_generation
+
+    def _refresh_catalog_in_background(self, refresh_generation: int) -> None:
+        try:
+            strategy, prepared_catalog, signature = self._build_prepared_catalog_snapshot()
+        except Exception:
+            logger.exception(
+                "Live retrieval catalog refresh failed: strategy=%s",
+                self.strategy_name,
+            )
+            with self._lock:
+                self._prepare_inflight = False
+            return
+
         with self._lock:
-            # Product/cache updates already invalidate this retriever explicitly,
-            # so avoid reloading the full SQLite catalog on every query.
-            if self._strategy is not None and self._catalog_signature is not None:
-                return self._strategy, self._prepared_catalog
-
-            rows = self._load_catalog_rows()
-            catalog_records = build_catalog_records(rows)
-            support_manifest_path = os.getenv("LIVE_IMAGE_SEARCH_PRODUCT_SUPPORT_MANIFEST", "")
-            support_signature = self._build_support_signature(support_manifest_path)
-            runtime_signature = _build_runtime_env_signature(self.strategy_name)
-            signature = self._build_signature(rows) + support_signature + runtime_signature
-            support_records = load_runtime_product_support_records(catalog_records)
-
-            strategy = create_strategy(self.strategy_name)
-            prepared_catalog = prepare_catalog_entries(
+            self._apply_prepared_catalog_locked(
                 strategy,
-                catalog_records,
-                support_records=support_records,
+                prepared_catalog,
+                signature,
+                refresh_generation,
             )
 
-            self._strategy = strategy
-            self._catalog_signature = signature
-            self._prepared_catalog = prepared_catalog
+    def _start_background_refresh_locked(self) -> bool:
+        if self._prepare_inflight:
+            return False
+
+        refresh_generation = self._refresh_generation
+        self._prepare_inflight = True
+        prepare_thread = Thread(
+            target=self._refresh_catalog_in_background,
+            args=(refresh_generation,),
+            daemon=True,
+            name=f"live-catalog-refresh-{self.strategy_name}",
+        )
+        prepare_thread.start()
+        return True
+
+    def _prepare_catalog_now(self):
+        with self._lock:
+            if self._has_active_catalog_locked() and not self._catalog_refresh_required:
+                return self._strategy, self._prepared_catalog
+
+            refresh_generation = self._refresh_generation
+            self._prepare_inflight = True
+
+        try:
+            strategy, prepared_catalog, signature = self._build_prepared_catalog_snapshot()
+        except Exception:
+            with self._lock:
+                self._prepare_inflight = False
+            raise
+
+        with self._lock:
+            self._apply_prepared_catalog_locked(
+                strategy,
+                prepared_catalog,
+                signature,
+                refresh_generation,
+            )
             return self._strategy, self._prepared_catalog
+
+    def _ensure_prepared_catalog(self):
+        with self._lock:
+            if self._has_active_catalog_locked():
+                if self._catalog_refresh_required:
+                    self._start_background_refresh_locked()
+                return self._strategy, self._prepared_catalog
+
+            self._catalog_refresh_required = True
+            self._start_background_refresh_locked()
+
+        raise LiveCatalogPreparingError("live catalog is warming up")
 
     def _search_streaming(
         self,
@@ -1841,7 +1926,7 @@ class LiveImageRetriever:
                 "skipped_count": True,
             }
 
-        _strategy, prepared_catalog = self._ensure_prepared_catalog()
+        _strategy, prepared_catalog = self._prepare_catalog_now()
         return {
             "strategy": self.strategy_name,
             "catalog_size": len(prepared_catalog),

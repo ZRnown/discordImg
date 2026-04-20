@@ -13,6 +13,7 @@ import { Upload, Search, ExternalLink, Settings, X, Clock, Trash2, Copy } from "
 import { toast } from "sonner"
 
 export function ImageSearchView() {
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null)
   const [uploadedImage, setUploadedImage] = useState<string | null>(null)
   const [imageUrl, setImageUrl] = useState<string>("")
   const [isSearching, setIsSearching] = useState(false)
@@ -183,6 +184,20 @@ export function ImageSearchView() {
     fetchWebsites()
   }, [])
 
+  useEffect(() => {
+    if (!uploadedFile) {
+      setUploadedImage(null)
+      return
+    }
+
+    const objectUrl = URL.createObjectURL(uploadedFile)
+    setUploadedImage(objectUrl)
+
+    return () => {
+      URL.revokeObjectURL(objectUrl)
+    }
+  }, [uploadedFile])
+
   const fetchSearchHistory = async (page: number = 1) => {
     try {
       const limit = 10 // 每页显示10条记录
@@ -258,22 +273,19 @@ export function ImageSearchView() {
       return
     }
 
-    const reader = new FileReader()
-    reader.onload = (event) => {
-      setUploadedImage(event.target?.result as string)
-      // 清空链接输入
-      setImageUrl("")
-      toast.success("图片已上传")
-    }
-    reader.readAsDataURL(file)
+    setUploadedFile(file)
+    setImageUrl("")
+    e.target.value = ""
+    toast.success("图片已上传")
   }, [])
 
   const handleClearImage = () => {
+    setUploadedFile(null)
     setUploadedImage(null)
   }
 
   const handleSearch = async () => {
-    if (!uploadedImage && !imageUrl.trim()) {
+    if (!uploadedFile && !imageUrl.trim()) {
       toast.error("请上传图片或输入图片链接")
       return
     }
@@ -284,25 +296,9 @@ export function ImageSearchView() {
       // 创建FormData
       const formData = new FormData();
 
-      if (uploadedImage) {
-        // 将base64图片转换为blob
-        try {
-          const base64Data = uploadedImage.split(',')[1]; // 去掉data:image/jpeg;base64,前缀
-          const byteCharacters = atob(base64Data);
-          const byteNumbers = new Array(byteCharacters.length);
-          for (let i = 0; i < byteCharacters.length; i++) {
-            byteNumbers[i] = byteCharacters.charCodeAt(i);
-          }
-          const byteArray = new Uint8Array(byteNumbers);
-          const blob = new Blob([byteArray], { type: 'image/jpeg' });
-        formData.append('image', blob, 'search.jpg');
+      if (uploadedFile) {
+        formData.append('image', uploadedFile);
         console.log('使用上传的图片进行搜索');
-        } catch (error) {
-          console.error('图片转换失败:', error);
-          toast.error('图片处理失败，请重试');
-          setIsSearching(false);
-          return;
-        }
       } else if (imageUrl.trim()) {
         // 发送图片URL
         formData.append('image_url', imageUrl.trim());
@@ -412,10 +408,11 @@ export function ImageSearchView() {
                   <input
                     type="url"
                     value={imageUrl}
-                    onChange={(e) => {
+                          onChange={(e) => {
                       setImageUrl(e.target.value)
                       // 当输入链接时，清空已上传的图片
                       if (e.target.value.trim()) {
+                        setUploadedFile(null)
                         setUploadedImage(null)
                       }
                     }}
@@ -423,8 +420,8 @@ export function ImageSearchView() {
                     className={`w-full px-3 py-2 border rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 ${
                       uploadedImage ? 'border-gray-200 bg-gray-50 cursor-not-allowed opacity-50' : 'border-gray-300'
                     }`}
-                    disabled={!!uploadedImage}
-                  />
+                  disabled={!!uploadedImage}
+                />
                   {imageUrl && !uploadedImage && (
                     <div className="flex items-center gap-2">
                       <img
@@ -485,7 +482,7 @@ export function ImageSearchView() {
                 <Button
                   className="w-full"
                   onClick={handleSearch}
-                  disabled={(!uploadedImage && !imageUrl.trim()) || isSearching}
+                  disabled={(!uploadedFile && !imageUrl.trim()) || isSearching}
                 >
                   <Search className="w-4 h-4 mr-2" />
                   {isSearching ? "搜索中..." : "开始搜索"}

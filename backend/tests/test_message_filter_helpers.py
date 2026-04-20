@@ -6,7 +6,9 @@ from backend.bot import DiscordBotClient
 from backend.message_filter_utils import (
     filters_block_message,
     get_keyword_match_limit_from_filters,
+    has_filter_type,
     resolve_keyword_match_limit,
+    should_run_ocr_for_image_reply,
 )
 
 
@@ -105,6 +107,88 @@ class MessageFilterHelperTestCase(unittest.TestCase):
         )
 
         self.assertFalse(blocked)
+
+    def test_has_filter_type_detects_target_filter(self):
+        self.assertTrue(
+            has_filter_type(
+                [
+                    {"filter_type": "contains", "filter_value": "http"},
+                    {"filter_type": "ocr_contains", "filter_value": "nike"},
+                ],
+                "ocr_contains",
+            )
+        )
+        self.assertFalse(has_filter_type([], "ocr_contains"))
+
+    def test_should_run_ocr_for_image_reply_only_when_ocr_filter_exists_and_threshold_matches(self):
+        website_configs = [
+            {"id": 11, "image_similarity_threshold": 0.8},
+            {"id": 12, "image_similarity_threshold": 0.7},
+        ]
+        website_filters_map = {
+            11: [{"filter_type": "ocr_contains", "filter_value": "nike"}],
+            12: [{"filter_type": "contains", "filter_value": "http"}],
+        }
+
+        self.assertFalse(
+            should_run_ocr_for_image_reply(
+                website_configs,
+                website_filters_map,
+                similarity=0.79,
+                base_threshold=0.75,
+            )
+        )
+        self.assertTrue(
+            should_run_ocr_for_image_reply(
+                website_configs,
+                website_filters_map,
+                similarity=0.8,
+                base_threshold=0.75,
+            )
+        )
+
+    def test_should_run_ocr_for_image_reply_falls_back_to_base_threshold(self):
+        website_configs = [
+            {"id": 21, "image_similarity_threshold": None},
+        ]
+        website_filters_map = {
+            21: [{"filter_type": "ocr_contains", "filter_value": "aj4"}],
+        }
+
+        self.assertFalse(
+            should_run_ocr_for_image_reply(
+                website_configs,
+                website_filters_map,
+                similarity=0.61,
+                base_threshold=0.63,
+            )
+        )
+
+    def test_should_run_ocr_for_image_reply_supports_global_ocr_filters(self):
+        self.assertFalse(
+            should_run_ocr_for_image_reply(
+                [],
+                {},
+                global_filters=[
+                    {"filter_type": "contains", "filter_value": "http"},
+                    {"filter_type": "ocr_contains", "filter_value": "nike"},
+                ],
+                similarity=0.62,
+                base_threshold=0.63,
+            )
+        )
+        self.assertTrue(
+            should_run_ocr_for_image_reply(
+                [],
+                {},
+                global_filters=[
+                    {"filter_type": "contains", "filter_value": "http"},
+                    {"filter_type": "ocr_contains", "filter_value": "nike"},
+                ],
+                similarity=0.63,
+                base_threshold=0.63,
+            )
+        )
 
 
 class ManagedAccountMessageGuardTestCase(unittest.IsolatedAsyncioTestCase):

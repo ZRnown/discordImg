@@ -32,6 +32,9 @@ import {
   getWebsiteTemplateByKey,
 } from "@/lib/website-templates"
 import {
+  hasWebsiteBlockUserTriggerFilter,
+} from "@/lib/website-filters"
+import {
   getEffectiveWebsiteReplyLanguages,
   normalizeWebsiteReplyLanguages,
   WEBSITE_REPLY_LANGUAGE_OPTIONS,
@@ -47,7 +50,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
-import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit, Clock } from "lucide-react"
+import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit, Clock, ChevronDown, ChevronRight } from "lucide-react"
 
 type NumericRangeFilterValue = {
   keyword: string
@@ -55,12 +58,17 @@ type NumericRangeFilterValue = {
   max: string
 }
 
-const WEBSITE_KEYWORD_FILTER_TYPES = new Set([
+const GLOBAL_KEYWORD_FILTER_TYPES = new Set([
   'user_id',
   'role_id',
   'ocr_contains',
   'website_block_user_trigger',
 ])
+
+const WEBSITE_KEYWORD_FILTER_TYPES = new Set([
+  ...GLOBAL_KEYWORD_FILTER_TYPES,
+])
+const MESSAGE_FILTERS_PER_PAGE = 5
 
 const getKeywordFilterTypeLabel = (filterType: string) => {
   if (filterType === 'user_id') return '用户ID'
@@ -367,6 +375,9 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
 
   // 消息过滤相关状态
   const [messageFilters, setMessageFilters] = useState<any[]>([])
+  const [messageFilterBlockedUsers, setMessageFilterBlockedUsers] = useState<{[key: number]: any[]}>({})
+  const [messageFilterPage, setMessageFilterPage] = useState(1)
+  const [expandedMessageFilterIds, setExpandedMessageFilterIds] = useState<{[key: number]: boolean}>({})
   const [showAddFilter, setShowAddFilter] = useState(false)
   const [editingFilter, setEditingFilter] = useState<any>(null)
   const [newFilter, setNewFilter] = useState({
@@ -576,13 +587,18 @@ const formatWebsiteForEdit = (website: any) => ({
         }
       })
 
-      const blockedUsersEntries = await Promise.all(
-        websites.map(async (website: any) => {
-          const blockedUsers = await requestWebsiteBlockedUsers(website.id, { silent: true })
-          return [website.id, blockedUsers] as const
-        })
-      )
       const blockedUsersMap: {[key: number]: any[]} = {}
+      websites.forEach((website: any) => {
+        blockedUsersMap[website.id] = []
+      })
+      const blockedUsersEntries = await Promise.all(
+        websites
+          .filter((website: any) => hasWebsiteBlockUserTriggerFilter(filters[website.id] || []))
+          .map(async (website: any) => {
+            const blockedUsers = await requestWebsiteBlockedUsers(website.id, { silent: true })
+            return [website.id, blockedUsers] as const
+          })
+      )
       blockedUsersEntries.forEach(([websiteId, blockedUsers]) => {
         blockedUsersMap[websiteId] = blockedUsers
       })
@@ -613,11 +629,53 @@ const formatWebsiteForEdit = (website: any) => ({
       const res = await fetch('/api/message-filters', { credentials: 'include' })
       if (res.ok) {
         const data = await res.json()
-        setMessageFilters(data.filters || [])
+        const filters = data.filters || []
+        const blockedUsersMap: {[key: number]: any[]} = {}
+
+        filters.forEach((filter: any) => {
+          if (filter?.id !== null && filter?.id !== undefined) {
+            blockedUsersMap[filter.id] = []
+          }
+        })
+
+        const blockedUsersEntries = await Promise.all(
+          filters
+            .filter((filter: any) => filter?.filter_type === 'website_block_user_trigger' && filter?.id !== undefined)
+            .map(async (filter: any) => {
+              const blockedUsers = await requestMessageFilterBlockedUsers(Number(filter.id), { silent: true })
+              return [Number(filter.id), blockedUsers] as const
+            })
+        )
+
+        blockedUsersEntries.forEach(([filterId, blockedUsers]) => {
+          blockedUsersMap[filterId] = blockedUsers
+        })
+
+        setMessageFilters(filters)
+        setMessageFilterBlockedUsers(blockedUsersMap)
       }
     } catch (e) {
       console.error('获取消息过滤规则失败:', e)
       toast.error(getApiErrorMessage(e, '获取消息过滤规则失败'))
+    }
+  }
+
+  const requestMessageFilterBlockedUsers = async (filterId: number, options?: { silent?: boolean }) => {
+    try {
+      const res = await fetch(`/api/message-filters/${filterId}/blocked-users`, { credentials: 'include' })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        if (!options?.silent) {
+          toast.error(getApiErrorMessage(data, '获取对应用户失败'))
+        }
+        return []
+      }
+      return data.blocked_users || []
+    } catch (e) {
+      if (!options?.silent) {
+        toast.error(getApiErrorMessage(e, '获取对应用户失败'))
+      }
+      return []
     }
   }
 
@@ -682,6 +740,27 @@ const formatWebsiteForEdit = (website: any) => ({
     }
   }
 
+  const handleDeleteMessageFilterBlockedUser = async (filterId: number, discordUserId: string) => {
+    try {
+      const res = await fetch(`/api/message-filters/${filterId}/blocked-users/${discordUserId}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(getApiErrorMessage(data, '删除对应用户失败'))
+        return
+      }
+      setMessageFilterBlockedUsers(prev => ({
+        ...prev,
+        [filterId]: (prev[filterId] || []).filter((item: any) => String(item.discord_user_id) !== String(discordUserId))
+      }))
+      toast.success('已删除对应用户')
+    } catch (e) {
+      toast.error(getApiErrorMessage(e, '删除对应用户失败'))
+    }
+  }
+
   const fetchWebsiteFilterImages = async (websiteId: number, filterId: string) => {
     setEditingWebsiteFilterImagesLoading(true)
     try {
@@ -705,6 +784,12 @@ const formatWebsiteForEdit = (website: any) => ({
         const data = await res.json()
         const filters = data.filters || []
         setWebsiteFilters(prev => ({ ...prev, [websiteId]: filters }))
+        if (hasWebsiteBlockUserTriggerFilter(filters)) {
+          const blockedUsers = await requestWebsiteBlockedUsers(websiteId, { silent: true })
+          setWebsiteBlockedUsers(prev => ({ ...prev, [websiteId]: blockedUsers }))
+        } else {
+          setWebsiteBlockedUsers(prev => ({ ...prev, [websiteId]: [] }))
+        }
         return filters
       }
     } catch (e) {
@@ -731,6 +816,21 @@ const formatWebsiteForEdit = (website: any) => ({
       }
       return []
     }
+  }
+
+  const syncWebsiteBlockedUsersForFilters = async (
+    websiteId: number,
+    filters: any[],
+    options?: { silent?: boolean }
+  ) => {
+    if (!hasWebsiteBlockUserTriggerFilter(filters)) {
+      setWebsiteBlockedUsers(prev => ({ ...prev, [websiteId]: [] }))
+      return []
+    }
+
+    const blockedUsers = await requestWebsiteBlockedUsers(websiteId, options)
+    setWebsiteBlockedUsers(prev => ({ ...prev, [websiteId]: blockedUsers }))
+    return blockedUsers
   }
 
   const handleDeleteWebsiteBlockedUser = async (websiteId: number, discordUserId: string) => {
@@ -2027,6 +2127,7 @@ const formatWebsiteForEdit = (website: any) => ({
             [websiteId]: newFilters
           }))
         }
+        await syncWebsiteBlockedUsersForFilters(websiteId, finalFilters, { silent: true })
         setShowAddWebsiteFilter(null)
         setWebsiteNewFilter({ filter_type: 'contains', filter_value: '' })
         setWebsiteNewFilterImages([])
@@ -2151,6 +2252,7 @@ const formatWebsiteForEdit = (website: any) => ({
             [websiteId]: finalFilters
           }))
         }
+        await syncWebsiteBlockedUsersForFilters(websiteId, finalFilters, { silent: true })
         setEditingWebsiteFilter(null)
       } else {
         toast.error(getApiErrorMessage(updateData, '更新失败'))
@@ -2179,6 +2281,7 @@ const formatWebsiteForEdit = (website: any) => ({
           ...prev,
           [websiteId]: newFilters
         }))
+        await syncWebsiteBlockedUsersForFilters(websiteId, newFilters, { silent: true })
       } else {
         toast.error(getApiErrorMessage(updateData, '删除过滤规则失败'))
       }
@@ -2302,10 +2405,10 @@ const formatWebsiteForEdit = (website: any) => ({
         payload = { filter_type: 'keyword_match_limit', filter_value: normalized.value }
       }
 
-      if (newFilter.filter_type === 'role_id' || newFilter.filter_type === 'user_id') {
+      if (GLOBAL_KEYWORD_FILTER_TYPES.has(newFilter.filter_type)) {
         const normalized = normalizeMultiValueFilterInput(newFilter.filter_value)
         if (!normalized) {
-          toast.error(newFilter.filter_type === 'role_id' ? '身份组ID不能为空' : '用户ID不能为空')
+          toast.error(`${getKeywordFilterTypeLabel(newFilter.filter_type)}不能为空`)
           return
         }
         payload = { filter_type: newFilter.filter_type, filter_value: normalized }
@@ -2405,10 +2508,10 @@ const formatWebsiteForEdit = (website: any) => ({
         }
       }
 
-      if (editingFilter.filter_type === 'role_id' || editingFilter.filter_type === 'user_id') {
+      if (GLOBAL_KEYWORD_FILTER_TYPES.has(editingFilter.filter_type)) {
         const normalized = normalizeMultiValueFilterInput(editingFilter.filter_value)
         if (!normalized) {
-          toast.error(editingFilter.filter_type === 'role_id' ? '身份组ID不能为空' : '用户ID不能为空')
+          toast.error(`${getKeywordFilterTypeLabel(editingFilter.filter_type)}不能为空`)
           return
         }
         payload = {
@@ -2457,12 +2560,29 @@ const formatWebsiteForEdit = (website: any) => ({
 
   const totalAccountPages = Math.ceil(accounts.length / accountsPerPage)
   const paginatedAccounts = accounts.slice((accountPage - 1) * accountsPerPage, accountPage * accountsPerPage)
+  const totalMessageFilterPages = Math.max(1, Math.ceil(messageFilters.length / MESSAGE_FILTERS_PER_PAGE))
+  const paginatedMessageFilters = messageFilters.slice(
+    (messageFilterPage - 1) * MESSAGE_FILTERS_PER_PAGE,
+    messageFilterPage * MESSAGE_FILTERS_PER_PAGE
+  )
 
   useEffect(() => {
     if (totalAccountPages > 0 && accountPage > totalAccountPages) {
       setAccountPage(totalAccountPages)
     }
   }, [accountPage, totalAccountPages])
+
+  useEffect(() => {
+    if (messageFilters.length === 0) {
+      if (messageFilterPage !== 1) {
+        setMessageFilterPage(1)
+      }
+      return
+    }
+    if (messageFilterPage > totalMessageFilterPages) {
+      setMessageFilterPage(totalMessageFilterPages)
+    }
+  }, [messageFilterPage, messageFilters.length, totalMessageFilterPages])
 
   useEffect(() => {
     if (editingFilter && editingFilter.filter_type === 'image_filter') {
@@ -2988,6 +3108,8 @@ const formatWebsiteForEdit = (website: any) => ({
                             <SelectItem value="numeric_range">数字范围</SelectItem>
                             <SelectItem value="user_repeat">用户重复发送</SelectItem>
                             <SelectItem value="keyword_match_limit">关键词命中上限</SelectItem>
+                            <SelectItem value="ocr_contains">图片OCR关键词</SelectItem>
+                            <SelectItem value="website_block_user_trigger">网站拉黑触发词</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -3120,38 +3242,145 @@ const formatWebsiteForEdit = (website: any) => ({
             </CardHeader>
             <CardContent>
               <div className="space-y-3">
-                {messageFilters.map((filter: any) => (
-                  <div key={filter.id} className="flex items-center justify-between p-3 border rounded">
-                    <div>
-                      <div className="font-medium">{formatMessageFilterLabel(filter)}</div>
-                      <div className="text-sm text-muted-foreground">
-                        创建时间: {new Date(filter.created_at).toLocaleString('zh-CN')}
+                {paginatedMessageFilters.map((filter: any) => {
+                  const blockedUsers = messageFilterBlockedUsers[filter.id] || []
+                  const hasBlockedUsers = blockedUsers.length > 0
+                  const isExpanded = !!expandedMessageFilterIds[filter.id]
+
+                  return (
+                  <div key={filter.id} className="space-y-3 rounded border p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="font-medium break-words">{formatMessageFilterLabel(filter)}</div>
+                        <div className="text-sm text-muted-foreground">
+                          创建时间: {new Date(filter.created_at).toLocaleString('zh-CN')}
+                        </div>
+                      </div>
+                      <div className="flex gap-2 shrink-0">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setEditingFilter(filter)}
+                        >
+                          <Edit className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleDeleteMessageFilter(filter.id)}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
                       </div>
                     </div>
-                    <div className="flex gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setEditingFilter(filter)}
-                      >
-                        <Edit className="w-4 h-4" />
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleDeleteMessageFilter(filter.id)}
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </Button>
-                    </div>
+
+                    {filter.filter_type === 'website_block_user_trigger' && (
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2 min-w-0">
+                            {hasBlockedUsers ? (
+                              isExpanded ? (
+                                <ChevronDown className="w-4 h-4 text-muted-foreground" />
+                              ) : (
+                                <ChevronRight className="w-4 h-4 text-muted-foreground" />
+                              )
+                            ) : (
+                              <Hash className="w-4 h-4 text-muted-foreground" />
+                            )}
+                            <span className="text-sm font-medium">对应用户</span>
+                            <span className="text-xs text-muted-foreground">
+                              {blockedUsers.length} 个
+                            </span>
+                          </div>
+                          {hasBlockedUsers ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 px-2 text-[11px] shrink-0"
+                              onClick={() => setExpandedMessageFilterIds(prev => ({
+                                ...prev,
+                                [filter.id]: !prev[filter.id]
+                              }))}
+                            >
+                              {isExpanded ? '收起' : '展开'}
+                            </Button>
+                          ) : null}
+                        </div>
+                        {!hasBlockedUsers ? (
+                          <div className="text-xs text-muted-foreground">
+                            暂无对应用户
+                          </div>
+                        ) : isExpanded ? (
+                          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                            {blockedUsers.map((blockedUser: any) => (
+                              <div
+                                key={`${filter.id}-${blockedUser.discord_user_id}`}
+                                className="flex min-w-0 items-start justify-between gap-2 rounded border px-2.5 py-2"
+                              >
+                                <div className="min-w-0">
+                                  <div className="truncate text-xs font-medium">
+                                    {blockedUser.discord_username || blockedUser.discord_user_id}
+                                  </div>
+                                  <div className="truncate text-[11px] text-muted-foreground">
+                                    ID: {blockedUser.discord_user_id}
+                                  </div>
+                                  {blockedUser.trigger_keyword ? (
+                                    <div className="truncate text-[11px] text-muted-foreground">
+                                      触发词: {blockedUser.trigger_keyword}
+                                    </div>
+                                  ) : null}
+                                </div>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-7 px-2 text-[11px]"
+                                  onClick={() => handleDeleteMessageFilterBlockedUser(filter.id, String(blockedUser.discord_user_id))}
+                                >
+                                  删除
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    )}
                   </div>
-                ))}
+                  )
+                })}
                 {messageFilters.length === 0 && (
                   <div className="text-center py-4 text-muted-foreground">
                     暂无过滤规则
                   </div>
                 )}
               </div>
+              {messageFilters.length > 0 && totalMessageFilterPages > 1 && (
+                <div className="flex flex-col sm:flex-row justify-between items-center gap-4 mt-4 pt-4 border-t">
+                  <div className="text-sm text-muted-foreground font-medium">
+                    显示第 {(messageFilterPage - 1) * MESSAGE_FILTERS_PER_PAGE + 1} - {Math.min(messageFilterPage * MESSAGE_FILTERS_PER_PAGE, messageFilters.length)} 条，共 {messageFilters.length} 条规则
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={messageFilterPage === 1}
+                      onClick={() => setMessageFilterPage(page => page - 1)}
+                    >
+                      上一页
+                    </Button>
+                    <div className="text-sm font-medium bg-primary text-primary-foreground px-3 py-1 rounded">
+                      {messageFilterPage} / {totalMessageFilterPages}
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={messageFilterPage === totalMessageFilterPages}
+                      onClick={() => setMessageFilterPage(page => page + 1)}
+                    >
+                      下一页
+                    </Button>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         )}
@@ -4139,43 +4368,50 @@ const formatWebsiteForEdit = (website: any) => ({
                       </div>
                     </div>
 
-                    <div className="space-y-2">
-                      <div className="flex items-center gap-2">
-                        <Hash className="w-4 h-4" />
-                        <span className="text-sm font-medium">已拉黑用户</span>
-                      </div>
-                      {(websiteBlockedUsers[website.id] || []).length === 0 ? (
-                        <div className="text-xs text-muted-foreground">
-                          暂无永久拉黑用户
+                    {hasWebsiteBlockUserTriggerFilter(websiteFilters[website.id] || []) && (
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Hash className="w-4 h-4" />
+                          <span className="text-sm font-medium">已拉黑用户</span>
                         </div>
-                      ) : (
-                        <div className="space-y-2">
-                          {(websiteBlockedUsers[website.id] || []).map((blockedUser: any) => (
-                            <div
-                              key={`${website.id}-${blockedUser.discord_user_id}`}
-                              className="flex items-center justify-between gap-3 rounded border px-3 py-2"
-                            >
-                              <div className="min-w-0">
-                                <div className="text-sm font-medium truncate">
-                                  {blockedUser.discord_username || blockedUser.discord_user_id}
-                                </div>
-                                <div className="text-xs text-muted-foreground truncate">
-                                  ID: {blockedUser.discord_user_id}
-                                  {blockedUser.trigger_keyword ? ` · 触发词: ${blockedUser.trigger_keyword}` : ''}
-                                </div>
-                              </div>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleDeleteWebsiteBlockedUser(website.id, String(blockedUser.discord_user_id))}
+                        {(websiteBlockedUsers[website.id] || []).length === 0 ? (
+                          <div className="text-xs text-muted-foreground">
+                            暂无永久拉黑用户
+                          </div>
+                        ) : (
+                          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                            {(websiteBlockedUsers[website.id] || []).map((blockedUser: any) => (
+                              <div
+                                key={`${website.id}-${blockedUser.discord_user_id}`}
+                                className="flex min-w-0 items-start justify-between gap-2 rounded border px-2.5 py-2"
                               >
-                                删除
-                              </Button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
+                                <div className="min-w-0">
+                                  <div className="truncate text-xs font-medium">
+                                    {blockedUser.discord_username || blockedUser.discord_user_id}
+                                  </div>
+                                  <div className="truncate text-[11px] text-muted-foreground">
+                                    ID: {blockedUser.discord_user_id}
+                                  </div>
+                                  {blockedUser.trigger_keyword ? (
+                                    <div className="truncate text-[11px] text-muted-foreground">
+                                      触发词: {blockedUser.trigger_keyword}
+                                    </div>
+                                  ) : null}
+                                </div>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-7 px-2 text-[11px]"
+                                  onClick={() => handleDeleteWebsiteBlockedUser(website.id, String(blockedUser.discord_user_id))}
+                                >
+                                  删除
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                   </div>
                 ))}
@@ -4217,6 +4453,8 @@ const formatWebsiteForEdit = (website: any) => ({
                       <SelectItem value="numeric_range">数字范围</SelectItem>
                       <SelectItem value="user_repeat">用户重复发送</SelectItem>
                       <SelectItem value="keyword_match_limit">关键词命中上限</SelectItem>
+                      <SelectItem value="ocr_contains">图片OCR关键词</SelectItem>
+                      <SelectItem value="website_block_user_trigger">网站拉黑触发词</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

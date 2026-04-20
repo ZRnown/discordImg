@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 from PIL import Image
 
 from backend.benchmarks.strategies import (
@@ -10,6 +11,7 @@ from backend.benchmarks.strategies import (
 )
 from backend.live_retrieval import (
     LiveCatalogImageRecord,
+    LiveCatalogPreparingError,
     LiveImageRetriever,
     LiveProductSupportRecord,
     LiveQueryRecord,
@@ -653,7 +655,7 @@ def test_live_image_retriever_reuses_prepared_catalog_without_reloading_rows(mon
     )
 
     retriever = LiveImageRetriever(FakeDB(), "siglip2_rerank")
-
+    retriever.warm()
     first = retriever.search("/tmp/query-a.jpg", query_text="alpha", top_k=1, threshold=0.0)
     second = retriever.search("/tmp/query-b.jpg", query_text="alpha", top_k=1, threshold=0.0)
 
@@ -712,6 +714,108 @@ def test_live_image_retriever_warm_prepares_catalog_before_search(monkeypatch):
     assert retriever.db.calls == 1
 
 
+def test_live_image_retriever_cold_search_starts_background_prepare_and_raises_not_ready(monkeypatch):
+    class FakeStrategy:
+        def supports_streaming_live_search(self):
+            return False
+
+    monkeypatch.setattr(
+        "backend.live_retrieval.get_retrieval_strategy_instance",
+        lambda *args, **kwargs: FakeStrategy(),
+    )
+
+    class FakeDB:
+        pass
+
+    retriever = LiveImageRetriever(FakeDB(), "siglip2_rerank")
+    started = []
+
+    def fake_start_background_refresh_locked():
+        started.append(True)
+        retriever._prepare_inflight = True
+        return True
+
+    monkeypatch.setattr(
+        retriever,
+        "_start_background_refresh_locked",
+        fake_start_background_refresh_locked,
+    )
+
+    with pytest.raises(LiveCatalogPreparingError):
+        retriever.search("/tmp/query.jpg", top_k=1, threshold=0.0)
+
+    assert started == [True]
+
+
+def test_live_image_retriever_search_keeps_using_previous_catalog_while_refreshing(monkeypatch):
+    class FakeDB:
+        def __init__(self):
+            self.calls = 0
+
+        def get_searchable_product_image_records(self, **kwargs):
+            self.calls += 1
+            product_id = "1001" if self.calls == 1 else "2002"
+            image_path = "/tmp/a-1.jpg" if self.calls == 1 else "/tmp/b-1.jpg"
+            title = "Alpha Runner" if self.calls == 1 else "Beta Runner"
+            return [
+                {
+                    "product_id": product_id,
+                    "title": title,
+                    "english_title": title,
+                    "description": "",
+                    "shop_name": "shop-a",
+                    "image_path": image_path,
+                    "image_index": 0,
+                    "product_url": f"https://weidian.com/item.html?itemID={product_id}",
+                    "retrieval_cache_strategy": "siglip2_rerank",
+                    "retrieval_cache_version": "siglip2_rerank_v1",
+                    "retrieval_embedding": "[0.1, 0.2, 0.3]",
+                    "retrieval_color_hist": None,
+                    "retrieval_tokens": "[\"alpha\", \"runner\"]",
+                }
+            ]
+
+    class FakeStrategy:
+        def prepare_catalog_image(self, record):
+            return {"image_path": record.image_path}
+
+        def prepare_query_image(self, record):
+            return {"query": record.query}
+
+        def score(self, query_context, catalog_context):
+            return 0.95 if catalog_context["image_path"] == "/tmp/a-1.jpg" else 0.11
+
+    monkeypatch.setattr(
+        "backend.benchmarks.strategies.create_strategy",
+        lambda _name: FakeStrategy(),
+    )
+
+    retriever = LiveImageRetriever(FakeDB(), "siglip2_rerank")
+    retriever.warm()
+    first = retriever.search("/tmp/query-a.jpg", query_text="alpha", top_k=1, threshold=0.0)
+
+    started = []
+
+    def fake_start_background_refresh_locked():
+        started.append(True)
+        retriever._prepare_inflight = True
+        return True
+
+    monkeypatch.setattr(
+        retriever,
+        "_start_background_refresh_locked",
+        fake_start_background_refresh_locked,
+    )
+
+    retriever.invalidate()
+    second = retriever.search("/tmp/query-b.jpg", query_text="alpha", top_k=1, threshold=0.0)
+
+    assert first["ranked_products"][0]["product_id"] == "1001"
+    assert second["ranked_products"][0]["product_id"] == "1001"
+    assert retriever.db.calls == 1
+    assert started == [True]
+
+
 def test_live_image_retriever_search_prefers_prepared_catalog_by_default(monkeypatch):
     class FakeDB:
         def __init__(self):
@@ -761,7 +865,7 @@ def test_live_image_retriever_search_prefers_prepared_catalog_by_default(monkeyp
     )
 
     retriever = LiveImageRetriever(FakeDB(), "siglip2_rerank")
-
+    retriever.warm()
     result = retriever.search(
         "/tmp/query.jpg",
         query_text="ignored",
@@ -797,6 +901,7 @@ def test_live_image_retriever_warm_skips_streaming_catalog_count(monkeypatch):
             return True
 
     monkeypatch.setenv("LIVE_IMAGE_SEARCH_STREAMING_ENABLED", "1")
+    monkeypatch.setenv("LIVE_IMAGE_SEARCH_STREAMING_FORCE", "1")
     monkeypatch.setattr(
         "backend.live_retrieval.get_retrieval_strategy_instance",
         lambda *args, **kwargs: FakeStrategy(),
@@ -855,6 +960,7 @@ def test_live_image_retriever_streaming_search_requires_explicit_enable(monkeypa
             return catalog_context["score"]
 
     monkeypatch.setenv("LIVE_IMAGE_SEARCH_STREAMING_ENABLED", "1")
+    monkeypatch.setenv("LIVE_IMAGE_SEARCH_STREAMING_FORCE", "1")
     monkeypatch.setattr(
         "backend.live_retrieval.get_retrieval_strategy_instance",
         lambda *args, **kwargs: FakeStrategy(),

@@ -1504,14 +1504,17 @@ def search_similar():
 
             # 实时图片检索改走 benchmark 验证过的策略，实现图片到商品的直接匹配。
             try:
-                from live_retrieval import get_live_image_retriever
+                import live_retrieval as live_retrieval_module
             except ModuleNotFoundError as e:
                 if e.name == 'live_retrieval':
-                    from .live_retrieval import get_live_image_retriever
+                    from . import live_retrieval as live_retrieval_module
                 else:
                     raise
 
-            retriever = get_live_image_retriever(db, getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank'))
+            retriever = live_retrieval_module.get_live_image_retriever(
+                db,
+                getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank'),
+            )
             filter_stage_elapsed = time.perf_counter() - filter_stage_started_at
             retrieval_timeout_seconds = _get_live_search_queue_timeout_seconds()
             release_live_search_slot = LIVE_SEARCH_REQUEST_GATE.try_acquire(
@@ -1535,13 +1538,27 @@ def search_similar():
 
             retrieval_started_at = time.perf_counter()
             try:
-                retrieval_result = retriever.search(
-                    image_path=image_path,
-                    query_text=query_text,
-                    top_k=limit,
-                    threshold=threshold,
-                    user_shops=user_shops,
-                )
+                try:
+                    retrieval_result = retriever.search(
+                        image_path=image_path,
+                        query_text=query_text,
+                        top_k=limit,
+                        threshold=threshold,
+                        user_shops=user_shops,
+                    )
+                except live_retrieval_module.LiveCatalogPreparingError:
+                    logger.warning(
+                        "search_similar warming up: user_id=%s shops=%s",
+                        user_id,
+                        user_shops,
+                    )
+                    return jsonify(
+                        {
+                            'error': 'search warming up',
+                            'retryable': True,
+                            'message': '图搜服务预热中，请稍后重试',
+                        }
+                    ), 503
             finally:
                 release_live_search_slot()
             retrieval_elapsed = time.perf_counter() - retrieval_started_at
@@ -3275,6 +3292,34 @@ def get_message_filter_images(filter_id: int):
     except Exception as e:
         logger.error(f"获取过滤图片失败: {e}")
         return jsonify({'error': '获取失败'}), 500
+
+
+@app.route('/api/message-filters/<int:filter_id>/blocked-users', methods=['GET'])
+def get_message_filter_blocked_users(filter_id: int):
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        blocked_users = db.get_message_filter_blocked_users(filter_id)
+        return jsonify({'blocked_users': blocked_users})
+    except Exception as e:
+        logger.error(f"获取全局拉黑用户失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/message-filters/<int:filter_id>/blocked-users/<discord_user_id>', methods=['DELETE'])
+def delete_message_filter_blocked_user(filter_id: int, discord_user_id: str):
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        deleted = db.delete_message_filter_blocked_user(filter_id, discord_user_id)
+        if not deleted:
+            return jsonify({'error': '拉黑用户不存在'}), 404
+        return jsonify({'success': True, 'message': '已删除拉黑用户'})
+    except Exception as e:
+        logger.error(f"删除全局拉黑用户失败: {e}")
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/api/message-filters/<int:filter_id>/images', methods=['POST'])
