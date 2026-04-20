@@ -196,51 +196,45 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
 
   return (
     <div className="space-y-6">
-      <Card className="overflow-hidden border-slate-800/20 shadow-[0_24px_70px_-32px_rgba(15,23,42,0.55)]">
-        <div
-          className="border-b border-white/10 px-6 py-5 text-white"
-          style={{
-            backgroundImage:
-              "radial-gradient(circle at top right, rgba(34,197,94,0.28), transparent 32%), linear-gradient(135deg, #0f172a 0%, #1e293b 52%, #0f172a 100%)",
-          }}
-        >
+      <Card className="overflow-hidden border shadow-sm">
+        <div className="border-b bg-muted/20 px-6 py-5">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div className="space-y-2">
-              <div className="inline-flex items-center gap-2 rounded-full border border-emerald-400/25 bg-emerald-400/10 px-3 py-1 text-xs text-emerald-100">
+              <div className="inline-flex items-center gap-2 rounded-full border border-primary/10 bg-primary/5 px-3 py-1 text-xs font-medium text-primary">
                 <ShieldCheck className="size-3.5" />
                 人工审核窗口
               </div>
               <div>
                 <h2 className="text-2xl font-semibold tracking-tight">待审关键词消息</h2>
-                <p className="mt-1 max-w-2xl text-sm text-slate-300">
+                <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
                   通过后会继续走网站配置的发送逻辑，保留自定义内容、图片和当前账号调度规则。
                 </p>
               </div>
             </div>
 
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <div className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 backdrop-blur">
-                <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">待审</div>
+              <div className="rounded-lg border bg-background px-4 py-3">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">待审</div>
                 <div className="mt-1 text-2xl font-semibold">{items.length}</div>
               </div>
-              <div className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 backdrop-blur">
-                <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">已选</div>
+              <div className="rounded-lg border bg-background px-4 py-3">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">已选</div>
                 <div className="mt-1 text-2xl font-semibold">{selectedCount}</div>
               </div>
-              <div className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3 backdrop-blur">
-                <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">网站</div>
+              <div className="rounded-lg border bg-background px-4 py-3">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">网站</div>
                 <div className="mt-1 text-2xl font-semibold">{websites.length}</div>
               </div>
-              <div className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3 backdrop-blur">
-                <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">刷新</div>
-                <div className="mt-1 text-sm text-slate-200">15 秒轮询</div>
+              <div className="rounded-lg border bg-background px-4 py-3">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-muted-foreground">刷新</div>
+                <div className="mt-1 text-sm text-foreground">15 秒轮询</div>
               </div>
             </div>
           </div>
         </div>
 
         <CardContent className="space-y-5 p-6">
-          <div className="flex flex-col gap-3 rounded-2xl border bg-muted/30 p-4 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex flex-col gap-4 rounded-lg border bg-muted/20 p-4 lg:flex-row lg:items-center lg:justify-between">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
               <div className="space-y-1">
                 <div className="text-xs font-medium text-muted-foreground">筛选网站</div>
@@ -284,7 +278,6 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
                 size="sm"
                 onClick={() => void submitAction("approved", selectedIds)}
                 disabled={!selectedIds.length || actionInFlight !== null}
-                className="bg-emerald-600 hover:bg-emerald-700"
               >
                 {actionInFlight === "approved" ? <Loader2 className="mr-2 size-4 animate-spin" /> : <CheckCircle2 className="mr-2 size-4" />}
                 通过选中
@@ -292,11 +285,11 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
             </div>
           </div>
 
-          <div className="rounded-2xl border bg-background/70">
-            <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
+          <div className="overflow-hidden rounded-lg border bg-background">
+            <div className="flex items-center justify-between gap-3 border-b bg-muted/10 px-4 py-3">
               <label className="flex items-center gap-3 text-sm font-medium">
                 <Checkbox checked={allSelected} onCheckedChange={toggleAll} />
-                全选当前列表
+                全选当前结果
               </label>
               <div className="text-xs text-muted-foreground">
                 {selectedCount > 0 ? `已选择 ${selectedCount} 条` : "未选择任何消息"}
@@ -330,8 +323,7 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
                 return (
                   <div
                     key={item.id}
-                    className="grid gap-4 px-4 py-4 transition-colors hover:bg-muted/40 lg:grid-cols-[auto_minmax(0,1fr)_auto]"
-                    style={{ animationDelay: `${Math.min(index * 40, 240)}ms` }}
+                    className="grid gap-4 px-4 py-4 transition-colors hover:bg-muted/20 lg:grid-cols-[auto_minmax(0,1fr)_auto]"
                   >
                     <div className="pt-1">
                       <Checkbox checked={selected} onCheckedChange={(checked) => toggleSelected(item.id, Boolean(checked))} />
@@ -344,29 +336,33 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
                         <Badge variant="outline">消息 #{item.id}</Badge>
                       </div>
 
-                      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                        <div className="rounded-xl border bg-muted/30 px-3 py-2">
+                      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+                        <div className="rounded-lg border bg-muted/20 px-3 py-2">
                           <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">账号</div>
                           <div className="mt-1 text-sm font-medium">{accountNames.join(" / ") || "未记录"}</div>
                         </div>
-                        <div className="rounded-xl border bg-muted/30 px-3 py-2">
+                        <div className="rounded-lg border bg-muted/20 px-3 py-2">
                           <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">发送者</div>
                           <div className="mt-1 text-sm font-medium">{item.sender_name || "未记录"}</div>
                         </div>
-                        <div className="rounded-xl border bg-muted/30 px-3 py-2">
+                        <div className="rounded-lg border bg-muted/20 px-3 py-2">
+                          <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">位置</div>
+                          <div className="mt-1 text-sm font-medium">{item.position || "未记录"}</div>
+                        </div>
+                        <div className="rounded-lg border bg-muted/20 px-3 py-2">
                           <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">时间</div>
                           <div className="mt-1 text-sm font-medium">{formatReviewTime(item.message_time || item.created_at)}</div>
                         </div>
-                        <div className="rounded-xl border bg-muted/30 px-3 py-2">
+                        <div className="rounded-lg border bg-muted/20 px-3 py-2">
                           <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">来源</div>
                           <div className="mt-1 text-sm font-medium">{item.guild_name || "服务器"} / #{item.channel_name || "频道"}</div>
                         </div>
                       </div>
 
-                      <div className="rounded-2xl border bg-slate-950 px-4 py-3 text-slate-100 shadow-inner">
+                      <div className="rounded-lg border bg-muted/10 px-4 py-3">
                         <div className="flex items-center justify-between gap-3">
-                          <div className="text-xs uppercase tracking-[0.24em] text-slate-400">审核内容</div>
-                          <div className="text-[11px] text-slate-400">保留原始发送文本</div>
+                          <div className="text-xs uppercase tracking-[0.18em] text-muted-foreground">内容</div>
+                          <div className="text-[11px] text-muted-foreground">保留原始发送文本</div>
                         </div>
                         <div className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap break-words text-sm leading-6">
                           {content}
@@ -374,7 +370,7 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
                       </div>
 
                       {sourceContent ? (
-                        <div className="rounded-xl border border-dashed bg-muted/20 px-3 py-2">
+                        <div className="rounded-lg border border-dashed bg-background px-3 py-2">
                           <div className="text-[11px] uppercase tracking-[0.16em] text-muted-foreground">原始消息</div>
                           <div className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words text-sm text-muted-foreground">
                             {sourceContent}
@@ -388,7 +384,6 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
                         size="sm"
                         onClick={() => void submitAction("approved", [item.id])}
                         disabled={actionInFlight !== null}
-                        className="bg-emerald-600 hover:bg-emerald-700"
                       >
                         <CheckCircle2 className="mr-2 size-4" />
                         通过
