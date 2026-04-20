@@ -1840,25 +1840,29 @@ const formatWebsiteForEdit = (website: any) => ({
   }
 
   const handleAddChannel = async (websiteId: number, channelId: string) => {
-    if (!channelId.trim()) {
+    const normalizedChannelInput = channelId.trim()
+    if (!normalizedChannelInput) {
       toast.warning("频道ID不能为空")
       return
     }
+    const actualChannelId = normalizedChannelInput.includes('discord.com/channels/')
+      ? normalizedChannelInput.split('/').filter(Boolean).pop() || normalizedChannelInput
+      : normalizedChannelInput
     try {
       const res = await fetch(`/api/websites/${websiteId}/channels`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ channel_id: channelId.trim() })
+        body: JSON.stringify({ channel_id: actualChannelId })
       })
       const data = await res.json().catch(() => ({}))
       if (res.ok) {
         toast.success('频道绑定已添加')
         // 立即更新前端状态，而不是重新获取所有数据
         const nextBinding = {
-          id: `${websiteId}:${channelId.trim()}`,
+          id: `${websiteId}:${actualChannelId}`,
           website_id: websiteId,
-          channel_id: channelId.trim(),
+          channel_id: actualChannelId,
           keyword_review_enabled: 0,
         }
         applyWebsiteChannelBindingsState(websiteId, [
@@ -1915,9 +1919,10 @@ const formatWebsiteForEdit = (website: any) => ({
   }
 
   const handleToggleChannelReviewWindow = async (websiteId: number, channelId: string, enabled: boolean) => {
-    const normalizedChannelId = channelId.includes('discord.com/channels/')
-      ? channelId.split('/').filter(Boolean).pop() || channelId
-      : channelId
+    const normalizedInput = channelId.trim()
+    const normalizedChannelId = normalizedInput.includes('discord.com/channels/')
+      ? normalizedInput.split('/').filter(Boolean).pop() || normalizedInput
+      : normalizedInput
     const previousBindings = websiteChannelBindings[websiteId] || []
     const optimisticBindings = previousBindings.map((binding: any) => {
       const bindingChannelId = String(binding?.channel_id ?? binding?.channelId ?? binding?.id ?? '').trim()

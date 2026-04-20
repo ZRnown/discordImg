@@ -772,6 +772,25 @@ def get_global_feature_extractor():
         return initialize_feature_extractor()
     return feature_extractor_instance
 
+
+def _build_ai_status_snapshot():
+    extractor = feature_extractor_instance
+    if extractor is None:
+        return {
+            'device': str(getattr(config, 'DEVICE', 'cpu')),
+            'yolo_available': False,
+            'yolo_type': 'None',
+            'detection_cache_size': 0,
+            'confidence_threshold': 0.05,
+            'iou_threshold': 0.5,
+            'performance_tips': ['AI模型尚未初始化'],
+            'initialized': False,
+        }
+
+    ai_status = extractor.get_status()
+    ai_status['initialized'] = True
+    return ai_status
+
 # 在应用启动时初始化
 # 【修复】注释掉模块级别的初始化，避免多进程环境下重复初始化
 # 实际的初始化在 if __name__ == '__main__' 块中的预热阶段执行
@@ -5195,10 +5214,7 @@ def cleanup_images():
 def get_ai_status():
     """获取AI系统完整状态和诊断信息"""
     try:
-        extractor = get_global_feature_extractor()
-        if extractor is None:
-            return {'error': '特征提取器未初始化'}
-        ai_status = extractor.get_status()
+        ai_status = _build_ai_status_snapshot()
         strategy_name = getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank')
         total_images = 0
         try:
@@ -5220,7 +5236,11 @@ def get_ai_status():
         overall_status = {
             'ai_model_status': ai_status,
             'retrieval_cache_status': cache_status,
-            'system_health': '良好' if ai_status['yolo_available'] and cached_images >= 0 else '需要优化',
+            'system_health': (
+                '未初始化'
+                if not ai_status.get('initialized')
+                else ('良好' if ai_status['yolo_available'] and cached_images >= 0 else '需要优化')
+            ),
             'recommendations': []
         }
 
@@ -5229,7 +5249,7 @@ def get_ai_status():
         recommendations.extend(ai_status.get('performance_tips', []))
 
         # 额外的系统级建议
-        if not ai_status['yolo_available']:
+        if ai_status.get('initialized') and not ai_status['yolo_available']:
             recommendations.append("YOLO裁剪功能已禁用，图像识别准确率会降低")
         if cached_images == 0:
             recommendations.append("商品检索缓存为空，建议先执行商品抓取或缓存回填")

@@ -270,6 +270,25 @@ class SearchSimilarTextApiTestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
 
+    def test_ai_status_does_not_initialize_feature_extractor(self):
+        with (
+            patch.object(
+                app_module,
+                "get_global_feature_extractor",
+                side_effect=AssertionError("ai-status should not initialize the model"),
+            ),
+            patch.object(app_module.db, "get_connection", self._fake_get_connection),
+            patch.object(app_module.db, "count_product_image_retrieval_cache", return_value=7),
+        ):
+            response = self.client.get("/api/system/ai-status")
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertFalse(data["ai_model_status"]["initialized"])
+        self.assertFalse(data["ai_model_status"]["yolo_available"])
+        self.assertEqual(data["retrieval_cache_status"]["total_images"], 3)
+        self.assertEqual(data["retrieval_cache_status"]["cached_images"], 7)
+
     def test_search_similar_recovers_from_catalog_warming_up(self):
         from backend import live_retrieval as live_retrieval_module
 

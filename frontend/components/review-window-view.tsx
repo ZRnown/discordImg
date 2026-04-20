@@ -1,11 +1,11 @@
 "use client"
 
-import { useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import { toast } from "sonner"
 import { getApiErrorMessage } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
@@ -31,7 +31,8 @@ type ReviewItem = {
 const formatReviewTime = (value: unknown) => {
   if (!value) return "未记录"
   const text = String(value)
-  const parsed = new Date(text)
+  const normalized = text.includes("T") ? text : text.replace(" ", "T")
+  const parsed = new Date(normalized)
   if (Number.isNaN(parsed.getTime())) {
     return text
   }
@@ -69,7 +70,7 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
   const selectedCount = selectedIds.length
   const allSelected = items.length > 0 && selectedCount === items.length
 
-  const fetchWebsites = async () => {
+  const fetchWebsites = useCallback(async () => {
     setLoadingWebsites(true)
     try {
       const response = await fetch("/api/websites", {
@@ -86,9 +87,9 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
     } finally {
       setLoadingWebsites(false)
     }
-  }
+  }, [])
 
-  const fetchItems = async () => {
+  const fetchItems = useCallback(async (options?: { preserveSelection?: boolean; silent?: boolean }) => {
     setLoadingItems(true)
     try {
       const params = new URLSearchParams()
@@ -104,32 +105,41 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
       if (!response.ok) {
         throw new Error(getApiErrorMessage(data, "获取审核队列失败"))
       }
-      setItems(data.items || [])
-      setSelectedIds([])
+      const nextItems: ReviewItem[] = data.items || []
+      setItems(nextItems)
+      setSelectedIds(prev => {
+        if (!options?.preserveSelection) {
+          return []
+        }
+        const nextIds = new Set(nextItems.map(item => item.id))
+        return prev.filter(id => nextIds.has(id))
+      })
     } catch (error) {
-      toast.error(getApiErrorMessage(error, "获取审核队列失败"))
+      if (!options?.silent) {
+        toast.error(getApiErrorMessage(error, "获取审核队列失败"))
+      }
     } finally {
       setLoadingItems(false)
     }
-  }
+  }, [selectedWebsiteId])
 
   useEffect(() => {
     if (!isActive) return
     void fetchWebsites()
-  }, [isActive])
+  }, [isActive, fetchWebsites])
 
   useEffect(() => {
     if (!isActive) return
     void fetchItems()
-  }, [isActive, selectedWebsiteId])
+  }, [isActive, fetchItems])
 
   useEffect(() => {
     if (!isActive) return
     const timer = setInterval(() => {
-      void fetchItems()
+      void fetchItems({ preserveSelection: true, silent: true })
     }, 15000)
     return () => clearInterval(timer)
-  }, [isActive, selectedWebsiteId])
+  }, [isActive, fetchItems])
 
   const toggleSelected = (itemId: number, checked: boolean) => {
     setSelectedIds(prev => {
@@ -209,11 +219,11 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
             </div>
 
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-              <div className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3 backdrop-blur">
+              <div className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 backdrop-blur">
                 <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">待审</div>
                 <div className="mt-1 text-2xl font-semibold">{items.length}</div>
               </div>
-              <div className="rounded-2xl border border-white/10 bg-white/8 px-4 py-3 backdrop-blur">
+              <div className="rounded-2xl border border-white/10 bg-white/10 px-4 py-3 backdrop-blur">
                 <div className="text-[11px] uppercase tracking-[0.24em] text-slate-400">已选</div>
                 <div className="mt-1 text-2xl font-semibold">{selectedCount}</div>
               </div>
@@ -250,7 +260,7 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
               </div>
 
               <div className="flex items-center gap-2 pt-5 sm:pt-0">
-                <Button variant="outline" size="sm" onClick={() => void fetchItems()} disabled={loadingItems}>
+                <Button variant="outline" size="sm" onClick={() => void fetchItems({ preserveSelection: true })} disabled={loadingItems}>
                   {loadingItems ? <Loader2 className="mr-2 size-4 animate-spin" /> : <RefreshCw className="mr-2 size-4" />}
                   刷新
                 </Button>
@@ -294,6 +304,12 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
             </div>
 
             <div className="divide-y">
+              {loadingItems && items.length === 0 ? (
+                <div className="flex min-h-[320px] flex-col items-center justify-center px-6 py-14 text-center">
+                  <Loader2 className="size-8 animate-spin text-muted-foreground" />
+                  <p className="mt-3 text-sm text-muted-foreground">正在加载待审消息...</p>
+                </div>
+              ) : null}
               {!loadingItems && items.length === 0 ? (
                 <div className="flex min-h-[320px] flex-col items-center justify-center px-6 py-14 text-center">
                   <Inbox className="size-12 text-muted-foreground/60" />
