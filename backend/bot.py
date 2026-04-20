@@ -4414,7 +4414,10 @@ class DiscordBotClient(discord.Client):
             if channel is None:
                 return
 
-            message = await channel.fetch_message(message_id)
+            try:
+                message = await channel.fetch_message(message_id)
+            except discord.NotFound:
+                return
             if message is None:
                 return
             if getattr(message.author, "id", None) != getattr(self.user, "id", None):

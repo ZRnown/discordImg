@@ -1,10 +1,10 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Pause, Play, Trash2, RefreshCw } from "lucide-react"
+import { Trash2 } from "lucide-react"
 
 type LogEntry = {
   timestamp: string
@@ -19,125 +19,120 @@ type LogEntry = {
 export function LogsView({ isActive = true }: { isActive?: boolean }) {
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [isConnected, setIsConnected] = useState(false)
-  const [isPaused, setIsPaused] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const logLimit = 5000
 
-  // 加载历史日志
-  const loadRecentLogs = async () => {
-    try {
-      const response = await fetch('/api/logs/recent')
-      if (response.ok) {
-        const data = await response.json()
-        setLogs((data.logs || []).slice(-logLimit))
-      }
-    } catch (error) {
-      console.error('加载历史日志失败:', error)
-    }
-  }
-
-  // 连接到日志流
-  const connectToLogStream = () => {
-    if (eventSourceRef.current) {
-      eventSourceRef.current.close()
-    }
-
-    const eventSource = new EventSource('/api/logs/stream')
-    eventSourceRef.current = eventSource
-
-    eventSource.onopen = () => {
-      console.log('日志流连接已建立')
-      setIsConnected(true)
-    }
-
-    eventSource.onmessage = (event) => {
-      try {
-        const logEntry: LogEntry = JSON.parse(event.data)
-
-        // 过滤心跳包
-        if (logEntry.type === 'heartbeat') {
-          return
-        }
-
-        setLogs((prev) => [...prev, logEntry].slice(-logLimit))
-      } catch (error) {
-        console.error('解析日志数据失败:', error, event.data)
-      }
-    }
-
-    eventSource.onerror = (error) => {
-      console.error('日志流连接错误:', error)
-      setIsConnected(false)
-
-      // 自动重连
-      setTimeout(() => {
-        if (!isPaused) {
-          connectToLogStream()
-        }
-      }, 5000)
-    }
-  }
-
   useEffect(() => {
-    if (!isActive) {
+    let cancelled = false
+
+    const cleanupConnection = () => {
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current)
+        reconnectTimerRef.current = null
+      }
       if (eventSourceRef.current) {
         eventSourceRef.current.close()
         eventSourceRef.current = null
       }
+    }
+
+    const loadRecentLogs = async () => {
+      try {
+        const response = await fetch('/api/logs/recent')
+        if (!response.ok) {
+          return
+        }
+        const data = await response.json()
+        if (!cancelled) {
+          setLogs((data.logs || []).slice(-logLimit))
+        }
+      } catch (error) {
+        console.error('加载历史日志失败:', error)
+      }
+    }
+
+    const connectToLogStream = () => {
+      cleanupConnection()
+      if (cancelled) {
+        return
+      }
+
+      const eventSource = new EventSource('/api/logs/stream')
+      eventSourceRef.current = eventSource
+
+      eventSource.onopen = () => {
+        if (!cancelled) {
+          setIsConnected(true)
+        }
+      }
+
+      eventSource.onmessage = (event) => {
+        if (cancelled) {
+          return
+        }
+
+        try {
+          const logEntry: LogEntry = JSON.parse(event.data)
+          if (logEntry.type === 'heartbeat') {
+            return
+          }
+
+          setLogs((prev) => [...prev, logEntry].slice(-logLimit))
+        } catch (error) {
+          console.error('解析日志数据失败:', error, event.data)
+        }
+      }
+
+      eventSource.onerror = (error) => {
+        if (cancelled) {
+          return
+        }
+
+        console.error('日志流连接错误:', error)
+        setIsConnected(false)
+        cleanupConnection()
+        reconnectTimerRef.current = setTimeout(() => {
+          reconnectTimerRef.current = null
+          if (!cancelled) {
+            connectToLogStream()
+          }
+        }, 5000)
+      }
+    }
+
+    if (!isActive) {
+      cleanupConnection()
       setIsConnected(false)
       return
     }
 
-    // 加载历史日志
-    loadRecentLogs()
-
-    // 连接到日志流
-    if (!isPaused) {
-      connectToLogStream()
-    }
+    void loadRecentLogs()
+    connectToLogStream()
 
     return () => {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close()
-        eventSourceRef.current = null
-      }
+      cancelled = true
+      cleanupConnection()
+      setIsConnected(false)
     }
-  }, [isPaused, isActive])
+  }, [isActive])
 
   useEffect(() => {
-    if (scrollRef.current && !isPaused) {
-      scrollRef.current.scrollIntoView({ behavior: "smooth" })
+    if (scrollRef.current) {
+      scrollRef.current.scrollIntoView({ behavior: "auto" })
     }
-  }, [logs, isPaused])
-
-  const handleTogglePause = () => {
-    setIsPaused(!isPaused)
-    if (!isPaused) {
-      // 暂停时断开连接
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close()
-        setIsConnected(false)
-      }
-    } else {
-      // 恢复时重新连接
-      connectToLogStream()
-    }
-  }
+  }, [logs])
 
   const handleClearLogs = () => {
     setLogs([])
-  }
-
-  const handleRefresh = () => {
-    loadRecentLogs()
   }
 
   const getLogLine = (log: LogEntry) => log.raw_line || log.message || ''
 
   return (
     <div className="space-y-6" data-tutorial="logs-root">
-        <div className="flex items-center justify-between" data-tutorial="logs-controls">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between" data-tutorial="logs-controls">
         <div>
           <h2 className="text-3xl font-bold tracking-tight">实时日志</h2>
           <p className="text-muted-foreground">按 PM2 控制台原始格式展示系统日志</p>
@@ -149,14 +144,6 @@ export function LogsView({ isActive = true }: { isActive?: boolean }) {
               {isConnected ? '已连接' : '未连接'}
             </span>
           </div>
-          <Button variant="outline" size="sm" onClick={handleTogglePause}>
-            {isPaused ? <Play className="size-4" /> : <Pause className="size-4" />}
-            {isPaused ? '恢复' : '暂停'}
-          </Button>
-          <Button variant="outline" size="sm" onClick={handleRefresh}>
-            <RefreshCw className="size-4" />
-            刷新
-          </Button>
           <Button variant="outline" size="sm" onClick={handleClearLogs}>
             <Trash2 className="size-4" />
             清空
@@ -168,7 +155,7 @@ export function LogsView({ isActive = true }: { isActive?: boolean }) {
         <CardHeader>
           <CardTitle>系统日志流</CardTitle>
           <CardDescription>
-            共 {logs.length} 条记录（最多保留 {logLimit} 条原始日志） • {isPaused ? '已暂停' : '实时监控中'}
+            共 {logs.length} 条记录（最多保留 {logLimit} 条原始日志） • 实时监控中
           </CardDescription>
         </CardHeader>
         <CardContent>

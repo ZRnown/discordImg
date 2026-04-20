@@ -234,8 +234,8 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
         </div>
 
         <CardContent className="space-y-5 p-6">
-          <div className="flex flex-col gap-4 rounded-lg border bg-muted/20 p-4 lg:flex-row lg:items-center lg:justify-between">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="flex flex-col gap-4 rounded-lg border bg-muted/20 p-4 lg:flex-row lg:items-end lg:justify-between">
+            <div className="grid gap-3 sm:grid-cols-[240px_auto] sm:items-end">
               <div className="space-y-1">
                 <div className="text-xs font-medium text-muted-foreground">筛选网站</div>
                 <Select value={selectedWebsiteId} onValueChange={setSelectedWebsiteId}>
@@ -253,7 +253,7 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
                 </Select>
               </div>
 
-              <div className="flex items-center gap-2 pt-5 sm:pt-0">
+              <div className="flex items-end gap-2">
                 <Button variant="outline" size="sm" onClick={() => void fetchItems({ preserveSelection: true })} disabled={loadingItems}>
                   {loadingItems ? <Loader2 className="mr-2 size-4 animate-spin" /> : <RefreshCw className="mr-2 size-4" />}
                   刷新
@@ -264,7 +264,7 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
               </div>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 lg:justify-end">
               <Button
                 size="sm"
                 variant="outline"
