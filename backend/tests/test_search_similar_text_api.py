@@ -1,20 +1,63 @@
+import base64
 import io
 import json
 import sqlite3
 import unittest
 from contextlib import contextmanager
 from unittest.mock import patch
+from types import ModuleType, SimpleNamespace
+import sys
 
-from PIL import Image
+@contextmanager
+def _noop_context():
+    yield
+
+if "torch" not in sys.modules:
+    torch_stub = ModuleType("torch")
+    torch_stub.float32 = "float32"
+    torch_stub.device = lambda value: value
+    torch_stub.no_grad = _noop_context
+    torch_stub.backends = SimpleNamespace(nnpack=SimpleNamespace(enabled=False))
+    sys.modules["torch"] = torch_stub
+
+if "cv2" not in sys.modules:
+    sys.modules["cv2"] = ModuleType("cv2")
+
+if "PIL" not in sys.modules:
+    pil_stub = ModuleType("PIL")
+    pil_image_stub = ModuleType("PIL.Image")
+    pil_filter_stub = ModuleType("PIL.ImageFilter")
+    pil_image_stub.Image = type("Image", (), {})
+    pil_stub.Image = pil_image_stub
+    pil_stub.ImageFilter = pil_filter_stub
+    sys.modules["PIL"] = pil_stub
+    sys.modules["PIL.Image"] = pil_image_stub
+    sys.modules["PIL.ImageFilter"] = pil_filter_stub
+
+if "transformers" not in sys.modules:
+    transformers_stub = ModuleType("transformers")
+    transformers_stub.AutoImageProcessor = object
+    transformers_stub.AutoModel = object
+    sys.modules["transformers"] = transformers_stub
+
+if "ultralytics" not in sys.modules:
+    ultralytics_stub = ModuleType("ultralytics")
+    ultralytics_stub.YOLO = object
+    sys.modules["ultralytics"] = ultralytics_stub
 
 from backend import app as app_module
-import feature_extractor as feature_extractor_module
+from backend import feature_extractor as feature_extractor_module
+from backend import live_retrieval as live_retrieval_module
+
+sys.modules.setdefault("feature_extractor", feature_extractor_module)
+sys.modules.setdefault("live_retrieval", live_retrieval_module)
 
 
-def _make_jpeg_bytes(color=(255, 0, 0)):
-    buf = io.BytesIO()
-    Image.new("RGB", (96, 96), color=color).save(buf, format="JPEG")
-    return buf.getvalue()
+def _make_jpeg_bytes():
+    # Tiny valid JPEG so the test does not depend on Pillow.
+    return base64.b64decode(
+        "/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBxISEhUTEhIVFhUVFxUXFhUVFxUVFhUVFRUXFhUVFRUYHSggGBolGxUVITEhJSkrLi4uFx8zODMtNygtLisBCgoKDg0OFw8QFS0dFR0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLf/AABEIAAEAAQMBIgACEQEDEQH/xAAbAAEAAgMBAQAAAAAAAAAAAAAABQYDBEcCAf/EADYQAAEDAgQDBgQFBQAAAAAAAAEAAgMEEQUSITFBBhMiUWFxgZEUMkKhsdEHFSNCYnKCwdH/xAAYAQEBAQEBAAAAAAAAAAAAAAAAAQIDBP/EAB8RAAICAgEFAAAAAAAAAAAAAAABAhEDIRIxQVFhcf/aAAwDAQACEQMRAD8A9+iiigAooooAKKKKACiiigAooooAKKKKACiiigAooooA//2Q=="
+    )
 
 
 class SearchSimilarTextApiTestCase(unittest.TestCase):
