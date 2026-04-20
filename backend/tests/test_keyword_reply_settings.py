@@ -3,11 +3,13 @@ import tempfile
 import unittest
 import uuid
 import asyncio
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from backend.database import Database
 from backend.bot import DiscordBotClient
+from backend import bot as bot_module
 from backend.rotation_settings import resolve_rotation_settings_update
 
 
@@ -82,6 +84,130 @@ class KeywordReplySettingsTestCase(unittest.TestCase):
         self.assertTrue(ok)
         settings = self.db.get_user_settings(self.user_id)
         self.assertEqual(settings["keyword_reply_send_best_match_image"], 1)
+
+    def test_user_settings_persist_review_bark_fields(self):
+        ok = self.db.update_user_settings(
+            user_id=self.user_id,
+            bark_server_url="https://api.day.app",
+            bark_device_key="device-key",
+            review_bark_enabled=1,
+            review_bark_mode="interval",
+            review_bark_count_threshold=8,
+            review_bark_interval_minutes=45,
+            review_bark_last_notified_at="2026-04-20T10:00:00+08:00",
+            review_bark_last_pending_count=3,
+        )
+
+        self.assertTrue(ok)
+        settings = self.db.get_user_settings(self.user_id)
+        self.assertEqual(settings["review_bark_enabled"], 1)
+        self.assertEqual(settings["review_bark_mode"], "interval")
+        self.assertEqual(settings["review_bark_count_threshold"], 8)
+        self.assertEqual(settings["review_bark_interval_minutes"], 45)
+        self.assertEqual(settings["review_bark_last_notified_at"], "2026-04-20T10:00:00+08:00")
+        self.assertEqual(settings["review_bark_last_pending_count"], 3)
+
+    def test_count_pending_review_items_only_counts_pending_status(self):
+        first_id = self.db.add_keyword_reply_review_item({
+            "user_id": self.user_id,
+            "website_id": self.website_id,
+            "channel_id": "100",
+            "guild_id": "200",
+            "guild_name": "Guild",
+            "channel_name": "channel",
+            "account_ids": [1],
+            "account_names": ["sender-1"],
+            "sender_id": "300",
+            "sender_name": "sender",
+            "content": "content-1",
+            "source_content": "source-1",
+            "message_id": "400",
+            "reply_mode": "keyword",
+            "status": "pending",
+            "payload": {},
+        })
+        second_id = self.db.add_keyword_reply_review_item({
+            "user_id": self.user_id,
+            "website_id": self.website_id,
+            "channel_id": "101",
+            "guild_id": "201",
+            "guild_name": "Guild",
+            "channel_name": "channel",
+            "account_ids": [2],
+            "account_names": ["sender-2"],
+            "sender_id": "301",
+            "sender_name": "sender",
+            "content": "content-2",
+            "source_content": "source-2",
+            "message_id": "401",
+            "reply_mode": "keyword",
+            "status": "pending",
+            "payload": {},
+        })
+
+        self.assertGreater(first_id, 0)
+        self.assertGreater(second_id, 0)
+        self.assertEqual(self.db.count_pending_keyword_reply_review_items(self.user_id), 2)
+
+        self.assertTrue(self.db.update_keyword_reply_review_item_status(first_id, "approved"))
+        self.assertEqual(self.db.count_pending_keyword_reply_review_items(self.user_id), 1)
+
+    def test_review_bark_count_mode_only_triggers_on_new_threshold_bucket(self):
+        self.assertTrue(
+            bot_module._should_send_review_queue_bark_count_notification(
+                pending_count=5,
+                threshold=5,
+                last_pending_count=4,
+            )
+        )
+        self.assertFalse(
+            bot_module._should_send_review_queue_bark_count_notification(
+                pending_count=6,
+                threshold=5,
+                last_pending_count=5,
+            )
+        )
+        self.assertTrue(
+            bot_module._should_send_review_queue_bark_count_notification(
+                pending_count=10,
+                threshold=5,
+                last_pending_count=6,
+            )
+        )
+
+    def test_review_bark_interval_mode_checks_elapsed_time(self):
+        self.assertFalse(
+            bot_module._should_send_review_queue_bark_interval_notification(
+                pending_count=3,
+                interval_minutes=60,
+                last_notified_at=None,
+                now=datetime.fromisoformat("2026-04-20T12:00:00+08:00"),
+            )
+        )
+        self.assertFalse(
+            bot_module._should_send_review_queue_bark_interval_notification(
+                pending_count=0,
+                interval_minutes=60,
+                last_notified_at=None,
+                now=datetime.fromisoformat("2026-04-20T12:00:00+08:00"),
+            )
+        )
+        self.assertFalse(
+            bot_module._should_send_review_queue_bark_interval_notification(
+                pending_count=3,
+                interval_minutes=60,
+                last_notified_at="2026-04-20T11:30:00+08:00",
+                now=datetime.fromisoformat("2026-04-20T12:00:00+08:00"),
+            )
+        )
+        self.assertTrue(
+            bot_module._should_send_review_queue_bark_interval_notification(
+                pending_count=3,
+                interval_minutes=60,
+                last_notified_at="2026-04-20T10:30:00+08:00",
+                now=datetime.fromisoformat("2026-04-20T12:00:00+08:00"),
+            )
+        )
 
     def test_update_user_website_rotation_persists_keyword_batch_size(self):
         try:

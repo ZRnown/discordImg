@@ -3004,6 +3004,15 @@ def bulk_action_keyword_review_items():
             })
 
         failed_count = sum(1 for item in results if not item.get('success'))
+        try:
+            pending_count = db.count_pending_keyword_reply_review_items(current_user['id'])
+            db.update_user_settings(
+                user_id=current_user['id'],
+                review_bark_last_pending_count=pending_count,
+                review_bark_last_notified_at='' if pending_count <= 0 else None,
+            )
+        except Exception as sync_error:
+            logger.error(f"同步审核 Bark 待审数量失败: {sync_error}")
         return jsonify({
             'success': failed_count == 0,
             'message': '审核完成' if failed_count == 0 else '部分消息审核失败',
@@ -4744,15 +4753,41 @@ def update_user_settings():
         keyword_reply = data.get('keyword_reply_enabled')
         image_reply = data.get('image_reply_enabled')
         bark_enabled = data.get('bark_enabled')
+        review_bark_enabled = data.get('review_bark_enabled')
         keyword_reply_send_best_match_image = data.get('keyword_reply_send_best_match_image')
+        review_bark_mode = str(data.get('review_bark_mode') or 'count').strip().lower()
+        review_bark_count_threshold = data.get('review_bark_count_threshold')
+        review_bark_interval_minutes = data.get('review_bark_interval_minutes')
+        review_bark_last_notified_at = data.get('review_bark_last_notified_at')
+        review_bark_last_pending_count = data.get('review_bark_last_pending_count')
         if keyword_reply is not None:
             keyword_reply = 1 if keyword_reply else 0
         if image_reply is not None:
             image_reply = 1 if image_reply else 0
         if bark_enabled is not None:
             bark_enabled = 1 if bark_enabled else 0
+        if review_bark_enabled is not None:
+            review_bark_enabled = 1 if review_bark_enabled else 0
         if keyword_reply_send_best_match_image is not None:
             keyword_reply_send_best_match_image = 1 if keyword_reply_send_best_match_image else 0
+        if review_bark_mode not in {'count', 'interval'}:
+            review_bark_mode = 'count'
+
+        if review_bark_count_threshold is not None:
+            review_bark_count_threshold = int(review_bark_count_threshold)
+            if review_bark_count_threshold <= 0:
+                return jsonify({'error': '待审数量通知阈值必须大于 0'}), 400
+
+        if review_bark_interval_minutes is not None:
+            review_bark_interval_minutes = int(review_bark_interval_minutes)
+            if review_bark_interval_minutes <= 0:
+                return jsonify({'error': '时间通知间隔必须大于 0 分钟'}), 400
+
+        if review_bark_last_notified_at is not None:
+            review_bark_last_notified_at = str(review_bark_last_notified_at or '').strip()
+
+        if review_bark_last_pending_count is not None:
+            review_bark_last_pending_count = max(0, int(review_bark_last_pending_count))
 
         success = db.update_user_settings(
             user_id=user['id'],
@@ -4774,6 +4809,12 @@ def update_user_settings():
             bark_server_url=data.get('bark_server_url'),
             bark_device_key=data.get('bark_device_key'),
             keyword_reply_send_best_match_image=keyword_reply_send_best_match_image,
+            review_bark_enabled=review_bark_enabled,
+            review_bark_mode=review_bark_mode if 'review_bark_mode' in data else None,
+            review_bark_count_threshold=review_bark_count_threshold,
+            review_bark_interval_minutes=review_bark_interval_minutes,
+            review_bark_last_notified_at=review_bark_last_notified_at,
+            review_bark_last_pending_count=review_bark_last_pending_count,
         )
 
         if success:

@@ -6,8 +6,11 @@ import { getApiErrorMessage } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Separator } from "@/components/ui/separator"
+import { Switch } from "@/components/ui/switch"
 import { CheckCircle2, Inbox, Loader2, RefreshCw, ShieldCheck, XCircle } from "lucide-react"
 
 type ReviewItem = {
@@ -25,6 +28,42 @@ type ReviewItem = {
   message_time?: string
   created_at?: string
   payload?: any
+}
+
+type ReviewBarkMode = "count" | "interval"
+
+type ReviewBarkSettings = {
+  bark_server_url: string
+  bark_device_key: string
+  review_bark_enabled: boolean
+  review_bark_mode: ReviewBarkMode
+  review_bark_count_threshold: number
+  review_bark_interval_minutes: number
+}
+
+const createDefaultReviewBarkSettings = (): ReviewBarkSettings => ({
+  bark_server_url: "https://api.day.app",
+  bark_device_key: "",
+  review_bark_enabled: false,
+  review_bark_mode: "count",
+  review_bark_count_threshold: 5,
+  review_bark_interval_minutes: 60,
+})
+
+const toBoolean = (value: unknown) => (
+  value === true ||
+  value === 1 ||
+  value === "1" ||
+  value === "true" ||
+  value === "True"
+)
+
+const normalizePositiveInteger = (value: unknown, fallback: number) => {
+  const parsed = Number.parseInt(String(value ?? "").trim(), 10)
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback
+  }
+  return parsed
 }
 
 const formatReviewTime = (value: unknown) => {
@@ -56,6 +95,10 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
   const [selectedWebsiteId, setSelectedWebsiteId] = useState<string>("all")
   const [selectedIds, setSelectedIds] = useState<number[]>([])
   const [actionInFlight, setActionInFlight] = useState<"approved" | "rejected" | null>(null)
+  const [reviewBarkSettings, setReviewBarkSettings] = useState<ReviewBarkSettings>(() => createDefaultReviewBarkSettings())
+  const [loadingReviewBarkSettings, setLoadingReviewBarkSettings] = useState(false)
+  const [savingReviewBarkSettings, setSavingReviewBarkSettings] = useState(false)
+  const [testingReviewBark, setTestingReviewBark] = useState(false)
 
   const websiteOptions = useMemo(
     () =>
@@ -85,6 +128,33 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
       toast.error(getApiErrorMessage(error, "获取网站列表失败"))
     } finally {
       setLoadingWebsites(false)
+    }
+  }, [])
+
+  const fetchReviewBarkSettings = useCallback(async () => {
+    setLoadingReviewBarkSettings(true)
+    try {
+      const response = await fetch("/api/user/settings", {
+        credentials: "include",
+        cache: "no-store",
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(getApiErrorMessage(data, "获取审核 Bark 设置失败"))
+      }
+
+      setReviewBarkSettings({
+        bark_server_url: String(data.bark_server_url || "https://api.day.app").trim() || "https://api.day.app",
+        bark_device_key: String(data.bark_device_key || ""),
+        review_bark_enabled: toBoolean(data.review_bark_enabled),
+        review_bark_mode: String(data.review_bark_mode || "count").trim().toLowerCase() === "interval" ? "interval" : "count",
+        review_bark_count_threshold: normalizePositiveInteger(data.review_bark_count_threshold, 5),
+        review_bark_interval_minutes: normalizePositiveInteger(data.review_bark_interval_minutes, 60),
+      })
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, "获取审核 Bark 设置失败"))
+    } finally {
+      setLoadingReviewBarkSettings(false)
     }
   }, [])
 
@@ -125,7 +195,8 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
   useEffect(() => {
     if (!isActive) return
     void fetchWebsites()
-  }, [isActive, fetchWebsites])
+    void fetchReviewBarkSettings()
+  }, [isActive, fetchReviewBarkSettings, fetchWebsites])
 
   useEffect(() => {
     if (!isActive) return
@@ -191,6 +262,69 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
     }
   }
 
+  const saveReviewBarkSettings = async () => {
+    if (reviewBarkSettings.review_bark_enabled && !reviewBarkSettings.bark_device_key.trim()) {
+      toast.error("启用审核 Bark 通知前，请先填写 Bark 设备 Key")
+      return
+    }
+
+    setSavingReviewBarkSettings(true)
+    try {
+      const response = await fetch("/api/user/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          bark_server_url: reviewBarkSettings.bark_server_url.trim() || "https://api.day.app",
+          bark_device_key: reviewBarkSettings.bark_device_key.trim(),
+          review_bark_enabled: reviewBarkSettings.review_bark_enabled,
+          review_bark_mode: reviewBarkSettings.review_bark_mode,
+          review_bark_count_threshold: normalizePositiveInteger(reviewBarkSettings.review_bark_count_threshold, 5),
+          review_bark_interval_minutes: normalizePositiveInteger(reviewBarkSettings.review_bark_interval_minutes, 60),
+        }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(getApiErrorMessage(data, "保存审核 Bark 设置失败"))
+      }
+      toast.success(data.message || "审核 Bark 设置已保存")
+      await fetchReviewBarkSettings()
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, "保存审核 Bark 设置失败"))
+    } finally {
+      setSavingReviewBarkSettings(false)
+    }
+  }
+
+  const testReviewBarkNotification = async () => {
+    if (!reviewBarkSettings.bark_device_key.trim()) {
+      toast.error("请先填写 Bark 设备 Key")
+      return
+    }
+
+    setTestingReviewBark(true)
+    try {
+      const response = await fetch("/internal-api/bark-test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          bark_server_url: reviewBarkSettings.bark_server_url.trim() || "https://api.day.app",
+          bark_device_key: reviewBarkSettings.bark_device_key.trim(),
+        }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(getApiErrorMessage(data, "发送测试推送失败"))
+      }
+      toast.success(data.message || "测试推送已发送")
+    } catch (error) {
+      toast.error(getApiErrorMessage(error, "发送测试推送失败"))
+    } finally {
+      setTestingReviewBark(false)
+    }
+  }
+
   const visibleSelectedItems = items.filter(item => selectedIds.includes(item.id))
 
   return (
@@ -233,6 +367,143 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
         </div>
 
         <CardContent className="space-y-5 p-6">
+          <div className="rounded-lg border bg-background p-4">
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div>
+                  <div className="text-sm font-medium">审核 Bark 通知</div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    放在人工审核页管理。可按待审数量触发，也可按时间间隔汇总当前待审条数。
+                  </p>
+                </div>
+                <div className="flex items-center gap-3">
+                  <Label htmlFor="review-bark-enabled" className="text-sm">启用</Label>
+                  <Switch
+                    id="review-bark-enabled"
+                    checked={reviewBarkSettings.review_bark_enabled}
+                    onCheckedChange={(checked) => {
+                      setReviewBarkSettings(prev => ({ ...prev, review_bark_enabled: checked }))
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-1">
+                  <Label htmlFor="review-bark-server-url" className="text-sm">Bark 服务地址</Label>
+                  <Input
+                    id="review-bark-server-url"
+                    value={reviewBarkSettings.bark_server_url}
+                    onChange={(event) => {
+                      const value = event.target.value
+                      setReviewBarkSettings(prev => ({ ...prev, bark_server_url: value }))
+                    }}
+                    placeholder="https://api.day.app"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="review-bark-device-key" className="text-sm">Bark 设备 Key</Label>
+                  <Input
+                    id="review-bark-device-key"
+                    type="password"
+                    value={reviewBarkSettings.bark_device_key}
+                    onChange={(event) => {
+                      const value = event.target.value
+                      setReviewBarkSettings(prev => ({ ...prev, bark_device_key: value }))
+                    }}
+                    placeholder="从 Bark App 复制"
+                  />
+                </div>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-[220px_minmax(0,1fr)]">
+                <div className="space-y-1">
+                  <Label className="text-sm">通知类型</Label>
+                  <Select
+                    value={reviewBarkSettings.review_bark_mode}
+                    onValueChange={(value) => {
+                      const nextMode: ReviewBarkMode = value === "interval" ? "interval" : "count"
+                      setReviewBarkSettings(prev => ({ ...prev, review_bark_mode: nextMode }))
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="count">待审数量通知</SelectItem>
+                      <SelectItem value="interval">时间通知</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {reviewBarkSettings.review_bark_mode === "count" ? (
+                  <div className="space-y-1">
+                    <Label htmlFor="review-bark-count-threshold" className="text-sm">待审达到</Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        id="review-bark-count-threshold"
+                        type="number"
+                        min={1}
+                        value={reviewBarkSettings.review_bark_count_threshold}
+                        onChange={(event) => {
+                          const value = normalizePositiveInteger(event.target.value, 1)
+                          setReviewBarkSettings(prev => ({ ...prev, review_bark_count_threshold: value }))
+                        }}
+                        className="w-28"
+                      />
+                      <span className="text-xs text-muted-foreground">条时推送一次</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    <Label htmlFor="review-bark-interval-minutes" className="text-sm">通知间隔</Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        id="review-bark-interval-minutes"
+                        type="number"
+                        min={1}
+                        value={reviewBarkSettings.review_bark_interval_minutes}
+                        onChange={(event) => {
+                          const value = normalizePositiveInteger(event.target.value, 1)
+                          setReviewBarkSettings(prev => ({ ...prev, review_bark_interval_minutes: value }))
+                        }}
+                        className="w-28"
+                      />
+                      <span className="text-xs text-muted-foreground">分钟汇总一次当前待审条数</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+                <div className="text-xs text-muted-foreground">
+                  {loadingReviewBarkSettings
+                    ? "正在加载审核 Bark 设置..."
+                    : savingReviewBarkSettings
+                      ? "审核 Bark 设置保存中..."
+                      : "审核 Bark 通知会复用当前账号的 Bark 服务地址和设备 Key"}
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void testReviewBarkNotification()}
+                    disabled={testingReviewBark}
+                  >
+                    {testingReviewBark ? "测试推送中..." : "发送测试推送"}
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={() => void saveReviewBarkSettings()}
+                    disabled={savingReviewBarkSettings}
+                  >
+                    {savingReviewBarkSettings ? "保存中..." : "保存通知设置"}
+                  </Button>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <div className="flex flex-col gap-4 rounded-lg border bg-muted/20 p-4 lg:flex-row lg:items-end lg:justify-between">
             <div className="grid gap-3 sm:grid-cols-[240px_auto] sm:items-end">
               <div className="space-y-1">

@@ -10,7 +10,8 @@ import io
 import sqlite3
 import re
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
+from functools import partial
 from types import SimpleNamespace
 from urllib.parse import quote
 
@@ -130,6 +131,8 @@ _keyword_reply_flush_tasks = {}
 _keyword_reply_window_configs = {}
 _keyword_reply_background_tasks = set()
 _auto_reply_thread_ids = {}
+_review_bark_monitor_task = None
+_review_bark_notification_lock = asyncio.Lock()
 _AUTO_REPLY_THREAD_CACHE_LIMIT = 2048
 _BARK_ERROR_LOG_WINDOW_SECONDS = 60.0
 _bark_issue_log_state = {}
@@ -174,6 +177,112 @@ def _log_rate_limited_bark_issue(scene, detail, *, level="error"):
         "suppressed": 0,
         "last_summary": summary,
     }
+
+
+def _normalize_review_bark_mode(value):
+    normalized = str(value or 'count').strip().lower()
+    if normalized == 'interval':
+        return 'interval'
+    return 'count'
+
+
+def _parse_review_bark_datetime(value):
+    if isinstance(value, datetime):
+        return value
+
+    text = str(value or '').strip()
+    if not text:
+        return None
+
+    normalized = text.replace('Z', '+00:00')
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=datetime.now().astimezone().tzinfo)
+    return parsed
+
+
+def _should_send_review_queue_bark_count_notification(pending_count, threshold, last_pending_count):
+    current_pending = max(0, _coerce_int(pending_count, 0))
+    current_threshold = max(1, _coerce_int(threshold, 5))
+    previous_pending = max(0, _coerce_int(last_pending_count, 0))
+    if current_pending < current_threshold:
+        return False
+    return current_pending // current_threshold > previous_pending // current_threshold
+
+
+def _should_send_review_queue_bark_interval_notification(
+    pending_count,
+    interval_minutes,
+    last_notified_at,
+    now=None,
+):
+    current_pending = max(0, _coerce_int(pending_count, 0))
+    if current_pending <= 0:
+        return False
+
+    parsed_last = _parse_review_bark_datetime(last_notified_at)
+    if parsed_last is None:
+        return False
+
+    current_interval = max(1, _coerce_int(interval_minutes, 60))
+    current_time = now if isinstance(now, datetime) else datetime.now().astimezone()
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=datetime.now().astimezone().tzinfo)
+    return current_time >= parsed_last + timedelta(minutes=current_interval)
+
+
+async def _send_bark_notification_payload(bark_server_url, bark_device_key, title, body, jump_url=None):
+    server_url = (bark_server_url or "https://api.day.app").strip().rstrip("/")
+    if not server_url:
+        server_url = "https://api.day.app"
+    if not server_url.startswith(("http://", "https://")):
+        server_url = f"https://{server_url}"
+    device_key = (bark_device_key or "").strip()
+    if not device_key:
+        return
+
+    encoded_key = quote(device_key, safe="")
+    encoded_title = quote(title or "Discord 通知", safe="")
+    encoded_body = quote(body or "", safe="")
+    push_url = f"{server_url}/{encoded_key}/{encoded_title}/{encoded_body}"
+
+    params = {
+        "group": "LinkRadar 链接雷达",
+        "isArchive": "1",
+        "sound": "gotosleep",
+    }
+    if jump_url:
+        params["url"] = jump_url
+
+    timeout = aiohttp.ClientTimeout(total=8)
+    for attempt in range(2):
+        try:
+            async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+                async with session.get(push_url, params=params) as response:
+                    if response.status < 400:
+                        return
+
+                    text = await response.text()
+                    retryable = response.status >= 500
+                    if retryable and attempt == 0:
+                        await asyncio.sleep(0.5)
+                        continue
+
+                    _log_rate_limited_bark_issue(
+                        "Bark 推送失败",
+                        f"status={response.status}, body={text}",
+                        level="warning",
+                    )
+                    return
+        except Exception as e:
+            if attempt == 0:
+                await asyncio.sleep(0.5)
+                continue
+            _log_rate_limited_bark_issue("Bark 推送异常", _summarize_exception_for_log(e))
 
 
 def _coerce_int(value, default):
@@ -2649,53 +2758,199 @@ class DiscordBotClient(discord.Client):
         return None
 
     async def _send_bark_notification(self, bark_server_url, bark_device_key, title, body, jump_url=None):
-        server_url = (bark_server_url or "https://api.day.app").strip().rstrip("/")
-        if not server_url:
-            server_url = "https://api.day.app"
-        if not server_url.startswith(("http://", "https://")):
-            server_url = f"https://{server_url}"
-        device_key = (bark_device_key or "").strip()
-        if not device_key:
+        await _send_bark_notification_payload(
+            bark_server_url=bark_server_url,
+            bark_device_key=bark_device_key,
+            title=title,
+            body=body,
+            jump_url=jump_url,
+        )
+
+    async def _sync_review_bark_state(
+        self,
+        user_id,
+        *,
+        pending_count=None,
+        last_notified_at=None,
+    ):
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+
+            payload = {
+                'user_id': user_id,
+            }
+            if pending_count is not None:
+                payload['review_bark_last_pending_count'] = max(0, _coerce_int(pending_count, 0))
+            if last_notified_at is not None:
+                payload['review_bark_last_notified_at'] = str(last_notified_at or '')
+
+            if len(payload) > 1:
+                await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    partial(db.update_user_settings, **payload),
+                )
+        except Exception as e:
+            logger.error(f"同步审核 Bark 状态失败(user_id={user_id}): {e}")
+
+    async def _maybe_send_review_queue_bark_notification(self, user_id, *, trigger):
+        if user_id is None:
             return
 
-        encoded_key = quote(device_key, safe="")
-        encoded_title = quote(title or "Discord 通知", safe="")
-        encoded_body = quote(body or "", safe="")
-        push_url = f"{server_url}/{encoded_key}/{encoded_title}/{encoded_body}"
+        try:
+            async with _review_bark_notification_lock:
+                try:
+                    from database import db
+                except ImportError:
+                    from .database import db
 
-        params = {
-            "group": "LinkRadar 链接雷达",
-            "isArchive": "1",
-            "sound": "gotosleep",
-        }
-        if jump_url:
-            params["url"] = jump_url
+                user_settings = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    db.get_user_settings,
+                    user_id,
+                )
+                if not user_settings:
+                    return
 
-        timeout = aiohttp.ClientTimeout(total=8)
-        for attempt in range(2):
-            try:
-                async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
-                    async with session.get(push_url, params=params) as response:
-                        if response.status < 400:
-                            return
+                review_bark_enabled = user_settings.get("review_bark_enabled", 0) in (1, True, "1", "true", "True")
+                bark_device_key = (user_settings.get("bark_device_key") or "").strip()
+                if not review_bark_enabled or not bark_device_key:
+                    return
 
-                        text = await response.text()
-                        retryable = response.status >= 500
-                        if retryable and attempt == 0:
-                            await asyncio.sleep(0.5)
-                            continue
+                pending_count = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    db.count_pending_keyword_reply_review_items,
+                    user_id,
+                )
+                bark_mode = _normalize_review_bark_mode(user_settings.get("review_bark_mode"))
+                now = datetime.now().astimezone()
 
-                        _log_rate_limited_bark_issue(
-                            "Bark 推送失败",
-                            f"status={response.status}, body={text}",
-                            level="warning",
-                        )
+                if trigger == "count":
+                    if bark_mode != "count":
+                        if pending_count > 0 and not _parse_review_bark_datetime(user_settings.get("review_bark_last_notified_at")):
+                            await self._sync_review_bark_state(
+                                user_id,
+                                pending_count=pending_count,
+                                last_notified_at=now.isoformat(),
+                            )
                         return
+
+                    threshold = max(1, _coerce_int(user_settings.get("review_bark_count_threshold"), 5))
+                    last_pending_count = max(0, _coerce_int(user_settings.get("review_bark_last_pending_count"), 0))
+                    if not _should_send_review_queue_bark_count_notification(
+                        pending_count=pending_count,
+                        threshold=threshold,
+                        last_pending_count=last_pending_count,
+                    ):
+                        return
+
+                    title = f"待审核消息 {pending_count} 条"
+                    body = (
+                        f"类型: 待审数量通知\n"
+                        f"当前待审核: {pending_count} 条\n"
+                        f"触发阈值: {threshold} 条\n"
+                        f"时间: {now.strftime('%Y-%m-%d %H:%M:%S')}"
+                    )
+                    await self._send_bark_notification(
+                        bark_server_url=user_settings.get("bark_server_url"),
+                        bark_device_key=bark_device_key,
+                        title=title,
+                        body=body,
+                    )
+                    await self._sync_review_bark_state(
+                        user_id,
+                        pending_count=pending_count,
+                        last_notified_at=now.isoformat(),
+                    )
+                    logger.info(
+                        f"📱 审核 Bark 通知已发送: user_id={user_id} | 类型=数量 | 待审核={pending_count}"
+                    )
+                    return
+
+                if bark_mode != "interval":
+                    return
+
+                interval_minutes = max(1, _coerce_int(user_settings.get("review_bark_interval_minutes"), 60))
+                if not _should_send_review_queue_bark_interval_notification(
+                    pending_count=pending_count,
+                    interval_minutes=interval_minutes,
+                    last_notified_at=user_settings.get("review_bark_last_notified_at"),
+                    now=now,
+                ):
+                    return
+
+                title = f"待审核消息 {pending_count} 条"
+                body = (
+                    f"类型: 时间通知\n"
+                    f"当前待审核: {pending_count} 条\n"
+                    f"通知间隔: {interval_minutes} 分钟\n"
+                    f"时间: {now.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+                await self._send_bark_notification(
+                    bark_server_url=user_settings.get("bark_server_url"),
+                    bark_device_key=bark_device_key,
+                    title=title,
+                    body=body,
+                )
+                await self._sync_review_bark_state(
+                    user_id,
+                    pending_count=pending_count,
+                    last_notified_at=now.isoformat(),
+                )
+                logger.info(
+                    f"📱 审核 Bark 通知已发送: user_id={user_id} | 类型=时间 | 待审核={pending_count}"
+                )
+        except Exception as e:
+            _log_rate_limited_bark_issue("处理审核 Bark 通知失败", _summarize_exception_for_log(e))
+
+    async def _review_bark_monitor_loop(self):
+        while True:
+            try:
+                try:
+                    from database import db
+                except ImportError:
+                    from .database import db
+
+                user_ids = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    db.get_pending_keyword_reply_review_user_ids,
+                )
+                for user_id in user_ids:
+                    await self._maybe_send_review_queue_bark_notification(
+                        user_id,
+                        trigger="interval",
+                    )
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
-                if attempt == 0:
-                    await asyncio.sleep(0.5)
-                    continue
-                _log_rate_limited_bark_issue("Bark 推送异常", _summarize_exception_for_log(e))
+                logger.error(f"审核 Bark 轮询任务失败: {e}")
+
+            await asyncio.sleep(60)
+
+    def _ensure_review_bark_monitor_task(self):
+        global _review_bark_monitor_task
+        if _review_bark_monitor_task is not None and not _review_bark_monitor_task.done():
+            return
+
+        _review_bark_monitor_task = asyncio.create_task(
+            self._review_bark_monitor_loop(),
+            name="review-bark-monitor",
+        )
+
+        def _on_done(task):
+            global _review_bark_monitor_task
+            if _review_bark_monitor_task is task:
+                _review_bark_monitor_task = None
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                logger.info("审核 Bark 轮询任务已取消")
+            except Exception as e:
+                logger.error(f"审核 Bark 轮询任务异常退出: {e}")
+
+        _review_bark_monitor_task.add_done_callback(_on_done)
 
     async def _notify_direct_interaction_if_needed(self, message):
         interaction_type = await self._classify_direct_interaction(message)
@@ -3663,6 +3918,13 @@ class DiscordBotClient(discord.Client):
                                     repeat_product_ids=repeat_product_ids,
                                 )
                                 if queued_review_id:
+                                    self._start_keyword_reply_background_task(
+                                        self._maybe_send_review_queue_bark_notification(
+                                            self.user_id,
+                                            trigger="count",
+                                        ),
+                                        task_name=f"review-bark-count user={self.user_id} item={queued_review_id}",
+                                    )
                                     logger.info(
                                         f"📝 [进入人工审核] 网站:{website_config.get('name')} "
                                         f"频道:{message.channel.id} 队列ID:{queued_review_id}"
@@ -4363,6 +4625,7 @@ class DiscordBotClient(discord.Client):
     async def on_ready(self):
         logger.info(f'Discord机器人已登录: {self.user} (ID: {self.user.id})')
         logger.info(f'机器人已就绪，开始监听消息')
+        self._ensure_review_bark_monitor_task()
         try:
             await self._refresh_channel_cache()
             bound_channels = DiscordBotClient._bound_channels_cache

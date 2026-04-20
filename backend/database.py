@@ -847,6 +847,13 @@ class Database:
                     bark_enabled INTEGER DEFAULT 0,  -- 是否启用 Bark 通知
                     bark_server_url TEXT DEFAULT 'https://api.day.app',  -- Bark 服务地址
                     bark_device_key TEXT DEFAULT '',  -- Bark 设备密钥
+                    keyword_reply_send_best_match_image INTEGER DEFAULT 0,
+                    review_bark_enabled INTEGER DEFAULT 0,
+                    review_bark_mode TEXT DEFAULT 'count',
+                    review_bark_count_threshold INTEGER DEFAULT 5,
+                    review_bark_interval_minutes INTEGER DEFAULT 60,
+                    review_bark_last_notified_at TEXT DEFAULT '',
+                    review_bark_last_pending_count INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
@@ -907,6 +914,36 @@ class Database:
 
             try:
                 cursor.execute('ALTER TABLE user_settings ADD COLUMN keyword_reply_send_best_match_image INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN review_bark_enabled INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN review_bark_mode TEXT DEFAULT \'count\'')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN review_bark_count_threshold INTEGER DEFAULT 5')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN review_bark_interval_minutes INTEGER DEFAULT 60')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN review_bark_last_notified_at TEXT DEFAULT \'\'')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN review_bark_last_pending_count INTEGER DEFAULT 0')
             except sqlite3.OperationalError:
                 pass
 
@@ -5461,7 +5498,10 @@ class Database:
                            keyword_reply_enabled, image_reply_enabled, keyword_match_limit,
                            global_reply_template, numeric_filter_keyword, filter_size_min, filter_size_max,
                            bark_enabled, bark_server_url, bark_device_key,
-                           keyword_reply_send_best_match_image
+                           keyword_reply_send_best_match_image,
+                           review_bark_enabled, review_bark_mode, review_bark_count_threshold,
+                           review_bark_interval_minutes, review_bark_last_notified_at,
+                           review_bark_last_pending_count
                     FROM user_settings WHERE user_id = ?
                 ''', (user_id,))
                 row = cursor.fetchone()
@@ -5486,6 +5526,12 @@ class Database:
                         'bark_server_url': row[15] or 'https://api.day.app',
                         'bark_device_key': row[16] or '',
                         'keyword_reply_send_best_match_image': row[17] if row[17] is not None else 0,
+                        'review_bark_enabled': row[18] if row[18] is not None else 0,
+                        'review_bark_mode': row[19] or 'count',
+                        'review_bark_count_threshold': row[20] if row[20] is not None else 5,
+                        'review_bark_interval_minutes': row[21] if row[21] is not None else 60,
+                        'review_bark_last_notified_at': row[22] or '',
+                        'review_bark_last_pending_count': row[23] if row[23] is not None else 0,
                     }
                 # 如果用户没有设置，返回默认值
                 return {
@@ -5507,6 +5553,12 @@ class Database:
                     'bark_server_url': 'https://api.day.app',
                     'bark_device_key': '',
                     'keyword_reply_send_best_match_image': 0,
+                    'review_bark_enabled': 0,
+                    'review_bark_mode': 'count',
+                    'review_bark_count_threshold': 5,
+                    'review_bark_interval_minutes': 60,
+                    'review_bark_last_notified_at': '',
+                    'review_bark_last_pending_count': 0,
                 }
         except Exception as e:
             logger.error(f"获取用户设置失败: {e}")
@@ -5529,6 +5581,12 @@ class Database:
                 'bark_server_url': 'https://api.day.app',
                 'bark_device_key': '',
                 'keyword_reply_send_best_match_image': 0,
+                'review_bark_enabled': 0,
+                'review_bark_mode': 'count',
+                'review_bark_count_threshold': 5,
+                'review_bark_interval_minutes': 60,
+                'review_bark_last_notified_at': '',
+                'review_bark_last_pending_count': 0,
             }
 
     def update_user_settings(self, user_id: int, download_threads: int = None,
@@ -5541,7 +5599,13 @@ class Database:
                            filter_size_min: int = None, filter_size_max: int = None,
                            bark_enabled: int = None, bark_server_url: str = None,
                            bark_device_key: str = None,
-                           keyword_reply_send_best_match_image: int = None) -> bool:
+                           keyword_reply_send_best_match_image: int = None,
+                           review_bark_enabled: int = None,
+                           review_bark_mode: str = None,
+                           review_bark_count_threshold: int = None,
+                           review_bark_interval_minutes: int = None,
+                           review_bark_last_notified_at: str = None,
+                           review_bark_last_pending_count: int = None) -> bool:
         """更新用户个性化设置"""
         try:
             with self.get_connection() as conn:
@@ -5628,6 +5692,30 @@ class Database:
                         update_fields.append('keyword_reply_send_best_match_image = ?')
                         params.append(keyword_reply_send_best_match_image)
 
+                    if review_bark_enabled is not None:
+                        update_fields.append('review_bark_enabled = ?')
+                        params.append(review_bark_enabled)
+
+                    if review_bark_mode is not None:
+                        update_fields.append('review_bark_mode = ?')
+                        params.append(review_bark_mode)
+
+                    if review_bark_count_threshold is not None:
+                        update_fields.append('review_bark_count_threshold = ?')
+                        params.append(review_bark_count_threshold)
+
+                    if review_bark_interval_minutes is not None:
+                        update_fields.append('review_bark_interval_minutes = ?')
+                        params.append(review_bark_interval_minutes)
+
+                    if review_bark_last_notified_at is not None:
+                        update_fields.append('review_bark_last_notified_at = ?')
+                        params.append(review_bark_last_notified_at)
+
+                    if review_bark_last_pending_count is not None:
+                        update_fields.append('review_bark_last_pending_count = ?')
+                        params.append(review_bark_last_pending_count)
+
                     if update_fields:
                         update_fields.append('updated_at = CURRENT_TIMESTAMP')
                         sql = f'UPDATE user_settings SET {", ".join(update_fields)} WHERE user_id = ?'
@@ -5641,8 +5729,10 @@ class Database:
                          global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
                          keyword_reply_enabled, image_reply_enabled, keyword_match_limit, global_reply_template,
                          numeric_filter_keyword, filter_size_min, filter_size_max, bark_enabled, bark_server_url, bark_device_key,
-                         keyword_reply_send_best_match_image)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         keyword_reply_send_best_match_image, review_bark_enabled, review_bark_mode,
+                         review_bark_count_threshold, review_bark_interval_minutes,
+                         review_bark_last_notified_at, review_bark_last_pending_count)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         user_id,
                         download_threads or 4,
@@ -5663,6 +5753,12 @@ class Database:
                         bark_server_url if bark_server_url is not None else 'https://api.day.app',
                         bark_device_key or '',
                         keyword_reply_send_best_match_image if keyword_reply_send_best_match_image is not None else 0,
+                        review_bark_enabled if review_bark_enabled is not None else 0,
+                        review_bark_mode or 'count',
+                        review_bark_count_threshold if review_bark_count_threshold is not None else 5,
+                        review_bark_interval_minutes if review_bark_interval_minutes is not None else 60,
+                        review_bark_last_notified_at or '',
+                        review_bark_last_pending_count if review_bark_last_pending_count is not None else 0,
                     ))
 
                 conn.commit()
@@ -5670,6 +5766,47 @@ class Database:
         except Exception as e:
             logger.error(f"更新用户设置失败: {e}")
             return False
+
+    def count_pending_keyword_reply_review_items(self, user_id: int) -> int:
+        """统计用户当前待审核的关键词回复数量"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    SELECT COUNT(1)
+                    FROM keyword_reply_review_items
+                    WHERE user_id = ? AND status = 'pending'
+                    ''',
+                    (user_id,),
+                )
+                row = cursor.fetchone()
+                return int((row[0] if row else 0) or 0)
+        except Exception as e:
+            logger.error(f"统计关键词审核队列数量失败: {e}")
+            return 0
+
+    def get_pending_keyword_reply_review_user_ids(self) -> List[int]:
+        """获取当前存在待审核关键词回复的用户ID列表"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    SELECT DISTINCT user_id
+                    FROM keyword_reply_review_items
+                    WHERE status = 'pending' AND user_id IS NOT NULL
+                    ORDER BY user_id ASC
+                    '''
+                )
+                return [
+                    int(row[0])
+                    for row in cursor.fetchall()
+                    if row and row[0] is not None
+                ]
+        except Exception as e:
+            logger.error(f"获取待审核关键词回复用户列表失败: {e}")
+            return []
 
     def update_system_config(self, discord_channel_id: str = None, discord_similarity_threshold: float = None,
                            cnfans_channel_id: str = None, acbuy_channel_id: str = None) -> bool:

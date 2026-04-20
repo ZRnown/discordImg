@@ -48,3 +48,14 @@ test('review window removes the badge summary row and keeps original message abo
   assert.notEqual(sendContentIndex, -1)
   assert.ok(sourceMessageIndex < sendContentIndex)
 })
+
+test('review window contains review bark notification controls', () => {
+  const source = readSource()
+
+  assert.match(source, /审核 Bark 通知/)
+  assert.match(source, /待审数量通知/)
+  assert.match(source, /时间通知/)
+  assert.match(source, /Bark 设备 Key/)
+  assert.match(source, /待审达到/)
+  assert.match(source, /通知间隔/)
+})
