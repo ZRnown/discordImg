@@ -1,10 +1,13 @@
 import json
+import sys
+import types
 
 import numpy as np
 import pytest
 from PIL import Image
 
 from backend.benchmarks.strategies import Siglip2RerankStrategy, _Siglip2Encoder
+from backend.config import config as backend_config
 from backend.live_retrieval import LiveCatalogImageRecord
 from backend.benchmarks.strategies import get_strategy_cls
 
@@ -151,6 +154,52 @@ def test_siglip2_encoder_normalizes_extreme_image_sizes():
     assert max(normalized_large.size) <= 448
 
 
+def test_siglip2_encoder_loads_cpu_model_without_device_move(monkeypatch):
+    from transformers import AutoModel, AutoProcessor
+
+    fake_torch = types.SimpleNamespace(
+        device=lambda value: types.SimpleNamespace(type=str(value)),
+        float32="float32",
+    )
+    fake_feature_extractor = types.SimpleNamespace(get_feature_extractor=lambda: object())
+    dummy_model = types.SimpleNamespace(
+        config=types.SimpleNamespace(projection_dim=768, hidden_size=768),
+        eval=lambda: None,
+        parameters=lambda: (),
+        to=lambda device: (_ for _ in ()).throw(AssertionError("cpu model should not be moved")),
+    )
+    captured = {}
+
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "backend.feature_extractor", fake_feature_extractor)
+    monkeypatch.setitem(sys.modules, "feature_extractor", fake_feature_extractor)
+    monkeypatch.setattr(backend_config, "DEVICE", "cpu", raising=False)
+    monkeypatch.setattr(
+        "backend.benchmarks.strategies.inspect.signature",
+        lambda _func: types.SimpleNamespace(
+            parameters={
+                "low_cpu_mem_usage": None,
+                "torch_dtype": None,
+                "device_map": None,
+                "use_safetensors": None,
+            }
+        ),
+    )
+    monkeypatch.setattr(AutoProcessor, "from_pretrained", lambda *args, **kwargs: object())
+
+    def fake_from_pretrained(model_name, **kwargs):
+        captured["kwargs"] = kwargs
+        return dummy_model
+
+    monkeypatch.setattr(AutoModel, "from_pretrained", fake_from_pretrained)
+
+    encoder = _Siglip2Encoder()
+
+    assert encoder.model is dummy_model
+    assert captured["kwargs"]["low_cpu_mem_usage"] is False
+    assert captured["kwargs"]["device_map"] is None
+
+
 def test_siglip2_rerank_score_without_text_renormalizes_available_modalities():
     strategy = object.__new__(Siglip2RerankStrategy)
     hist = np.ones((18, 4), dtype=np.float32)
@@ -214,6 +263,14 @@ def test_siglip2_rerank_rank_products_skips_raw_variant_when_raw_weight_is_zero(
     strategy.query_yolo_weight = 0.0
     strategy.adaptive_raw_center_enabled = True
     strategy.adaptive_raw_delta = 0.05
+    strategy._apply_stage2_ridge_rerank = lambda payload, *_args, **_kwargs: payload
+    strategy._apply_stage2_hard_negative_rerank = lambda payload, *_args, **_kwargs: payload
+    strategy._apply_stage2_support_stats_rerank = lambda payload, *_args, **_kwargs: payload
+    strategy._apply_stage2_query_pair_rerank = lambda payload, *_args, **_kwargs: payload
+    strategy._apply_stage2_dynamic_cluster_rerank = lambda payload, *_args, **_kwargs: payload
+    strategy._apply_stage2_query_cluster_rerank = lambda payload, *_args, **_kwargs: payload
+    strategy._apply_stage2_targeted_support_rerank = lambda payload, *_args, **_kwargs: payload
+    strategy._apply_stage2_targeted_cluster_rerank = lambda payload, *_args, **_kwargs: payload
     strategy._build_image_rankings_for_query_context = lambda query_context, prepared_catalog: [
         {
             "product_id": "1001",

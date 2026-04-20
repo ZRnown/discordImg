@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 import glob
+import inspect
 import json
 import logging
 import os
@@ -350,8 +351,14 @@ class _Siglip2Encoder:
         self.yolo_crop_weight = float(getattr(config, "QUERY_YOLO_CROP_WEIGHT", 0.6))
 
         self.processor = AutoProcessor.from_pretrained(self.model_id, use_fast=True)
-        self.model = AutoModel.from_pretrained(self.model_id)
-        self.model.to(self.device)
+        self.model = self._load_pretrained_model(self.model_id, force_no_safetensors=False)
+        if self._model_has_meta(self.model):
+            logger.warning("SigLIP2模型检测到 meta tensor，尝试禁用 safetensors 重新加载")
+            self.model = self._load_pretrained_model(self.model_id, force_no_safetensors=True)
+        if self._model_has_meta(self.model):
+            raise RuntimeError("SigLIP2模型仍处于 meta 状态，请检查 transformers/torch 版本或缓存")
+        if getattr(self.device, "type", None) != "cpu":
+            self.model.to(self.device)
         self.model.eval()
         model_config = getattr(self.model, "config", None)
         self.output_dim = int(
@@ -365,6 +372,33 @@ class _Siglip2Encoder:
         except Exception as exc:
             logger.warning("SigLIP2 crop helper unavailable: %s", exc)
             self.cropper = None
+
+    def _load_pretrained_model(self, model_name: str, force_no_safetensors: bool):
+        from transformers import AutoModel
+
+        load_kwargs = {
+            "low_cpu_mem_usage": False,
+            "torch_dtype": self.torch.float32,
+            "device_map": None,
+        }
+        if force_no_safetensors:
+            load_kwargs["use_safetensors"] = False
+
+        try:
+            sig = inspect.signature(AutoModel.from_pretrained)
+            allowed = set(sig.parameters.keys())
+            load_kwargs = {key: value for key, value in load_kwargs.items() if key in allowed}
+        except Exception:
+            pass
+
+        return AutoModel.from_pretrained(model_name, **load_kwargs)
+
+    @staticmethod
+    def _model_has_meta(model) -> bool:
+        try:
+            return any(getattr(param, "is_meta", False) for param in model.parameters())
+        except Exception:
+            return False
 
     @staticmethod
     def _normalize_image_for_inference(
@@ -3887,6 +3921,7 @@ class Siglip2RerankStrategy:
             if (
                 raw_embedding is not None
                 and default_embedding is not None
+                and self.query_raw_weight > 0
                 and (self.query_center_weight > 0 or self.query_yolo_weight > 0)
             ):
                 raw_query_context = dict(query_context)
@@ -3961,12 +3996,15 @@ class Siglip2RerankStrategy:
         weighted_scores = [(image_weight, image_score)]
         query_hist = query_context.get("hist")
         catalog_hist = catalog_context.get("hist")
-        if query_hist is not None and catalog_hist is not None:
+        if query_hist is not None and catalog_hist is not None and color_weight > 0:
             color_score = max(0.0, float(cv2.compareHist(query_hist, catalog_hist, cv2.HISTCMP_CORREL)))
             weighted_scores.append((color_weight, color_score))
 
-        text_score = self._text_overlap(query_context.get("tokens"), catalog_context.get("tokens"))
-        if query_context.get("tokens") and catalog_context.get("tokens"):
+        text_score = 0.0
+        query_tokens = query_context.get("tokens")
+        catalog_tokens = catalog_context.get("tokens")
+        if query_tokens and catalog_tokens and text_weight > 0:
+            text_score = self._text_overlap(query_tokens, catalog_tokens)
             weighted_scores.append((text_weight, text_score))
 
         total_weight = sum(weight for weight, _score in weighted_scores)

@@ -154,6 +154,67 @@ class BotTimeoutHelpersTestCase(unittest.TestCase):
         self.assertIn("重复 1 次", mock_warning.call_args.args[0])
 
 
+class RecognizeImageRetryPolicyTestCase(unittest.IsolatedAsyncioTestCase):
+    async def test_recognize_image_does_not_retry_on_backend_busy_503(self):
+        class FakeResponse:
+            def __init__(self, status, body):
+                self.status = status
+                self._body = body
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def text(self):
+                return self._body
+
+        class FakeSession:
+            def __init__(self, responses):
+                self._responses = list(responses)
+                self.post_calls = 0
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def post(self, *args, **kwargs):
+                response = self._responses[self.post_calls]
+                self.post_calls += 1
+                return response
+
+        fake_session = FakeSession(
+            [FakeResponse(503, '{"error":"search busy","retryable":true}')]
+        )
+
+        with patch.object(
+            bot_module.aiohttp,
+            "ClientSession",
+            return_value=fake_session,
+        ) as _mock_client_session, patch.object(
+            bot_module.asyncio,
+            "sleep",
+            AsyncMock(),
+        ) as mock_sleep, patch.object(
+            bot_module.config,
+            "BACKEND_API_URL",
+            "http://127.0.0.1:5001",
+            create=True,
+        ):
+            result = await bot_module.DiscordBotClient.recognize_image(
+                SimpleNamespace(user_id=None),
+                b"fake-image-bytes",
+                user_shops=["Vibeo"],
+            )
+
+        self.assertIsNone(result)
+        self.assertEqual(fake_session.post_calls, 1)
+        mock_sleep.assert_not_awaited()
+
+
 class _SlottedMessage:
     __slots__ = ("id", "channel", "thread", "flags", "fetch_thread")
 

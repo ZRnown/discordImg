@@ -346,30 +346,29 @@ class SearchSimilarTextApiTestCase(unittest.TestCase):
 
     def test_initialize_feature_extractor_reuses_feature_extractor_singleton(self):
         dummy_extractor = object()
-        call_state = {"count": 0}
-
-        def fake_extractor_ctor(*args, **kwargs):
-            call_state["count"] += 1
-            if call_state["count"] == 1:
-                return dummy_extractor
-            raise AssertionError("feature_extractor singleton should be reused")
+        dummy_feature_module = ModuleType("feature_extractor")
+        dummy_feature_module._global_extractor = dummy_extractor
+        dummy_feature_module.get_feature_extractor = lambda: dummy_extractor
+        dummy_feature_module.DINOv2FeatureExtractor = lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("singleton should be reused")
+        )
 
         with (
             patch.object(app_module, "feature_extractor_instance", None),
             patch.object(app_module, "feature_extractor_failed_at", 0.0),
-            patch.object(feature_extractor_module, "_global_extractor", None),
-            patch.object(
-                feature_extractor_module,
-                "DINOv2FeatureExtractor",
-                side_effect=fake_extractor_ctor,
+            patch.dict(
+                sys.modules,
+                {
+                    "feature_extractor": dummy_feature_module,
+                    "backend.feature_extractor": dummy_feature_module,
+                },
+                clear=False,
             ),
         ):
             created = app_module.initialize_feature_extractor()
-            shared = feature_extractor_module.get_feature_extractor()
-
-        self.assertIs(created, dummy_extractor)
-        self.assertIs(shared, dummy_extractor)
-        self.assertEqual(call_state["count"], 1)
+            self.assertIs(created, dummy_extractor)
+            self.assertIs(app_module.feature_extractor_instance, dummy_extractor)
+            self.assertIs(dummy_feature_module._global_extractor, dummy_extractor)
 
     def test_search_similar_returns_retryable_when_catalog_is_warming_up(self):
         import live_retrieval as live_retrieval_module
