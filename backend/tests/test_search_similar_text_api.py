@@ -5,7 +5,16 @@ import unittest
 from contextlib import contextmanager
 from unittest.mock import patch
 
+from PIL import Image
+
 from backend import app as app_module
+import feature_extractor as feature_extractor_module
+
+
+def _make_jpeg_bytes(color=(255, 0, 0)):
+    buf = io.BytesIO()
+    Image.new("RGB", (96, 96), color=color).save(buf, format="JPEG")
+    return buf.getvalue()
 
 
 class SearchSimilarTextApiTestCase(unittest.TestCase):
@@ -254,8 +263,11 @@ class SearchSimilarTextApiTestCase(unittest.TestCase):
             "get_total_indexed_images",
             return_value=0,
         ), patch(
-            "backend.live_retrieval.get_live_image_retriever",
+            "live_retrieval.get_live_image_retriever",
             return_value=DummyRetriever(),
+        ), patch(
+            "live_retrieval.warm_live_image_retriever",
+            return_value={"catalog_size": 0},
         ):
             response = self.client.post(
                 "/search_similar",
@@ -289,37 +301,47 @@ class SearchSimilarTextApiTestCase(unittest.TestCase):
         self.assertEqual(data["retrieval_cache_status"]["total_images"], 3)
         self.assertEqual(data["retrieval_cache_status"]["cached_images"], 7)
 
-    def test_search_similar_recovers_from_catalog_warming_up(self):
-        from backend import live_retrieval as live_retrieval_module
+    def test_initialize_feature_extractor_reuses_feature_extractor_singleton(self):
+        dummy_extractor = object()
+        call_state = {"count": 0}
+
+        def fake_extractor_ctor(*args, **kwargs):
+            call_state["count"] += 1
+            if call_state["count"] == 1:
+                return dummy_extractor
+            raise AssertionError("feature_extractor singleton should be reused")
+
+        with (
+            patch.object(app_module, "feature_extractor_instance", None),
+            patch.object(app_module, "feature_extractor_failed_at", 0.0),
+            patch.object(feature_extractor_module, "_global_extractor", None),
+            patch.object(
+                feature_extractor_module,
+                "DINOv2FeatureExtractor",
+                side_effect=fake_extractor_ctor,
+            ),
+        ):
+            created = app_module.initialize_feature_extractor()
+            shared = feature_extractor_module.get_feature_extractor()
+
+        self.assertIs(created, dummy_extractor)
+        self.assertIs(shared, dummy_extractor)
+        self.assertEqual(call_state["count"], 1)
+
+    def test_search_similar_returns_retryable_when_catalog_is_warming_up(self):
+        import live_retrieval as live_retrieval_module
 
         class WarmableRetriever:
             def __init__(self):
-                self.warmed = False
+                self.calls = 0
 
             def search(self, image_path, query_text="", top_k=5, threshold=0.0, user_shops=None):
-                if not self.warmed:
-                    raise live_retrieval_module.LiveCatalogPreparingError(
-                        "live catalog is warming up"
-                    )
-                return {
-                    "strategy": "dummy",
-                    "catalog_size": 1,
-                    "ranked_products": [
-                        {
-                            "product_id": 3,
-                            "image_index": 0,
-                            "score": 0.98,
-                        }
-                    ],
-                    "top1_score": 0.98,
-                    "top1_margin": 0.0,
-                }
+                self.calls += 1
+                raise live_retrieval_module.LiveCatalogPreparingError(
+                    "live catalog is warming up"
+                )
 
         warmable_retriever = WarmableRetriever()
-
-        def warm_live_image_retriever(*args, **kwargs):
-            warmable_retriever.warmed = True
-            return {"catalog_size": 1}
 
         with patch.object(app_module.db, "get_connection", self._fake_get_connection), patch.object(
             app_module,
@@ -354,28 +376,30 @@ class SearchSimilarTextApiTestCase(unittest.TestCase):
             return_value=1,
             create=True,
         ), patch(
-            "backend.live_retrieval.get_live_image_retriever",
+            "live_retrieval.get_live_image_retriever",
             return_value=warmable_retriever,
-        ), patch(
-            "backend.live_retrieval.warm_live_image_retriever",
-            side_effect=warm_live_image_retriever,
-        ):
+        ) as mock_get_retriever, patch(
+            "live_retrieval.warm_live_image_retriever",
+            return_value={"catalog_size": 1},
+        ) as mock_warm:
             response = self.client.post(
                 "/search_similar",
                 data={
                     "threshold": "0.2",
                     "limit": "5",
                     "user_id": "123",
-                    "image": (io.BytesIO(b"fake-image-bytes"), "query.jpg"),
+                    "image": (io.BytesIO(_make_jpeg_bytes()), "query.jpg"),
                 },
                 content_type="multipart/form-data",
             )
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 503)
         data = response.get_json()
-        self.assertTrue(data["success"])
-        self.assertEqual(data["totalResults"], 1)
-        self.assertEqual(data["results"][0]["product"]["id"], 3)
+        self.assertTrue(data["retryable"])
+        self.assertEqual(data["error"], "search warming up")
+        self.assertEqual(warmable_retriever.calls, 1)
+        mock_get_retriever.assert_called_once()
+        mock_warm.assert_not_called()
 
     def test_text_search_preserves_shop_name_whitespace_in_scope_filter(self):
         with patch.object(app_module.db, "get_connection", self._fake_get_connection), patch.object(

@@ -754,10 +754,25 @@ def initialize_feature_extractor():
                     if now - feature_extractor_failed_at < 60:
                         print("⚠️ 特征提取器初始化失败后冷却中，稍后再试")
                         return None
+                try:
+                    import feature_extractor as feature_extractor_module
+                except ModuleNotFoundError as import_error:
+                    if import_error.name == 'feature_extractor':
+                        from . import feature_extractor as feature_extractor_module
+                    else:
+                        raise
+                shared_extractor = getattr(feature_extractor_module, '_global_extractor', None)
+                if shared_extractor is not None:
+                    feature_extractor_instance = shared_extractor
+                    return feature_extractor_instance
                 print("🚀 初始化全局特征提取器实例...")
                 try:
                     from feature_extractor import DINOv2FeatureExtractor
                     feature_extractor_instance = DINOv2FeatureExtractor()
+                    try:
+                        feature_extractor_module._global_extractor = feature_extractor_instance
+                    except Exception:
+                        pass
                     print("✅ 全局特征提取器实例初始化完成")
                 except Exception as e:
                     print(f"❌ 特征提取器初始化失败: {e}")
@@ -768,9 +783,34 @@ def initialize_feature_extractor():
 def get_global_feature_extractor():
     """获取全局特征提取器实例"""
     global feature_extractor_instance
-    if feature_extractor_instance is None:
-        return initialize_feature_extractor()
-    return feature_extractor_instance
+    if feature_extractor_instance is not None:
+        try:
+            import feature_extractor as feature_extractor_module
+        except ModuleNotFoundError as import_error:
+            if import_error.name == 'feature_extractor':
+                from . import feature_extractor as feature_extractor_module
+            else:
+                raise
+        try:
+            feature_extractor_module._global_extractor = feature_extractor_instance
+        except Exception:
+            pass
+        return feature_extractor_instance
+
+    try:
+        import feature_extractor as feature_extractor_module
+    except ModuleNotFoundError as import_error:
+        if import_error.name == 'feature_extractor':
+            from . import feature_extractor as feature_extractor_module
+        else:
+            raise
+
+    shared_extractor = getattr(feature_extractor_module, '_global_extractor', None)
+    if shared_extractor is not None:
+        feature_extractor_instance = shared_extractor
+        return feature_extractor_instance
+
+    return initialize_feature_extractor()
 
 
 def _build_ai_status_snapshot():
@@ -1561,55 +1601,26 @@ def search_similar():
 
             retrieval_started_at = time.perf_counter()
             try:
-                retrieval_result = None
-                for warm_attempt in range(2):
-                    try:
-                        retrieval_result = retriever.search(
-                            image_path=image_path,
-                            query_text=query_text,
-                            top_k=limit,
-                            threshold=threshold,
-                            user_shops=user_shops,
-                        )
-                        break
-                    except live_retrieval_module.LiveCatalogPreparingError:
-                        logger.warning(
-                            "search_similar warming up: user_id=%s shops=%s attempt=%s",
-                            user_id,
-                            user_shops,
-                            warm_attempt + 1,
-                        )
-                        if warm_attempt > 0:
-                            return jsonify(
-                                {
-                                    'error': 'search warming up',
-                                    'retryable': True,
-                                    'message': '图搜服务预热中，请稍后重试',
-                                }
-                            ), 503
-
-                        try:
-                            warm_summary = live_retrieval_module.warm_live_image_retriever(db, strategy_name)
-                            logger.info(
-                                "search_similar on-demand warmup completed: strategy=%s catalog_size=%s",
-                                strategy_name,
-                                warm_summary.get('catalog_size', 0),
-                            )
-                        except Exception as warm_error:
-                            logger.warning(
-                                "search_similar on-demand warmup failed: strategy=%s error=%s",
-                                strategy_name,
-                                warm_error,
-                            )
-                        retriever = live_retrieval_module.get_live_image_retriever(db, strategy_name)
-                if retrieval_result is None:
-                    return jsonify(
-                        {
-                            'error': 'search warming up',
-                            'retryable': True,
-                            'message': '图搜服务预热中，请稍后重试',
-                        }
-                    ), 503
+                retrieval_result = retriever.search(
+                    image_path=image_path,
+                    query_text=query_text,
+                    top_k=limit,
+                    threshold=threshold,
+                    user_shops=user_shops,
+                )
+            except live_retrieval_module.LiveCatalogPreparingError:
+                logger.warning(
+                    "search_similar warming up: user_id=%s shops=%s",
+                    user_id,
+                    user_shops,
+                )
+                return jsonify(
+                    {
+                        'error': 'search warming up',
+                        'retryable': True,
+                        'message': '图搜服务预热中，请稍后重试',
+                    }
+                ), 503
             finally:
                 release_live_search_slot()
             retrieval_elapsed = time.perf_counter() - retrieval_started_at
