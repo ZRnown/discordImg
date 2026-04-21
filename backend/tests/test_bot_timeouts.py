@@ -314,3 +314,37 @@ class ResolveMessageReplyChannelTestCase(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(resolved, fetched_thread)
         target_client.fetch_channel.assert_awaited_once_with(555001)
+
+
+class KeywordReviewMessageProxyTestCase(unittest.TestCase):
+    def test_saved_thread_reply_target_wins_over_original_parent_channel(self):
+        review_item = {
+            "channel_id": "123001",
+            "message_id": "777001",
+            "sender_id": "42",
+            "payload": {
+                "message": {
+                    "id": 777001,
+                    "channel_id": 123001,
+                    "channel_name": "parent-channel",
+                    "guild_id": 9001,
+                    "author_id": 42,
+                    "author_name": "buyer",
+                    "content": "keyword",
+                },
+                "reply_target_channel": {
+                    "used_thread_reply": True,
+                    "channel_id": 555001,
+                    "channel_name": "auto-reply-thread",
+                    "parent_channel_id": 123001,
+                    "parent_channel_name": "parent-channel",
+                },
+            },
+        }
+
+        message = bot_module._build_keyword_review_message_proxy(review_item)
+
+        self.assertEqual(message.channel.id, 555001)
+        self.assertEqual(message.channel.name, "auto-reply-thread")
+        self.assertEqual(message.channel.parent_id, 123001)
+        self.assertEqual(message.channel.parent.name, "parent-channel")

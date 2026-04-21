@@ -693,6 +693,11 @@ def _build_message_reference(message, reply_target_channel):
 def _build_keyword_review_message_proxy(review_item):
     payload = review_item.get('payload') or {}
     message_payload = payload.get('message') or {}
+    reply_target_payload = payload.get('reply_target_channel') or {}
+    use_saved_reply_target = bool(
+        reply_target_payload.get('used_thread_reply')
+        and _coerce_int(reply_target_payload.get('channel_id'), None) is not None
+    )
 
     def _parse_message_time(value):
         if isinstance(value, datetime):
@@ -714,6 +719,12 @@ def _build_keyword_review_message_proxy(review_item):
     guild_id = _coerce_int(message_payload.get('guild_id') or review_item.get('guild_id'), None)
     channel_id = _coerce_int(message_payload.get('channel_id') or review_item.get('channel_id'), None)
     parent_channel_id = _coerce_int(message_payload.get('parent_channel_id'), None)
+    if use_saved_reply_target:
+        channel_id = _coerce_int(reply_target_payload.get('channel_id'), channel_id)
+        parent_channel_id = _coerce_int(
+            reply_target_payload.get('parent_channel_id'),
+            parent_channel_id,
+        )
     author_id = _coerce_int(
         message_payload.get('author_id')
         or review_item.get('sender_id')
@@ -727,11 +738,15 @@ def _build_keyword_review_message_proxy(review_item):
         or ''
     )
     channel_name = (
+        reply_target_payload.get('channel_name') if use_saved_reply_target else None
+    ) or (
         message_payload.get('channel_name')
         or review_item.get('channel_name')
         or ''
     )
     parent_channel_name = (
+        reply_target_payload.get('parent_channel_name') if use_saved_reply_target else None
+    ) or (
         message_payload.get('parent_channel_name')
         or review_item.get('parent_channel_name')
         or ''
@@ -2614,6 +2629,8 @@ class DiscordBotClient(discord.Client):
         prevalidated_batch=False,
         broadcast_mode=False,
         thread_reply_enabled=False,
+        reply_target_channel=None,
+        used_thread_reply=False,
         cooldown_channel_id=None,
         batch_repeat_records=None,
         repeat_product_ids=None,
@@ -2628,6 +2645,18 @@ class DiscordBotClient(discord.Client):
             guild = getattr(message, 'guild', None)
             author = getattr(message, 'author', None)
             parent_channel = getattr(channel, 'parent', None)
+            reply_parent_channel = getattr(reply_target_channel, 'parent', None)
+            reply_parent_channel_id = (
+                getattr(reply_target_channel, 'parent_id', None)
+                or getattr(reply_parent_channel, 'id', None)
+            )
+            if (
+                used_thread_reply
+                and reply_parent_channel_id is None
+                and reply_target_channel is not None
+                and getattr(reply_target_channel, 'id', None) != getattr(channel, 'id', None)
+            ):
+                reply_parent_channel_id = getattr(channel, 'id', None)
 
             account_names = []
             for client in target_clients or []:
@@ -2665,6 +2694,13 @@ class DiscordBotClient(discord.Client):
                 'prevalidated_batch': bool(prevalidated_batch),
                 'broadcast_mode': bool(broadcast_mode),
                 'thread_reply_enabled': bool(thread_reply_enabled),
+                'reply_target_channel': {
+                    'used_thread_reply': bool(used_thread_reply),
+                    'channel_id': getattr(reply_target_channel, 'id', None),
+                    'channel_name': getattr(reply_target_channel, 'name', None) or '',
+                    'parent_channel_id': reply_parent_channel_id,
+                    'parent_channel_name': getattr(reply_parent_channel, 'name', None) or getattr(parent_channel, 'name', None) or '',
+                } if reply_target_channel is not None else {},
                 'cooldown_channel_id': cooldown_channel_id,
                 'batch_repeat_records': [
                     list(item)
@@ -3896,7 +3932,7 @@ class DiscordBotClient(discord.Client):
 
                 for target_index, target_client in enumerate(target_clients):
                     try:
-                        target_channel = target_client.get_channel(message.channel.id)
+                        target_channel = await _resolve_message_reply_channel(target_client, message)
 
                         if target_channel:
                             reply_target_channel, used_thread_reply = await resolve_reply_target_channel(
@@ -3927,6 +3963,8 @@ class DiscordBotClient(discord.Client):
                                     prevalidated_batch=prevalidated_batch,
                                     broadcast_mode=broadcast_mode,
                                     thread_reply_enabled=thread_reply_enabled,
+                                    reply_target_channel=reply_target_channel,
+                                    used_thread_reply=used_thread_reply,
                                     cooldown_channel_id=cooldown_channel_id,
                                     batch_repeat_records=batch_repeat_records,
                                     repeat_product_ids=repeat_product_ids,
