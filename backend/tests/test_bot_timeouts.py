@@ -8,6 +8,7 @@ from backend.bot import (
     _auto_reply_thread_ids,
     filter_forum_channel_configs_for_message,
     _get_image_recognition_request_timeout_seconds,
+    _is_image_match_above_reply_threshold,
     _resolve_message_reply_channel,
     _resolve_cooldown_channel_id,
     resolve_reply_target_channel,
@@ -131,6 +132,20 @@ class BotTimeoutHelpersTestCase(unittest.TestCase):
         )
 
         self.assertEqual(filtered, parent_configs)
+
+    def test_image_match_threshold_uses_website_override(self):
+        self.assertFalse(
+            _is_image_match_above_reply_threshold(
+                {"type": "image", "similarity": 0.72, "base_threshold": 0.6},
+                {"image_similarity_threshold": 0.8},
+            )
+        )
+        self.assertTrue(
+            _is_image_match_above_reply_threshold(
+                {"type": "image", "similarity": 0.72, "base_threshold": 0.6},
+                {"image_similarity_threshold": None},
+            )
+        )
 
     def test_summarize_exception_for_log_collapses_whitespace_and_truncates(self):
         error = RuntimeError("429 Too Many Requests\n\n" + ("x" * 260))

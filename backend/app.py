@@ -4022,6 +4022,76 @@ def update_user_shops(user_id):
         logger.error(f"更新用户权限失败: {e}")
         return jsonify({'error': str(e)}), 500
 
+def _safe_string_attr(obj, *names):
+    for name in names:
+        try:
+            value = getattr(obj, name, None)
+        except Exception:
+            value = None
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ''
+
+
+def _build_runtime_account_details():
+    details = {}
+    for client in list(bot_clients):
+        account_id = getattr(client, 'account_id', None)
+        if account_id is None:
+            continue
+
+        user_obj = getattr(client, 'user', None)
+        is_ready = False
+        is_closed = False
+        try:
+            ready_fn = getattr(client, 'is_ready', None)
+            is_ready = bool(ready_fn()) if callable(ready_fn) else False
+        except Exception:
+            is_ready = False
+        try:
+            closed_fn = getattr(client, 'is_closed', None)
+            is_closed = bool(closed_fn()) if callable(closed_fn) else False
+        except Exception:
+            is_closed = False
+
+        avatar_url = ''
+        if user_obj is not None:
+            for avatar_attr in ('display_avatar', 'avatar'):
+                avatar = getattr(user_obj, avatar_attr, None)
+                if avatar is not None:
+                    avatar_url = _safe_string_attr(avatar, 'url')
+                    if avatar_url:
+                        break
+
+        discriminator = _safe_string_attr(user_obj, 'discriminator')
+        username = _safe_string_attr(user_obj, 'name')
+        user_tag = username
+        if discriminator and discriminator != '0':
+            user_tag = f'{username}#{discriminator}'
+
+        try:
+            guild_count = len(getattr(client, 'guilds', []) or [])
+        except Exception:
+            guild_count = 0
+
+        details[int(account_id)] = {
+            'discord_user_id': _safe_string_attr(user_obj, 'id'),
+            'discord_username': user_tag,
+            'discord_handle': username,
+            'discord_discriminator': discriminator,
+            'discord_global_name': _safe_string_attr(user_obj, 'global_name'),
+            'discord_display_name': _safe_string_attr(user_obj, 'display_name', 'global_name', 'name'),
+            'discord_avatar_url': avatar_url,
+            'runtime_ready': is_ready and not is_closed,
+            'runtime_running': bool(getattr(client, 'running', False)),
+            'runtime_role': getattr(client, 'role', '') or '',
+            'runtime_guild_count': guild_count,
+            'last_ready_at': getattr(client, 'last_ready_at', 0.0) or 0.0,
+            'last_disconnect_at': getattr(client, 'last_disconnect_at', 0.0) or 0.0,
+        }
+    return details
+
+
 @app.route('/api/accounts', methods=['GET'])
 def get_accounts():
     """获取所有 Discord 账号"""
@@ -4032,8 +4102,22 @@ def get_accounts():
     try:
         # 所有用户（包括管理员）只能看到自己的账号
         accounts = db.get_discord_accounts_by_user(current_user['id'])
+        runtime_details = _build_runtime_account_details()
+        enriched_accounts = []
+        for account in accounts:
+            item = dict(account)
+            account_id = item.get('id')
+            try:
+                runtime = runtime_details.get(int(account_id))
+            except (TypeError, ValueError):
+                runtime = None
+            if runtime:
+                item.update(runtime)
+            token_value = str(item.get('token') or '')
+            item['token_preview'] = f"{token_value[:8]}...{token_value[-6:]}" if len(token_value) > 18 else token_value
+            enriched_accounts.append(item)
 
-        return jsonify({'accounts': accounts})
+        return jsonify({'accounts': enriched_accounts})
     except Exception as e:
         logger.error(f"获取账号列表失败: {e}")
         return jsonify({'error': str(e)}), 500

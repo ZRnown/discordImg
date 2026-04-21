@@ -690,6 +690,23 @@ def _build_message_reference(message, reply_target_channel):
         return message
 
 
+def _resolve_image_reply_threshold(match_context, website_config):
+    base_threshold = _coerce_float((match_context or {}).get('base_threshold'))
+    if base_threshold is None:
+        base_threshold = config.DISCORD_SIMILARITY_THRESHOLD
+    website_threshold = _coerce_float((website_config or {}).get('image_similarity_threshold'))
+    return website_threshold if website_threshold is not None else base_threshold
+
+
+def _is_image_match_above_reply_threshold(match_context, website_config):
+    if not isinstance(match_context, dict) or match_context.get('type') != 'image':
+        return True
+
+    similarity = _coerce_float(match_context.get('similarity')) or 0.0
+    threshold_to_use = _resolve_image_reply_threshold(match_context, website_config)
+    return similarity >= threshold_to_use
+
+
 def _build_keyword_review_message_proxy(review_item):
     payload = review_item.get('payload') or {}
     message_payload = payload.get('message') or {}
@@ -875,6 +892,7 @@ async def dispatch_keyword_review_item(review_item):
             skip_repeat_checks=True,
             skip_review_check=True,
             force_reference_reply=True,
+            disable_thread_creation=True,
         )
         if item_id:
             db.update_keyword_reply_review_item_status(
@@ -2289,17 +2307,18 @@ class DiscordBotClient(discord.Client):
                     return None
 
             similarity = _coerce_float(match_context.get('similarity')) or 0.0
-            base_threshold = _coerce_float(match_context.get('base_threshold'))
-            if base_threshold is None:
-                base_threshold = config.DISCORD_SIMILARITY_THRESHOLD
-            website_threshold = _coerce_float(website_config.get('image_similarity_threshold'))
-            threshold_to_use = website_threshold if website_threshold is not None else base_threshold
+            threshold_to_use = _resolve_image_reply_threshold(match_context, website_config)
 
             if similarity < threshold_to_use:
-                logger.info(
-                    f"📷 图片相似度 {similarity:.3f} 低于网站阈值 {threshold_to_use:.3f}，跳过回复"
-                )
-                return None
+                if match_context.get('allow_below_threshold_link_only'):
+                    logger.info(
+                        f"📷 图片相似度 {similarity:.3f} 低于网站阈值 {threshold_to_use:.3f}，仅发送链接"
+                    )
+                else:
+                    logger.info(
+                        f"📷 图片相似度 {similarity:.3f} 低于网站阈值 {threshold_to_use:.3f}，跳过回复"
+                    )
+                    return None
 
         rotation_interval = _coerce_int(
             user_settings.get('rotation_interval', website_config.get('rotation_interval', 180)),
@@ -3500,8 +3519,19 @@ class DiscordBotClient(discord.Client):
             if (
                 isinstance(match_context, dict)
                 and match_context.get('type') == 'image'
-                and bool(user_settings.get('keyword_reply_send_best_match_image'))
             ):
+                if not _is_image_match_above_reply_threshold(match_context, website_config):
+                    return []
+
+                if not bool(user_settings.get('keyword_reply_send_best_match_image')):
+                    return await self._collect_custom_reply_files(
+                        session,
+                        product,
+                        custom_reply,
+                        website_config,
+                        channel_id,
+                    )
+
                 best_match_files = await self._collect_best_match_reply_files(
                     session,
                     product,
@@ -3595,6 +3625,7 @@ class DiscordBotClient(discord.Client):
         skip_review_check=False,
         force_plain_send=False,
         force_reference_reply=False,
+        disable_thread_creation=False,
     ):
         """调度回复到合适的发送账号 (增强版：带详细状态诊断)"""
 
@@ -3729,17 +3760,18 @@ class DiscordBotClient(discord.Client):
                             continue
                 if not skip_filters and not prevalidated_batch and match_context and match_context.get('type') == 'image':
                     similarity = _coerce_float(match_context.get('similarity')) or 0.0
-                    base_threshold = _coerce_float(match_context.get('base_threshold'))
-                    if base_threshold is None:
-                        base_threshold = config.DISCORD_SIMILARITY_THRESHOLD
-                    website_threshold = _coerce_float(website_config.get('image_similarity_threshold'))
-                    threshold_to_use = website_threshold if website_threshold is not None else base_threshold
+                    threshold_to_use = _resolve_image_reply_threshold(match_context, website_config)
 
                     if similarity < threshold_to_use:
-                        logger.debug(
-                            f"📷 图片相似度 {similarity:.3f} 低于网站阈值 {threshold_to_use:.3f}，跳过回复"
-                        )
-                        continue
+                        if match_context.get('allow_below_threshold_link_only'):
+                            logger.debug(
+                                f"📷 图片相似度 {similarity:.3f} 低于网站阈值 {threshold_to_use:.3f}，仅发送链接"
+                            )
+                        else:
+                            logger.debug(
+                                f"📷 图片相似度 {similarity:.3f} 低于网站阈值 {threshold_to_use:.3f}，跳过回复"
+                            )
+                            continue
 
                 active_product, website_product_custom_reply, _, _ = _prepare_effective_product_reply(
                     product,
@@ -3747,6 +3779,12 @@ class DiscordBotClient(discord.Client):
                 )
 
                 active_custom_reply = custom_reply
+                link_only_below_threshold = (
+                    isinstance(match_context, dict)
+                    and match_context.get('type') == 'image'
+                    and match_context.get('allow_below_threshold_link_only')
+                    and not _is_image_match_above_reply_threshold(match_context, website_config)
+                )
                 if isinstance(custom_reply, dict):
                     per_website_content = custom_reply.get('per_website_content')
                     if isinstance(per_website_content, dict):
@@ -3757,6 +3795,10 @@ class DiscordBotClient(discord.Client):
                     if active_custom_reply.get('product_data') is not None:
                         active_custom_reply = dict(active_custom_reply)
                         active_custom_reply['product_data'] = active_product
+
+                if link_only_below_threshold:
+                    active_custom_reply = None
+                    website_product_custom_reply = None
 
                 forced_custom_payload = bool(
                     isinstance(active_custom_reply, dict)
@@ -3939,7 +3981,7 @@ class DiscordBotClient(discord.Client):
                                 target_client=target_client,
                                 target_channel=target_channel,
                                 message=message,
-                                thread_reply_enabled=thread_reply_enabled,
+                                thread_reply_enabled=thread_reply_enabled and not disable_thread_creation,
                             )
                             reply_target_channel = reply_target_channel or target_channel
 
@@ -5194,7 +5236,8 @@ class DiscordBotClient(discord.Client):
 
                 logger.debug(f'最佳匹配相似度: {similarity:.4f}, 用户阈值: {user_threshold:.4f}')
 
-                if similarity < skip_threshold:
+                below_reply_threshold = similarity < skip_threshold
+                if below_reply_threshold:
                     await self._record_skipped_image_history(
                         image_data=image_data,
                         attachment=attachment,
@@ -5204,9 +5247,8 @@ class DiscordBotClient(discord.Client):
                         best_match=best_match,
                     )
                     logger.info(
-                        f'⏭️ 图片命中未过阈值，已记录历史: 相似度 {similarity:.3f} < {skip_threshold:.3f} | 频道: {message.channel.name}'
+                        f'⏭️ 图片命中未过阈值，改为只发送链接: 相似度 {similarity:.3f} < {skip_threshold:.3f} | 频道: {message.channel.name}'
                     )
-                    return
 
                 product = best_match.get('product', {})
                 product_title = (product.get('title') or '').strip()
@@ -5265,7 +5307,9 @@ class DiscordBotClient(discord.Client):
                         product['selectedImageIndexes'] = selected_indexes
                     has_custom_images = bool(selected_indexes)
 
-                if not product_rule_enabled or has_custom_images:
+                if below_reply_threshold:
+                    custom_reply = None
+                elif not product_rule_enabled or has_custom_images:
                     custom_text = (product.get('custom_reply_text') or '').strip()
                     custom_reply = {
                         'reply_type': 'text' if custom_text else 'custom_only',
@@ -5290,6 +5334,7 @@ class DiscordBotClient(discord.Client):
                         'best_match_image_index': best_match.get('imageIndex', best_match.get('image_index')),
                         'website_filter_matches': blocked_website_filter_matches,
                         'ocr_text': ocr_text,
+                        'allow_below_threshold_link_only': below_reply_threshold,
                     },
                     website_configs_override=website_configs,
                     skip_review_check=True,
@@ -6040,7 +6085,7 @@ class DiscordBotClient(discord.Client):
                 def _build_form_data():
                     form = aiohttp.FormData()
                     form.add_field('image', image_data, filename='image.jpg', content_type='image/jpeg')
-                    form.add_field('threshold', str(api_threshold))
+                    form.add_field('threshold', '0')
                     form.add_field('limit', '1')  # Discord只返回最相似的一个结果
                     if self.user_id:
                         form.add_field('user_id', str(self.user_id))

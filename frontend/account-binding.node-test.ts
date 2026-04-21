@@ -44,3 +44,13 @@ test('account binding chips no longer show sender or both role badges', () => {
     /binding\.role === 'listener' \? '监听' : binding\.role === 'sender' \? '发送' : '两者'/,
   )
 })
+
+test('account list shows detailed Discord account metadata', () => {
+  const source = readAccountsViewSource()
+
+  assert.match(source, /discord_display_name/)
+  assert.match(source, /discord_global_name/)
+  assert.match(source, /Discord ID/)
+  assert.match(source, /runtime_guild_count/)
+  assert.match(source, /token_preview/)
+})

@@ -32,3 +32,18 @@ test('approved review dispatch does not force plain sends', () => {
   assert.match(source, /async def dispatch_keyword_review_item/)
   assert.doesNotMatch(source, /force_plain_send=True/)
 })
+
+test('low similarity image matches can fall back to link-only replies', () => {
+  const source = readSource()
+
+  assert.match(source, /allow_below_threshold_link_only/)
+  assert.match(source, /form\.add_field\('threshold', '0'\)/)
+  assert.match(source, /仅发送链接/)
+})
+
+test('approved review dispatch disables new thread creation', () => {
+  const source = readSource()
+
+  assert.match(source, /disable_thread_creation=True/)
+  assert.match(source, /thread_reply_enabled=thread_reply_enabled and not disable_thread_creation/)
+})

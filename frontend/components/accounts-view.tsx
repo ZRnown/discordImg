@@ -54,7 +54,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
-import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit, Clock, ChevronDown, ChevronRight, ShieldCheck } from "lucide-react"
+import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit, Clock, ChevronDown, ChevronRight, ShieldCheck, UserRound, Fingerprint, KeyRound, CalendarClock } from "lucide-react"
 
 type NumericRangeFilterValue = {
   keyword: string
@@ -107,6 +107,46 @@ const buildNumericRangeFilterValue = (value: NumericRangeFilterValue) => {
   const min = value.min === '' ? null : Number(value.min)
   const max = value.max === '' ? null : Number(value.max)
   return JSON.stringify({ keyword, min, max })
+}
+
+const formatAccountDateTime = (value: any) => {
+  if (!value) return '未记录'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value)
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+const getAccountPrimaryName = (account: any) => {
+  return account.discord_display_name || account.discord_global_name || account.discord_username || account.username || `账号 ${account.id}`
+}
+
+const getAccountSecondaryName = (account: any) => {
+  const names = [
+    account.discord_username,
+    account.discord_handle,
+    account.username,
+  ].filter(Boolean)
+  return names.find(name => name !== getAccountPrimaryName(account)) || ''
+}
+
+const getAccountRuntimeRoleLabel = (role: string) => {
+  if (role === 'listener') return '监听'
+  if (role === 'sender') return '发送'
+  if (role === 'both') return '监听+发送'
+  return '未绑定'
+}
+
+const getAccountTokenPreview = (account: any) => {
+  if (account.token_preview) return account.token_preview
+  const token = typeof account.token === 'string' ? account.token : ''
+  if (!token) return 'Token 无效'
+  return token.length > 18 ? `${token.substring(0, 8)}...${token.slice(-6)}` : token
 }
 
 const formatMessageFilterLabel = (filter: any) => {
@@ -2818,35 +2858,86 @@ const formatWebsiteForEdit = (website: any) => ({
           </Dialog>
         </div>
 
-        <div className="space-y-2">
-          {paginatedAccounts.map((account) => (
-            <div key={account.id} className="flex justify-between items-center p-4 border rounded">
-              <div className="flex-1">
-                <div className="font-semibold">{account.username}</div>
-                <div className="text-sm text-gray-500">
-                  {account.user_id ? `所属用户: ${getUserDisplayName(account.user_id)}` : '未分配用户'}
-                </div>
-                <div className="text-xs text-gray-400 font-mono">
-                  {account.token && typeof account.token === 'string' ? `${account.token.substring(0, 20)}...` : 'Token 无效'}
+        <div className="space-y-3">
+          {paginatedAccounts.map((account) => {
+            const primaryName = getAccountPrimaryName(account)
+            const secondaryName = getAccountSecondaryName(account)
+            const isOnline = account.status === 'online'
+
+            return (
+              <div key={account.id} className="rounded-md border bg-background p-4">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-muted">
+                        {account.discord_avatar_url ? (
+                          <img
+                            src={account.discord_avatar_url}
+                            alt={primaryName}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <UserRound className="size-5 text-muted-foreground" />
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="truncate text-base font-semibold">{primaryName}</div>
+                        {secondaryName ? (
+                          <div className="truncate text-xs text-muted-foreground">{secondaryName}</div>
+                        ) : null}
+                      </div>
+                      <Badge variant={isOnline ? "default" : "secondary"} className="h-6">
+                        {isOnline ? '在线' : '离线'}
+                      </Badge>
+                      {account.runtime_ready ? (
+                        <Badge variant="outline" className="h-6 border-emerald-200 bg-emerald-50 text-emerald-700">
+                          已连接
+                        </Badge>
+                      ) : null}
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-1 gap-2 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-4">
+                      <div className="flex items-center gap-2 rounded-md bg-muted/40 px-3 py-2">
+                        <Fingerprint className="size-3.5" />
+                        <span className="truncate">账号ID: {account.id}</span>
+                      </div>
+                      <div className="flex items-center gap-2 rounded-md bg-muted/40 px-3 py-2">
+                        <UserRound className="size-3.5" />
+                        <span className="truncate">
+                          {account.user_id ? `所属用户: ${getUserDisplayName(account.user_id)}` : '未分配用户'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 rounded-md bg-muted/40 px-3 py-2">
+                        <KeyRound className="size-3.5" />
+                        <span className="truncate font-mono">{getAccountTokenPreview(account)}</span>
+                      </div>
+                      <div className="flex items-center gap-2 rounded-md bg-muted/40 px-3 py-2">
+                        <CalendarClock className="size-3.5" />
+                        <span className="truncate">活跃: {formatAccountDateTime(account.last_active)}</span>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-4">
+                      <div className="truncate">Discord ID: {account.discord_user_id || '未获取'}</div>
+                      <div className="truncate">昵称: {account.discord_global_name || account.discord_display_name || '未设置'}</div>
+                      <div className="truncate">角色: {getAccountRuntimeRoleLabel(account.runtime_role)}</div>
+                      <div className="truncate">服务器: {account.runtime_guild_count ?? 0} 个</div>
+                    </div>
+                  </div>
+
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleDeleteAccount(account)}
+                    className="shrink-0 text-red-600 hover:bg-red-50 hover:text-red-700"
+                    title="删除账号"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <div className={`px-2 py-1 rounded text-sm ${
-                  account.status === 'online' ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'
-                }`}>
-                  {account.status === 'online' ? '在线' : '离线'}
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => handleDeleteAccount(account)}
-                  className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </Button>
-              </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
         {totalAccountPages > 1 && (
           <div className="flex flex-col sm:flex-row justify-between items-center gap-4 mt-4 pt-4 border-t">
@@ -2997,9 +3088,9 @@ const formatWebsiteForEdit = (website: any) => ({
             <div className="space-y-4 border-t pt-4">
               <div className="flex items-center justify-between">
                 <div>
-                  <Label htmlFor="keyword-best-match-image" className="text-sm font-medium">发送最相似商品图</Label>
+                  <Label htmlFor="keyword-best-match-image" className="text-sm font-medium">图片过阈值时发送图和链接</Label>
                   <p className="text-xs text-muted-foreground mt-1">
-                    开启后，图片命中商品时会额外带上该商品里和客户来图最相似的一张图
+                    开启后，客户来图相似度达到阈值时发送最相似商品图和链接；未达到阈值时只发送链接
                   </p>
                 </div>
                 <Switch
