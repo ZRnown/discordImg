@@ -28,6 +28,7 @@ const baseMenuItems = [
   { id: "review-window", icon: ShieldCheck, label: "审核窗口" },
   { id: "scraper", icon: Search, label: "微店抓取" },
   { id: "image-search", icon: ImageIcon, label: "以图搜图" },
+  { id: "keyword-image-review", icon: ListTree, label: "关键词搜图" },
   { id: "shops", icon: Store, label: "店铺管理" },
 ]
 

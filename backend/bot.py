@@ -79,6 +79,20 @@ try:
 except ImportError:
     from .product_reply_settings import apply_effective_product_reply_settings
 try:
+    from keyword_image_search import (
+        KeywordImageSearchError,
+        keyword_image_search_service,
+        normalize_keyword_image_search_max_images,
+        normalize_keyword_image_search_mode,
+    )
+except ImportError:
+    from .keyword_image_search import (
+        KeywordImageSearchError,
+        keyword_image_search_service,
+        normalize_keyword_image_search_max_images,
+        normalize_keyword_image_search_mode,
+    )
+try:
     from product_title_translations import (
         apply_reply_language_template_default,
         get_effective_reply_languages,
@@ -5450,9 +5464,13 @@ class DiscordBotClient(discord.Client):
                     if product.get('id') is not None
                 )
 
+            matched_website_ids = {
+                context['website_config'].get('id')
+                for context in website_match_contexts
+                if context.get('website_config')
+            }
             if not website_match_contexts:
-                logger.debug(f'关键词搜索无精确匹配: {search_query}')
-                return
+                logger.debug(f'关键词搜索无精确匹配，准备尝试关键词搜图: {search_query}')
 
             db = None
             global_filters = []
@@ -5549,6 +5567,7 @@ class DiscordBotClient(discord.Client):
                     logger.info(f"商品 {prepared_product.get('id')} 配置了自定义图片，准备发送自定义回复")
 
             any_reply_scheduled = False
+            keyword_image_job_created = False
 
             try:
                 if db is None:
@@ -5700,12 +5719,35 @@ class DiscordBotClient(discord.Client):
                     ),
                 )
 
-            if not any_reply_scheduled:
+            if allow_keyword_image_search and db is not None:
+                for website_config in website_configs:
+                    website_id = website_config.get('id')
+                    if not website_id or website_id in matched_website_ids:
+                        continue
+                    website_settings = user_website_settings_map.get(website_id) or {}
+                    keyword_image_result = await self._run_keyword_image_search_for_website(
+                        message,
+                        search_query,
+                        website_config,
+                        website_settings,
+                        user_settings,
+                        db,
+                    )
+                    keyword_image_job_created = (
+                        keyword_image_job_created
+                        or bool(keyword_image_result.get('job_created'))
+                    )
+                    any_reply_scheduled = (
+                        any_reply_scheduled
+                        or bool(keyword_image_result.get('reply_scheduled'))
+                    )
+
+            if not any_reply_scheduled and not keyword_image_job_created:
                 if keyword_triggered:
                     logger.info(f'关键词已命中但无可用回复内容: {search_query}')
                 else:
                     logger.info(f'关键词搜索无可用回复内容: {search_query}')
-            return keyword_triggered or any_reply_scheduled
+            return keyword_triggered or any_reply_scheduled or keyword_image_job_created
 
         except Exception as e:
             logger.error(f'Error handling keyword search: {e}')
@@ -5741,6 +5783,195 @@ class DiscordBotClient(discord.Client):
         except Exception as e:
             logger.error(f'Error searching products by keyword: {e}')
             return None
+
+    def _select_keyword_image_search_candidate_index(self, candidates):
+        best_index = None
+        best_similarity = -1.0
+        for index, candidate in enumerate(candidates or []):
+            if not isinstance(candidate, dict):
+                continue
+            if not candidate.get('match_found') or not candidate.get('product'):
+                continue
+            similarity = _coerce_float(candidate.get('similarity'))
+            if similarity is None:
+                similarity = -1.0
+            if best_index is None or similarity > best_similarity:
+                best_index = index
+                best_similarity = similarity
+        return best_index
+
+    async def _run_keyword_image_search_for_website(
+        self,
+        message,
+        search_query,
+        website_config,
+        website_settings,
+        user_settings,
+        db_module,
+    ):
+        website_id = website_config.get('id') if website_config else None
+        if not website_id or db_module is None:
+            return {'job_created': False, 'reply_scheduled': False}
+
+        enabled = 1 if int((website_settings or {}).get('keyword_image_search_enabled') or 0) else 0
+        if not enabled:
+            return {'job_created': False, 'reply_scheduled': False}
+
+        mode = normalize_keyword_image_search_mode(
+            (website_settings or {}).get('keyword_image_search_mode')
+        )
+        max_images = normalize_keyword_image_search_max_images(
+            (website_settings or {}).get('keyword_image_search_max_images'),
+            default=3,
+        )
+
+        logger.info(
+            "🔎 关键词搜图触发: query=%s website_id=%s mode=%s max_images=%s",
+            _summarize_text_for_log(search_query, limit=80),
+            website_id,
+            mode,
+            max_images,
+        )
+
+        try:
+            search_result = await asyncio.to_thread(
+                keyword_image_search_service.search_candidates,
+                query_text=search_query,
+                website_config=website_config,
+                user_id=self.user_id,
+                user_shops=self.user_shops,
+                max_images=max_images,
+                user_settings=user_settings,
+            )
+            error_message = None
+        except KeywordImageSearchError as exc:
+            search_result = {
+                'success': False,
+                'provider': getattr(config, 'KEYWORD_IMAGE_SEARCH_PROVIDER', 'searchapi_google_images'),
+                'external_result_count': 0,
+                'matched_result_count': 0,
+                'candidates': [],
+            }
+            error_message = str(exc)
+            logger.warning(
+                "关键词搜图失败: website_id=%s query=%s error=%s",
+                website_id,
+                _summarize_text_for_log(search_query, limit=80),
+                error_message,
+            )
+        except Exception as exc:
+            search_result = {
+                'success': False,
+                'provider': getattr(config, 'KEYWORD_IMAGE_SEARCH_PROVIDER', 'searchapi_google_images'),
+                'external_result_count': 0,
+                'matched_result_count': 0,
+                'candidates': [],
+            }
+            error_message = str(exc)
+            logger.error(
+                "关键词搜图异常: website_id=%s query=%s error=%s",
+                website_id,
+                _summarize_text_for_log(search_query, limit=80),
+                error_message,
+            )
+
+        candidates = search_result.get('candidates') or []
+        matched_result_count = int(search_result.get('matched_result_count') or 0)
+        if error_message:
+            job_status = 'failed'
+        elif matched_result_count <= 0:
+            job_status = 'no_match'
+        elif mode == 'auto':
+            job_status = 'pending'
+        else:
+            job_status = 'ready'
+
+        job_id = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: db_module.create_keyword_image_search_job(
+                user_id=self.user_id,
+                website_id=website_id,
+                query_text=search_query,
+                channel_id=str(getattr(message.channel, 'id', '')),
+                message_id=str(getattr(message, 'id', '')),
+                guild_id=str(getattr(getattr(message, 'guild', None), 'id', '')) or None,
+                author_id=str(getattr(getattr(message, 'author', None), 'id', '')) or None,
+                mode=mode,
+                provider=search_result.get('provider') or getattr(config, 'KEYWORD_IMAGE_SEARCH_PROVIDER', 'searchapi_google_images'),
+                status=job_status,
+                error_message=error_message,
+                candidates=candidates,
+                external_result_count=search_result.get('external_result_count') or 0,
+                matched_result_count=matched_result_count,
+            ),
+        )
+
+        if not job_id:
+            return {'job_created': False, 'reply_scheduled': False}
+
+        if matched_result_count <= 0 or mode != 'auto':
+            logger.info(
+                "关键词搜图任务已记录: job_id=%s website_id=%s status=%s matched=%s",
+                job_id,
+                website_id,
+                job_status,
+                matched_result_count,
+            )
+            return {'job_created': True, 'reply_scheduled': False}
+
+        best_candidate_index = self._select_keyword_image_search_candidate_index(candidates)
+        if best_candidate_index is None:
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: db_module.update_keyword_image_search_job(
+                    job_id,
+                    user_id=self.user_id,
+                    status='no_match',
+                    error_message='自动发送未找到可用候选商品',
+                ),
+            )
+            return {'job_created': True, 'reply_scheduled': False}
+
+        best_candidate = candidates[best_candidate_index]
+        product = best_candidate.get('product')
+        if not isinstance(product, dict) or not product.get('id'):
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: db_module.update_keyword_image_search_job(
+                    job_id,
+                    user_id=self.user_id,
+                    status='failed',
+                    error_message='自动发送候选商品数据无效',
+                ),
+            )
+            return {'job_created': True, 'reply_scheduled': False}
+
+        send_success = await self.schedule_reply(
+            message,
+            product,
+            None,
+            None,
+            website_configs_override=[website_config],
+        )
+        await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: db_module.update_keyword_image_search_job(
+                job_id,
+                user_id=self.user_id,
+                status='sent' if send_success else 'failed',
+                error_message=None if send_success else '自动发送失败',
+                selected_candidate_index=best_candidate_index,
+                sent_product_id=product.get('id') if send_success else None,
+            ),
+        )
+        logger.info(
+            "关键词搜图自动发送完成: job_id=%s website_id=%s success=%s product_id=%s",
+            job_id,
+            website_id,
+            send_success,
+            product.get('id'),
+        )
+        return {'job_created': True, 'reply_scheduled': bool(send_success)}
 
     async def recognize_image(self, image_data, user_shops=None):
         try:

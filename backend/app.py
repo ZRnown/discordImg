@@ -24,6 +24,7 @@ import logging
 import sys
 from datetime import datetime
 from types import SimpleNamespace
+from typing import Any, Dict
 
 # 自动加载.env文件
 try:
@@ -84,6 +85,21 @@ try:
 except ModuleNotFoundError as e:
     if e.name == 'rotation_settings':
         from .rotation_settings import resolve_rotation_settings_update
+    else:
+        raise
+try:
+    from keyword_image_search import (
+        KeywordImageSearchError,
+        normalize_keyword_image_search_max_images,
+        normalize_keyword_image_search_mode,
+    )
+except ModuleNotFoundError as e:
+    if e.name == 'keyword_image_search':
+        from .keyword_image_search import (
+            KeywordImageSearchError,
+            normalize_keyword_image_search_max_images,
+            normalize_keyword_image_search_mode,
+        )
     else:
         raise
 try:
@@ -2188,6 +2204,9 @@ def get_website_configs():
             config['thread_reply_enabled'] = user_settings.get('thread_reply_enabled', 0)
             config['forum_post_reply_enabled'] = user_settings.get('forum_post_reply_enabled', 0)
             config['keyword_match_limit'] = user_settings.get('keyword_match_limit')
+            config['keyword_image_search_enabled'] = user_settings.get('keyword_image_search_enabled', 0)
+            config['keyword_image_search_mode'] = user_settings.get('keyword_image_search_mode', 'manual')
+            config['keyword_image_search_max_images'] = user_settings.get('keyword_image_search_max_images', 3)
             config['reply_min_delay'] = user_settings.get('reply_min_delay')
             config['reply_max_delay'] = user_settings.get('reply_max_delay')
             try:
@@ -2662,6 +2681,9 @@ def get_website_rotation(config_id):
             'thread_reply_enabled': settings.get('thread_reply_enabled', 0),
             'forum_post_reply_enabled': settings.get('forum_post_reply_enabled', 0),
             'keyword_match_limit': settings.get('keyword_match_limit'),
+            'keyword_image_search_enabled': settings.get('keyword_image_search_enabled', 0),
+            'keyword_image_search_mode': settings.get('keyword_image_search_mode', 'manual'),
+            'keyword_image_search_max_images': settings.get('keyword_image_search_max_images', 3),
             'reply_min_delay': settings.get('reply_min_delay'),
             'reply_max_delay': settings.get('reply_max_delay'),
         })
@@ -2696,6 +2718,9 @@ def update_website_rotation(config_id):
         thread_reply_enabled = data.get('thread_reply_enabled')
         forum_post_reply_enabled = data.get('forum_post_reply_enabled')
         keyword_match_limit = data.get('keyword_match_limit')
+        keyword_image_search_enabled = data.get('keyword_image_search_enabled')
+        keyword_image_search_mode = data.get('keyword_image_search_mode')
+        keyword_image_search_max_images = data.get('keyword_image_search_max_images')
         reply_min_delay = data.get('reply_min_delay')
         reply_max_delay = data.get('reply_max_delay')
         reply_delay_requested = 'reply_min_delay' in data or 'reply_max_delay' in data
@@ -2704,6 +2729,9 @@ def update_website_rotation(config_id):
         forum_post_reply_requested = 'forum_post_reply_enabled' in data
         keyword_match_limit_requested = 'keyword_match_limit' in data
         keyword_match_limit_cleared = keyword_match_limit_requested and keyword_match_limit in {'', None}
+        keyword_image_search_enabled_requested = 'keyword_image_search_enabled' in data
+        keyword_image_search_mode_requested = 'keyword_image_search_mode' in data
+        keyword_image_search_max_images_requested = 'keyword_image_search_max_images' in data
         target_reply_mode = str(reply_mode or current_effective_settings.get('reply_mode', 'rotation')).strip().lower()
 
         # 验证参数
@@ -2762,6 +2790,32 @@ def update_website_rotation(config_id):
                 return jsonify({'error': '关键词命中上限必须是整数'}), 400
             if keyword_match_limit < 0:
                 return jsonify({'error': '关键词命中上限不能小于 0'}), 400
+        if keyword_image_search_enabled_requested:
+            if isinstance(keyword_image_search_enabled, str):
+                normalized_keyword_image_search_enabled = keyword_image_search_enabled.strip().lower()
+                if normalized_keyword_image_search_enabled in {'1', 'true', 'yes', 'on'}:
+                    keyword_image_search_enabled = 1
+                elif normalized_keyword_image_search_enabled in {'0', 'false', 'no', 'off'}:
+                    keyword_image_search_enabled = 0
+                else:
+                    return jsonify({'error': '关键词搜图开关必须是 0 或 1'}), 400
+            elif isinstance(keyword_image_search_enabled, bool):
+                keyword_image_search_enabled = 1 if keyword_image_search_enabled else 0
+            elif isinstance(keyword_image_search_enabled, (int, float)) and float(keyword_image_search_enabled) in {0.0, 1.0}:
+                keyword_image_search_enabled = int(keyword_image_search_enabled)
+            else:
+                return jsonify({'error': '关键词搜图开关必须是 0 或 1'}), 400
+        if keyword_image_search_mode_requested:
+            keyword_image_search_mode = normalize_keyword_image_search_mode(keyword_image_search_mode)
+            if keyword_image_search_mode not in {'manual', 'auto'}:
+                return jsonify({'error': '关键词搜图模式必须是 manual 或 auto'}), 400
+        if keyword_image_search_max_images_requested:
+            try:
+                keyword_image_search_max_images = int(keyword_image_search_max_images)
+            except (TypeError, ValueError):
+                return jsonify({'error': '关键词搜图张数必须是整数'}), 400
+            if keyword_image_search_max_images < 1 or keyword_image_search_max_images > 10:
+                return jsonify({'error': '关键词搜图张数必须在 1 到 10 之间'}), 400
         if reply_min_delay in {'', None}:
             reply_min_delay = None
         if reply_max_delay in {'', None}:
@@ -2806,6 +2860,9 @@ def update_website_rotation(config_id):
             thread_reply_enabled=thread_reply_enabled,
             forum_post_reply_enabled=forum_post_reply_enabled,
             keyword_match_limit=None if keyword_match_limit_cleared else keyword_match_limit,
+            keyword_image_search_enabled=keyword_image_search_enabled,
+            keyword_image_search_mode=keyword_image_search_mode,
+            keyword_image_search_max_images=keyword_image_search_max_images,
         ):
             if keyword_match_limit_cleared:
                 if not db.update_user_website_keyword_match_limit(
@@ -2860,6 +2917,16 @@ def update_website_rotation(config_id):
                 messages.append('子分区回复已开启' if thread_reply_enabled else '子分区回复已关闭')
             if forum_post_reply_requested and int(current_settings.get('forum_post_reply_enabled', 0) or 0) != int(forum_post_reply_enabled):
                 messages.append('帖子回复已开启' if forum_post_reply_enabled else '帖子回复已关闭')
+            if keyword_image_search_enabled_requested and int(current_settings.get('keyword_image_search_enabled', 0) or 0) != int(keyword_image_search_enabled):
+                messages.append('关键词搜图已开启' if keyword_image_search_enabled else '关键词搜图已关闭')
+            if keyword_image_search_mode_requested and current_settings.get('keyword_image_search_mode', 'manual') != keyword_image_search_mode:
+                messages.append(
+                    '关键词搜图模式已切换为自动发送'
+                    if keyword_image_search_mode == 'auto'
+                    else '关键词搜图模式已切换为人工审核发送'
+                )
+            if keyword_image_search_max_images_requested and int(current_settings.get('keyword_image_search_max_images', 3) or 3) != int(keyword_image_search_max_images):
+                messages.append(f'关键词搜图图片数已设置为 {keyword_image_search_max_images} 张')
             current_settings = db.get_user_website_settings(current_user['id'], config_id)
             return jsonify({
                 'success': True,
@@ -2869,6 +2936,9 @@ def update_website_rotation(config_id):
                     'thread_reply_enabled': current_settings.get('thread_reply_enabled', 0),
                     'forum_post_reply_enabled': current_settings.get('forum_post_reply_enabled', 0),
                     'keyword_match_limit': current_settings.get('keyword_match_limit'),
+                    'keyword_image_search_enabled': current_settings.get('keyword_image_search_enabled', 0),
+                    'keyword_image_search_mode': current_settings.get('keyword_image_search_mode', 'manual'),
+                    'keyword_image_search_max_images': current_settings.get('keyword_image_search_max_images', 3),
                     'reply_min_delay': current_settings.get('reply_min_delay'),
                     'reply_max_delay': current_settings.get('reply_max_delay'),
                 },
@@ -2877,6 +2947,161 @@ def update_website_rotation(config_id):
             return jsonify({'error': '更新失败'}), 500
     except Exception as e:
         logger.error(f"更新网站轮换配置失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+async def _send_keyword_image_search_candidate_async(
+    *,
+    user_id: int,
+    job: Dict[str, Any],
+    candidate: Dict[str, Any],
+) -> Dict[str, Any]:
+    try:
+        from bot import bot_clients
+    except ModuleNotFoundError:
+        from .bot import bot_clients
+
+    channel_id = int(str(job.get('channel_id') or '').strip())
+    message_id = int(str(job.get('message_id') or '').strip())
+    website_id = job.get('website_id')
+    website_config = next(
+        (item for item in db.get_website_configs() if item.get('id') == website_id),
+        None,
+    )
+    if not website_config:
+        raise RuntimeError('网站配置不存在或已删除')
+
+    product = candidate.get('product')
+    if not isinstance(product, dict) or not product.get('id'):
+        raise RuntimeError('候选结果没有可发送的商品')
+
+    ready_clients = [
+        client
+        for client in bot_clients
+        if getattr(client, 'user_id', None) == user_id
+        and getattr(client, 'running', False)
+        and not client.is_closed()
+        and client.is_ready()
+    ]
+    if not ready_clients:
+        raise RuntimeError('当前没有在线机器人账号，无法发送')
+
+    last_error = None
+    for client in ready_clients:
+        try:
+            channel = client.get_channel(channel_id)
+            if channel is None:
+                channel = await client.fetch_channel(channel_id)
+            if channel is None:
+                raise RuntimeError(f'无法获取频道 {channel_id}')
+            message = await channel.fetch_message(message_id)
+            success = await client.schedule_reply(
+                message,
+                product,
+                None,
+                None,
+                website_configs_override=[website_config],
+            )
+            if success:
+                return {
+                    'success': True,
+                    'product_id': product.get('id'),
+                    'website_id': website_id,
+                }
+            last_error = RuntimeError('发送链路未返回成功状态')
+        except Exception as exc:
+            last_error = exc
+
+    raise last_error or RuntimeError('发送失败')
+
+
+@app.route('/api/keyword-image-search/jobs', methods=['GET'])
+def list_keyword_image_search_jobs():
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        current_user = get_current_user()
+        limit = request.args.get('limit', 50)
+        website_id = request.args.get('website_id')
+        status = request.args.get('status')
+        try:
+            website_id = int(website_id) if website_id not in {None, '', 'all'} else None
+        except (TypeError, ValueError):
+            website_id = None
+
+        jobs = db.list_keyword_image_search_jobs(
+            current_user['id'],
+            website_id=website_id,
+            status=status or None,
+            limit=limit,
+        )
+        return jsonify({'jobs': jobs})
+    except Exception as e:
+        logger.error(f"获取关键词搜图任务列表失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/keyword-image-search/jobs/<int:job_id>/send', methods=['POST'])
+def send_keyword_image_search_job(job_id):
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        current_user = get_current_user()
+        job = db.get_keyword_image_search_job(job_id, user_id=current_user['id'])
+        if not job:
+            return jsonify({'error': '任务不存在'}), 404
+
+        data = request.get_json(silent=True) or {}
+        try:
+            candidate_index = int(data.get('candidate_index', 0))
+        except (TypeError, ValueError):
+            return jsonify({'error': '候选项索引无效'}), 400
+
+        candidates = job.get('candidates') or []
+        if candidate_index < 0 or candidate_index >= len(candidates):
+            return jsonify({'error': '候选项索引超出范围'}), 400
+
+        candidate = candidates[candidate_index]
+        if not candidate.get('match_found') or not candidate.get('product'):
+            return jsonify({'error': '该候选项没有可发送的匹配商品'}), 400
+
+        if bot_loop is None or not getattr(bot_loop, 'is_running', lambda: False)():
+            return jsonify({'error': '机器人未运行，无法发送'}), 409
+
+        future = asyncio.run_coroutine_threadsafe(
+            _send_keyword_image_search_candidate_async(
+                user_id=current_user['id'],
+                job=job,
+                candidate=candidate,
+            ),
+            bot_loop,
+        )
+        result = future.result(timeout=60)
+        db.update_keyword_image_search_job(
+            job_id,
+            user_id=current_user['id'],
+            status='sent',
+            selected_candidate_index=candidate_index,
+            sent_product_id=(candidate.get('product') or {}).get('id'),
+            error_message=None,
+        )
+        return jsonify({
+            'success': True,
+            'message': '候选商品已发送',
+            'result': result,
+        })
+    except Exception as e:
+        logger.error(f"发送关键词搜图候选失败(job_id={job_id}): {e}")
+        current_user = get_current_user()
+        if current_user:
+            db.update_keyword_image_search_job(
+                job_id,
+                user_id=current_user['id'],
+                status='failed',
+                error_message=str(e),
+            )
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/keyword-review-items', methods=['GET'])
@@ -4809,6 +5034,8 @@ def update_user_settings():
             bark_server_url=data.get('bark_server_url'),
             bark_device_key=data.get('bark_device_key'),
             keyword_reply_send_best_match_image=keyword_reply_send_best_match_image,
+            keyword_image_search_api_key=data.get('keyword_image_search_api_key'),
+            keyword_image_search_cx=data.get('keyword_image_search_cx'),
             review_bark_enabled=review_bark_enabled,
             review_bark_mode=review_bark_mode if 'review_bark_mode' in data else None,
             review_bark_count_threshold=review_bark_count_threshold,

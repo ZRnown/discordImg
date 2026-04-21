@@ -848,6 +848,8 @@ class Database:
                     bark_server_url TEXT DEFAULT 'https://api.day.app',  -- Bark 服务地址
                     bark_device_key TEXT DEFAULT '',  -- Bark 设备密钥
                     keyword_reply_send_best_match_image INTEGER DEFAULT 0,
+                    keyword_image_search_api_key TEXT DEFAULT '',
+                    keyword_image_search_cx TEXT DEFAULT '',
                     review_bark_enabled INTEGER DEFAULT 0,
                     review_bark_mode TEXT DEFAULT 'count',
                     review_bark_count_threshold INTEGER DEFAULT 5,
@@ -918,6 +920,16 @@ class Database:
                 pass
 
             try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN keyword_image_search_api_key TEXT DEFAULT \'\'')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN keyword_image_search_cx TEXT DEFAULT \'\'')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
                 cursor.execute('ALTER TABLE user_settings ADD COLUMN review_bark_enabled INTEGER DEFAULT 0')
             except sqlite3.OperationalError:
                 pass
@@ -962,6 +974,9 @@ class Database:
                     thread_reply_enabled INTEGER DEFAULT 0,
                     forum_post_reply_enabled INTEGER DEFAULT 0,
                     keyword_match_limit INTEGER DEFAULT NULL,
+                    keyword_image_search_enabled INTEGER DEFAULT 0,
+                    keyword_image_search_mode TEXT DEFAULT 'manual',
+                    keyword_image_search_max_images INTEGER DEFAULT 3,
                     message_filters TEXT DEFAULT '[]',
                     image_similarity_threshold REAL DEFAULT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1014,6 +1029,18 @@ class Database:
             except sqlite3.OperationalError:
                 pass
             try:
+                cursor.execute('ALTER TABLE user_website_settings ADD COLUMN keyword_image_search_enabled INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute("ALTER TABLE user_website_settings ADD COLUMN keyword_image_search_mode TEXT DEFAULT 'manual'")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute('ALTER TABLE user_website_settings ADD COLUMN keyword_image_search_max_images INTEGER DEFAULT 3')
+            except sqlite3.OperationalError:
+                pass
+            try:
                 cursor.execute('''
                     UPDATE user_website_settings
                     SET keyword_reply_interval = rotation_interval
@@ -1043,6 +1070,48 @@ class Database:
                     ''')
                 except sqlite3.OperationalError:
                     pass
+
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS keyword_image_search_jobs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    website_id INTEGER NOT NULL,
+                    query_text TEXT NOT NULL,
+                    channel_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL,
+                    guild_id TEXT,
+                    author_id TEXT,
+                    mode TEXT DEFAULT 'manual',
+                    provider TEXT DEFAULT 'searchapi_google_images',
+                    status TEXT DEFAULT 'pending',
+                    error_message TEXT,
+                    external_result_count INTEGER DEFAULT 0,
+                    matched_result_count INTEGER DEFAULT 0,
+                    selected_candidate_index INTEGER,
+                    sent_product_id INTEGER,
+                    candidates_json TEXT DEFAULT '[]',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+                    FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE,
+                    FOREIGN KEY (sent_product_id) REFERENCES products (id) ON DELETE SET NULL
+                )
+            ''')
+
+            try:
+                cursor.execute(
+                    'CREATE INDEX IF NOT EXISTS idx_keyword_image_jobs_user_created '
+                    'ON keyword_image_search_jobs(user_id, created_at)'
+                )
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute(
+                    'CREATE INDEX IF NOT EXISTS idx_keyword_image_jobs_website_created '
+                    'ON keyword_image_search_jobs(website_id, created_at)'
+                )
+            except sqlite3.OperationalError:
+                pass
 
             # 创建抓取状态表（持久化存储抓取状态）
             cursor.execute('''
@@ -4046,6 +4115,9 @@ class Database:
             'thread_reply_enabled': 0,
             'forum_post_reply_enabled': 0,
             'keyword_match_limit': None,
+            'keyword_image_search_enabled': 0,
+            'keyword_image_search_mode': 'manual',
+            'keyword_image_search_max_images': 3,
             'message_filters': '[]',
             'image_similarity_threshold': None,
             'reply_min_delay': None,
@@ -4084,6 +4156,16 @@ class Database:
         keyword_batch_dispatch_mode = (row['keyword_batch_dispatch_mode'] or 'immediate').strip().lower()
         if keyword_batch_dispatch_mode not in {'immediate', 'window_end'}:
             keyword_batch_dispatch_mode = 'immediate'
+        keyword_image_search_mode = str(
+            row['keyword_image_search_mode'] or 'manual'
+        ).strip().lower()
+        if keyword_image_search_mode not in {'manual', 'auto'}:
+            keyword_image_search_mode = 'manual'
+        try:
+            keyword_image_search_max_images = int(row['keyword_image_search_max_images'] or 3)
+        except (TypeError, ValueError):
+            keyword_image_search_max_images = 3
+        keyword_image_search_max_images = max(1, min(keyword_image_search_max_images, 10))
 
         return {
             'rotation_interval': rotation_interval,
@@ -4095,6 +4177,9 @@ class Database:
             'thread_reply_enabled': 1 if int(row['thread_reply_enabled'] or 0) else 0,
             'forum_post_reply_enabled': 1 if int(row['forum_post_reply_enabled'] or 0) else 0,
             'keyword_match_limit': row['keyword_match_limit'],
+            'keyword_image_search_enabled': 1 if int(row['keyword_image_search_enabled'] or 0) else 0,
+            'keyword_image_search_mode': keyword_image_search_mode,
+            'keyword_image_search_max_images': keyword_image_search_max_images,
             'message_filters': row['message_filters'],
             'image_similarity_threshold': row['image_similarity_threshold'],
             'reply_min_delay': row['reply_min_delay'],
@@ -4109,7 +4194,8 @@ class Database:
                 cursor.execute('''
                     SELECT rotation_interval, rotation_enabled, reply_mode, keyword_reply_interval, keyword_reply_batch_size,
                            keyword_batch_dispatch_mode, thread_reply_enabled, forum_post_reply_enabled,
-                           keyword_match_limit, message_filters,
+                           keyword_match_limit, keyword_image_search_enabled, keyword_image_search_mode,
+                           keyword_image_search_max_images, message_filters,
                            image_similarity_threshold, reply_min_delay, reply_max_delay
                     FROM user_website_settings
                     WHERE user_id = ? AND website_id = ?
@@ -4130,7 +4216,8 @@ class Database:
                     SELECT website_id, rotation_interval, rotation_enabled, reply_mode, keyword_reply_interval,
                            keyword_reply_batch_size, keyword_batch_dispatch_mode, thread_reply_enabled,
                            forum_post_reply_enabled,
-                           keyword_match_limit, message_filters, image_similarity_threshold,
+                           keyword_match_limit, keyword_image_search_enabled, keyword_image_search_mode,
+                           keyword_image_search_max_images, message_filters, image_similarity_threshold,
                            reply_min_delay, reply_max_delay
                     FROM user_website_settings
                     WHERE user_id = ?
@@ -4214,6 +4301,9 @@ class Database:
         thread_reply_enabled: int = None,
         forum_post_reply_enabled: int = None,
         keyword_match_limit: int = None,
+        keyword_image_search_enabled: int = None,
+        keyword_image_search_mode: str = None,
+        keyword_image_search_max_images: int = None,
     ) -> bool:
         """更新用户的网站轮换设置"""
         try:
@@ -4231,6 +4321,24 @@ class Database:
                 normalized_forum_post_reply_enabled = None
                 if forum_post_reply_enabled is not None:
                     normalized_forum_post_reply_enabled = 1 if int(forum_post_reply_enabled) else 0
+                normalized_keyword_image_search_enabled = None
+                if keyword_image_search_enabled is not None:
+                    normalized_keyword_image_search_enabled = 1 if int(keyword_image_search_enabled) else 0
+                normalized_keyword_image_search_mode = None
+                if keyword_image_search_mode is not None:
+                    candidate_mode = str(keyword_image_search_mode).strip().lower()
+                    if candidate_mode in {'manual', 'auto'}:
+                        normalized_keyword_image_search_mode = candidate_mode
+                normalized_keyword_image_search_max_images = None
+                if keyword_image_search_max_images is not None:
+                    try:
+                        normalized_keyword_image_search_max_images = int(keyword_image_search_max_images)
+                    except (TypeError, ValueError):
+                        normalized_keyword_image_search_max_images = 3
+                    normalized_keyword_image_search_max_images = max(
+                        1,
+                        min(normalized_keyword_image_search_max_images, 10),
+                    )
                 if normalized_reply_mode is None:
                     if rotation_enabled == 0 and (keyword_reply_batch_size or 0) > 0:
                         normalized_reply_mode = 'keyword'
@@ -4284,6 +4392,15 @@ class Database:
                     if keyword_match_limit is not None:
                         updates.append('keyword_match_limit = ?')
                         params.append(keyword_match_limit)
+                    if normalized_keyword_image_search_enabled is not None:
+                        updates.append('keyword_image_search_enabled = ?')
+                        params.append(normalized_keyword_image_search_enabled)
+                    if normalized_keyword_image_search_mode is not None:
+                        updates.append('keyword_image_search_mode = ?')
+                        params.append(normalized_keyword_image_search_mode)
+                    if normalized_keyword_image_search_max_images is not None:
+                        updates.append('keyword_image_search_max_images = ?')
+                        params.append(normalized_keyword_image_search_max_images)
                     if updates:
                         updates.append('updated_at = CURRENT_TIMESTAMP')
                         params.extend([user_id, website_id])
@@ -4306,9 +4423,12 @@ class Database:
                             keyword_batch_dispatch_mode,
                             thread_reply_enabled,
                             forum_post_reply_enabled,
-                            keyword_match_limit
+                            keyword_match_limit,
+                            keyword_image_search_enabled,
+                            keyword_image_search_mode,
+                            keyword_image_search_max_images
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         user_id,
                         website_id,
@@ -4323,12 +4443,252 @@ class Database:
                         normalized_thread_reply_enabled if normalized_thread_reply_enabled is not None else 0,
                         normalized_forum_post_reply_enabled if normalized_forum_post_reply_enabled is not None else 0,
                         keyword_match_limit,
+                        normalized_keyword_image_search_enabled if normalized_keyword_image_search_enabled is not None else 0,
+                        normalized_keyword_image_search_mode or 'manual',
+                        normalized_keyword_image_search_max_images if normalized_keyword_image_search_max_images is not None else 3,
                     ))
 
                 conn.commit()
                 return True
         except Exception as e:
             logger.error(f"更新用户网站轮换设置失败: {e}")
+            return False
+
+    @staticmethod
+    def _normalize_keyword_image_search_job_status(value: Any) -> str:
+        candidate = str(value or 'pending').strip().lower()
+        if candidate in {'pending', 'ready', 'sent', 'no_match', 'failed'}:
+            return candidate
+        return 'pending'
+
+    @staticmethod
+    def _normalize_keyword_image_search_job_mode(value: Any) -> str:
+        candidate = str(value or 'manual').strip().lower()
+        if candidate in {'manual', 'auto'}:
+            return candidate
+        return 'manual'
+
+    @staticmethod
+    def _parse_keyword_image_search_candidates(raw_value: Any) -> List[Dict[str, Any]]:
+        if isinstance(raw_value, list):
+            return [item for item in raw_value if isinstance(item, dict)]
+        if not raw_value:
+            return []
+        try:
+            parsed = json.loads(raw_value)
+        except Exception:
+            return []
+        if not isinstance(parsed, list):
+            return []
+        return [item for item in parsed if isinstance(item, dict)]
+
+    def _normalize_keyword_image_search_job_row(self, row: Any) -> Optional[Dict[str, Any]]:
+        if not row:
+            return None
+
+        payload = dict(row)
+        payload['mode'] = self._normalize_keyword_image_search_job_mode(payload.get('mode'))
+        payload['status'] = self._normalize_keyword_image_search_job_status(payload.get('status'))
+        payload['candidates'] = self._parse_keyword_image_search_candidates(
+            payload.get('candidates_json')
+        )
+        payload.pop('candidates_json', None)
+        payload['external_result_count'] = int(payload.get('external_result_count') or 0)
+        payload['matched_result_count'] = int(payload.get('matched_result_count') or 0)
+        return payload
+
+    def create_keyword_image_search_job(
+        self,
+        *,
+        user_id: int,
+        website_id: int,
+        query_text: str,
+        channel_id: str,
+        message_id: str,
+        guild_id: Optional[str] = None,
+        author_id: Optional[str] = None,
+        mode: str = 'manual',
+        provider: str = 'searchapi_google_images',
+        status: str = 'pending',
+        error_message: Optional[str] = None,
+        candidates: Optional[List[Dict[str, Any]]] = None,
+        external_result_count: int = 0,
+        matched_result_count: int = 0,
+    ) -> Optional[int]:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    INSERT INTO keyword_image_search_jobs (
+                        user_id,
+                        website_id,
+                        query_text,
+                        channel_id,
+                        message_id,
+                        guild_id,
+                        author_id,
+                        mode,
+                        provider,
+                        status,
+                        error_message,
+                        external_result_count,
+                        matched_result_count,
+                        candidates_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''',
+                    (
+                        int(user_id),
+                        int(website_id),
+                        str(query_text or '').strip(),
+                        str(channel_id or ''),
+                        str(message_id or ''),
+                        str(guild_id) if guild_id is not None else None,
+                        str(author_id) if author_id is not None else None,
+                        self._normalize_keyword_image_search_job_mode(mode),
+                        str(provider or 'searchapi_google_images').strip() or 'searchapi_google_images',
+                        self._normalize_keyword_image_search_job_status(status),
+                        error_message,
+                        max(0, int(external_result_count or 0)),
+                        max(0, int(matched_result_count or 0)),
+                        json.dumps(candidates or [], ensure_ascii=False),
+                    ),
+                )
+                conn.commit()
+                return cursor.lastrowid
+        except Exception as e:
+            logger.error(f"创建关键词搜图任务失败: {e}")
+            return None
+
+    def get_keyword_image_search_job(
+        self,
+        job_id: int,
+        user_id: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                user_scope_sql = ' AND kij.user_id = ?' if user_id is not None else ''
+                params: List[Any] = [job_id]
+                if user_id is not None:
+                    params.append(user_id)
+                cursor.execute(
+                    f'''
+                    SELECT
+                        kij.*,
+                        wc.display_name AS website_display_name,
+                        wc.name AS website_name
+                    FROM keyword_image_search_jobs kij
+                    LEFT JOIN website_configs wc ON wc.id = kij.website_id
+                    WHERE kij.id = ?{user_scope_sql}
+                    ''',
+                    params,
+                )
+                return self._normalize_keyword_image_search_job_row(cursor.fetchone())
+        except Exception as e:
+            logger.error(f"获取关键词搜图任务失败: {e}")
+            return None
+
+    def list_keyword_image_search_jobs(
+        self,
+        user_id: int,
+        *,
+        website_id: Optional[int] = None,
+        status: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        try:
+            normalized_limit = max(1, min(int(limit or 50), 200))
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                query = '''
+                    SELECT
+                        kij.*,
+                        wc.display_name AS website_display_name,
+                        wc.name AS website_name
+                    FROM keyword_image_search_jobs kij
+                    LEFT JOIN website_configs wc ON wc.id = kij.website_id
+                    WHERE kij.user_id = ?
+                '''
+                params: List[Any] = [user_id]
+                if website_id:
+                    query += ' AND kij.website_id = ?'
+                    params.append(website_id)
+                if status:
+                    query += ' AND kij.status = ?'
+                    params.append(self._normalize_keyword_image_search_job_status(status))
+                query += ' ORDER BY kij.created_at DESC, kij.id DESC LIMIT ?'
+                params.append(normalized_limit)
+                cursor.execute(query, params)
+                return [
+                    job
+                    for job in (
+                        self._normalize_keyword_image_search_job_row(row)
+                        for row in cursor.fetchall()
+                    )
+                    if job is not None
+                ]
+        except Exception as e:
+            logger.error(f"列出关键词搜图任务失败: {e}")
+            return []
+
+    def update_keyword_image_search_job(
+        self,
+        job_id: int,
+        *,
+        user_id: Optional[int] = None,
+        **updates: Any,
+    ) -> bool:
+        try:
+            update_pairs: List[str] = []
+            params: List[Any] = []
+            for field, value in updates.items():
+                if value is None and field not in {'error_message', 'selected_candidate_index', 'sent_product_id'}:
+                    continue
+                if field == 'status':
+                    update_pairs.append('status = ?')
+                    params.append(self._normalize_keyword_image_search_job_status(value))
+                elif field == 'mode':
+                    update_pairs.append('mode = ?')
+                    params.append(self._normalize_keyword_image_search_job_mode(value))
+                elif field == 'candidates':
+                    update_pairs.append('candidates_json = ?')
+                    params.append(json.dumps(value or [], ensure_ascii=False))
+                elif field in {
+                    'error_message',
+                    'selected_candidate_index',
+                    'sent_product_id',
+                    'external_result_count',
+                    'matched_result_count',
+                    'provider',
+                }:
+                    update_pairs.append(f'{field} = ?')
+                    params.append(value)
+
+            if not update_pairs:
+                return False
+
+            update_pairs.append('updated_at = CURRENT_TIMESTAMP')
+            user_scope_sql = ' AND user_id = ?' if user_id is not None else ''
+            params.append(job_id)
+            if user_id is not None:
+                params.append(user_id)
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f'''
+                    UPDATE keyword_image_search_jobs
+                    SET {', '.join(update_pairs)}
+                    WHERE id = ?{user_scope_sql}
+                    ''',
+                    params,
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"更新关键词搜图任务失败: {e}")
             return False
 
     def update_user_website_filters(self, user_id: int, website_id: int, message_filters: str) -> bool:
@@ -5499,6 +5859,7 @@ class Database:
                            global_reply_template, numeric_filter_keyword, filter_size_min, filter_size_max,
                            bark_enabled, bark_server_url, bark_device_key,
                            keyword_reply_send_best_match_image,
+                           keyword_image_search_api_key, keyword_image_search_cx,
                            review_bark_enabled, review_bark_mode, review_bark_count_threshold,
                            review_bark_interval_minutes, review_bark_last_notified_at,
                            review_bark_last_pending_count
@@ -5526,12 +5887,14 @@ class Database:
                         'bark_server_url': row[15] or 'https://api.day.app',
                         'bark_device_key': row[16] or '',
                         'keyword_reply_send_best_match_image': row[17] if row[17] is not None else 0,
-                        'review_bark_enabled': row[18] if row[18] is not None else 0,
-                        'review_bark_mode': row[19] or 'count',
-                        'review_bark_count_threshold': row[20] if row[20] is not None else 5,
-                        'review_bark_interval_minutes': row[21] if row[21] is not None else 60,
-                        'review_bark_last_notified_at': row[22] or '',
-                        'review_bark_last_pending_count': row[23] if row[23] is not None else 0,
+                        'keyword_image_search_api_key': row[18] or '',
+                        'keyword_image_search_cx': row[19] or '',
+                        'review_bark_enabled': row[20] if row[20] is not None else 0,
+                        'review_bark_mode': row[21] or 'count',
+                        'review_bark_count_threshold': row[22] if row[22] is not None else 5,
+                        'review_bark_interval_minutes': row[23] if row[23] is not None else 60,
+                        'review_bark_last_notified_at': row[24] or '',
+                        'review_bark_last_pending_count': row[25] if row[25] is not None else 0,
                     }
                 # 如果用户没有设置，返回默认值
                 return {
@@ -5553,6 +5916,8 @@ class Database:
                     'bark_server_url': 'https://api.day.app',
                     'bark_device_key': '',
                     'keyword_reply_send_best_match_image': 0,
+                    'keyword_image_search_api_key': '',
+                    'keyword_image_search_cx': '',
                     'review_bark_enabled': 0,
                     'review_bark_mode': 'count',
                     'review_bark_count_threshold': 5,
@@ -5581,6 +5946,8 @@ class Database:
                 'bark_server_url': 'https://api.day.app',
                 'bark_device_key': '',
                 'keyword_reply_send_best_match_image': 0,
+                'keyword_image_search_api_key': '',
+                'keyword_image_search_cx': '',
                 'review_bark_enabled': 0,
                 'review_bark_mode': 'count',
                 'review_bark_count_threshold': 5,
@@ -5600,6 +5967,8 @@ class Database:
                            bark_enabled: int = None, bark_server_url: str = None,
                            bark_device_key: str = None,
                            keyword_reply_send_best_match_image: int = None,
+                           keyword_image_search_api_key: str = None,
+                           keyword_image_search_cx: str = None,
                            review_bark_enabled: int = None,
                            review_bark_mode: str = None,
                            review_bark_count_threshold: int = None,
@@ -5692,6 +6061,14 @@ class Database:
                         update_fields.append('keyword_reply_send_best_match_image = ?')
                         params.append(keyword_reply_send_best_match_image)
 
+                    if keyword_image_search_api_key is not None:
+                        update_fields.append('keyword_image_search_api_key = ?')
+                        params.append(keyword_image_search_api_key)
+
+                    if keyword_image_search_cx is not None:
+                        update_fields.append('keyword_image_search_cx = ?')
+                        params.append(keyword_image_search_cx)
+
                     if review_bark_enabled is not None:
                         update_fields.append('review_bark_enabled = ?')
                         params.append(review_bark_enabled)
@@ -5729,10 +6106,11 @@ class Database:
                          global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
                          keyword_reply_enabled, image_reply_enabled, keyword_match_limit, global_reply_template,
                          numeric_filter_keyword, filter_size_min, filter_size_max, bark_enabled, bark_server_url, bark_device_key,
-                         keyword_reply_send_best_match_image, review_bark_enabled, review_bark_mode,
+                         keyword_reply_send_best_match_image, keyword_image_search_api_key, keyword_image_search_cx,
+                         review_bark_enabled, review_bark_mode,
                          review_bark_count_threshold, review_bark_interval_minutes,
                          review_bark_last_notified_at, review_bark_last_pending_count)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         user_id,
                         download_threads or 4,
@@ -5753,6 +6131,8 @@ class Database:
                         bark_server_url if bark_server_url is not None else 'https://api.day.app',
                         bark_device_key or '',
                         keyword_reply_send_best_match_image if keyword_reply_send_best_match_image is not None else 0,
+                        keyword_image_search_api_key or '',
+                        keyword_image_search_cx or '',
                         review_bark_enabled if review_bark_enabled is not None else 0,
                         review_bark_mode or 'count',
                         review_bark_count_threshold if review_bark_count_threshold is not None else 5,
