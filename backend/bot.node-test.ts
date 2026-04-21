@@ -41,9 +41,11 @@ test('low similarity image matches can fall back to link-only replies', () => {
   assert.match(source, /仅发送链接/)
 })
 
-test('approved review dispatch disables new thread creation', () => {
+test('thread reply mode resolves existing threads without creating new ones', () => {
   const source = readSource()
 
   assert.match(source, /disable_thread_creation=True/)
-  assert.match(source, /thread_reply_enabled=thread_reply_enabled and not disable_thread_creation/)
+  assert.match(source, /thread_reply_enabled=thread_reply_enabled,\n\s+\)/)
+  assert.doesNotMatch(source, /create_thread = getattr\(target_channel, 'create_thread'/)
+  assert.doesNotMatch(source, /await create_thread\(/)
 })

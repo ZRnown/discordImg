@@ -1144,30 +1144,19 @@ async def resolve_reply_target_channel(
             _store_cached_auto_reply_thread_id(message, message_thread_id)
             return existing_thread, True
 
-    create_thread = getattr(target_channel, 'create_thread', None)
-    if not callable(create_thread):
-        return target_channel, False
+    existing_thread = await _resolve_existing_reply_thread_after_create_failure(
+        target_client,
+        target_channel,
+        message,
+    )
+    if existing_thread is not None:
+        return existing_thread, True
 
-    try:
-        created_thread = await create_thread(
-            name=_build_auto_reply_thread_name(message),
-            message=message,
-        )
-        created_thread_id = getattr(created_thread, 'id', None)
-        if created_thread_id is not None:
-            _store_cached_auto_reply_thread_id(message, created_thread_id)
-        return created_thread, True
-    except Exception as exc:
-        if getattr(exc, 'code', None) == 160004:
-            existing_thread = await _resolve_existing_reply_thread_after_create_failure(
-                target_client,
-                target_channel,
-                message,
-            )
-            if existing_thread is not None:
-                return existing_thread, True
-        logger.warning(f"创建子分区失败，回退频道直发: {exc}")
-        return target_channel, False
+    logger.info(
+        f"未找到消息已有子区，回退频道直发: message={getattr(message, 'id', None)} "
+        f"channel={getattr(target_channel, 'id', None)}"
+    )
+    return target_channel, False
 
 
 def _build_keyword_window_key(user_id, website_id, guild_id):
@@ -3981,7 +3970,7 @@ class DiscordBotClient(discord.Client):
                                 target_client=target_client,
                                 target_channel=target_channel,
                                 message=message,
-                                thread_reply_enabled=thread_reply_enabled and not disable_thread_creation,
+                                thread_reply_enabled=thread_reply_enabled,
                             )
                             reply_target_channel = reply_target_channel or target_channel
 
