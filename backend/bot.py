@@ -1153,7 +1153,7 @@ async def resolve_reply_target_channel(
         return existing_thread, True
 
     logger.info(
-        f"未找到消息已有子区，回退频道直发: message={getattr(message, 'id', None)} "
+        f"未找到消息已有子区: message={getattr(message, 'id', None)} "
         f"channel={getattr(target_channel, 'id', None)}"
     )
     return target_channel, False
@@ -3973,6 +3973,13 @@ class DiscordBotClient(discord.Client):
                                 thread_reply_enabled=thread_reply_enabled,
                             )
                             reply_target_channel = reply_target_channel or target_channel
+                            if thread_reply_enabled and not used_thread_reply:
+                                logger.info(
+                                    f"⏭️ [子区回复跳过] 源消息没有可用子区: "
+                                    f"message={getattr(message, 'id', None)} "
+                                    f"channel={getattr(target_channel, 'id', None)}"
+                                )
+                                continue
 
                             if (
                                 website_config

@@ -46,6 +46,8 @@ test('thread reply mode resolves existing threads without creating new ones', ()
 
   assert.match(source, /disable_thread_creation=True/)
   assert.match(source, /thread_reply_enabled=thread_reply_enabled,\n\s+\)/)
+  assert.match(source, /if thread_reply_enabled and not used_thread_reply:/)
+  assert.match(source, /子区回复跳过/)
   assert.doesNotMatch(source, /create_thread = getattr\(target_channel, 'create_thread'/)
   assert.doesNotMatch(source, /await create_thread\(/)
 })
