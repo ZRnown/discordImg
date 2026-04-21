@@ -5333,7 +5333,6 @@ class DiscordBotClient(discord.Client):
                         'allow_below_threshold_link_only': below_reply_threshold,
                     },
                     website_configs_override=website_configs,
-                    skip_review_check=True,
                 )
 
                 logger.debug(f'图片识别完成，相似度: {similarity:.4f}')

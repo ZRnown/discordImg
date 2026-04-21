@@ -33,6 +33,18 @@ test('approved review dispatch does not force plain sends', () => {
   assert.doesNotMatch(source, /force_plain_send=True/)
 })
 
+test('image attachment replies do not bypass channel review', () => {
+  const source = readSource()
+  const start = source.indexOf('async def handle_image')
+  const end = source.indexOf('    async def recognize_image', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+
+  const handleImageSource = source.slice(start, end)
+  assert.match(handleImageSource, /await self\.schedule_reply\(/)
+  assert.doesNotMatch(handleImageSource, /skip_review_check=True/)
+})
+
 test('low similarity image matches can fall back to link-only replies', () => {
   const source = readSource()
 
