@@ -2474,6 +2474,7 @@ def update_website_channel_review_window(config_id, channel_id):
     """更新频道的关键词人工审核开关"""
     if not require_login():
         return jsonify({'error': '需要登录'}), 401
+    return jsonify({'error': '审核功能已在当前分支移除'}), 410
 
     try:
         data = request.get_json() or {}
@@ -3109,6 +3110,7 @@ def get_keyword_review_items():
     """获取当前用户的关键词人工审核队列"""
     if not require_login():
         return jsonify({'error': '需要登录'}), 401
+    return jsonify({'items': [], 'disabled': True, 'message': '审核功能已在当前分支移除'}), 410
 
     try:
         current_user = get_current_user()
@@ -3152,6 +3154,7 @@ def bulk_action_keyword_review_items():
     """批量审核关键词回复"""
     if not require_login():
         return jsonify({'error': '需要登录'}), 401
+    return jsonify({'error': '审核功能已在当前分支移除'}), 410
 
     try:
         current_user = get_current_user()

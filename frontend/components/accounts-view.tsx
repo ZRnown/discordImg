@@ -54,7 +54,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
-import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit, Clock, ChevronDown, ChevronRight, ShieldCheck, UserRound, Fingerprint, KeyRound, CalendarClock } from "lucide-react"
+import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit, Clock, ChevronDown, ChevronRight, UserRound, Fingerprint, KeyRound, CalendarClock } from "lucide-react"
 
 type NumericRangeFilterValue = {
   keyword: string
@@ -1950,7 +1950,6 @@ const formatWebsiteForEdit = (website: any) => ({
           id: `${websiteId}:${actualChannelId}`,
           website_id: websiteId,
           channel_id: actualChannelId,
-          keyword_review_enabled: 0,
         }
         applyWebsiteChannelBindingsState(websiteId, [
           ...(websiteChannelBindings[websiteId] || []),
@@ -2002,56 +2001,6 @@ const formatWebsiteForEdit = (website: any) => ({
       toast.error(getApiErrorMessage(e, '网络错误'))
     } finally {
       setChannelToRemove(null)
-    }
-  }
-
-  const handleToggleChannelReviewWindow = async (websiteId: number, channelId: string, enabled: boolean) => {
-    const normalizedInput = channelId.trim()
-    const normalizedChannelId = normalizedInput.includes('discord.com/channels/')
-      ? normalizedInput.split('/').filter(Boolean).pop() || normalizedInput
-      : normalizedInput
-    const previousBindings = websiteChannelBindings[websiteId] || []
-    const optimisticBindings = previousBindings.map((binding: any) => {
-      const bindingChannelId = String(binding?.channel_id ?? binding?.channelId ?? binding?.id ?? '').trim()
-      if (bindingChannelId !== normalizedChannelId) {
-        return binding
-      }
-      return {
-        ...binding,
-        keyword_review_enabled: enabled ? 1 : 0,
-      }
-    })
-
-    applyWebsiteChannelBindingsState(websiteId, optimisticBindings)
-
-    try {
-      const res = await fetch(`/api/websites/${websiteId}/channels/${normalizedChannelId}/review-window`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ enabled }),
-      })
-      const data = await res.json().catch(() => ({}))
-      if (!res.ok) {
-        applyWebsiteChannelBindingsState(websiteId, previousBindings)
-        toast.error(getApiErrorMessage(data, '更新审核开关失败'))
-        return
-      }
-
-      if (data.binding) {
-        const nextBindings = previousBindings.map((binding: any) => {
-          const bindingChannelId = String(binding?.channel_id ?? binding?.channelId ?? binding?.id ?? '').trim()
-          if (bindingChannelId !== normalizedChannelId) {
-            return binding
-          }
-          return data.binding
-        })
-        applyWebsiteChannelBindingsState(websiteId, nextBindings)
-      }
-      toast.success(data?.message || (enabled ? '审核窗口已开启' : '审核窗口已关闭'))
-    } catch (e) {
-      applyWebsiteChannelBindingsState(websiteId, previousBindings)
-      toast.error(getApiErrorMessage(e, '网络错误'))
     }
   }
 
@@ -4059,21 +4008,10 @@ const formatWebsiteForEdit = (website: any) => ({
                       <div className="flex flex-wrap gap-2">
                         {(websiteChannelBindings[website.id] || websiteChannels[website.id] || []).map((binding: any) => {
                           const channelId = String(binding?.channel_id ?? binding?.channelId ?? binding?.id ?? binding ?? '').trim()
-                          const reviewEnabled = toBoolean(binding?.keyword_review_enabled)
                           return (
                             <div key={`${website.id}-${channelId}`} className="flex items-center gap-2 bg-muted rounded px-2 py-1 border">
                               <Hash className="w-3 h-3" />
                               <span className="text-xs font-mono">{channelId}</span>
-                              <div className="flex items-center gap-1 rounded bg-background/60 px-2 py-0.5">
-                                <ShieldCheck className={`w-3 h-3 ${reviewEnabled ? 'text-emerald-600' : 'text-muted-foreground'}`} />
-                                <span className="text-[10px] text-muted-foreground">审核</span>
-                                <Switch
-                                  checked={reviewEnabled}
-                                  onCheckedChange={(checked) => {
-                                    void handleToggleChannelReviewWindow(website.id, channelId, checked)
-                                  }}
-                                />
-                              </div>
                               <Button
                                 variant="ghost"
                                 size="sm"

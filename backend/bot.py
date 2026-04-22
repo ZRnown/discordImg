@@ -3981,47 +3981,6 @@ class DiscordBotClient(discord.Client):
                                 )
                                 continue
 
-                            if (
-                                website_config
-                                and _coerce_bool(website_config.get('keyword_review_enabled', 0), False)
-                                and not skip_review_check
-                            ):
-                                queued_review_id = await asyncio.to_thread(
-                                    self._queue_keyword_review_item,
-                                    message=message,
-                                    product=active_product,
-                                    custom_reply=active_custom_reply,
-                                    website_config=website_config,
-                                    reply_content=response_content,
-                                    target_clients=[target_client],
-                                    selected_sender_ids=selected_sender_ids,
-                                    reply_mode=reply_mode,
-                                    files=None,
-                                    match_context=match_context,
-                                    prevalidated_batch=prevalidated_batch,
-                                    broadcast_mode=broadcast_mode,
-                                    thread_reply_enabled=thread_reply_enabled,
-                                    reply_target_channel=reply_target_channel,
-                                    used_thread_reply=used_thread_reply,
-                                    cooldown_channel_id=cooldown_channel_id,
-                                    batch_repeat_records=batch_repeat_records,
-                                    repeat_product_ids=repeat_product_ids,
-                                )
-                                if queued_review_id:
-                                    self._start_keyword_reply_background_task(
-                                        self._maybe_send_review_queue_bark_notification(
-                                            self.user_id,
-                                            trigger="count",
-                                        ),
-                                        task_name=f"review-bark-count user={self.user_id} item={queued_review_id}",
-                                    )
-                                    logger.info(
-                                        f"📝 [进入人工审核] 网站:{website_config.get('name')} "
-                                        f"频道:{message.channel.id} 队列ID:{queued_review_id}"
-                                    )
-                                    sent_any = True
-                                    continue
-
                             should_apply_delay = not (broadcast_mode and target_index > 0)
                             if should_apply_delay:
                                 async with reply_target_channel.typing():

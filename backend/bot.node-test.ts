@@ -26,23 +26,12 @@ test('reaction bark notification ignores missing messages instead of logging the
   assert.match(source, /return/)
 })
 
-test('approved review dispatch does not force plain sends', () => {
+test('runtime reply path does not enqueue channel review items', () => {
   const source = readSource()
 
-  assert.match(source, /async def dispatch_keyword_review_item/)
-  assert.doesNotMatch(source, /force_plain_send=True/)
-})
-
-test('image attachment replies do not bypass channel review', () => {
-  const source = readSource()
-  const start = source.indexOf('async def handle_image')
-  const end = source.indexOf('    async def recognize_image', start)
-  assert.notEqual(start, -1)
-  assert.notEqual(end, -1)
-
-  const handleImageSource = source.slice(start, end)
-  assert.match(handleImageSource, /await self\.schedule_reply\(/)
-  assert.doesNotMatch(handleImageSource, /skip_review_check=True/)
+  assert.match(source, /def _queue_keyword_review_item/)
+  assert.equal(source.match(/self\._queue_keyword_review_item/g)?.length ?? 0, 0)
+  assert.doesNotMatch(source, /进入人工审核/)
 })
 
 test('low similarity image matches can fall back to link-only replies', () => {
