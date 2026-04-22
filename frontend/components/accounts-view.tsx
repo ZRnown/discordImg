@@ -39,10 +39,6 @@ import {
   normalizeWebsiteReplyLanguages,
   WEBSITE_REPLY_LANGUAGE_OPTIONS,
 } from "@/lib/product-title-translations"
-import {
-  getInitialKeywordImageSearchCredentialsExpanded,
-  normalizeKeywordImageSearchMaxImages,
-} from "@/lib/keyword-image-review"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
@@ -357,18 +353,14 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
     bark_enabled: false,
     bark_server_url: 'https://api.day.app',
     bark_device_key: '',
-    keyword_image_search_api_key: '',
-    keyword_image_search_cx: '',
   })
   const [settingsLoading, setSettingsLoading] = useState(false)
-  const [showKeywordImageSearchCredentials, setShowKeywordImageSearchCredentials] = useState(false)
   const [settingsFetchedOnce, setSettingsFetchedOnce] = useState(false)
   const [barkTesting, setBarkTesting] = useState(false)
   const [barkAutoSaving, setBarkAutoSaving] = useState(false)
   const barkCacheHydratedRef = useRef(false)
   const barkAutoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const barkAutoSaveLastPayloadRef = useRef('')
-  const keywordImageSearchCredentialsHydratedRef = useRef(false)
 
   // 新增：当前用户信息状态
   const [currentUser, setCurrentUser] = useState<any>(null)
@@ -394,7 +386,6 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
   const [keywordIntervalInputs, setKeywordIntervalInputs] = useState<{[key: number]: string}>({})
   const [keywordBatchInputs, setKeywordBatchInputs] = useState<{[key: number]: string}>({})
   const [keywordDispatchModes, setKeywordDispatchModes] = useState<{[key: number]: string}>({})
-  const [keywordImageSearchMaxInputs, setKeywordImageSearchMaxInputs] = useState<{[key: number]: string}>({})
 
   const [cooldowns, setCooldowns] = useState<any[]>([])
 
@@ -526,12 +517,6 @@ const formatWebsiteForEdit = (website: any) => ({
     if (hasOwn(data, 'bark_device_key')) {
       next.bark_device_key = data.bark_device_key || ''
     }
-    if (hasOwn(data, 'keyword_image_search_api_key')) {
-      next.keyword_image_search_api_key = data.keyword_image_search_api_key || ''
-    }
-    if (hasOwn(data, 'keyword_image_search_cx')) {
-      next.keyword_image_search_cx = data.keyword_image_search_cx || ''
-    }
     return next
   }
 
@@ -618,7 +603,6 @@ const formatWebsiteForEdit = (website: any) => ({
       const keywordIntervalInputs: {[key: number]: string} = {}
       const keywordBatchInputs: {[key: number]: string} = {}
       const keywordDispatchModes: {[key: number]: string} = {}
-      const keywordImageSearchMaxInputs: {[key: number]: string} = {}
       const similarityInputs: {[key: number]: string} = {}
       const replyDelayInputs: {[key: number]: { min: string, max: string }} = {}
       const keywordMatchInputs: {[key: number]: string} = {}
@@ -632,7 +616,6 @@ const formatWebsiteForEdit = (website: any) => ({
         keywordIntervalInputs[website.id] = (website.keyword_reply_interval ?? website.rotation_interval ?? 180).toString()
         keywordBatchInputs[website.id] = (website.keyword_reply_batch_size ?? 0).toString()
         keywordDispatchModes[website.id] = website.keyword_batch_dispatch_mode ?? 'immediate'
-        keywordImageSearchMaxInputs[website.id] = String(website.keyword_image_search_max_images ?? 3)
         similarityInputs[website.id] = formatThresholdForInput(website.image_similarity_threshold)
         replyDelayInputs[website.id] = {
           min: formatReplyDelayForInput(website.reply_min_delay),
@@ -680,7 +663,6 @@ const formatWebsiteForEdit = (website: any) => ({
         setKeywordIntervalInputs(keywordIntervalInputs)
         setKeywordBatchInputs(keywordBatchInputs)
         setKeywordDispatchModes(keywordDispatchModes)
-        setKeywordImageSearchMaxInputs(keywordImageSearchMaxInputs)
         setWebsiteSimilarityInputs(similarityInputs)
         setWebsiteReplyDelayInputs(replyDelayInputs)
         setWebsiteKeywordMatchInputs(keywordMatchInputs)
@@ -1113,9 +1095,6 @@ const formatWebsiteForEdit = (website: any) => ({
             thread_reply_enabled: nextSettings.thread_reply_enabled,
             forum_post_reply_enabled: nextSettings.forum_post_reply_enabled,
             keyword_match_limit: nextSettings.keyword_match_limit,
-            keyword_image_search_enabled: nextSettings.keyword_image_search_enabled,
-            keyword_image_search_mode: nextSettings.keyword_image_search_mode,
-            keyword_image_search_max_images: nextSettings.keyword_image_search_max_images,
             reply_min_delay: nextSettings.reply_min_delay,
             reply_max_delay: nextSettings.reply_max_delay,
           }
@@ -1134,10 +1113,6 @@ const formatWebsiteForEdit = (website: any) => ({
     setKeywordDispatchModes(prev => ({
       ...prev,
       [websiteId]: nextSettings.keyword_batch_dispatch_mode ?? 'immediate'
-    }))
-    setKeywordImageSearchMaxInputs(prev => ({
-      ...prev,
-      [websiteId]: String(nextSettings.keyword_image_search_max_images ?? 3),
     }))
     if (nextSettings.keyword_match_limit !== undefined) {
       setWebsiteKeywordMatchInputs(prev => ({
@@ -1324,21 +1299,6 @@ const formatWebsiteForEdit = (website: any) => ({
   useEffect(() => {
     websiteReplyDelayInputsRef.current = websiteReplyDelayInputs
   }, [websiteReplyDelayInputs])
-
-  useEffect(() => {
-    if (!settingsFetchedOnce || keywordImageSearchCredentialsHydratedRef.current) {
-      return
-    }
-    setShowKeywordImageSearchCredentials(
-      getInitialKeywordImageSearchCredentialsExpanded(
-        settings.keyword_image_search_api_key,
-      )
-    )
-    keywordImageSearchCredentialsHydratedRef.current = true
-  }, [
-    settingsFetchedOnce,
-    settings.keyword_image_search_api_key,
-  ])
 
   useEffect(() => {
     const flushPendingReplyDelaySaves = () => {
@@ -3105,37 +3065,6 @@ const formatWebsiteForEdit = (website: any) => ({
 
               <div className="flex items-center justify-between">
                 <div>
-                  <Label htmlFor="keyword-image-search-credentials" className="text-sm font-medium">自定义关键词搜图凭据</Label>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    填入 SearchApi Key 后，关键词未命中商品时可以走 Google 图片搜索回流图搜
-                  </p>
-                </div>
-                <Switch
-                  id="keyword-image-search-credentials"
-                  checked={showKeywordImageSearchCredentials}
-                  onCheckedChange={setShowKeywordImageSearchCredentials}
-                />
-              </div>
-
-              {showKeywordImageSearchCredentials ? (
-                <div className="space-y-1">
-                  <Label htmlFor="keyword-image-search-api-key" className="text-sm font-medium">SearchApi Key</Label>
-                  <Input
-                    id="keyword-image-search-api-key"
-                    type="password"
-                    value={settings.keyword_image_search_api_key}
-                    onChange={(e) => setSettings(prev => ({ ...prev, keyword_image_search_api_key: e.target.value }))}
-                    placeholder="优先使用这里填写的 Key，留空则回退到服务器环境变量"
-                    className="h-9"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    这条链路会调用 Google Images 搜图，再把搜到的图片送回系统做匹配。
-                  </p>
-                </div>
-              ) : null}
-
-              <div className="flex items-center justify-between">
-                <div>
                   <Label htmlFor="bark-enabled" className="text-sm font-medium">iPhone Bark 通知</Label>
                   <p className="text-xs text-muted-foreground mt-1">
                     当任一已添加账号被他人回复或 @ 时，立即推送到 iPhone
@@ -4389,82 +4318,6 @@ const formatWebsiteForEdit = (website: any) => ({
                                 <div>
                                   开启后，如果绑定的是帖子频道或论坛频道，会监控该频道下所有帖子里的关键词和图片，并在对应帖子内回复；如果帖子本身单独绑定了网站配置，会优先按帖子本身的绑定处理。
                                 </div>
-                                <div className="flex items-center gap-2 pt-1 text-foreground">
-                                  <Label htmlFor={`keyword-image-search-${website.id}`} className="text-xs cursor-pointer">
-                                    关键词搜图
-                                  </Label>
-                                  <Switch
-                                    id={`keyword-image-search-${website.id}`}
-                                    checked={toBoolean(website.keyword_image_search_enabled)}
-                                    onCheckedChange={(checked) => {
-                                      void updateWebsiteRotationSettings(
-                                        website.id,
-                                        { keyword_image_search_enabled: checked ? 1 : 0 },
-                                        checked ? '关键词搜图已开启' : '关键词搜图已关闭',
-                                      )
-                                    }}
-                                  />
-                                </div>
-                                <div>
-                                  开启后，当前网站如果没有命中原有关键词商品，会把消息文本送去 Google 图片搜索，再把搜到的前几张图片回流到系统图搜，生成候选商品。
-                                </div>
-                                {toBoolean(website.keyword_image_search_enabled) ? (
-                                  <>
-                                    <div className="flex items-center gap-2 pt-1">
-                                      <Label className="text-xs">搜图结果处理:</Label>
-                                      <Select
-                                        value={website.keyword_image_search_mode ?? 'manual'}
-                                        onValueChange={(value) => {
-                                          void updateWebsiteRotationSettings(
-                                            website.id,
-                                            { keyword_image_search_mode: value },
-                                            value === 'auto' ? '关键词搜图模式已切换为自动发送' : '关键词搜图模式已切换为人工审核发送',
-                                          )
-                                        }}
-                                      >
-                                        <SelectTrigger className="w-[180px] h-8 text-xs">
-                                          <SelectValue />
-                                        </SelectTrigger>
-                                        <SelectContent>
-                                          <SelectItem value="manual">人工审核发送</SelectItem>
-                                          <SelectItem value="auto">自动发送</SelectItem>
-                                        </SelectContent>
-                                      </Select>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                      <Label className="text-xs">取前几张图:</Label>
-                                      <Input
-                                        type="number"
-                                        min="1"
-                                        max="10"
-                                        value={keywordImageSearchMaxInputs[website.id] ?? String(website.keyword_image_search_max_images ?? 3)}
-                                        className="w-20 h-7 text-xs"
-                                        onChange={(e) => {
-                                          const value = e.target.value
-                                          setKeywordImageSearchMaxInputs(prev => ({ ...prev, [website.id]: value }))
-                                        }}
-                                        onBlur={() => {
-                                          const rawValue = keywordImageSearchMaxInputs[website.id] ?? String(website.keyword_image_search_max_images ?? 3)
-                                          const normalizedValue = normalizeKeywordImageSearchMaxImages(rawValue)
-                                          setKeywordImageSearchMaxInputs(prev => ({
-                                            ...prev,
-                                            [website.id]: String(normalizedValue),
-                                          }))
-                                          if (normalizedValue !== (website.keyword_image_search_max_images ?? 3)) {
-                                            void updateWebsiteRotationSettings(
-                                              website.id,
-                                              { keyword_image_search_max_images: normalizedValue },
-                                              `关键词搜图图片数已设置为 ${normalizedValue} 张`,
-                                            )
-                                          }
-                                        }}
-                                      />
-                                      <span className="text-xs text-muted-foreground">
-                                        建议 3-5 张，数量越大耗时越长
-                                      </span>
-                                    </div>
-                                  </>
-                                ) : null}
                                 <div>
                                   {senderCount === 0
                                     ? '请先绑定至少一个发送账号。'

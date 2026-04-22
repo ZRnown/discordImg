@@ -7,7 +7,6 @@ import { ReviewWindowView } from "@/components/review-window-view"
 import { ScraperView } from "@/components/scraper-view"
 import { ShopsView } from "@/components/shops-view"
 import { ImageSearchView } from "@/components/image-search-view"
-import { KeywordImageReviewView } from "@/components/keyword-image-review-view"
 import { UsersView } from "@/components/users-view"
 import { RulesView } from "@/components/rules-view"
 import { LogsView } from "@/components/logs-view"
@@ -294,10 +293,6 @@ export function AppPageClient() {
 
           <div style={{ display: currentView === "image-search" ? "block" : "none", height: "100%" }}>
             <ImageSearchView />
-          </div>
-
-          <div style={{ display: currentView === "keyword-image-review" ? "block" : "none", height: "100%" }}>
-            <KeywordImageReviewView isActive={currentView === "keyword-image-review"} />
           </div>
 
           {currentUser.role === "admin" && (

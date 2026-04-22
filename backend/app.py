@@ -3017,6 +3017,8 @@ async def _send_keyword_image_search_candidate_async(
 
 @app.route('/api/keyword-image-search/jobs', methods=['GET'])
 def list_keyword_image_search_jobs():
+    return jsonify({'jobs': [], 'disabled': True, 'message': '关键词搜图功能已在当前分支移除'}), 410
+
     if not require_login():
         return jsonify({'error': '需要登录'}), 401
 
@@ -3044,6 +3046,8 @@ def list_keyword_image_search_jobs():
 
 @app.route('/api/keyword-image-search/jobs/<int:job_id>/send', methods=['POST'])
 def send_keyword_image_search_job(job_id):
+    return jsonify({'error': '关键词搜图功能已在当前分支移除'}), 410
+
     if not require_login():
         return jsonify({'error': '需要登录'}), 401
 

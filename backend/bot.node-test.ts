@@ -45,6 +45,14 @@ test('image attachment replies do not bypass channel review', () => {
   assert.doesNotMatch(handleImageSource, /skip_review_check=True/)
 })
 
+test('keyword image search runtime is disabled on main', () => {
+  const source = readSource()
+
+  assert.doesNotMatch(source, /keyword_image_search_service/)
+  assert.doesNotMatch(source, /_run_keyword_image_search_for_website/)
+  assert.doesNotMatch(source, /allow_keyword_image_search=not bool/)
+})
+
 test('low similarity image matches can fall back to link-only replies', () => {
   const source = readSource()
 
