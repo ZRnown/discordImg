@@ -2285,15 +2285,10 @@ class DiscordBotClient(discord.Client):
             threshold_to_use = _resolve_image_reply_threshold(match_context, website_config)
 
             if similarity < threshold_to_use:
-                if match_context.get('allow_below_threshold_link_only'):
-                    logger.info(
-                        f"📷 图片相似度 {similarity:.3f} 低于网站阈值 {threshold_to_use:.3f}，仅发送链接"
-                    )
-                else:
-                    logger.info(
-                        f"📷 图片相似度 {similarity:.3f} 低于网站阈值 {threshold_to_use:.3f}，跳过回复"
-                    )
-                    return None
+                logger.info(
+                    f"📷 图片相似度 {similarity:.3f} 低于网站阈值 {threshold_to_use:.3f}，跳过回复"
+                )
+                return None
 
         rotation_interval = _coerce_int(
             user_settings.get('rotation_interval', website_config.get('rotation_interval', 180)),
@@ -3738,15 +3733,10 @@ class DiscordBotClient(discord.Client):
                     threshold_to_use = _resolve_image_reply_threshold(match_context, website_config)
 
                     if similarity < threshold_to_use:
-                        if match_context.get('allow_below_threshold_link_only'):
-                            logger.debug(
-                                f"📷 图片相似度 {similarity:.3f} 低于网站阈值 {threshold_to_use:.3f}，仅发送链接"
-                            )
-                        else:
-                            logger.debug(
-                                f"📷 图片相似度 {similarity:.3f} 低于网站阈值 {threshold_to_use:.3f}，跳过回复"
-                            )
-                            continue
+                        logger.debug(
+                            f"📷 图片相似度 {similarity:.3f} 低于网站阈值 {threshold_to_use:.3f}，跳过回复"
+                        )
+                        continue
 
                 active_product, website_product_custom_reply, _, _ = _prepare_effective_product_reply(
                     product,
@@ -3754,12 +3744,6 @@ class DiscordBotClient(discord.Client):
                 )
 
                 active_custom_reply = custom_reply
-                link_only_below_threshold = (
-                    isinstance(match_context, dict)
-                    and match_context.get('type') == 'image'
-                    and match_context.get('allow_below_threshold_link_only')
-                    and not _is_image_match_above_reply_threshold(match_context, website_config)
-                )
                 if isinstance(custom_reply, dict):
                     per_website_content = custom_reply.get('per_website_content')
                     if isinstance(per_website_content, dict):
@@ -3770,10 +3754,6 @@ class DiscordBotClient(discord.Client):
                     if active_custom_reply.get('product_data') is not None:
                         active_custom_reply = dict(active_custom_reply)
                         active_custom_reply['product_data'] = active_product
-
-                if link_only_below_threshold:
-                    active_custom_reply = None
-                    website_product_custom_reply = None
 
                 forced_custom_payload = bool(
                     isinstance(active_custom_reply, dict)
@@ -5160,25 +5140,6 @@ class DiscordBotClient(discord.Client):
                 logger.error("图片下载失败，已达到最大重试次数")
                 return  # 静默失败，不发送错误消息
 
-            # 【新增】AI并发限制：最多同时2个AI推理任务
-            # 使用Semaphore控制并发，防止CPU饱和导致Flask主线程阻塞
-            async with ai_concurrency_limit:
-                logger.debug(f"🔒 获取AI并发锁，当前等待队列: {ai_concurrency_limit._value}")
-
-                # 传入用户店铺权限，避免 A 店铺命中结果串到 B 店铺
-                scoped_user_shops = self.user_shops if self.user_shops else None
-                result = await self.recognize_image(
-                    image_data,
-                    user_shops=scoped_user_shops,
-                )
-
-                logger.debug(f"🔓 释放AI并发锁")
-
-            logger.debug(
-                f'图片识别结果: success={result.get("success") if result else False}, '
-                f'results_count={len(result.get("results", [])) if result else 0}'
-            )
-
             user_settings = {}
             user_threshold = config.DISCORD_SIMILARITY_THRESHOLD
             if self.user_id:
@@ -5192,6 +5153,28 @@ class DiscordBotClient(discord.Client):
                         user_threshold = user_settings['discord_similarity_threshold']
                 except Exception as e:
                     logger.error(f'获取用户相似度设置失败: {e}')
+
+            skip_threshold = self._resolve_image_skip_threshold(website_configs, user_threshold)
+
+            # 【新增】AI并发限制：最多同时2个AI推理任务
+            # 使用Semaphore控制并发，防止CPU饱和导致Flask主线程阻塞
+            async with ai_concurrency_limit:
+                logger.debug(f"🔒 获取AI并发锁，当前等待队列: {ai_concurrency_limit._value}")
+
+                # 传入用户店铺权限，避免 A 店铺命中结果串到 B 店铺
+                scoped_user_shops = self.user_shops if self.user_shops else None
+                result = await self.recognize_image(
+                    image_data,
+                    user_shops=scoped_user_shops,
+                    threshold=skip_threshold,
+                )
+
+                logger.debug(f"🔓 释放AI并发锁")
+
+            logger.debug(
+                f'图片识别结果: success={result.get("success") if result else False}, '
+                f'results_count={len(result.get("results", [])) if result else 0}'
+            )
 
             if result:
                 blocked_filter_match = result.get('blocked_filter_match')
@@ -5208,8 +5191,6 @@ class DiscordBotClient(discord.Client):
                             return
                 except Exception:
                     pass
-
-            skip_threshold = self._resolve_image_skip_threshold(website_configs, user_threshold)
 
             if result and result.get('success') and result.get('results'):
                 # 获取最佳匹配结果
@@ -5229,8 +5210,9 @@ class DiscordBotClient(discord.Client):
                         best_match=best_match,
                     )
                     logger.info(
-                        f'⏭️ 图片命中未过阈值，改为只发送链接: 相似度 {similarity:.3f} < {skip_threshold:.3f} | 频道: {message.channel.name}'
+                        f'⏭️ 图片命中未过阈值，跳过回复: 相似度 {similarity:.3f} < {skip_threshold:.3f} | 频道: {message.channel.name}'
                     )
+                    return
 
                 product = best_match.get('product', {})
                 product_title = (product.get('title') or '').strip()
@@ -5316,7 +5298,6 @@ class DiscordBotClient(discord.Client):
                         'best_match_image_index': best_match.get('imageIndex', best_match.get('image_index')),
                         'website_filter_matches': blocked_website_filter_matches,
                         'ocr_text': ocr_text,
-                        'allow_below_threshold_link_only': below_reply_threshold,
                     },
                     website_configs_override=website_configs,
                 )
@@ -5822,15 +5803,18 @@ class DiscordBotClient(discord.Client):
             logger.error(f'Error searching products by keyword: {e}')
             return None
 
-    async def recognize_image(self, image_data, user_shops=None):
+    async def recognize_image(self, image_data, user_shops=None, threshold=None):
         try:
             # 与图片消息阶段超时保持一致，避免内部请求先于外层保护提前中断。
             timeout = aiohttp.ClientTimeout(total=IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 # 使用配置的阈值
                 # 使用用户个性化阈值，如果没有则使用全局默认值
-                api_threshold = config.DISCORD_SIMILARITY_THRESHOLD
-                if self.user_id:
+                api_threshold = _coerce_float(threshold)
+                if api_threshold is None:
+                    api_threshold = config.DISCORD_SIMILARITY_THRESHOLD
+
+                if threshold is None and self.user_id:
                     try:
                         try:
                             from database import db
@@ -5851,7 +5835,7 @@ class DiscordBotClient(discord.Client):
                 def _build_form_data():
                     form = aiohttp.FormData()
                     form.add_field('image', image_data, filename='image.jpg', content_type='image/jpeg')
-                    form.add_field('threshold', '0')
+                    form.add_field('threshold', str(api_threshold))
                     form.add_field('limit', '1')  # Discord只返回最相似的一个结果
                     if self.user_id:
                         form.add_field('user_id', str(self.user_id))

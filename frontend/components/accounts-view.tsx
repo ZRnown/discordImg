@@ -3050,7 +3050,7 @@ const formatWebsiteForEdit = (website: any) => ({
                 <div>
                   <Label htmlFor="keyword-best-match-image" className="text-sm font-medium">图片过阈值时发送图和链接</Label>
                   <p className="text-xs text-muted-foreground mt-1">
-                    开启后，客户来图相似度达到阈值时发送最相似商品图和链接；未达到阈值时只发送链接
+                    开启后，客户来图相似度达到阈值时发送最相似商品图和链接；未达到阈值时不发送，并记录到被略过的商品
                   </p>
                 </div>
                 <Switch

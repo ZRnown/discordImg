@@ -7,7 +7,7 @@ test('accounts personal settings expose the best-match-image toggle', () => {
 
   assert.equal(source.includes('keyword_reply_send_best_match_image'), true)
   assert.equal(source.includes('图片过阈值时发送图和链接'), true)
-  assert.equal(source.includes('未达到阈值时只发送链接'), true)
+  assert.equal(source.includes('未达到阈值时不发送'), true)
 })
 
 test('image search view exposes skipped image history section and endpoint', () => {

@@ -53,12 +53,26 @@ test('keyword image search runtime is disabled on main', () => {
   assert.doesNotMatch(source, /allow_keyword_image_search=not bool/)
 })
 
-test('low similarity image matches can fall back to link-only replies', () => {
+test('image recognition uses the resolved reply threshold', () => {
   const source = readSource()
 
-  assert.match(source, /allow_below_threshold_link_only/)
-  assert.match(source, /form\.add_field\('threshold', '0'\)/)
-  assert.match(source, /仅发送链接/)
+  assert.match(source, /threshold=skip_threshold/)
+  assert.match(source, /form\.add_field\('threshold', str\(api_threshold\)\)/)
+  assert.doesNotMatch(source, /form\.add_field\('threshold', '0'\)/)
+  assert.doesNotMatch(source, /allow_below_threshold_link_only/)
+  assert.doesNotMatch(source, /仅发送链接/)
+})
+
+test('low similarity image matches are skipped instead of sent', () => {
+  const source = readSource()
+  const start = source.indexOf('async def handle_image')
+  const end = source.indexOf('    async def handle_keyword_forward', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+
+  const handleImageSource = source.slice(start, end)
+  assert.match(handleImageSource, /图片命中未过阈值，跳过回复/)
+  assert.match(handleImageSource, /return/)
 })
 
 test('thread reply mode resolves existing threads without creating new ones', () => {
