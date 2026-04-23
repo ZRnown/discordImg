@@ -5829,7 +5829,7 @@ class DiscordBotClient(discord.Client):
 
                 # 调用后端实时图片检索服务。
                 request_url = f'{config.BACKEND_API_URL.replace("/api", "")}/search_similar'
-                max_attempts = 5
+                max_attempts = 8
                 retry_delay = 1.0
 
                 def _build_form_data():
