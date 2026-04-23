@@ -170,7 +170,7 @@ class BotTimeoutHelpersTestCase(unittest.TestCase):
 
 
 class RecognizeImageRetryPolicyTestCase(unittest.IsolatedAsyncioTestCase):
-    async def test_recognize_image_does_not_retry_on_backend_busy_503(self):
+    async def test_recognize_image_retries_on_backend_busy_503(self):
         class FakeResponse:
             def __init__(self, status, body):
                 self.status = status
@@ -184,6 +184,11 @@ class RecognizeImageRetryPolicyTestCase(unittest.IsolatedAsyncioTestCase):
 
             async def text(self):
                 return self._body
+
+            async def json(self):
+                import json
+
+                return json.loads(self._body)
 
         class FakeSession:
             def __init__(self, responses):
@@ -202,7 +207,10 @@ class RecognizeImageRetryPolicyTestCase(unittest.IsolatedAsyncioTestCase):
                 return response
 
         fake_session = FakeSession(
-            [FakeResponse(503, '{"error":"search busy","retryable":true}')]
+            [
+                FakeResponse(503, '{"error":"search busy","retryable":true}'),
+                FakeResponse(200, '{"ok": true}'),
+            ]
         )
 
         with patch.object(
@@ -225,9 +233,9 @@ class RecognizeImageRetryPolicyTestCase(unittest.IsolatedAsyncioTestCase):
                 user_shops=["Vibeo"],
             )
 
-        self.assertIsNone(result)
-        self.assertEqual(fake_session.post_calls, 1)
-        mock_sleep.assert_not_awaited()
+        self.assertEqual(result, {"ok": True})
+        self.assertEqual(fake_session.post_calls, 2)
+        mock_sleep.assert_awaited_once()
 
 
 class _SlottedMessage:

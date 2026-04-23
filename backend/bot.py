@@ -5857,9 +5857,8 @@ class DiscordBotClient(discord.Client):
                             attempt + 1,
                             compact_response_text or '<empty>',
                         )
-                        # 后端对 search busy / warming up 返回 503。
-                        # 这类响应继续重试只会把事件循环拖慢，所以直接停止。
-                        if resp.status == 429 and attempt < max_attempts - 1:
+                        # 后端在预热或繁忙时会返回 503，短暂退避后重试通常能恢复。
+                        if resp.status in {429, 503} and attempt < max_attempts - 1:
                             await asyncio.sleep(retry_delay)
                             retry_delay = min(retry_delay * 1.8, 6.0)
                             continue
