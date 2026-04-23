@@ -6,7 +6,7 @@
     "build": "next build",
     "build:desktop": "next build",
     "dev": "next dev",
-    "dev:desktop": "next dev -p 1420",
+    "dev:desktop": "next dev -p 3000",
     "lint": "eslint .",
     "start": "next start"
   },
