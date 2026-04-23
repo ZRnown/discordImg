@@ -213,7 +213,7 @@ class SearchSimilarTextApiTestCase(unittest.TestCase):
             "get_total_indexed_images",
             return_value=0,
         ), patch(
-            "live_retrieval.get_live_image_retriever",
+            "backend.live_retrieval.get_live_image_retriever",
             return_value=DummyRetriever(),
         ):
             response = self.client.post(
@@ -228,6 +228,87 @@ class SearchSimilarTextApiTestCase(unittest.TestCase):
             )
 
         self.assertEqual(response.status_code, 200)
+
+    def test_search_similar_admin_without_shop_permissions_uses_unscoped_search(self):
+        class DummyRetriever:
+            def __init__(self):
+                self.calls = []
+
+            def search(self, image_path, query_text="", top_k=5, threshold=0.0, user_shops=None):
+                self.calls.append(
+                    {
+                        "image_path": image_path,
+                        "query_text": query_text,
+                        "top_k": top_k,
+                        "threshold": threshold,
+                        "user_shops": user_shops,
+                    }
+                )
+                return {
+                    "strategy": "dummy",
+                    "catalog_size": 1,
+                    "ranked_products": [
+                        {
+                            "product_id": "3",
+                            "score": 0.99,
+                            "image_index": 0,
+                            "image_path": "/tmp/pur-0.jpg",
+                        }
+                    ],
+                    "top1_score": 0.99,
+                    "top1_margin": 0.0,
+                }
+
+        dummy_retriever = DummyRetriever()
+
+        with patch.object(
+            app_module,
+            "extract_features",
+            side_effect=AssertionError(
+                "extract_features should be skipped when there are no filter images"
+            ),
+        ), patch.object(
+            app_module,
+            "get_current_user",
+            return_value={"id": 1, "role": "admin"},
+        ), patch.object(
+            app_module,
+            "build_user_shop_scope",
+            return_value=[],
+        ), patch.object(
+            app_module.db,
+            "has_global_image_filter_images",
+            return_value=False,
+            create=True,
+        ), patch.object(
+            app_module.db,
+            "has_user_website_filter_images",
+            return_value=False,
+            create=True,
+        ), patch.object(
+            app_module.db,
+            "get_total_indexed_images",
+            return_value=1,
+        ), patch(
+            "backend.live_retrieval.get_live_image_retriever",
+            return_value=dummy_retriever,
+        ):
+            response = self.client.post(
+                "/search_similar",
+                data={
+                    "threshold": "0.03",
+                    "limit": "5",
+                    "user_id": "1",
+                    "image": (io.BytesIO(b"fake-image-bytes"), "query.jpg"),
+                },
+                content_type="multipart/form-data",
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data["success"])
+        self.assertEqual(data["totalResults"], 1)
+        self.assertEqual(dummy_retriever.calls[0]["user_shops"], None)
 
 
 if __name__ == "__main__":

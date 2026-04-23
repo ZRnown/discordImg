@@ -39,6 +39,10 @@ import {
   normalizeWebsiteReplyLanguages,
   WEBSITE_REPLY_LANGUAGE_OPTIONS,
 } from "@/lib/product-title-translations"
+import {
+  getInitialKeywordImageSearchCredentialsExpanded,
+  normalizeKeywordImageSearchMaxImages,
+} from "@/lib/keyword-image-review"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Input } from "@/components/ui/input"
@@ -50,7 +54,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
-import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit, Clock, ChevronDown, ChevronRight } from "lucide-react"
+import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit, Clock, ChevronDown, ChevronRight, ShieldCheck, UserRound, Fingerprint, KeyRound, CalendarClock } from "lucide-react"
 import { toBackendUrl } from "@/lib/desktop-api"
 
 type NumericRangeFilterValue = {
@@ -104,6 +108,46 @@ const buildNumericRangeFilterValue = (value: NumericRangeFilterValue) => {
   const min = value.min === '' ? null : Number(value.min)
   const max = value.max === '' ? null : Number(value.max)
   return JSON.stringify({ keyword, min, max })
+}
+
+const formatAccountDateTime = (value: any) => {
+  if (!value) return '未记录'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return String(value)
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+const getAccountPrimaryName = (account: any) => {
+  return account.discord_display_name || account.discord_global_name || account.discord_username || account.username || `账号 ${account.id}`
+}
+
+const getAccountSecondaryName = (account: any) => {
+  const names = [
+    account.discord_username,
+    account.discord_handle,
+    account.username,
+  ].filter(Boolean)
+  return names.find(name => name !== getAccountPrimaryName(account)) || ''
+}
+
+const getAccountRuntimeRoleLabel = (role: string) => {
+  if (role === 'listener') return '监听'
+  if (role === 'sender') return '发送'
+  if (role === 'both') return '监听+发送'
+  return '未绑定'
+}
+
+const getAccountTokenPreview = (account: any) => {
+  if (account.token_preview) return account.token_preview
+  const token = typeof account.token === 'string' ? account.token : ''
+  if (!token) return 'Token 无效'
+  return token.length > 18 ? `${token.substring(0, 8)}...${token.slice(-6)}` : token
 }
 
 const formatMessageFilterLabel = (filter: any) => {
@@ -310,20 +354,32 @@ export function AccountsView({ currentUser: providedUser = null, isActive = true
     global_reply_min_delay: 1.0,
     global_reply_max_delay: 3.0,
     keyword_match_limit: 0,
+    keyword_reply_send_best_match_image: false,
     bark_enabled: false,
     bark_server_url: 'https://api.day.app',
     bark_device_key: '',
+    keyword_image_search_api_key: '',
+    keyword_image_search_cx: '',
   })
   const [settingsLoading, setSettingsLoading] = useState(false)
+  const [showKeywordImageSearchCredentials, setShowKeywordImageSearchCredentials] = useState(false)
+  const [settingsFetchedOnce, setSettingsFetchedOnce] = useState(false)
   const [barkTesting, setBarkTesting] = useState(false)
   const [barkAutoSaving, setBarkAutoSaving] = useState(false)
   const barkCacheHydratedRef = useRef(false)
   const barkAutoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const barkAutoSaveLastPayloadRef = useRef('')
+  const keywordImageSearchCredentialsHydratedRef = useRef(false)
 
   // 新增：当前用户信息状态
   const [currentUser, setCurrentUser] = useState<any>(providedUser)
   const [deleteAccountConfirm, setDeleteAccountConfirm] = useState<any>(null)
+
+  useEffect(() => {
+    if (providedUser) {
+      setCurrentUser(providedUser)
+    }
+  }, [providedUser])
 
   // 使用API缓存hook
   const { cachedFetch, invalidateCache } = useApiCache()
@@ -335,6 +391,7 @@ export function AccountsView({ currentUser: providedUser = null, isActive = true
   const [editingWebsite, setEditingWebsite] = useState<any>(null)
   const [newWebsite, setNewWebsite] = useState(createWebsiteConfigFromTemplateKey(DEFAULT_WEBSITE_TEMPLATE_KEY))
   const [websiteChannels, setWebsiteChannels] = useState<{[key: number]: string[]}>({})
+  const [websiteChannelBindings, setWebsiteChannelBindings] = useState<{[key: number]: any[]}>({})
   const [channelInputs, setChannelInputs] = useState<{[key: number]: string}>({})
   const [channelToRemove, setChannelToRemove] = useState<{webId: number, chanId: string} | null>(null)
   const [replyModes, setReplyModes] = useState<{[key: number]: string}>({})
@@ -344,6 +401,7 @@ export function AccountsView({ currentUser: providedUser = null, isActive = true
   const [keywordIntervalInputs, setKeywordIntervalInputs] = useState<{[key: number]: string}>({})
   const [keywordBatchInputs, setKeywordBatchInputs] = useState<{[key: number]: string}>({})
   const [keywordDispatchModes, setKeywordDispatchModes] = useState<{[key: number]: string}>({})
+  const [keywordImageSearchMaxInputs, setKeywordImageSearchMaxInputs] = useState<{[key: number]: string}>({})
 
   const [cooldowns, setCooldowns] = useState<any[]>([])
 
@@ -398,13 +456,6 @@ export function AccountsView({ currentUser: providedUser = null, isActive = true
   const websiteReplyDelaySaveTimersRef = useRef<{[key: number]: ReturnType<typeof setTimeout> | undefined}>({})
   const websiteReplyDelayInputsRef = useRef<{[key: number]: { min: string, max: string }}>({})
   const websiteKeywordMatchSaveTimersRef = useRef<{[key: number]: ReturnType<typeof setTimeout> | undefined}>({})
-
-  useEffect(() => {
-    if (providedUser) {
-      setCurrentUser(providedUser)
-    }
-  }, [providedUser])
-
   const formatThresholdForInput = (value: any) => {
     if (value === null || value === undefined || value === '') return ''
     const num = Number(value)
@@ -468,6 +519,9 @@ const formatWebsiteForEdit = (website: any) => ({
       global_reply_min_delay: delayRange.minDelay,
       global_reply_max_delay: delayRange.maxDelay,
       keyword_match_limit: Number(data?.keyword_match_limit ?? prev.keyword_match_limit ?? 0),
+      keyword_reply_send_best_match_image: hasOwn(data, 'keyword_reply_send_best_match_image')
+        ? toBoolean(data.keyword_reply_send_best_match_image)
+        : toBoolean(prev.keyword_reply_send_best_match_image),
     }
 
     if (hasOwn(data, 'bark_enabled')) {
@@ -478,6 +532,12 @@ const formatWebsiteForEdit = (website: any) => ({
     }
     if (hasOwn(data, 'bark_device_key')) {
       next.bark_device_key = data.bark_device_key || ''
+    }
+    if (hasOwn(data, 'keyword_image_search_api_key')) {
+      next.keyword_image_search_api_key = data.keyword_image_search_api_key || ''
+    }
+    if (hasOwn(data, 'keyword_image_search_cx')) {
+      next.keyword_image_search_cx = data.keyword_image_search_cx || ''
     }
     return next
   }
@@ -557,6 +617,7 @@ const formatWebsiteForEdit = (website: any) => ({
 
       // 后端已包含channels和accounts信息
       const channels: {[key: number]: string[]} = {}
+      const channelBindings: {[key: number]: any[]} = {}
       const accounts: {[key: number]: any[]} = {}
       const filters: {[key: number]: any[]} = {}
       const replyModes: {[key: number]: string} = {}
@@ -564,18 +625,21 @@ const formatWebsiteForEdit = (website: any) => ({
       const keywordIntervalInputs: {[key: number]: string} = {}
       const keywordBatchInputs: {[key: number]: string} = {}
       const keywordDispatchModes: {[key: number]: string} = {}
+      const keywordImageSearchMaxInputs: {[key: number]: string} = {}
       const similarityInputs: {[key: number]: string} = {}
       const replyDelayInputs: {[key: number]: { min: string, max: string }} = {}
       const keywordMatchInputs: {[key: number]: string} = {}
 
       websites.forEach((website: any) => {
         channels[website.id] = website.channels || []
+        channelBindings[website.id] = website.channel_bindings || []
         accounts[website.id] = website.accounts || []
         replyModes[website.id] = website.reply_mode ?? 'rotation'
         rotationInputs[website.id] = String(website.rotation_interval ?? 180)
         keywordIntervalInputs[website.id] = (website.keyword_reply_interval ?? website.rotation_interval ?? 180).toString()
         keywordBatchInputs[website.id] = (website.keyword_reply_batch_size ?? 0).toString()
         keywordDispatchModes[website.id] = website.keyword_batch_dispatch_mode ?? 'immediate'
+        keywordImageSearchMaxInputs[website.id] = String(website.keyword_image_search_max_images ?? 3)
         similarityInputs[website.id] = formatThresholdForInput(website.image_similarity_threshold)
         replyDelayInputs[website.id] = {
           min: formatReplyDelayForInput(website.reply_min_delay),
@@ -614,6 +678,7 @@ const formatWebsiteForEdit = (website: any) => ({
       startTransition(() => {
         setWebsites(websites)
         setWebsiteChannels(channels)
+        setWebsiteChannelBindings(channelBindings)
         setWebsiteAccounts(accounts)
         setWebsiteFilters(filters)
         setWebsiteBlockedUsers(blockedUsersMap)
@@ -622,6 +687,7 @@ const formatWebsiteForEdit = (website: any) => ({
         setKeywordIntervalInputs(keywordIntervalInputs)
         setKeywordBatchInputs(keywordBatchInputs)
         setKeywordDispatchModes(keywordDispatchModes)
+        setKeywordImageSearchMaxInputs(keywordImageSearchMaxInputs)
         setWebsiteSimilarityInputs(similarityInputs)
         setWebsiteReplyDelayInputs(replyDelayInputs)
         setWebsiteKeywordMatchInputs(keywordMatchInputs)
@@ -1054,6 +1120,9 @@ const formatWebsiteForEdit = (website: any) => ({
             thread_reply_enabled: nextSettings.thread_reply_enabled,
             forum_post_reply_enabled: nextSettings.forum_post_reply_enabled,
             keyword_match_limit: nextSettings.keyword_match_limit,
+            keyword_image_search_enabled: nextSettings.keyword_image_search_enabled,
+            keyword_image_search_mode: nextSettings.keyword_image_search_mode,
+            keyword_image_search_max_images: nextSettings.keyword_image_search_max_images,
             reply_min_delay: nextSettings.reply_min_delay,
             reply_max_delay: nextSettings.reply_max_delay,
           }
@@ -1072,6 +1141,10 @@ const formatWebsiteForEdit = (website: any) => ({
     setKeywordDispatchModes(prev => ({
       ...prev,
       [websiteId]: nextSettings.keyword_batch_dispatch_mode ?? 'immediate'
+    }))
+    setKeywordImageSearchMaxInputs(prev => ({
+      ...prev,
+      [websiteId]: String(nextSettings.keyword_image_search_max_images ?? 3),
     }))
     if (nextSettings.keyword_match_limit !== undefined) {
       setWebsiteKeywordMatchInputs(prev => ({
@@ -1142,37 +1215,31 @@ const formatWebsiteForEdit = (website: any) => ({
 
   useEffect(() => {
     if (!isActive) return
-    // 先恢复本地 Bark 配置缓存，避免后端响应缺字段时把输入框清空
+    // ????????Bark ????????????????????????????????
     const cached = readBarkSettingsCache()
     if (Object.keys(cached).length > 0) {
       setSettings(prev => ({ ...prev, ...cached }))
     }
     barkCacheHydratedRef.current = true
 
-    // 先获取当前用户，再决定是否获取用户列表
+    // ?????????????????????????????
     const init = async () => {
-      if (providedUser) {
-        setCurrentUser(providedUser)
-        await fetchAccounts(true)
-        if (providedUser.role === 'admin') {
-          fetchUsers()
+      let activeUser = providedUser
+      if (!activeUser) {
+        const userRes = await fetch('/api/auth/me', { credentials: 'include' })
+        if (userRes.ok) {
+          const userData = await userRes.json()
+          activeUser = userData.user
+          setCurrentUser(userData.user)
         }
-        return
       }
 
-      const userRes = await fetch('/api/auth/me', { credentials: 'include' })
-      if (userRes.ok) {
-        const userData = await userRes.json()
-        setCurrentUser(userData.user)
-
-        await fetchAccounts(true)
-
-        if (userData.user.role === 'admin') {
-          fetchUsers()
-        }
+      fetchAccounts()
+      if (activeUser?.role === 'admin') {
+        fetchUsers()
       }
     }
-    init();
+    init()
     fetchSettings();
     fetchWebsites(true); // 强制刷新，清除旧的缓存数据
     fetchMessageFilters();
@@ -1267,6 +1334,21 @@ const formatWebsiteForEdit = (website: any) => ({
   }, [websiteReplyDelayInputs])
 
   useEffect(() => {
+    if (!settingsFetchedOnce || keywordImageSearchCredentialsHydratedRef.current) {
+      return
+    }
+    setShowKeywordImageSearchCredentials(
+      getInitialKeywordImageSearchCredentialsExpanded(
+        settings.keyword_image_search_api_key,
+      )
+    )
+    keywordImageSearchCredentialsHydratedRef.current = true
+  }, [
+    settingsFetchedOnce,
+    settings.keyword_image_search_api_key,
+  ])
+
+  useEffect(() => {
     const flushPendingReplyDelaySaves = () => {
       Object.entries(websiteReplyDelaySaveTimersRef.current).forEach(([websiteId, timer]) => {
         if (timer) {
@@ -1306,6 +1388,7 @@ const formatWebsiteForEdit = (website: any) => ({
               barkAutoSaveLastPayloadRef.current = JSON.stringify(pickBarkSettings(merged))
               return merged
             })
+            setSettingsFetchedOnce(true)
 
             // 清除预加载数据，避免重复使用
             sessionStorage.removeItem('preload_settings')
@@ -1343,6 +1426,7 @@ const formatWebsiteForEdit = (website: any) => ({
           barkAutoSaveLastPayloadRef.current = JSON.stringify(pickBarkSettings(merged))
           return merged
         })
+        setSettingsFetchedOnce(true)
       } else {
         const errorData = await response.json().catch(() => ({}))
         toast.error(getApiErrorMessage(errorData, '获取设置失败'))
@@ -1404,7 +1488,7 @@ const formatWebsiteForEdit = (website: any) => ({
       // 先尝试保存当前配置，避免“测试后重启看起来丢失”
       await saveBarkSettings(settings, { silent: true }).catch(() => null)
 
-      const response = await fetch('/api/user/bark-test', {
+      const response = await fetch('/internal-api/bark-test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -1438,17 +1522,15 @@ const formatWebsiteForEdit = (website: any) => ({
   }
 
   const fetchAccounts = async (forceRefresh = false) => {
-    try {
+          try {
       console.log('获取账号列表...')
+      const cacheKey = '/api/accounts'
       if (forceRefresh) {
-        invalidateCache('/api/accounts')
+        // 强制刷新：清除缓存
+        sessionStorage.removeItem(`cache_${cacheKey}`)
       }
-      const data = await cachedFetch('/api/accounts', {
-        credentials: 'include',
-        cache: forceRefresh ? 'no-store' : 'default',
-        force: forceRefresh,
-      })
-      setAccounts(data.accounts || [])
+      const data = await cachedFetch('/api/accounts', { credentials: 'include' })
+            setAccounts(data.accounts || [])
     } catch (error) {
       console.error('获取账号列表出错:', error)
       toast.error(getApiErrorMessage(error, '获取账号列表失败'))
@@ -1498,8 +1580,7 @@ const formatWebsiteForEdit = (website: any) => ({
         toast.success("账号添加成功")
         setNewAccount({ token: "" })
         setShowAddDialog(false)
-        await fetchAccounts(true)
-        setAccountPage(1)
+        fetchAccounts()
       } else {
         const error = await response.json()
         toast.error(error.error || "添加账号失败")
@@ -1524,7 +1605,7 @@ const formatWebsiteForEdit = (website: any) => ({
 
       if (response.ok) {
         toast.success("账号删除成功")
-        await fetchAccounts(true)
+        fetchAccounts()
         setDeleteAccountConfirm(null)
       } else {
         const error = await response.json()
@@ -1839,26 +1920,50 @@ const formatWebsiteForEdit = (website: any) => ({
     }, 450)
   }
 
+  const applyWebsiteChannelBindingsState = (websiteId: number, bindings: any[]) => {
+    const nextBindings = Array.isArray(bindings) ? bindings : []
+    setWebsiteChannelBindings(prev => ({
+      ...prev,
+      [websiteId]: nextBindings,
+    }))
+    setWebsiteChannels(prev => ({
+      ...prev,
+      [websiteId]: nextBindings
+        .map((binding: any) => String(binding?.channel_id ?? binding?.channelId ?? binding?.id ?? binding ?? '').trim())
+        .filter(Boolean),
+    }))
+  }
+
   const handleAddChannel = async (websiteId: number, channelId: string) => {
-    if (!channelId.trim()) {
+    const normalizedChannelInput = channelId.trim()
+    if (!normalizedChannelInput) {
       toast.warning("频道ID不能为空")
       return
     }
+    const actualChannelId = normalizedChannelInput.includes('discord.com/channels/')
+      ? normalizedChannelInput.split('/').filter(Boolean).pop() || normalizedChannelInput
+      : normalizedChannelInput
     try {
       const res = await fetch(`/api/websites/${websiteId}/channels`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ channel_id: channelId.trim() })
+        body: JSON.stringify({ channel_id: actualChannelId })
       })
       const data = await res.json().catch(() => ({}))
       if (res.ok) {
         toast.success('频道绑定已添加')
         // 立即更新前端状态，而不是重新获取所有数据
-        setWebsiteChannels(prev => ({
-          ...prev,
-          [websiteId]: [...(prev[websiteId] || []), channelId.trim()]
-        }))
+        const nextBinding = {
+          id: `${websiteId}:${actualChannelId}`,
+          website_id: websiteId,
+          channel_id: actualChannelId,
+          keyword_review_enabled: 0,
+        }
+        applyWebsiteChannelBindingsState(websiteId, [
+          ...(websiteChannelBindings[websiteId] || []),
+          nextBinding,
+        ])
         setChannelInputs(prev => ({ ...prev, [websiteId]: '' }))
       } else {
         toast.error(getApiErrorMessage(data, '添加失败'))
@@ -1891,10 +1996,13 @@ const formatWebsiteForEdit = (website: any) => ({
       if (res.ok) {
         toast.success('频道绑定已移除')
         // 立即更新前端状态，而不是重新获取所有数据
-        setWebsiteChannels(prev => ({
-          ...prev,
-          [webId]: prev[webId]?.filter(id => id !== chanId) || []
-        }))
+        applyWebsiteChannelBindingsState(
+          webId,
+          (websiteChannelBindings[webId] || []).filter((binding: any) => {
+            const bindingChannelId = String(binding?.channel_id ?? binding?.channelId ?? binding?.id ?? '').trim()
+            return bindingChannelId !== chanId
+          }),
+        )
       } else {
         toast.error(getApiErrorMessage(data, '移除失败'))
       }
@@ -1902,6 +2010,56 @@ const formatWebsiteForEdit = (website: any) => ({
       toast.error(getApiErrorMessage(e, '网络错误'))
     } finally {
       setChannelToRemove(null)
+    }
+  }
+
+  const handleToggleChannelReviewWindow = async (websiteId: number, channelId: string, enabled: boolean) => {
+    const normalizedInput = channelId.trim()
+    const normalizedChannelId = normalizedInput.includes('discord.com/channels/')
+      ? normalizedInput.split('/').filter(Boolean).pop() || normalizedInput
+      : normalizedInput
+    const previousBindings = websiteChannelBindings[websiteId] || []
+    const optimisticBindings = previousBindings.map((binding: any) => {
+      const bindingChannelId = String(binding?.channel_id ?? binding?.channelId ?? binding?.id ?? '').trim()
+      if (bindingChannelId !== normalizedChannelId) {
+        return binding
+      }
+      return {
+        ...binding,
+        keyword_review_enabled: enabled ? 1 : 0,
+      }
+    })
+
+    applyWebsiteChannelBindingsState(websiteId, optimisticBindings)
+
+    try {
+      const res = await fetch(`/api/websites/${websiteId}/channels/${normalizedChannelId}/review-window`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ enabled }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        applyWebsiteChannelBindingsState(websiteId, previousBindings)
+        toast.error(getApiErrorMessage(data, '更新审核开关失败'))
+        return
+      }
+
+      if (data.binding) {
+        const nextBindings = previousBindings.map((binding: any) => {
+          const bindingChannelId = String(binding?.channel_id ?? binding?.channelId ?? binding?.id ?? '').trim()
+          if (bindingChannelId !== normalizedChannelId) {
+            return binding
+          }
+          return data.binding
+        })
+        applyWebsiteChannelBindingsState(websiteId, nextBindings)
+      }
+      toast.success(data?.message || (enabled ? '审核窗口已开启' : '审核窗口已关闭'))
+    } catch (e) {
+      applyWebsiteChannelBindingsState(websiteId, previousBindings)
+      toast.error(getApiErrorMessage(e, '网络错误'))
     }
   }
 
@@ -2708,43 +2866,86 @@ const formatWebsiteForEdit = (website: any) => ({
           </Dialog>
         </div>
 
-        <div className="space-y-2">
-          {paginatedAccounts.map((account) => (
-            <div key={account.id} className="flex justify-between items-center p-4 border rounded">
-              <div className="flex-1">
-                <div className="font-semibold">{account.username}</div>
-                <div className="text-sm text-gray-500">
-                  {account.user_id ? `所属用户: ${getUserDisplayName(account.user_id)}` : '未分配用户'}
-                </div>
-                <div className="text-xs text-gray-400 font-mono">
-                  {account.token && typeof account.token === 'string' ? `${account.token.substring(0, 20)}...` : 'Token 无效'}
+        <div className="space-y-3">
+          {paginatedAccounts.map((account) => {
+            const primaryName = getAccountPrimaryName(account)
+            const secondaryName = getAccountSecondaryName(account)
+            const isOnline = account.status === 'online'
+
+            return (
+              <div key={account.id} className="rounded-md border bg-background p-4">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex size-10 shrink-0 items-center justify-center overflow-hidden rounded-md border bg-muted">
+                        {account.discord_avatar_url ? (
+                          <img
+                            src={account.discord_avatar_url}
+                            alt={primaryName}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <UserRound className="size-5 text-muted-foreground" />
+                        )}
+                      </div>
+                      <div className="min-w-0">
+                        <div className="truncate text-base font-semibold">{primaryName}</div>
+                        {secondaryName ? (
+                          <div className="truncate text-xs text-muted-foreground">{secondaryName}</div>
+                        ) : null}
+                      </div>
+                      <Badge variant={isOnline ? "default" : "secondary"} className="h-6">
+                        {isOnline ? '在线' : '离线'}
+                      </Badge>
+                      {account.runtime_ready ? (
+                        <Badge variant="outline" className="h-6 border-emerald-200 bg-emerald-50 text-emerald-700">
+                          已连接
+                        </Badge>
+                      ) : null}
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-1 gap-2 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-4">
+                      <div className="flex items-center gap-2 rounded-md bg-muted/40 px-3 py-2">
+                        <Fingerprint className="size-3.5" />
+                        <span className="truncate">账号ID: {account.id}</span>
+                      </div>
+                      <div className="flex items-center gap-2 rounded-md bg-muted/40 px-3 py-2">
+                        <UserRound className="size-3.5" />
+                        <span className="truncate">
+                          {account.user_id ? `所属用户: ${getUserDisplayName(account.user_id)}` : '未分配用户'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 rounded-md bg-muted/40 px-3 py-2">
+                        <KeyRound className="size-3.5" />
+                        <span className="truncate font-mono">{getAccountTokenPreview(account)}</span>
+                      </div>
+                      <div className="flex items-center gap-2 rounded-md bg-muted/40 px-3 py-2">
+                        <CalendarClock className="size-3.5" />
+                        <span className="truncate">活跃: {formatAccountDateTime(account.last_active)}</span>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-4">
+                      <div className="truncate">Discord ID: {account.discord_user_id || '未获取'}</div>
+                      <div className="truncate">昵称: {account.discord_global_name || account.discord_display_name || '未设置'}</div>
+                      <div className="truncate">角色: {getAccountRuntimeRoleLabel(account.runtime_role)}</div>
+                      <div className="truncate">服务器: {account.runtime_guild_count ?? 0} 个</div>
+                    </div>
+                  </div>
+
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleDeleteAccount(account)}
+                    className="shrink-0 text-red-600 hover:bg-red-50 hover:text-red-700"
+                    title="删除账号"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
                 </div>
               </div>
-              <div className="flex items-center gap-2">
-                <div className={`px-2 py-1 rounded text-sm ${
-                  (account.runtime_status || account.status) === 'running'
-                    ? 'bg-green-100 text-green-800'
-                    : (account.runtime_status || account.status) === 'starting'
-                      ? 'bg-yellow-100 text-yellow-800'
-                      : 'bg-gray-100 text-gray-800'
-                }`}>
-                  {(account.runtime_status || account.status) === 'running'
-                    ? '在线'
-                    : (account.runtime_status || account.status) === 'starting'
-                      ? '启动中'
-                      : '离线'}
-                </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => handleDeleteAccount(account)}
-                  className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </Button>
-              </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
         {totalAccountPages > 1 && (
           <div className="flex flex-col sm:flex-row justify-between items-center gap-4 mt-4 pt-4 border-t">
@@ -2893,6 +3094,54 @@ const formatWebsiteForEdit = (website: any) => ({
             </div>
 
             <div className="space-y-4 border-t pt-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label htmlFor="keyword-best-match-image" className="text-sm font-medium">图片过阈值时发送图和链接</Label>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    开启后，客户来图相似度达到阈值时发送最相似商品图和链接；未达到阈值时直接跳过回复
+                  </p>
+                </div>
+                <Switch
+                  id="keyword-best-match-image"
+                  checked={settings.keyword_reply_send_best_match_image}
+                  onCheckedChange={(checked) => setSettings(prev => ({
+                    ...prev,
+                    keyword_reply_send_best_match_image: checked,
+                  }))}
+                />
+              </div>
+
+              <div className="flex items-center justify-between">
+                <div>
+                  <Label htmlFor="keyword-image-search-credentials" className="text-sm font-medium">自定义关键词搜图凭据</Label>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    填入 SearchApi Key 后，关键词未命中商品时可以走 Google 图片搜索回流图搜
+                  </p>
+                </div>
+                <Switch
+                  id="keyword-image-search-credentials"
+                  checked={showKeywordImageSearchCredentials}
+                  onCheckedChange={setShowKeywordImageSearchCredentials}
+                />
+              </div>
+
+              {showKeywordImageSearchCredentials ? (
+                <div className="space-y-1">
+                  <Label htmlFor="keyword-image-search-api-key" className="text-sm font-medium">SearchApi Key</Label>
+                  <Input
+                    id="keyword-image-search-api-key"
+                    type="password"
+                    value={settings.keyword_image_search_api_key}
+                    onChange={(e) => setSettings(prev => ({ ...prev, keyword_image_search_api_key: e.target.value }))}
+                    placeholder="优先使用这里填写的 Key，留空则回退到服务器环境变量"
+                    className="h-9"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    这条链路会调用 Google Images 搜图，再把搜到的图片送回系统做匹配。
+                  </p>
+                </div>
+              ) : null}
+
               <div className="flex items-center justify-between">
                 <div>
                   <Label htmlFor="bark-enabled" className="text-sm font-medium">iPhone Bark 通知</Label>
@@ -3134,6 +3383,8 @@ const formatWebsiteForEdit = (website: any) => ({
                             <SelectItem value="numeric_range">数字范围</SelectItem>
                             <SelectItem value="user_repeat">用户重复发送</SelectItem>
                             <SelectItem value="keyword_match_limit">关键词命中上限</SelectItem>
+                            <SelectItem value="ocr_contains">图片OCR关键词</SelectItem>
+                            <SelectItem value="website_block_user_trigger">网站拉黑触发词</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -3814,20 +4065,34 @@ const formatWebsiteForEdit = (website: any) => ({
                       </div>
 
                       <div className="flex flex-wrap gap-2">
-                        {(websiteChannels[website.id] || []).map((channelId: string) => (
-                          <div key={channelId} className="flex items-center gap-1 bg-muted rounded px-2 py-1">
-                            <Hash className="w-3 h-3" />
-                            <span className="text-xs font-mono">{channelId}</span>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-4 w-4 p-0"
-                              onClick={() => confirmRemoveChannel(website.id, channelId)}
-                            >
-                              <X className="w-3 h-3" />
-                            </Button>
-                          </div>
-                        ))}
+                        {(websiteChannelBindings[website.id] || websiteChannels[website.id] || []).map((binding: any) => {
+                          const channelId = String(binding?.channel_id ?? binding?.channelId ?? binding?.id ?? binding ?? '').trim()
+                          const reviewEnabled = toBoolean(binding?.keyword_review_enabled)
+                          return (
+                            <div key={`${website.id}-${channelId}`} className="flex items-center gap-2 bg-muted rounded px-2 py-1 border">
+                              <Hash className="w-3 h-3" />
+                              <span className="text-xs font-mono">{channelId}</span>
+                              <div className="flex items-center gap-1 rounded bg-background/60 px-2 py-0.5">
+                                <ShieldCheck className={`w-3 h-3 ${reviewEnabled ? 'text-emerald-600' : 'text-muted-foreground'}`} />
+                                <span className="text-[10px] text-muted-foreground">审核</span>
+                                <Switch
+                                  checked={reviewEnabled}
+                                  onCheckedChange={(checked) => {
+                                    void handleToggleChannelReviewWindow(website.id, channelId, checked)
+                                  }}
+                                />
+                              </div>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-4 w-4 p-0"
+                                onClick={() => confirmRemoveChannel(website.id, channelId)}
+                              >
+                                <X className="w-3 h-3" />
+                              </Button>
+                            </div>
+                          )
+                        })}
                       </div>
                     </div>
 
@@ -3871,7 +4136,7 @@ const formatWebsiteForEdit = (website: any) => ({
                                               account_ids: toggleAccountBindingSelection(prev.account_ids, account.id.toString()),
                                             }))}
                                           />
-                                          <span className="text-sm">{account.username} ({account.runtime_status || account.status})</span>
+                                          <span className="text-sm">{account.username} ({account.status})</span>
                                         </label>
                                       )
                                     })}
@@ -3898,9 +4163,6 @@ const formatWebsiteForEdit = (website: any) => ({
                             <div key={binding.id} className="flex flex-col items-start bg-muted rounded px-2 py-1 border">
                               <div className="flex items-center gap-1">
                                 <span className="text-xs">{binding.username}</span>
-                                <Badge variant="outline" className="text-[9px] px-1 py-0 h-4">
-                                  {binding.role === 'listener' ? '监听' : binding.role === 'sender' ? '发送' : '两者'}
-                                </Badge>
                                 <Button
                                   variant="ghost"
                                   size="sm"
@@ -4135,6 +4397,82 @@ const formatWebsiteForEdit = (website: any) => ({
                                 <div>
                                   开启后，如果绑定的是帖子频道或论坛频道，会监控该频道下所有帖子里的关键词和图片，并在对应帖子内回复；如果帖子本身单独绑定了网站配置，会优先按帖子本身的绑定处理。
                                 </div>
+                                <div className="flex items-center gap-2 pt-1 text-foreground">
+                                  <Label htmlFor={`keyword-image-search-${website.id}`} className="text-xs cursor-pointer">
+                                    关键词搜图
+                                  </Label>
+                                  <Switch
+                                    id={`keyword-image-search-${website.id}`}
+                                    checked={toBoolean(website.keyword_image_search_enabled)}
+                                    onCheckedChange={(checked) => {
+                                      void updateWebsiteRotationSettings(
+                                        website.id,
+                                        { keyword_image_search_enabled: checked ? 1 : 0 },
+                                        checked ? '关键词搜图已开启' : '关键词搜图已关闭',
+                                      )
+                                    }}
+                                  />
+                                </div>
+                                <div>
+                                  开启后，当前网站如果没有命中原有关键词商品，会把消息文本送去 Google 图片搜索，再把搜到的前几张图片回流到系统图搜，生成候选商品。
+                                </div>
+                                {toBoolean(website.keyword_image_search_enabled) ? (
+                                  <>
+                                    <div className="flex items-center gap-2 pt-1">
+                                      <Label className="text-xs">搜图结果处理:</Label>
+                                      <Select
+                                        value={website.keyword_image_search_mode ?? 'manual'}
+                                        onValueChange={(value) => {
+                                          void updateWebsiteRotationSettings(
+                                            website.id,
+                                            { keyword_image_search_mode: value },
+                                            value === 'auto' ? '关键词搜图模式已切换为自动发送' : '关键词搜图模式已切换为人工审核发送',
+                                          )
+                                        }}
+                                      >
+                                        <SelectTrigger className="w-[180px] h-8 text-xs">
+                                          <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          <SelectItem value="manual">人工审核发送</SelectItem>
+                                          <SelectItem value="auto">自动发送</SelectItem>
+                                        </SelectContent>
+                                      </Select>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <Label className="text-xs">取前几张图:</Label>
+                                      <Input
+                                        type="number"
+                                        min="1"
+                                        max="10"
+                                        value={keywordImageSearchMaxInputs[website.id] ?? String(website.keyword_image_search_max_images ?? 3)}
+                                        className="w-20 h-7 text-xs"
+                                        onChange={(e) => {
+                                          const value = e.target.value
+                                          setKeywordImageSearchMaxInputs(prev => ({ ...prev, [website.id]: value }))
+                                        }}
+                                        onBlur={() => {
+                                          const rawValue = keywordImageSearchMaxInputs[website.id] ?? String(website.keyword_image_search_max_images ?? 3)
+                                          const normalizedValue = normalizeKeywordImageSearchMaxImages(rawValue)
+                                          setKeywordImageSearchMaxInputs(prev => ({
+                                            ...prev,
+                                            [website.id]: String(normalizedValue),
+                                          }))
+                                          if (normalizedValue !== (website.keyword_image_search_max_images ?? 3)) {
+                                            void updateWebsiteRotationSettings(
+                                              website.id,
+                                              { keyword_image_search_max_images: normalizedValue },
+                                              `关键词搜图图片数已设置为 ${normalizedValue} 张`,
+                                            )
+                                          }
+                                        }}
+                                      />
+                                      <span className="text-xs text-muted-foreground">
+                                        建议 3-5 张，数量越大耗时越长
+                                      </span>
+                                    </div>
+                                  </>
+                                ) : null}
                                 <div>
                                   {senderCount === 0
                                     ? '请先绑定至少一个发送账号。'
@@ -4477,6 +4815,8 @@ const formatWebsiteForEdit = (website: any) => ({
                       <SelectItem value="numeric_range">数字范围</SelectItem>
                       <SelectItem value="user_repeat">用户重复发送</SelectItem>
                       <SelectItem value="keyword_match_limit">关键词命中上限</SelectItem>
+                      <SelectItem value="ocr_contains">图片OCR关键词</SelectItem>
+                      <SelectItem value="website_block_user_trigger">网站拉黑触发词</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>

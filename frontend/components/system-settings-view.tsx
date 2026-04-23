@@ -7,6 +7,7 @@ import { Progress } from "@/components/ui/progress"
 import { Badge } from "@/components/ui/badge"
 import { Copy, HardDrive, RefreshCw, Database, FolderOpen, Boxes, ScrollText } from "lucide-react"
 import { toast } from "sonner"
+import { toBackendUrl } from "@/lib/desktop-api"
 
 type DirectoryInfo = {
   path: string
@@ -63,7 +64,7 @@ export function SystemSettingsView() {
 
   const fetchStorageInfo = async () => {
     try {
-      const response = await fetch("/api/system/storage", { credentials: "include" })
+      const response = await fetch(toBackendUrl("/api/system/storage"), { credentials: "include" })
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`)
       }

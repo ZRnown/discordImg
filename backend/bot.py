@@ -9,7 +9,10 @@ import json
 import io
 import sqlite3
 import re
-from datetime import datetime
+import sys
+from datetime import datetime, timedelta
+from functools import partial
+from types import SimpleNamespace
 from urllib.parse import quote
 
 try:
@@ -76,6 +79,20 @@ try:
 except ImportError:
     from .product_reply_settings import apply_effective_product_reply_settings
 try:
+    from keyword_image_search import (
+        KeywordImageSearchError,
+        keyword_image_search_service,
+        normalize_keyword_image_search_max_images,
+        normalize_keyword_image_search_mode,
+    )
+except ImportError:
+    from .keyword_image_search import (
+        KeywordImageSearchError,
+        keyword_image_search_service,
+        normalize_keyword_image_search_max_images,
+        normalize_keyword_image_search_mode,
+    )
+try:
     from product_title_translations import (
         apply_reply_language_template_default,
         get_effective_reply_languages,
@@ -128,7 +145,158 @@ _keyword_reply_flush_tasks = {}
 _keyword_reply_window_configs = {}
 _keyword_reply_background_tasks = set()
 _auto_reply_thread_ids = {}
+_review_bark_monitor_task = None
+_review_bark_notification_lock = asyncio.Lock()
 _AUTO_REPLY_THREAD_CACHE_LIMIT = 2048
+_BARK_ERROR_LOG_WINDOW_SECONDS = 60.0
+_bark_issue_log_state = {}
+
+
+def _summarize_text_for_log(value, limit=200):
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return ""
+    if len(text) <= limit:
+        return text
+    if limit <= 3:
+        return text[:limit]
+    return f"{text[: limit - 3]}..."
+
+
+def _summarize_exception_for_log(error, limit=200):
+    summary = _summarize_text_for_log(error, limit=limit)
+    if summary:
+        return summary
+    return getattr(error, "__class__", type(error)).__name__
+
+
+def _log_rate_limited_bark_issue(scene, detail, *, level="error"):
+    summary = _summarize_text_for_log(detail, limit=200) or "unknown error"
+    now = time.monotonic()
+    state = _bark_issue_log_state.get(scene)
+    if state is not None and now - state["logged_at"] < _BARK_ERROR_LOG_WINDOW_SECONDS:
+        state["suppressed"] += 1
+        state["last_summary"] = summary
+        return
+
+    if state is not None and state["suppressed"] > 0:
+        logger.warning(
+            f"{scene} 在过去 {int(_BARK_ERROR_LOG_WINDOW_SECONDS)}s 内重复 {state['suppressed']} 次，最近一次: {state['last_summary']}"
+        )
+
+    log_method = getattr(logger, level, logger.error)
+    log_method(f"{scene}: {summary}")
+    _bark_issue_log_state[scene] = {
+        "logged_at": now,
+        "suppressed": 0,
+        "last_summary": summary,
+    }
+
+
+def _normalize_review_bark_mode(value):
+    normalized = str(value or 'count').strip().lower()
+    if normalized == 'interval':
+        return 'interval'
+    return 'count'
+
+
+def _parse_review_bark_datetime(value):
+    if isinstance(value, datetime):
+        return value
+
+    text = str(value or '').strip()
+    if not text:
+        return None
+
+    normalized = text.replace('Z', '+00:00')
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        return None
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=datetime.now().astimezone().tzinfo)
+    return parsed
+
+
+def _should_send_review_queue_bark_count_notification(pending_count, threshold, last_pending_count):
+    current_pending = max(0, _coerce_int(pending_count, 0))
+    current_threshold = max(1, _coerce_int(threshold, 5))
+    previous_pending = max(0, _coerce_int(last_pending_count, 0))
+    if current_pending < current_threshold:
+        return False
+    return current_pending // current_threshold > previous_pending // current_threshold
+
+
+def _should_send_review_queue_bark_interval_notification(
+    pending_count,
+    interval_minutes,
+    last_notified_at,
+    now=None,
+):
+    current_pending = max(0, _coerce_int(pending_count, 0))
+    if current_pending <= 0:
+        return False
+
+    parsed_last = _parse_review_bark_datetime(last_notified_at)
+    if parsed_last is None:
+        return False
+
+    current_interval = max(1, _coerce_int(interval_minutes, 60))
+    current_time = now if isinstance(now, datetime) else datetime.now().astimezone()
+    if current_time.tzinfo is None:
+        current_time = current_time.replace(tzinfo=datetime.now().astimezone().tzinfo)
+    return current_time >= parsed_last + timedelta(minutes=current_interval)
+
+
+async def _send_bark_notification_payload(bark_server_url, bark_device_key, title, body, jump_url=None):
+    server_url = (bark_server_url or "https://api.day.app").strip().rstrip("/")
+    if not server_url:
+        server_url = "https://api.day.app"
+    if not server_url.startswith(("http://", "https://")):
+        server_url = f"https://{server_url}"
+    device_key = (bark_device_key or "").strip()
+    if not device_key:
+        return
+
+    encoded_key = quote(device_key, safe="")
+    encoded_title = quote(title or "Discord 通知", safe="")
+    encoded_body = quote(body or "", safe="")
+    push_url = f"{server_url}/{encoded_key}/{encoded_title}/{encoded_body}"
+
+    params = {
+        "group": "LinkRadar 链接雷达",
+        "isArchive": "1",
+        "sound": "gotosleep",
+    }
+    if jump_url:
+        params["url"] = jump_url
+
+    timeout = aiohttp.ClientTimeout(total=8)
+    for attempt in range(2):
+        try:
+            async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+                async with session.get(push_url, params=params) as response:
+                    if response.status < 400:
+                        return
+
+                    text = await response.text()
+                    retryable = response.status >= 500
+                    if retryable and attempt == 0:
+                        await asyncio.sleep(0.5)
+                        continue
+
+                    _log_rate_limited_bark_issue(
+                        "Bark 推送失败",
+                        f"status={response.status}, body={text}",
+                        level="warning",
+                    )
+                    return
+        except Exception as e:
+            if attempt == 0:
+                await asyncio.sleep(0.5)
+                continue
+            _log_rate_limited_bark_issue("Bark 推送异常", _summarize_exception_for_log(e))
 
 
 def _coerce_int(value, default):
@@ -464,6 +632,293 @@ def _build_keyword_direct_send_payload(
     return payload
 
 
+def _strip_review_reply_mentions(reply_content):
+    if not reply_content:
+        return ''
+
+    cleaned_lines = []
+    for raw_line in str(reply_content).splitlines():
+        line = re.sub(r'^<@!?\d+>\s*', '', raw_line.strip())
+        if line:
+            cleaned_lines.append(line)
+
+    return '\n'.join(cleaned_lines).strip()
+
+
+def _prepare_review_dispatch_custom_reply(custom_reply):
+    if not isinstance(custom_reply, dict):
+        return custom_reply
+
+    prepared = dict(custom_reply)
+    content = prepared.get('content')
+    if isinstance(content, str) and content.strip():
+        prepared['content'] = _strip_review_reply_mentions(content)
+
+    return prepared
+
+
+def _build_message_reference(message, reply_target_channel):
+    if message is None or reply_target_channel is None:
+        return None
+
+    message_id = _coerce_int(getattr(message, 'id', None), None)
+    if message_id is None:
+        return None
+
+    get_partial_message = getattr(reply_target_channel, 'get_partial_message', None)
+    if callable(get_partial_message):
+        try:
+            return get_partial_message(message_id)
+        except Exception:
+            pass
+
+    channel_id = _coerce_int(getattr(reply_target_channel, 'id', None), None)
+    if channel_id is None:
+        channel_id = _coerce_int(getattr(getattr(message, 'channel', None), 'id', None), None)
+    guild_id = _coerce_int(getattr(getattr(reply_target_channel, 'guild', None), 'id', None), None)
+    if guild_id is None:
+        guild_id = _coerce_int(getattr(getattr(message, 'guild', None), 'id', None), None)
+
+    try:
+        return discord.MessageReference(
+            message_id=message_id,
+            channel_id=channel_id,
+            guild_id=guild_id,
+            fail_if_not_exists=False,
+        )
+    except Exception:
+        return message
+
+
+def _resolve_image_reply_threshold(match_context, website_config):
+    base_threshold = _coerce_float((match_context or {}).get('base_threshold'))
+    if base_threshold is None:
+        base_threshold = config.DISCORD_SIMILARITY_THRESHOLD
+    website_threshold = _coerce_float((website_config or {}).get('image_similarity_threshold'))
+    return website_threshold if website_threshold is not None else base_threshold
+
+
+def _is_image_match_above_reply_threshold(match_context, website_config):
+    if not isinstance(match_context, dict) or match_context.get('type') != 'image':
+        return True
+
+    similarity = _coerce_float(match_context.get('similarity')) or 0.0
+    threshold_to_use = _resolve_image_reply_threshold(match_context, website_config)
+    return similarity >= threshold_to_use
+
+
+def _build_keyword_review_message_proxy(review_item):
+    payload = review_item.get('payload') or {}
+    message_payload = payload.get('message') or {}
+    reply_target_payload = payload.get('reply_target_channel') or {}
+    use_saved_reply_target = bool(
+        reply_target_payload.get('used_thread_reply')
+        and _coerce_int(reply_target_payload.get('channel_id'), None) is not None
+    )
+
+    def _parse_message_time(value):
+        if isinstance(value, datetime):
+            return value
+        if not value:
+            return datetime.now().astimezone()
+        text = str(value).strip()
+        if not text:
+            return datetime.now().astimezone()
+        normalized = text.replace('Z', '+00:00')
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return datetime.now().astimezone()
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=datetime.now().astimezone().tzinfo)
+        return parsed
+
+    guild_id = _coerce_int(message_payload.get('guild_id') or review_item.get('guild_id'), None)
+    channel_id = _coerce_int(message_payload.get('channel_id') or review_item.get('channel_id'), None)
+    parent_channel_id = _coerce_int(message_payload.get('parent_channel_id'), None)
+    if use_saved_reply_target:
+        channel_id = _coerce_int(reply_target_payload.get('channel_id'), channel_id)
+        parent_channel_id = _coerce_int(
+            reply_target_payload.get('parent_channel_id'),
+            parent_channel_id,
+        )
+    author_id = _coerce_int(
+        message_payload.get('author_id')
+        or review_item.get('sender_id')
+        or review_item.get('author_id'),
+        None,
+    )
+
+    guild_name = (
+        message_payload.get('guild_name')
+        or review_item.get('guild_name')
+        or ''
+    )
+    channel_name = (
+        reply_target_payload.get('channel_name') if use_saved_reply_target else None
+    ) or (
+        message_payload.get('channel_name')
+        or review_item.get('channel_name')
+        or ''
+    )
+    parent_channel_name = (
+        reply_target_payload.get('parent_channel_name') if use_saved_reply_target else None
+    ) or (
+        message_payload.get('parent_channel_name')
+        or review_item.get('parent_channel_name')
+        or ''
+    )
+    author_name = (
+        message_payload.get('author_display_name')
+        or message_payload.get('author_name')
+        or review_item.get('sender_name')
+        or ''
+    )
+
+    guild = SimpleNamespace(
+        id=guild_id,
+        name=guild_name,
+    )
+    parent_channel = None
+    if parent_channel_id is not None:
+        parent_channel = SimpleNamespace(
+            id=parent_channel_id,
+            name=parent_channel_name,
+            guild=guild,
+        )
+
+    channel = SimpleNamespace(
+        id=channel_id,
+        name=channel_name,
+        guild=guild,
+        parent_id=parent_channel_id,
+        parent=parent_channel,
+    )
+
+    author = SimpleNamespace(
+        id=author_id,
+        name=message_payload.get('author_name') or author_name,
+        display_name=author_name,
+        bot=False,
+    )
+
+    message_content = (
+        message_payload.get('content')
+        or review_item.get('source_content')
+        or ''
+    )
+    message = SimpleNamespace(
+        id=_coerce_int(message_payload.get('id') or review_item.get('message_id'), None),
+        content=message_content,
+        clean_content=message_payload.get('clean_content') or message_content,
+        created_at=_parse_message_time(message_payload.get('created_at')),
+        author=author,
+        channel=channel,
+        guild=guild,
+        jump_url=message_payload.get('jump_url') or '',
+        mentions=[],
+        mention_everyone=False,
+        reference=None,
+        type=getattr(discord.MessageType, 'default', None),
+    )
+    return message
+
+
+def _select_keyword_review_dispatch_client(review_item):
+    user_id = _coerce_int(review_item.get('user_id'), None)
+    if user_id is None:
+        return None
+
+    preferred_account_ids = {
+        _coerce_int(account_id, None)
+        for account_id in (review_item.get('account_ids') or [])
+        if _coerce_int(account_id, None) is not None
+    }
+
+    running_clients = []
+    for client in bot_clients:
+        if getattr(client, 'user_id', None) != user_id:
+            continue
+        if not getattr(client, 'running', False):
+            continue
+        is_closed = getattr(client, 'is_closed', None)
+        if callable(is_closed) and is_closed():
+            continue
+        running_clients.append(client)
+    if not running_clients:
+        return None
+
+    for client in running_clients:
+        if preferred_account_ids and getattr(client, 'account_id', None) in preferred_account_ids:
+            return client
+
+    return running_clients[0]
+
+
+async def dispatch_keyword_review_item(review_item):
+    """审批通过后，按当前网站配置和账号状态发送待审关键词回复。"""
+    item_id = _coerce_int(review_item.get('id'), None)
+    try:
+        try:
+            from database import db
+        except ImportError:
+            from .database import db
+
+        client = _select_keyword_review_dispatch_client(review_item)
+        if client is None:
+            raise RuntimeError('没有可用的在线机器人账号来发送审核通过的消息')
+
+        payload = review_item.get('payload') or {}
+        website_config = payload.get('website_config') or {}
+        if not isinstance(website_config, dict):
+            website_config = {}
+        if not website_config.get('id'):
+            website_config = {
+                'id': review_item.get('website_id'),
+            }
+
+        message = _build_keyword_review_message_proxy(review_item)
+        product = payload.get('product') or {}
+        custom_reply = _prepare_review_dispatch_custom_reply(payload.get('custom_reply'))
+        match_context = payload.get('match_context')
+
+        success = await client.schedule_reply(
+            message,
+            product,
+            custom_reply,
+            match_context,
+            website_configs_override=[website_config],
+            skip_filters=True,
+            skip_repeat_checks=True,
+            skip_review_check=True,
+            force_reference_reply=True,
+            disable_thread_creation=True,
+        )
+        if item_id:
+            db.update_keyword_reply_review_item_status(
+                item_id,
+                'sent' if success else 'failed',
+                error_message=None if success else '审批后发送失败',
+            )
+        return success
+    except Exception as e:
+        logger.error(f"审批后发送关键词回复失败: {e}")
+        if item_id:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+            try:
+                db.update_keyword_reply_review_item_status(
+                    item_id,
+                    'failed',
+                    error_message=str(e),
+                )
+            except Exception:
+                pass
+        return False
+
+
 def _build_multi_reply_content(author_id, reply_contents, reply_mode):
     cleaned_contents = [
         (content or "").strip()
@@ -689,30 +1144,19 @@ async def resolve_reply_target_channel(
             _store_cached_auto_reply_thread_id(message, message_thread_id)
             return existing_thread, True
 
-    create_thread = getattr(target_channel, 'create_thread', None)
-    if not callable(create_thread):
-        return target_channel, False
+    existing_thread = await _resolve_existing_reply_thread_after_create_failure(
+        target_client,
+        target_channel,
+        message,
+    )
+    if existing_thread is not None:
+        return existing_thread, True
 
-    try:
-        created_thread = await create_thread(
-            name=_build_auto_reply_thread_name(message),
-            message=message,
-        )
-        created_thread_id = getattr(created_thread, 'id', None)
-        if created_thread_id is not None:
-            _store_cached_auto_reply_thread_id(message, created_thread_id)
-        return created_thread, True
-    except Exception as exc:
-        if getattr(exc, 'code', None) == 160004:
-            existing_thread = await _resolve_existing_reply_thread_after_create_failure(
-                target_client,
-                target_channel,
-                message,
-            )
-            if existing_thread is not None:
-                return existing_thread, True
-        logger.warning(f"创建子分区失败，回退频道直发: {exc}")
-        return target_channel, False
+    logger.info(
+        f"未找到消息已有子区: message={getattr(message, 'id', None)} "
+        f"channel={getattr(target_channel, 'id', None)}"
+    )
+    return target_channel, False
 
 
 def _build_keyword_window_key(user_id, website_id, guild_id):
@@ -1220,7 +1664,7 @@ class HTTPLogHandler(logging.Handler):
             self.is_sending = False
 
 # 配置日志
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, stream=sys.stdout)
 
 # 添加HTTP日志处理器
 http_handler = HTTPLogHandler()
@@ -1852,11 +2296,7 @@ class DiscordBotClient(discord.Client):
                     return None
 
             similarity = _coerce_float(match_context.get('similarity')) or 0.0
-            base_threshold = _coerce_float(match_context.get('base_threshold'))
-            if base_threshold is None:
-                base_threshold = config.DISCORD_SIMILARITY_THRESHOLD
-            website_threshold = _coerce_float(website_config.get('image_similarity_threshold'))
-            threshold_to_use = website_threshold if website_threshold is not None else base_threshold
+            threshold_to_use = _resolve_image_reply_threshold(match_context, website_config)
 
             if similarity < threshold_to_use:
                 logger.info(
@@ -2176,6 +2616,143 @@ class DiscordBotClient(discord.Client):
         )
         return False
 
+    def _queue_keyword_review_item(
+        self,
+        *,
+        message,
+        product,
+        custom_reply,
+        website_config,
+        reply_content,
+        target_clients,
+        selected_sender_ids,
+        reply_mode,
+        files=None,
+        match_context=None,
+        prevalidated_batch=False,
+        broadcast_mode=False,
+        thread_reply_enabled=False,
+        reply_target_channel=None,
+        used_thread_reply=False,
+        cooldown_channel_id=None,
+        batch_repeat_records=None,
+        repeat_product_ids=None,
+    ) -> int:
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+
+            channel = getattr(message, 'channel', None)
+            guild = getattr(message, 'guild', None)
+            author = getattr(message, 'author', None)
+            parent_channel = getattr(channel, 'parent', None)
+            reply_parent_channel = getattr(reply_target_channel, 'parent', None)
+            reply_parent_channel_id = (
+                getattr(reply_target_channel, 'parent_id', None)
+                or getattr(reply_parent_channel, 'id', None)
+            )
+            if (
+                used_thread_reply
+                and reply_parent_channel_id is None
+                and reply_target_channel is not None
+                and getattr(reply_target_channel, 'id', None) != getattr(channel, 'id', None)
+            ):
+                reply_parent_channel_id = getattr(channel, 'id', None)
+
+            account_names = []
+            for client in target_clients or []:
+                client_user = getattr(client, 'user', None)
+                client_name = getattr(client_user, 'name', None) or getattr(client, 'account_id', None)
+                if client_name is not None:
+                    account_names.append(str(client_name))
+
+            if not account_names and selected_sender_ids:
+                account_names = [str(item) for item in selected_sender_ids if item is not None]
+
+            preview_text = (reply_content or '').strip()
+            if not preview_text:
+                file_count = len(files or [])
+                preview_text = f"[图片 {file_count}]" if file_count else ''
+
+            message_time = getattr(message, 'created_at', None)
+            if isinstance(message_time, datetime):
+                try:
+                    message_time = message_time.astimezone()
+                except Exception:
+                    pass
+                message_time_text = message_time.isoformat()
+            else:
+                message_time_text = ''
+
+            payload = {
+                'product': product,
+                'custom_reply': custom_reply,
+                'website_config': website_config,
+                'match_context': match_context,
+                'selected_sender_ids': list(selected_sender_ids or []),
+                'reply_mode': reply_mode,
+                'files_count': len(files or []),
+                'prevalidated_batch': bool(prevalidated_batch),
+                'broadcast_mode': bool(broadcast_mode),
+                'thread_reply_enabled': bool(thread_reply_enabled),
+                'reply_target_channel': {
+                    'used_thread_reply': bool(used_thread_reply),
+                    'channel_id': getattr(reply_target_channel, 'id', None),
+                    'channel_name': getattr(reply_target_channel, 'name', None) or '',
+                    'parent_channel_id': reply_parent_channel_id,
+                    'parent_channel_name': getattr(reply_parent_channel, 'name', None) or getattr(parent_channel, 'name', None) or '',
+                } if reply_target_channel is not None else {},
+                'cooldown_channel_id': cooldown_channel_id,
+                'batch_repeat_records': [
+                    list(item)
+                    for item in (batch_repeat_records or [])
+                ],
+                'repeat_product_ids': list(repeat_product_ids or []),
+                'message': {
+                    'id': getattr(message, 'id', None),
+                    'content': getattr(message, 'content', None) or '',
+                    'created_at': message_time_text,
+                    'author_id': getattr(author, 'id', None),
+                    'author_name': getattr(author, 'name', None) or '',
+                    'author_display_name': getattr(author, 'display_name', None) or getattr(author, 'name', None) or '',
+                    'channel_id': getattr(channel, 'id', None),
+                    'channel_name': getattr(channel, 'name', None) or '',
+                    'parent_channel_id': getattr(channel, 'parent_id', None) or getattr(parent_channel, 'id', None),
+                    'parent_channel_name': getattr(parent_channel, 'name', None) or '',
+                    'guild_id': getattr(guild, 'id', None),
+                    'guild_name': getattr(guild, 'name', None) or '',
+                },
+            }
+
+            review_item = {
+                'user_id': self.user_id,
+                'website_id': website_config.get('id'),
+                'channel_id': str(getattr(channel, 'id', '') or ''),
+                'guild_id': str(getattr(guild, 'id', '') or ''),
+                'guild_name': str(getattr(guild, 'name', '') or ''),
+                'channel_name': str(getattr(channel, 'name', '') or ''),
+                'account_ids': list(selected_sender_ids or []),
+                'account_names': account_names,
+                'sender_id': getattr(author, 'id', None),
+                'sender_name': (
+                    getattr(author, 'display_name', None)
+                    or getattr(author, 'name', None)
+                    or ''
+                ),
+                'content': preview_text,
+                'source_content': getattr(message, 'content', None) or '',
+                'message_id': getattr(message, 'id', None),
+                'reply_mode': reply_mode,
+                'status': 'pending',
+                'payload': payload,
+            }
+            return db.add_keyword_reply_review_item(review_item)
+        except Exception as e:
+            logger.error(f"写入关键词人工审核队列失败: {e}")
+            return 0
+
     def _should_ignore_mass_or_activity_message(self, message):
         """屏蔽 @everyone/@here 与 Discord 活动/系统类消息。"""
         if message is None:
@@ -2234,49 +2811,199 @@ class DiscordBotClient(discord.Client):
         return None
 
     async def _send_bark_notification(self, bark_server_url, bark_device_key, title, body, jump_url=None):
-        server_url = (bark_server_url or "https://api.day.app").strip().rstrip("/")
-        if not server_url:
-            server_url = "https://api.day.app"
-        if not server_url.startswith(("http://", "https://")):
-            server_url = f"https://{server_url}"
-        device_key = (bark_device_key or "").strip()
-        if not device_key:
+        await _send_bark_notification_payload(
+            bark_server_url=bark_server_url,
+            bark_device_key=bark_device_key,
+            title=title,
+            body=body,
+            jump_url=jump_url,
+        )
+
+    async def _sync_review_bark_state(
+        self,
+        user_id,
+        *,
+        pending_count=None,
+        last_notified_at=None,
+    ):
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+
+            payload = {
+                'user_id': user_id,
+            }
+            if pending_count is not None:
+                payload['review_bark_last_pending_count'] = max(0, _coerce_int(pending_count, 0))
+            if last_notified_at is not None:
+                payload['review_bark_last_notified_at'] = str(last_notified_at or '')
+
+            if len(payload) > 1:
+                await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    partial(db.update_user_settings, **payload),
+                )
+        except Exception as e:
+            logger.error(f"同步审核 Bark 状态失败(user_id={user_id}): {e}")
+
+    async def _maybe_send_review_queue_bark_notification(self, user_id, *, trigger):
+        if user_id is None:
             return
 
-        encoded_key = quote(device_key, safe="")
-        encoded_title = quote(title or "Discord 通知", safe="")
-        encoded_body = quote(body or "", safe="")
-        push_url = f"{server_url}/{encoded_key}/{encoded_title}/{encoded_body}"
+        try:
+            async with _review_bark_notification_lock:
+                try:
+                    from database import db
+                except ImportError:
+                    from .database import db
 
-        params = {
-            "group": "LinkRadar 链接雷达",
-            "isArchive": "1",
-            "sound": "gotosleep",
-        }
-        if jump_url:
-            params["url"] = jump_url
+                user_settings = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    db.get_user_settings,
+                    user_id,
+                )
+                if not user_settings:
+                    return
 
-        timeout = aiohttp.ClientTimeout(total=8)
-        for attempt in range(2):
-            try:
-                async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
-                    async with session.get(push_url, params=params) as response:
-                        if response.status < 400:
-                            return
+                review_bark_enabled = user_settings.get("review_bark_enabled", 0) in (1, True, "1", "true", "True")
+                bark_device_key = (user_settings.get("bark_device_key") or "").strip()
+                if not review_bark_enabled or not bark_device_key:
+                    return
 
-                        text = await response.text()
-                        retryable = response.status >= 500
-                        if retryable and attempt == 0:
-                            await asyncio.sleep(0.5)
-                            continue
+                pending_count = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    db.count_pending_keyword_reply_review_items,
+                    user_id,
+                )
+                bark_mode = _normalize_review_bark_mode(user_settings.get("review_bark_mode"))
+                now = datetime.now().astimezone()
 
-                        logger.warning(f"Bark 推送失败: status={response.status}, body={text[:200]}")
+                if trigger == "count":
+                    if bark_mode != "count":
+                        if pending_count > 0 and not _parse_review_bark_datetime(user_settings.get("review_bark_last_notified_at")):
+                            await self._sync_review_bark_state(
+                                user_id,
+                                pending_count=pending_count,
+                                last_notified_at=now.isoformat(),
+                            )
                         return
+
+                    threshold = max(1, _coerce_int(user_settings.get("review_bark_count_threshold"), 5))
+                    last_pending_count = max(0, _coerce_int(user_settings.get("review_bark_last_pending_count"), 0))
+                    if not _should_send_review_queue_bark_count_notification(
+                        pending_count=pending_count,
+                        threshold=threshold,
+                        last_pending_count=last_pending_count,
+                    ):
+                        return
+
+                    title = f"待审核消息 {pending_count} 条"
+                    body = (
+                        f"类型: 待审数量通知\n"
+                        f"当前待审核: {pending_count} 条\n"
+                        f"触发阈值: {threshold} 条\n"
+                        f"时间: {now.strftime('%Y-%m-%d %H:%M:%S')}"
+                    )
+                    await self._send_bark_notification(
+                        bark_server_url=user_settings.get("bark_server_url"),
+                        bark_device_key=bark_device_key,
+                        title=title,
+                        body=body,
+                    )
+                    await self._sync_review_bark_state(
+                        user_id,
+                        pending_count=pending_count,
+                        last_notified_at=now.isoformat(),
+                    )
+                    logger.info(
+                        f"📱 审核 Bark 通知已发送: user_id={user_id} | 类型=数量 | 待审核={pending_count}"
+                    )
+                    return
+
+                if bark_mode != "interval":
+                    return
+
+                interval_minutes = max(1, _coerce_int(user_settings.get("review_bark_interval_minutes"), 60))
+                if not _should_send_review_queue_bark_interval_notification(
+                    pending_count=pending_count,
+                    interval_minutes=interval_minutes,
+                    last_notified_at=user_settings.get("review_bark_last_notified_at"),
+                    now=now,
+                ):
+                    return
+
+                title = f"待审核消息 {pending_count} 条"
+                body = (
+                    f"类型: 时间通知\n"
+                    f"当前待审核: {pending_count} 条\n"
+                    f"通知间隔: {interval_minutes} 分钟\n"
+                    f"时间: {now.strftime('%Y-%m-%d %H:%M:%S')}"
+                )
+                await self._send_bark_notification(
+                    bark_server_url=user_settings.get("bark_server_url"),
+                    bark_device_key=bark_device_key,
+                    title=title,
+                    body=body,
+                )
+                await self._sync_review_bark_state(
+                    user_id,
+                    pending_count=pending_count,
+                    last_notified_at=now.isoformat(),
+                )
+                logger.info(
+                    f"📱 审核 Bark 通知已发送: user_id={user_id} | 类型=时间 | 待审核={pending_count}"
+                )
+        except Exception as e:
+            _log_rate_limited_bark_issue("处理审核 Bark 通知失败", _summarize_exception_for_log(e))
+
+    async def _review_bark_monitor_loop(self):
+        while True:
+            try:
+                try:
+                    from database import db
+                except ImportError:
+                    from .database import db
+
+                user_ids = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    db.get_pending_keyword_reply_review_user_ids,
+                )
+                for user_id in user_ids:
+                    await self._maybe_send_review_queue_bark_notification(
+                        user_id,
+                        trigger="interval",
+                    )
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
-                if attempt == 0:
-                    await asyncio.sleep(0.5)
-                    continue
-                logger.error(f"Bark 推送异常: {e}")
+                logger.error(f"审核 Bark 轮询任务失败: {e}")
+
+            await asyncio.sleep(60)
+
+    def _ensure_review_bark_monitor_task(self):
+        global _review_bark_monitor_task
+        if _review_bark_monitor_task is not None and not _review_bark_monitor_task.done():
+            return
+
+        _review_bark_monitor_task = asyncio.create_task(
+            self._review_bark_monitor_loop(),
+            name="review-bark-monitor",
+        )
+
+        def _on_done(task):
+            global _review_bark_monitor_task
+            if _review_bark_monitor_task is task:
+                _review_bark_monitor_task = None
+            try:
+                task.result()
+            except asyncio.CancelledError:
+                logger.info("审核 Bark 轮询任务已取消")
+            except Exception as e:
+                logger.error(f"审核 Bark 轮询任务异常退出: {e}")
+
+        _review_bark_monitor_task.add_done_callback(_on_done)
 
     async def _notify_direct_interaction_if_needed(self, message):
         interaction_type = await self._classify_direct_interaction(message)
@@ -2572,6 +3299,304 @@ class DiscordBotClient(discord.Client):
             f"📱 Bark通知已发送: 账号:{account_name} | 类型:{interaction_label} | 发送者:{sender_name}"
         )
 
+    @staticmethod
+    def _coerce_list(value):
+        if not value:
+            return []
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+            except json.JSONDecodeError:
+                return []
+            return parsed if isinstance(parsed, list) else []
+        return []
+
+    async def _download_file_to_discord(
+        self,
+        session,
+        url,
+        *,
+        filename=None,
+        error_label='下载图片失败',
+    ):
+        try:
+            async with session.get(url) as resp:
+                if resp.status != 200:
+                    return None
+                data = await resp.read()
+        except Exception as e:
+            logger.error(f"{error_label}: {e}")
+            return None
+
+        safe_filename = filename or (url.split('/')[-1] or 'image.jpg')
+        return discord.File(io.BytesIO(data), safe_filename)
+
+    async def _build_product_image_file(
+        self,
+        session,
+        product_id,
+        image_index,
+        image_path_map=None,
+    ):
+        if product_id is None or image_index is None:
+            return None
+
+        idx_key = image_index
+        try:
+            idx_key = int(image_index)
+        except (TypeError, ValueError):
+            idx_key = image_index
+
+        if image_path_map is None:
+            image_path_map = {}
+            try:
+                try:
+                    from database import db
+                except ImportError:
+                    from .database import db
+                product_images = db.get_product_images(product_id)
+                image_path_map = {
+                    img.get('image_index'): img.get('image_path')
+                    for img in product_images
+                }
+            except Exception as e:
+                logger.error(f"获取商品图片路径失败: {e}")
+
+        image_path = image_path_map.get(idx_key)
+        if image_path and os.path.exists(image_path):
+            return discord.File(image_path, f"{product_id}_{idx_key}.jpg")
+
+        img_url = f"{config.BACKEND_API_URL}/api/image/{product_id}/{idx_key}"
+        return await self._download_file_to_discord(
+            session,
+            img_url,
+            filename=f"{product_id}_{idx_key}.jpg",
+            error_label='下载商品图片失败',
+        )
+
+    async def _collect_best_match_reply_files(self, session, product, match_context):
+        if not isinstance(match_context, dict) or match_context.get('type') != 'image':
+            return []
+
+        product_id = product.get('id') if isinstance(product, dict) else None
+        matched_index = match_context.get('best_match_image_index')
+        if product_id is None or matched_index is None:
+            return []
+
+        best_file = await self._build_product_image_file(session, product_id, matched_index)
+        return [best_file] if best_file is not None else []
+
+    async def _collect_custom_reply_files(
+        self,
+        session,
+        product,
+        custom_reply,
+        website_config,
+        channel_id,
+    ):
+        files = []
+        skip_images = bool(custom_reply and custom_reply.get('skip_images'))
+        reply_type = custom_reply.get('reply_type') if isinstance(custom_reply, dict) else None
+        is_custom_mode = bool(custom_reply) and reply_type in {
+            'custom_only',
+            'text',
+            'text_and_link',
+            'image',
+        }
+        is_product_custom_mode = bool(
+            isinstance(custom_reply, dict) and custom_reply.get('product_data') is not None
+        )
+
+        if is_custom_mode and not _should_send_product_custom_images(
+            custom_reply,
+            product,
+            channel_id,
+            website_config=website_config,
+        ):
+            skip_images = True
+
+        if not is_custom_mode or skip_images:
+            return files
+
+        if not is_product_custom_mode:
+            image_url = str(custom_reply.get('image_url') or '').strip()
+            if not image_url:
+                return files
+            downloaded = await self._download_file_to_discord(
+                session,
+                image_url,
+                error_label='下载全局自定义回复图片失败',
+            )
+            return [downloaded] if downloaded is not None else []
+
+        image_source = product.get('imageSource') or product.get('image_source') or 'product'
+        product_id = product.get('id')
+
+        if image_source == 'custom':
+            for url in self._coerce_list(product.get('customImageUrls') or product.get('custom_image_urls'))[:10]:
+                downloaded = await self._download_file_to_discord(
+                    session,
+                    url,
+                    error_label='下载自定义图片失败',
+                )
+                if downloaded is not None:
+                    files.append(downloaded)
+            return files
+
+        if image_source == 'upload':
+            for filename in self._coerce_list(product.get('uploaded_reply_images'))[:10]:
+                img_url = f"{config.BACKEND_API_URL}/api/custom_reply_image/{product_id}/{filename}"
+                downloaded = await self._download_file_to_discord(
+                    session,
+                    img_url,
+                    filename=filename,
+                    error_label='下载上传的自定义回复图片失败',
+                )
+                if downloaded is not None:
+                    files.append(downloaded)
+            return files
+
+        indexes = self._coerce_list(product.get('selectedImageIndexes') or product.get('custom_reply_images'))
+        if not product_id or not indexes:
+            return files
+
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+            product_images = db.get_product_images(product_id)
+            image_path_map = {
+                img.get('image_index'): img.get('image_path')
+                for img in product_images
+            }
+        except Exception as e:
+            logger.error(f"获取商品图片路径失败: {e}")
+            image_path_map = {}
+
+        for index in indexes[:10]:
+            downloaded = await self._build_product_image_file(
+                session,
+                product_id,
+                index,
+                image_path_map=image_path_map,
+            )
+            if downloaded is not None:
+                files.append(downloaded)
+
+        return files
+
+    async def _collect_reply_files(
+        self,
+        *,
+        product,
+        custom_reply,
+        website_config,
+        channel_id,
+        match_context,
+        user_settings,
+    ):
+        image_download_timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=image_download_timeout) as session:
+            if (
+                isinstance(match_context, dict)
+                and match_context.get('type') == 'image'
+            ):
+                if not _is_image_match_above_reply_threshold(match_context, website_config):
+                    return []
+
+                if not bool(user_settings.get('keyword_reply_send_best_match_image')):
+                    return await self._collect_custom_reply_files(
+                        session,
+                        product,
+                        custom_reply,
+                        website_config,
+                        channel_id,
+                    )
+
+                best_match_files = await self._collect_best_match_reply_files(
+                    session,
+                    product,
+                    match_context,
+                )
+                if best_match_files:
+                    return best_match_files
+
+            return await self._collect_custom_reply_files(
+                session,
+                product,
+                custom_reply,
+                website_config,
+                channel_id,
+            )
+
+    def _resolve_image_skip_threshold(self, website_configs, base_threshold):
+        thresholds = []
+        for website_config in website_configs or []:
+            website_threshold = _coerce_float(website_config.get('image_similarity_threshold'))
+            thresholds.append(website_threshold if website_threshold is not None else base_threshold)
+        thresholds = [value for value in thresholds if value is not None]
+        return min(thresholds) if thresholds else base_threshold
+
+    def _store_skipped_query_image(self, image_bytes, filename):
+        ext = os.path.splitext(filename or '')[1].lower()
+        if not ext:
+            ext = '.jpg'
+        target_dir = os.path.join(config.DATA_DIR, 'skipped_image_queries')
+        os.makedirs(target_dir, exist_ok=True)
+        basename = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{random.randint(1000, 9999)}{ext}"
+        target_path = os.path.join(target_dir, basename)
+        with open(target_path, 'wb') as f:
+            f.write(image_bytes)
+        return target_path
+
+    async def _record_skipped_image_history(
+        self,
+        *,
+        image_data,
+        attachment,
+        message,
+        similarity,
+        threshold,
+        best_match=None,
+    ):
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+
+            query_image_path = await asyncio.to_thread(
+                self._store_skipped_query_image,
+                image_data,
+                getattr(attachment, 'filename', 'query.jpg'),
+            )
+            matched_product = best_match.get('product') if isinstance(best_match, dict) else None
+            matched_product_id = matched_product.get('id') if isinstance(matched_product, dict) else None
+            matched_image_index = None
+            if isinstance(best_match, dict):
+                matched_image_index = best_match.get('imageIndex', best_match.get('image_index'))
+
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                db.add_skipped_image_history,
+                query_image_path,
+                float(similarity),
+                float(threshold),
+                str(getattr(message, 'id', '') or ''),
+                str(getattr(getattr(message, 'channel', None), 'id', '') or ''),
+                str(getattr(getattr(message, 'channel', None), 'name', '') or ''),
+                str(getattr(getattr(message, 'author', None), 'id', '') or ''),
+                self._get_message_author_name(message),
+                str(getattr(message, 'content', '') or ''),
+                matched_product_id,
+                matched_image_index,
+            )
+        except Exception as e:
+            logger.error(f"记录略过图片历史失败: {e}")
+
     async def schedule_reply(
         self,
         message,
@@ -2579,6 +3604,12 @@ class DiscordBotClient(discord.Client):
         custom_reply=None,
         match_context=None,
         website_configs_override=None,
+        skip_filters=False,
+        skip_repeat_checks=False,
+        skip_review_check=False,
+        force_plain_send=False,
+        force_reference_reply=False,
+        disable_thread_creation=False,
     ):
         """调度回复到合适的发送账号 (增强版：带详细状态诊断)"""
 
@@ -2655,7 +3686,13 @@ class DiscordBotClient(discord.Client):
                     if website_repeat_window > channel_repeat_window:
                         channel_repeat_window = website_repeat_window
 
-            if not prevalidated_batch and channel_repeat_window and author_id and repeat_product_ids:
+            if (
+                not skip_repeat_checks
+                and not prevalidated_batch
+                and channel_repeat_window
+                and author_id
+                and repeat_product_ids
+            ):
                 for pid in repeat_product_ids:
                     if await _is_recent_repeat(author_id, pid, message.channel.id, channel_repeat_window):
                         logger.info(
@@ -2665,7 +3702,7 @@ class DiscordBotClient(discord.Client):
                         return False
 
             global_image_filters = []
-            if not prevalidated_batch and match_context and match_context.get('type') == 'image':
+            if not skip_filters and not prevalidated_batch and match_context and match_context.get('type') == 'image':
                 try:
                     global_filters = await asyncio.get_event_loop().run_in_executor(None, db.get_message_filters)
                     global_image_filters = [
@@ -2687,7 +3724,7 @@ class DiscordBotClient(discord.Client):
                 ):
                     logger.debug("消息被过滤(全局图片相似度)")
                     return False
-                if not prevalidated_batch and match_context and match_context.get('type') == 'image':
+                if not skip_filters and not prevalidated_batch and match_context and match_context.get('type') == 'image':
                     website_filter_matches = match_context.get('website_filter_matches') or []
                     matched_filter = next(
                         (m for m in website_filter_matches if str(m.get('website_id')) == str(website_config.get('id'))),
@@ -2705,13 +3742,9 @@ class DiscordBotClient(discord.Client):
                                 continue
                         except Exception:
                             continue
-                if not prevalidated_batch and match_context and match_context.get('type') == 'image':
+                if not skip_filters and not prevalidated_batch and match_context and match_context.get('type') == 'image':
                     similarity = _coerce_float(match_context.get('similarity')) or 0.0
-                    base_threshold = _coerce_float(match_context.get('base_threshold'))
-                    if base_threshold is None:
-                        base_threshold = config.DISCORD_SIMILARITY_THRESHOLD
-                    website_threshold = _coerce_float(website_config.get('image_similarity_threshold'))
-                    threshold_to_use = website_threshold if website_threshold is not None else base_threshold
+                    threshold_to_use = _resolve_image_reply_threshold(match_context, website_config)
 
                     if similarity < threshold_to_use:
                         logger.debug(
@@ -2816,7 +3849,8 @@ class DiscordBotClient(discord.Client):
                         f"thread_reply_enabled={1 if thread_reply_enabled else 0}"
                     )
                     if (
-                        not prevalidated_batch
+                        not skip_filters
+                        and not prevalidated_batch
                         and website_filters
                         and self._filters_block_message(message, website_filters, match_context=match_context)
                     ):
@@ -2909,7 +3943,7 @@ class DiscordBotClient(discord.Client):
 
                 for target_index, target_client in enumerate(target_clients):
                     try:
-                        target_channel = target_client.get_channel(message.channel.id)
+                        target_channel = await _resolve_message_reply_channel(target_client, message)
 
                         if target_channel:
                             reply_target_channel, used_thread_reply = await resolve_reply_target_channel(
@@ -2919,6 +3953,55 @@ class DiscordBotClient(discord.Client):
                                 thread_reply_enabled=thread_reply_enabled,
                             )
                             reply_target_channel = reply_target_channel or target_channel
+                            if thread_reply_enabled and not used_thread_reply:
+                                logger.info(
+                                    f"⏭️ [子区回复跳过] 源消息没有可用子区: "
+                                    f"message={getattr(message, 'id', None)} "
+                                    f"channel={getattr(target_channel, 'id', None)}"
+                                )
+                                continue
+
+                            if (
+                                website_config
+                                and _coerce_bool(website_config.get('keyword_review_enabled', 0), False)
+                                and not skip_review_check
+                            ):
+                                queued_review_id = await asyncio.to_thread(
+                                    self._queue_keyword_review_item,
+                                    message=message,
+                                    product=active_product,
+                                    custom_reply=active_custom_reply,
+                                    website_config=website_config,
+                                    reply_content=response_content,
+                                    target_clients=[target_client],
+                                    selected_sender_ids=selected_sender_ids,
+                                    reply_mode=reply_mode,
+                                    files=None,
+                                    match_context=match_context,
+                                    prevalidated_batch=prevalidated_batch,
+                                    broadcast_mode=broadcast_mode,
+                                    thread_reply_enabled=thread_reply_enabled,
+                                    reply_target_channel=reply_target_channel,
+                                    used_thread_reply=used_thread_reply,
+                                    cooldown_channel_id=cooldown_channel_id,
+                                    batch_repeat_records=batch_repeat_records,
+                                    repeat_product_ids=repeat_product_ids,
+                                )
+                                if queued_review_id:
+                                    self._start_keyword_reply_background_task(
+                                        self._maybe_send_review_queue_bark_notification(
+                                            self.user_id,
+                                            trigger="count",
+                                        ),
+                                        task_name=f"review-bark-count user={self.user_id} item={queued_review_id}",
+                                    )
+                                    logger.info(
+                                        f"📝 [进入人工审核] 网站:{website_config.get('name')} "
+                                        f"频道:{message.channel.id} 队列ID:{queued_review_id}"
+                                    )
+                                    sent_any = True
+                                    continue
+
                             should_apply_delay = not (broadcast_mode and target_index > 0)
                             if should_apply_delay:
                                 async with reply_target_channel.typing():
@@ -2929,146 +4012,14 @@ class DiscordBotClient(discord.Client):
                             # 必须用 target_channel.send(..., reference=message) 才会使用 target_client(Sender) 的 token
                             try:
                                 # === 1. 收集所有要发送的图片文件 ===
-                                files = []
-                                image_download_timeout = aiohttp.ClientTimeout(total=10)
-
-                                # 检查是否是自定义模式，且有图片
-                                skip_images = bool(active_custom_reply and active_custom_reply.get('skip_images'))
-                                reply_type = active_custom_reply.get('reply_type') if isinstance(active_custom_reply, dict) else None
-                                is_custom_mode = bool(active_custom_reply) and reply_type in {
-                                    'custom_only',
-                                    'text',
-                                    'text_and_link',
-                                    'image',
-                                }
-                                is_product_custom_mode = bool(
-                                    isinstance(active_custom_reply, dict) and active_custom_reply.get('product_data') is not None
-                                )
-                                if is_custom_mode and not _should_send_product_custom_images(
-                                    active_custom_reply,
-                                    active_product,
-                                    message.channel.id,
+                                files = await self._collect_reply_files(
+                                    product=active_product,
+                                    custom_reply=active_custom_reply,
                                     website_config=website_config,
-                                ):
-                                    skip_images = True
-    
-                                if is_custom_mode and not skip_images:
-                                    if is_product_custom_mode:
-                                        # 获取图片信息
-                                        # 注意：如果是从 search_similar_text 返回的 product，字段名可能已经格式化
-                                        # 需要兼容处理
-    
-                                        # 1. 尝试获取自定义图片链接
-                                        custom_urls = active_product.get('customImageUrls', []) or active_product.get('custom_image_urls', [])
-                                        if isinstance(custom_urls, str):
-                                            try:
-                                                custom_urls = json.loads(custom_urls)
-                                            except Exception:
-                                                custom_urls = []
-    
-                                        image_source = active_product.get('imageSource') or active_product.get('image_source') or 'product'
-    
-                                        # 收集图片文件（Discord限制最多10个文件）
-                                        if image_source == 'custom' and custom_urls:
-                                            for url in custom_urls[:10]:  # 限制最多10张
-                                                if len(files) >= 10:
-                                                    break
-                                                try:
-                                                    async with aiohttp.ClientSession(timeout=image_download_timeout) as session:
-                                                        async with session.get(url) as resp:
-                                                            if resp.status == 200:
-                                                                data = await resp.read()
-                                                                filename = url.split('/')[-1] or 'image.jpg'
-                                                                files.append(discord.File(io.BytesIO(data), filename))
-                                                except Exception as e:
-                                                    logger.error(f"下载自定义图片失败: {e}")
-    
-                                        elif image_source == 'upload':
-                                            # 处理上传的自定义回复图片
-                                            pid = active_product.get('id')
-    
-                                            # 从 uploaded_reply_images 字段获取上传的图片文件名列表
-                                            uploaded_filenames = active_product.get('uploaded_reply_images', [])
-                                            if isinstance(uploaded_filenames, str):
-                                                try:
-                                                    uploaded_filenames = json.loads(uploaded_filenames)
-                                                except Exception:
-                                                    # 如果解析失败，且它本身就是列表，则保持原样，否则置空
-                                                    uploaded_filenames = uploaded_filenames if isinstance(uploaded_filenames, list) else []
-    
-                                            if pid and uploaded_filenames:
-                                                # 使用新的API端点获取上传的自定义回复图片
-                                                for filename in uploaded_filenames[:10]:  # 限制最多10张
-                                                    if len(files) >= 10:
-                                                        break
-                                                    img_url = f"{config.BACKEND_API_URL}/api/custom_reply_image/{pid}/{filename}"
-                                                    try:
-                                                        async with aiohttp.ClientSession(timeout=image_download_timeout) as session:
-                                                            async with session.get(img_url) as resp:
-                                                                if resp.status == 200:
-                                                                    data = await resp.read()
-                                                                    files.append(discord.File(io.BytesIO(data), filename))
-                                                    except Exception as e:
-                                                        logger.error(f"下载上传的自定义回复图片失败: {e}")
-    
-                                        elif image_source == 'product':
-                                            # 处理商品图集中的图片
-                                            pid = active_product.get('id')
-                                            indexes = active_product.get('selectedImageIndexes', []) or active_product.get('custom_reply_images', [])
-    
-                                            if isinstance(indexes, str):
-                                                try:
-                                                    indexes = json.loads(indexes)
-                                                except Exception:
-                                                    indexes = []
-    
-                                            if pid and indexes:
-                                                image_path_map = {}
-                                                try:
-                                                    product_images = db.get_product_images(pid)
-                                                    image_path_map = {
-                                                        img.get('image_index'): img.get('image_path')
-                                                        for img in product_images
-                                                    }
-                                                except Exception as e:
-                                                    logger.error(f"获取商品图片路径失败: {e}")
-    
-                                                # 优先使用本地图片路径，失败再回退到HTTP获取
-                                                for idx in indexes[:10]:  # 限制最多10张
-                                                    if len(files) >= 10:
-                                                        break
-                                                    idx_key = idx
-                                                    try:
-                                                        idx_key = int(idx)
-                                                    except (TypeError, ValueError):
-                                                        idx_key = idx
-    
-                                                    image_path = image_path_map.get(idx_key)
-                                                    if image_path and os.path.exists(image_path):
-                                                        files.append(discord.File(image_path, f"{pid}_{idx_key}.jpg"))
-                                                        continue
-    
-                                                    img_url = f"{config.BACKEND_API_URL}/api/image/{pid}/{idx_key}"
-                                                    try:
-                                                        async with aiohttp.ClientSession(timeout=image_download_timeout) as session:
-                                                            async with session.get(img_url) as resp:
-                                                                if resp.status == 200:
-                                                                    data = await resp.read()
-                                                                    files.append(discord.File(io.BytesIO(data), f"{pid}_{idx_key}.jpg"))
-                                                    except Exception as e:
-                                                        logger.error(f"下载商品图片失败: {e}")
-                                    else:
-                                        image_url = str(active_custom_reply.get('image_url') or '').strip()
-                                        if image_url:
-                                            try:
-                                                async with aiohttp.ClientSession(timeout=image_download_timeout) as session:
-                                                    async with session.get(image_url) as resp:
-                                                        if resp.status == 200:
-                                                            data = await resp.read()
-                                                            filename = image_url.split('/')[-1] or 'image.jpg'
-                                                            files.append(discord.File(io.BytesIO(data), filename))
-                                            except Exception as e:
-                                                logger.error(f"下载全局自定义回复图片失败: {e}")
+                                    channel_id=message.channel.id,
+                                    match_context=match_context,
+                                    user_settings=user_settings,
+                                )
     
                                 # === 2. 发送文字和所有图片（合并为一条消息） ===
                                 if not response_content and not files:
@@ -3078,11 +4029,13 @@ class DiscordBotClient(discord.Client):
                                     continue
     
                                 explicit_mentions = bool(active_custom_reply and active_custom_reply.get('explicit_mentions'))
-                                send_plain_message = _should_send_plain_keyword_message(
-                                    prevalidated_batch=prevalidated_batch,
-                                    explicit_mentions=explicit_mentions,
-                                    reply_mode=reply_mode,
-                                )
+                                send_plain_message = False
+                                if not force_reference_reply:
+                                    send_plain_message = force_plain_send or _should_send_plain_keyword_message(
+                                        prevalidated_batch=prevalidated_batch,
+                                        explicit_mentions=explicit_mentions,
+                                        reply_mode=reply_mode,
+                                    )
                                 if (
                                     send_plain_message
                                     and response_content
@@ -3094,7 +4047,7 @@ class DiscordBotClient(discord.Client):
                                         response_content,
                                     )
                                     response_content = direct_payload['content']
-    
+
                                 send_kwargs = {
                                     'content': response_content if response_content else None,
                                     'files': files if files else None,
@@ -3108,7 +4061,9 @@ class DiscordBotClient(discord.Client):
                                     )
                                 else:
                                     if not used_thread_reply:
-                                        send_kwargs['reference'] = message
+                                        message_reference = _build_message_reference(message, reply_target_channel)
+                                        if message_reference is not None:
+                                            send_kwargs['reference'] = message_reference
                                         send_kwargs['mention_author'] = _should_mention_reply_author(
                                             explicit_mentions=explicit_mentions,
                                             reply_mode=reply_mode,
@@ -3553,14 +4508,10 @@ class DiscordBotClient(discord.Client):
         channel_name = getattr(channel, 'name', None) or str(getattr(channel, 'id', '未知频道'))
         account_name = getattr(getattr(self, 'user', None), 'name', None) or f'账号#{self.account_id}'
         preview = self._message_preview(message)
-        log_message = (
+        logger.debug(
             f'⏭️ [跳过] 账号:{account_name} | 原因:{reason} | 作者:{author_name}({author_id}) '
             f'| 频道:{channel_name} | 内容:"{preview}"'
         )
-        if self._is_plain_text_keyword_trigger_candidate(message):
-            logger.info(log_message)
-        else:
-            logger.debug(log_message)
 
     def _should_filter_message(self, message, ignore_image_filters=False):
         """检查消息是否应该被过滤"""
@@ -3744,6 +4695,7 @@ class DiscordBotClient(discord.Client):
     async def on_ready(self):
         logger.info(f'Discord机器人已登录: {self.user} (ID: {self.user.id})')
         logger.info(f'机器人已就绪，开始监听消息')
+        self._ensure_review_bark_monitor_task()
         try:
             await self._refresh_channel_cache()
             bound_channels = DiscordBotClient._bound_channels_cache
@@ -3842,26 +4794,18 @@ class DiscordBotClient(discord.Client):
             try:
                 await self._notify_dm_interaction_if_needed(message)
             except Exception as e:
-                logger.error(f"处理私信 Bark 通知失败: {e}")
+                _log_rate_limited_bark_issue("处理私信 Bark 通知失败", _summarize_exception_for_log(e))
             return
 
         # 屏蔽活动通知/系统消息以及 @everyone/@here 广播
         if self._should_ignore_mass_or_activity_message(message):
             return
 
-        if self._is_plain_text_keyword_trigger_candidate(message):
-            logger.info(
-                f'📨 [收到关键词候选] 账号:{getattr(self.user, "name", f"账号#{self.account_id}")} '
-                f'| 作者:{getattr(message.author, "name", "未知作者")}({getattr(message.author, "id", None)}) '
-                f'| 频道:{getattr(message.channel, "name", getattr(message.channel, "id", "未知频道"))} '
-                f'| 内容:"{self._message_preview(message, limit=80)}"'
-            )
-
         # 1. 所有账号都可触发互动通知（无需频道绑定）
         try:
             await self._notify_direct_interaction_if_needed(message)
         except Exception as e:
-            logger.error(f"处理 @/回复 Bark 通知失败: {e}")
+            _log_rate_limited_bark_issue("处理 @/回复 Bark 通知失败", _summarize_exception_for_log(e))
 
         # 2. 所有绑定账号都可进入自动回复链路；真正执行搜索的账号由去重锁选出
         website_configs = None
@@ -4021,7 +4965,10 @@ class DiscordBotClient(discord.Client):
             if channel is None:
                 return
 
-            message = await channel.fetch_message(message_id)
+            try:
+                message = await channel.fetch_message(message_id)
+            except discord.NotFound:
+                return
             if message is None:
                 return
             if getattr(message.author, "id", None) != getattr(self.user, "id", None):
@@ -4038,7 +4985,7 @@ class DiscordBotClient(discord.Client):
 
             await self._notify_reaction_interaction_if_needed(message, reactor, emoji_text)
         except Exception as e:
-            logger.error(f"处理表情互动 Bark 通知失败: {e}")
+            _log_rate_limited_bark_issue("处理表情互动 Bark 通知失败", _summarize_exception_for_log(e))
 
     async def on_relationship_add(self, relationship):
         """监听好友关系新增（重点：收到好友请求）。"""
@@ -4069,7 +5016,7 @@ class DiscordBotClient(discord.Client):
                 detail_text="对方向该账号发起了好友请求",
             )
         except Exception as e:
-            logger.error(f"处理好友请求 Bark 通知失败: {e}")
+            _log_rate_limited_bark_issue("处理好友请求 Bark 通知失败", _summarize_exception_for_log(e))
 
     async def on_relationship_update(self, before, after):
         """监听好友关系更新（例如：请求通过后成为好友）。"""
@@ -4092,7 +5039,7 @@ class DiscordBotClient(discord.Client):
                 detail_text="双方已建立好友关系",
             )
         except Exception as e:
-            logger.error(f"处理添加好友 Bark 通知失败: {e}")
+            _log_rate_limited_bark_issue("处理添加好友 Bark 通知失败", _summarize_exception_for_log(e))
 
     async def on_private_channel_create(self, channel):
         """监听新私信会话创建并提醒（兜底）。"""
@@ -4209,6 +5156,22 @@ class DiscordBotClient(discord.Client):
 
             # 【新增】AI并发限制：最多同时2个AI推理任务
             # 使用Semaphore控制并发，防止CPU饱和导致Flask主线程阻塞
+            user_settings = {}
+            user_threshold = config.DISCORD_SIMILARITY_THRESHOLD
+            if self.user_id:
+                try:
+                    try:
+                        from database import db
+                    except ImportError:
+                        from .database import db
+                    user_settings = await asyncio.get_event_loop().run_in_executor(None, db.get_user_settings, self.user_id)
+                    if user_settings and user_settings.get('discord_similarity_threshold') is not None:
+                        user_threshold = user_settings['discord_similarity_threshold']
+                except Exception as e:
+                    logger.error(f'获取用户相似度设置失败: {e}')
+
+            skip_threshold = self._resolve_image_skip_threshold(website_configs, user_threshold)
+
             async with ai_concurrency_limit:
                 logger.debug(f"🔒 获取AI并发锁，当前等待队列: {ai_concurrency_limit._value}")
 
@@ -4217,6 +5180,7 @@ class DiscordBotClient(discord.Client):
                 result = await self.recognize_image(
                     image_data,
                     user_shops=scoped_user_shops,
+                    threshold=skip_threshold,
                 )
 
                 logger.debug(f"🔓 释放AI并发锁")
@@ -4242,28 +5206,29 @@ class DiscordBotClient(discord.Client):
                 except Exception:
                     pass
 
+            skip_threshold = self._resolve_image_skip_threshold(website_configs, user_threshold)
+
             if result and result.get('success') and result.get('results'):
                 # 获取最佳匹配结果
                 best_match = result['results'][0]
                 similarity = best_match.get('similarity', 0)
 
-                # 获取用户个性化相似度阈值，如果没有则使用全局默认值
-                user_threshold = config.DISCORD_SIMILARITY_THRESHOLD  # 默认值
-                if self.user_id:
-                    try:
-                        try:
-                            from database import db
-                        except ImportError:
-                            from .database import db
-                        # 异步获取用户设置
-                        user_settings = await asyncio.get_event_loop().run_in_executor(None, db.get_user_settings, self.user_id)
-                        if user_settings:
-                            if user_settings.get('discord_similarity_threshold') is not None:
-                                user_threshold = user_settings['discord_similarity_threshold']
-                    except Exception as e:
-                        logger.error(f'获取用户相似度设置失败: {e}')
-
                 logger.debug(f'最佳匹配相似度: {similarity:.4f}, 用户阈值: {user_threshold:.4f}')
+
+                below_reply_threshold = similarity < skip_threshold
+                if below_reply_threshold:
+                    await self._record_skipped_image_history(
+                        image_data=image_data,
+                        attachment=attachment,
+                        message=message,
+                        similarity=similarity,
+                        threshold=skip_threshold,
+                        best_match=best_match,
+                    )
+                    logger.info(
+                        f'⏭️ 图片命中未过阈值，跳过回复: 相似度 {similarity:.3f} < {skip_threshold:.3f} | 频道: {message.channel.name}'
+                    )
+                    return
 
                 product = best_match.get('product', {})
                 product_title = (product.get('title') or '').strip()
@@ -4303,39 +5268,28 @@ class DiscordBotClient(discord.Client):
                 elif isinstance(product_rule_enabled, (int, float)):
                     product_rule_enabled = bool(product_rule_enabled)
 
-                def _coerce_list(value):
-                    if not value:
-                        return []
-                    if isinstance(value, list):
-                        return value
-                    if isinstance(value, str):
-                        try:
-                            parsed = json.loads(value)
-                        except json.JSONDecodeError:
-                            return []
-                        return parsed if isinstance(parsed, list) else []
-                    return []
-
                 custom_reply = None
                 image_source = product.get('imageSource') or product.get('image_source') or 'product'
                 has_custom_images = False
 
                 if image_source == 'upload':
-                    uploaded_imgs = _coerce_list(product.get('uploaded_reply_images'))
+                    uploaded_imgs = self._coerce_list(product.get('uploaded_reply_images'))
                     product['uploaded_reply_images'] = uploaded_imgs
                     has_custom_images = bool(uploaded_imgs)
                 elif image_source == 'custom':
-                    custom_urls = _coerce_list(product.get('customImageUrls') or product.get('custom_image_urls'))
+                    custom_urls = self._coerce_list(product.get('customImageUrls') or product.get('custom_image_urls'))
                     if custom_urls:
                         product['customImageUrls'] = custom_urls
                     has_custom_images = bool(custom_urls)
                 elif image_source == 'product':
-                    selected_indexes = _coerce_list(product.get('selectedImageIndexes') or product.get('custom_reply_images'))
+                    selected_indexes = self._coerce_list(product.get('selectedImageIndexes') or product.get('custom_reply_images'))
                     if selected_indexes:
                         product['selectedImageIndexes'] = selected_indexes
                     has_custom_images = bool(selected_indexes)
 
-                if not product_rule_enabled or has_custom_images:
+                if below_reply_threshold:
+                    custom_reply = None
+                elif not product_rule_enabled or has_custom_images:
                     custom_text = (product.get('custom_reply_text') or '').strip()
                     custom_reply = {
                         'reply_type': 'text' if custom_text else 'custom_only',
@@ -4357,6 +5311,7 @@ class DiscordBotClient(discord.Client):
                         'type': 'image',
                         'similarity': similarity,
                         'base_threshold': user_threshold,
+                        'best_match_image_index': best_match.get('imageIndex', best_match.get('image_index')),
                         'website_filter_matches': blocked_website_filter_matches,
                         'ocr_text': ocr_text,
                     },
@@ -4364,6 +5319,18 @@ class DiscordBotClient(discord.Client):
                 )
 
                 logger.debug(f'图片识别完成，相似度: {similarity:.4f}')
+            elif result and result.get('success'):
+                await self._record_skipped_image_history(
+                    image_data=image_data,
+                    attachment=attachment,
+                    message=message,
+                    similarity=0.0,
+                    threshold=skip_threshold,
+                    best_match=None,
+                )
+                logger.info(
+                    f'⏭️ 图片未命中任何商品，已记录历史: 阈值 {skip_threshold:.3f} | 频道: {message.channel.name}'
+                )
 
         except Exception as e:
             logger.error(f'Error handling image: {e}')
@@ -4558,9 +5525,13 @@ class DiscordBotClient(discord.Client):
                     if product.get('id') is not None
                 )
 
+            matched_website_ids = {
+                context['website_config'].get('id')
+                for context in website_match_contexts
+                if context.get('website_config')
+            }
             if not website_match_contexts:
-                logger.debug(f'关键词搜索无精确匹配: {search_query}')
-                return
+                logger.debug(f'关键词搜索无精确匹配，准备尝试关键词搜图: {search_query}')
 
             db = None
             global_filters = []
@@ -4657,6 +5628,7 @@ class DiscordBotClient(discord.Client):
                     logger.info(f"商品 {prepared_product.get('id')} 配置了自定义图片，准备发送自定义回复")
 
             any_reply_scheduled = False
+            keyword_image_job_created = False
 
             try:
                 if db is None:
@@ -4808,12 +5780,35 @@ class DiscordBotClient(discord.Client):
                     ),
                 )
 
-            if not any_reply_scheduled:
+            if allow_keyword_image_search and db is not None:
+                for website_config in website_configs:
+                    website_id = website_config.get('id')
+                    if not website_id or website_id in matched_website_ids:
+                        continue
+                    website_settings = user_website_settings_map.get(website_id) or {}
+                    keyword_image_result = await self._run_keyword_image_search_for_website(
+                        message,
+                        search_query,
+                        website_config,
+                        website_settings,
+                        user_settings,
+                        db,
+                    )
+                    keyword_image_job_created = (
+                        keyword_image_job_created
+                        or bool(keyword_image_result.get('job_created'))
+                    )
+                    any_reply_scheduled = (
+                        any_reply_scheduled
+                        or bool(keyword_image_result.get('reply_scheduled'))
+                    )
+
+            if not any_reply_scheduled and not keyword_image_job_created:
                 if keyword_triggered:
                     logger.info(f'关键词已命中但无可用回复内容: {search_query}')
                 else:
                     logger.info(f'关键词搜索无可用回复内容: {search_query}')
-            return keyword_triggered or any_reply_scheduled
+            return keyword_triggered or any_reply_scheduled or keyword_image_job_created
 
         except Exception as e:
             logger.error(f'Error handling keyword search: {e}')
@@ -4850,18 +5845,206 @@ class DiscordBotClient(discord.Client):
             logger.error(f'Error searching products by keyword: {e}')
             return None
 
-    async def recognize_image(self, image_data, user_shops=None):
+    def _select_keyword_image_search_candidate_index(self, candidates):
+        best_index = None
+        best_similarity = -1.0
+        for index, candidate in enumerate(candidates or []):
+            if not isinstance(candidate, dict):
+                continue
+            if not candidate.get('match_found') or not candidate.get('product'):
+                continue
+            similarity = _coerce_float(candidate.get('similarity'))
+            if similarity is None:
+                similarity = -1.0
+            if best_index is None or similarity > best_similarity:
+                best_index = index
+                best_similarity = similarity
+        return best_index
+
+    async def _run_keyword_image_search_for_website(
+        self,
+        message,
+        search_query,
+        website_config,
+        website_settings,
+        user_settings,
+        db_module,
+    ):
+        website_id = website_config.get('id') if website_config else None
+        if not website_id or db_module is None:
+            return {'job_created': False, 'reply_scheduled': False}
+
+        enabled = 1 if int((website_settings or {}).get('keyword_image_search_enabled') or 0) else 0
+        if not enabled:
+            return {'job_created': False, 'reply_scheduled': False}
+
+        mode = normalize_keyword_image_search_mode(
+            (website_settings or {}).get('keyword_image_search_mode')
+        )
+        max_images = normalize_keyword_image_search_max_images(
+            (website_settings or {}).get('keyword_image_search_max_images'),
+            default=3,
+        )
+
+        logger.info(
+            "🔎 关键词搜图触发: query=%s website_id=%s mode=%s max_images=%s",
+            _summarize_text_for_log(search_query, limit=80),
+            website_id,
+            mode,
+            max_images,
+        )
+
+        try:
+            search_result = await asyncio.to_thread(
+                keyword_image_search_service.search_candidates,
+                query_text=search_query,
+                website_config=website_config,
+                user_id=self.user_id,
+                user_shops=self.user_shops,
+                max_images=max_images,
+                user_settings=user_settings,
+            )
+            error_message = None
+        except KeywordImageSearchError as exc:
+            search_result = {
+                'success': False,
+                'provider': getattr(config, 'KEYWORD_IMAGE_SEARCH_PROVIDER', 'searchapi_google_images'),
+                'external_result_count': 0,
+                'matched_result_count': 0,
+                'candidates': [],
+            }
+            error_message = str(exc)
+            logger.warning(
+                "关键词搜图失败: website_id=%s query=%s error=%s",
+                website_id,
+                _summarize_text_for_log(search_query, limit=80),
+                error_message,
+            )
+        except Exception as exc:
+            search_result = {
+                'success': False,
+                'provider': getattr(config, 'KEYWORD_IMAGE_SEARCH_PROVIDER', 'searchapi_google_images'),
+                'external_result_count': 0,
+                'matched_result_count': 0,
+                'candidates': [],
+            }
+            error_message = str(exc)
+            logger.error(
+                "关键词搜图异常: website_id=%s query=%s error=%s",
+                website_id,
+                _summarize_text_for_log(search_query, limit=80),
+                error_message,
+            )
+
+        candidates = search_result.get('candidates') or []
+        matched_result_count = int(search_result.get('matched_result_count') or 0)
+        if error_message:
+            job_status = 'failed'
+        elif matched_result_count <= 0:
+            job_status = 'no_match'
+        elif mode == 'auto':
+            job_status = 'pending'
+        else:
+            job_status = 'ready'
+
+        job_id = await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: db_module.create_keyword_image_search_job(
+                user_id=self.user_id,
+                website_id=website_id,
+                query_text=search_query,
+                channel_id=str(getattr(message.channel, 'id', '')),
+                message_id=str(getattr(message, 'id', '')),
+                guild_id=str(getattr(getattr(message, 'guild', None), 'id', '')) or None,
+                author_id=str(getattr(getattr(message, 'author', None), 'id', '')) or None,
+                mode=mode,
+                provider=search_result.get('provider') or getattr(config, 'KEYWORD_IMAGE_SEARCH_PROVIDER', 'searchapi_google_images'),
+                status=job_status,
+                error_message=error_message,
+                candidates=candidates,
+                external_result_count=search_result.get('external_result_count') or 0,
+                matched_result_count=matched_result_count,
+            ),
+        )
+
+        if not job_id:
+            return {'job_created': False, 'reply_scheduled': False}
+
+        if matched_result_count <= 0 or mode != 'auto':
+            logger.info(
+                "关键词搜图任务已记录: job_id=%s website_id=%s status=%s matched=%s",
+                job_id,
+                website_id,
+                job_status,
+                matched_result_count,
+            )
+            return {'job_created': True, 'reply_scheduled': False}
+
+        best_candidate_index = self._select_keyword_image_search_candidate_index(candidates)
+        if best_candidate_index is None:
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: db_module.update_keyword_image_search_job(
+                    job_id,
+                    user_id=self.user_id,
+                    status='no_match',
+                    error_message='自动发送未找到可用候选商品',
+                ),
+            )
+            return {'job_created': True, 'reply_scheduled': False}
+
+        best_candidate = candidates[best_candidate_index]
+        product = best_candidate.get('product')
+        if not isinstance(product, dict) or not product.get('id'):
+            await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: db_module.update_keyword_image_search_job(
+                    job_id,
+                    user_id=self.user_id,
+                    status='failed',
+                    error_message='自动发送候选商品数据无效',
+                ),
+            )
+            return {'job_created': True, 'reply_scheduled': False}
+
+        send_success = await self.schedule_reply(
+            message,
+            product,
+            None,
+            None,
+            website_configs_override=[website_config],
+        )
+        await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: db_module.update_keyword_image_search_job(
+                job_id,
+                user_id=self.user_id,
+                status='sent' if send_success else 'failed',
+                error_message=None if send_success else '自动发送失败',
+                selected_candidate_index=best_candidate_index,
+                sent_product_id=product.get('id') if send_success else None,
+            ),
+        )
+        logger.info(
+            "关键词搜图自动发送完成: job_id=%s website_id=%s success=%s product_id=%s",
+            job_id,
+            website_id,
+            send_success,
+            product.get('id'),
+        )
+        return {'job_created': True, 'reply_scheduled': bool(send_success)}
+
+    async def recognize_image(self, image_data, user_shops=None, threshold=None):
         try:
             # 与图片消息阶段超时保持一致，避免内部请求先于外层保护提前中断。
             timeout = aiohttp.ClientTimeout(total=IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS)
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                # 准备图片数据
-                form_data = aiohttp.FormData()
-                form_data.add_field('image', image_data, filename='image.jpg', content_type='image/jpeg')
                 # 使用配置的阈值
                 # 使用用户个性化阈值，如果没有则使用全局默认值
-                api_threshold = config.DISCORD_SIMILARITY_THRESHOLD
-                if self.user_id:
+                api_threshold = _coerce_float(threshold)
+                if api_threshold is None:
+                    api_threshold = config.DISCORD_SIMILARITY_THRESHOLD
+                if threshold is None and self.user_id:
                     try:
                         try:
                             from database import db
@@ -4874,19 +6057,24 @@ class DiscordBotClient(discord.Client):
                     except Exception as e:
                         logger.error(f'获取用户相似度设置失败: {e}')
 
-                form_data.add_field('threshold', str(api_threshold))
-                form_data.add_field('limit', '1')  # Discord只返回最相似的一个结果
-                if self.user_id:
-                    form_data.add_field('user_id', str(self.user_id))
-
-                # 如果指定了用户店铺权限，添加到请求中
-                if user_shops:
-                    form_data.add_field('user_shops', json.dumps(user_shops))
-
                 # 调用后端实时图片检索服务。
                 request_url = f'{config.BACKEND_API_URL.replace("/api", "")}/search_similar'
-                for attempt in range(2):
-                    async with session.post(request_url, data=form_data) as resp:
+                max_attempts = 5
+                retry_delay = 1.0
+
+                def _build_form_data():
+                    form = aiohttp.FormData()
+                    form.add_field('image', image_data, filename='image.jpg', content_type='image/jpeg')
+                    form.add_field('threshold', str(api_threshold))
+                    form.add_field('limit', '1')  # Discord只返回最相似的一个结果
+                    if self.user_id:
+                        form.add_field('user_id', str(self.user_id))
+                    if user_shops:
+                        form.add_field('user_shops', json.dumps(user_shops))
+                    return form
+
+                for attempt in range(max_attempts):
+                    async with session.post(request_url, data=_build_form_data()) as resp:
                         if resp.status == 200:
                             result = await resp.json()
                             return result
@@ -4899,8 +6087,11 @@ class DiscordBotClient(discord.Client):
                             attempt + 1,
                             compact_response_text or '<empty>',
                         )
-                        if resp.status in {429, 503} and attempt == 0:
-                            await asyncio.sleep(1.0)
+                        # 后端对 search busy / warming up 返回 503。
+                        # 这类响应继续重试只会把事件循环拖慢，所以直接停止。
+                        if resp.status == 429 and attempt < max_attempts - 1:
+                            await asyncio.sleep(retry_delay)
+                            retry_delay = min(retry_delay * 1.8, 6.0)
                             continue
                         return None
 

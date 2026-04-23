@@ -43,6 +43,7 @@ import numpy as np
 import logging
 import sys
 from datetime import datetime
+from typing import Any, Dict
 
 # 自动加载.env文件
 try:
@@ -118,6 +119,21 @@ try:
 except ModuleNotFoundError as e:
     if e.name == 'rotation_settings':
         from .rotation_settings import resolve_rotation_settings_update
+    else:
+        raise
+try:
+    from keyword_image_search import (
+        KeywordImageSearchError,
+        normalize_keyword_image_search_max_images,
+        normalize_keyword_image_search_mode,
+    )
+except ModuleNotFoundError as e:
+    if e.name == 'keyword_image_search':
+        from .keyword_image_search import (
+            KeywordImageSearchError,
+            normalize_keyword_image_search_max_images,
+            normalize_keyword_image_search_mode,
+        )
     else:
         raise
 try:
@@ -689,6 +705,22 @@ def build_user_shop_scope(user_id):
 
     return list(allowed_shops)
 
+
+def _resolve_search_user_shops(user_id, current_user=None, explicit_user_shops=None):
+    """Resolve the live image search scope for the current request."""
+    if explicit_user_shops is not None:
+        return explicit_user_shops
+
+    resolved_user_shops = build_user_shop_scope(user_id) if user_id else None
+    if resolved_user_shops is None and current_user and current_user.get('id'):
+        resolved_user_shops = build_user_shop_scope(current_user['id'])
+
+    is_admin_user = str((current_user or {}).get('role') or '').lower() == 'admin'
+    if is_admin_user and not resolved_user_shops:
+        return None
+
+    return resolved_user_shops
+
 def refresh_running_bot_user_shops(user_id):
     """更新运行中 Bot 的 user_shops，避免修改绑定后需要重启进程"""
     scoped_shops = build_user_shop_scope(user_id)
@@ -864,6 +896,33 @@ def schedule_discord_bot_watchdog():
 
 # 全局特征提取器实例（在应用启动时创建）
 feature_extractor_instance = None
+def schedule_keyword_review_item_dispatch(review_item):
+    """把审核通过的关键词回复交给机器人事件循环发送。"""
+    global bot_loop
+
+    try:
+        is_running = getattr(bot_loop, 'is_running', None)
+        if bot_loop is None or not callable(is_running) or not is_running():
+            return False, '机器人事件循环未运行'
+
+        import asyncio
+        try:
+            from bot import dispatch_keyword_review_item
+        except ModuleNotFoundError as import_error:
+            if import_error.name == 'bot':
+                from .bot import dispatch_keyword_review_item
+            else:
+                raise
+
+        future = asyncio.run_coroutine_threadsafe(
+            dispatch_keyword_review_item(review_item),
+            bot_loop,
+        )
+        return True, future
+    except Exception as e:
+        logger.error(f"调度审核通过消息失败: {e}")
+        return False, str(e)
+
 feature_extractor_lock = threading.Lock()
 feature_extractor_failed_at = 0.0
 feature_extractor_last_error = None
@@ -1468,6 +1527,7 @@ def search_similar():
             except (TypeError, ValueError):
                 user_id = None
 
+        current_user = get_current_user()
         # 获取用户店铺权限过滤（用于Discord机器人）
         user_shops = None
         user_shops_json = request.form.get('user_shops')
@@ -1476,12 +1536,8 @@ def search_similar():
                 user_shops = json.loads(user_shops_json)
             except:
                 user_shops = None
-        if user_shops is None and user_id:
-            user_shops = build_user_shop_scope(user_id)
         if user_shops is None:
-            current_user = get_current_user()
-            if current_user and current_user.get('id'):
-                user_shops = build_user_shop_scope(current_user['id'])
+            user_shops = _resolve_search_user_shops(user_id, current_user=current_user)
 
         if debug_enabled:
             logger.debug(f"Received threshold: {threshold}")
@@ -2477,6 +2533,7 @@ def get_website_configs():
 
             # 2) 频道绑定：只返回当前用户自己的绑定
             config['channels'] = channel_bindings_map.get(config_id, [])
+            config['channel_bindings'] = db.get_website_channel_bindings_details(config_id, current_user['id'])
 
             # 2.5) 普通用户展示自己的网站回复统计，不展示管理员全局累计
             if current_user.get('role') != 'admin':
@@ -2771,6 +2828,80 @@ def remove_website_channel(config_id, channel_id):
 
 # ===== 网站账号绑定API =====
 
+@app.route('/api/websites/<int:config_id>/channels/<channel_id>/review-window', methods=['PUT'])
+def update_website_channel_review_window(config_id, channel_id):
+    """更新频道的关键词人工审核开关"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        data = request.get_json() or {}
+        enabled = data.get('enabled')
+        if enabled is None:
+            enabled = data.get('keyword_review_enabled')
+        if enabled is None:
+            return jsonify({'error': '审核开关状态不能为空'}), 400
+
+        if isinstance(enabled, str):
+            normalized_enabled = enabled.strip().lower()
+            if normalized_enabled in {'1', 'true', 'yes', 'on'}:
+                enabled = True
+            elif normalized_enabled in {'0', 'false', 'no', 'off'}:
+                enabled = False
+            else:
+                return jsonify({'error': '审核开关状态必须是布尔值'}), 400
+        else:
+            enabled = bool(enabled)
+
+        if 'discord.com/channels/' in channel_id:
+            parts = channel_id.rstrip('/').split('/')
+            if len(parts) >= 1:
+                channel_id = parts[-1]
+
+        current_user = get_current_user()
+        if current_user.get('role') == 'admin':
+            success = db.update_website_channel_binding_review_enabled(
+                config_id,
+                channel_id,
+                enabled=enabled,
+            )
+        else:
+            success = db.update_website_channel_binding_review_enabled(
+                config_id,
+                channel_id,
+                current_user['id'],
+                enabled,
+            )
+
+        if not success:
+            return jsonify({'error': '更新审核开关失败'}), 500
+
+        binding = next(
+            (
+                item
+                for item in db.get_website_channel_bindings_details(config_id, current_user['id'])
+                if str(item.get('channel_id')) == str(channel_id)
+            ),
+            None,
+        )
+        if binding is None and current_user.get('role') == 'admin':
+            binding = next(
+                (
+                    item
+                    for item in db.get_website_channel_bindings_details(config_id)
+                    if str(item.get('channel_id')) == str(channel_id)
+                ),
+                None,
+            )
+        return jsonify({
+            'success': True,
+            'message': '审核窗口已开启' if enabled else '审核窗口已关闭',
+            'binding': binding,
+        })
+    except Exception as e:
+        logger.error(f"更新频道审核窗口失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/websites/<int:config_id>/accounts', methods=['GET'])
 def get_website_accounts(config_id):
     """获取网站绑定的账号（按用户过滤）"""
@@ -2907,6 +3038,9 @@ def get_website_rotation(config_id):
             'thread_reply_enabled': settings.get('thread_reply_enabled', 0),
             'forum_post_reply_enabled': settings.get('forum_post_reply_enabled', 0),
             'keyword_match_limit': settings.get('keyword_match_limit'),
+            'keyword_image_search_enabled': settings.get('keyword_image_search_enabled', 0),
+            'keyword_image_search_mode': settings.get('keyword_image_search_mode', 'manual'),
+            'keyword_image_search_max_images': settings.get('keyword_image_search_max_images', 3),
             'reply_min_delay': settings.get('reply_min_delay'),
             'reply_max_delay': settings.get('reply_max_delay'),
         })
@@ -2941,6 +3075,9 @@ def update_website_rotation(config_id):
         thread_reply_enabled = data.get('thread_reply_enabled')
         forum_post_reply_enabled = data.get('forum_post_reply_enabled')
         keyword_match_limit = data.get('keyword_match_limit')
+        keyword_image_search_enabled = data.get('keyword_image_search_enabled')
+        keyword_image_search_mode = data.get('keyword_image_search_mode')
+        keyword_image_search_max_images = data.get('keyword_image_search_max_images')
         reply_min_delay = data.get('reply_min_delay')
         reply_max_delay = data.get('reply_max_delay')
         reply_delay_requested = 'reply_min_delay' in data or 'reply_max_delay' in data
@@ -2949,6 +3086,9 @@ def update_website_rotation(config_id):
         forum_post_reply_requested = 'forum_post_reply_enabled' in data
         keyword_match_limit_requested = 'keyword_match_limit' in data
         keyword_match_limit_cleared = keyword_match_limit_requested and keyword_match_limit in {'', None}
+        keyword_image_search_enabled_requested = 'keyword_image_search_enabled' in data
+        keyword_image_search_mode_requested = 'keyword_image_search_mode' in data
+        keyword_image_search_max_images_requested = 'keyword_image_search_max_images' in data
         target_reply_mode = str(reply_mode or current_effective_settings.get('reply_mode', 'rotation')).strip().lower()
 
         # 验证参数
@@ -3007,6 +3147,32 @@ def update_website_rotation(config_id):
                 return jsonify({'error': '关键词命中上限必须是整数'}), 400
             if keyword_match_limit < 0:
                 return jsonify({'error': '关键词命中上限不能小于 0'}), 400
+        if keyword_image_search_enabled_requested:
+            if isinstance(keyword_image_search_enabled, str):
+                normalized_keyword_image_search_enabled = keyword_image_search_enabled.strip().lower()
+                if normalized_keyword_image_search_enabled in {'1', 'true', 'yes', 'on'}:
+                    keyword_image_search_enabled = 1
+                elif normalized_keyword_image_search_enabled in {'0', 'false', 'no', 'off'}:
+                    keyword_image_search_enabled = 0
+                else:
+                    return jsonify({'error': '关键词搜图开关必须是 0 或 1'}), 400
+            elif isinstance(keyword_image_search_enabled, bool):
+                keyword_image_search_enabled = 1 if keyword_image_search_enabled else 0
+            elif isinstance(keyword_image_search_enabled, (int, float)) and float(keyword_image_search_enabled) in {0.0, 1.0}:
+                keyword_image_search_enabled = int(keyword_image_search_enabled)
+            else:
+                return jsonify({'error': '关键词搜图开关必须是 0 或 1'}), 400
+        if keyword_image_search_mode_requested:
+            keyword_image_search_mode = normalize_keyword_image_search_mode(keyword_image_search_mode)
+            if keyword_image_search_mode not in {'manual', 'auto'}:
+                return jsonify({'error': '关键词搜图模式必须是 manual 或 auto'}), 400
+        if keyword_image_search_max_images_requested:
+            try:
+                keyword_image_search_max_images = int(keyword_image_search_max_images)
+            except (TypeError, ValueError):
+                return jsonify({'error': '关键词搜图张数必须是整数'}), 400
+            if keyword_image_search_max_images < 1 or keyword_image_search_max_images > 10:
+                return jsonify({'error': '关键词搜图张数必须在 1 到 10 之间'}), 400
         if reply_min_delay in {'', None}:
             reply_min_delay = None
         if reply_max_delay in {'', None}:
@@ -3051,6 +3217,9 @@ def update_website_rotation(config_id):
             thread_reply_enabled=thread_reply_enabled,
             forum_post_reply_enabled=forum_post_reply_enabled,
             keyword_match_limit=None if keyword_match_limit_cleared else keyword_match_limit,
+            keyword_image_search_enabled=keyword_image_search_enabled,
+            keyword_image_search_mode=keyword_image_search_mode,
+            keyword_image_search_max_images=keyword_image_search_max_images,
         ):
             if keyword_match_limit_cleared:
                 if not db.update_user_website_keyword_match_limit(
@@ -3105,6 +3274,16 @@ def update_website_rotation(config_id):
                 messages.append('子分区回复已开启' if thread_reply_enabled else '子分区回复已关闭')
             if forum_post_reply_requested and int(current_settings.get('forum_post_reply_enabled', 0) or 0) != int(forum_post_reply_enabled):
                 messages.append('帖子回复已开启' if forum_post_reply_enabled else '帖子回复已关闭')
+            if keyword_image_search_enabled_requested and int(current_settings.get('keyword_image_search_enabled', 0) or 0) != int(keyword_image_search_enabled):
+                messages.append('关键词搜图已开启' if keyword_image_search_enabled else '关键词搜图已关闭')
+            if keyword_image_search_mode_requested and current_settings.get('keyword_image_search_mode', 'manual') != keyword_image_search_mode:
+                messages.append(
+                    '关键词搜图模式已切换为自动发送'
+                    if keyword_image_search_mode == 'auto'
+                    else '关键词搜图模式已切换为人工审核发送'
+                )
+            if keyword_image_search_max_images_requested and int(current_settings.get('keyword_image_search_max_images', 3) or 3) != int(keyword_image_search_max_images):
+                messages.append(f'关键词搜图图片数已设置为 {keyword_image_search_max_images} 张')
             current_settings = db.get_user_website_settings(current_user['id'], config_id)
             return jsonify({
                 'success': True,
@@ -3114,6 +3293,9 @@ def update_website_rotation(config_id):
                     'thread_reply_enabled': current_settings.get('thread_reply_enabled', 0),
                     'forum_post_reply_enabled': current_settings.get('forum_post_reply_enabled', 0),
                     'keyword_match_limit': current_settings.get('keyword_match_limit'),
+                    'keyword_image_search_enabled': current_settings.get('keyword_image_search_enabled', 0),
+                    'keyword_image_search_mode': current_settings.get('keyword_image_search_mode', 'manual'),
+                    'keyword_image_search_max_images': current_settings.get('keyword_image_search_max_images', 3),
                     'reply_min_delay': current_settings.get('reply_min_delay'),
                     'reply_max_delay': current_settings.get('reply_max_delay'),
                 },
@@ -3122,6 +3304,304 @@ def update_website_rotation(config_id):
             return jsonify({'error': '更新失败'}), 500
     except Exception as e:
         logger.error(f"更新网站轮换配置失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+async def _send_keyword_image_search_candidate_async(
+    *,
+    user_id: int,
+    job: Dict[str, Any],
+    candidate: Dict[str, Any],
+) -> Dict[str, Any]:
+    try:
+        from bot import bot_clients
+    except ModuleNotFoundError:
+        from .bot import bot_clients
+
+    channel_id = int(str(job.get('channel_id') or '').strip())
+    message_id = int(str(job.get('message_id') or '').strip())
+    website_id = job.get('website_id')
+    website_config = next(
+        (item for item in db.get_website_configs() if item.get('id') == website_id),
+        None,
+    )
+    if not website_config:
+        raise RuntimeError('网站配置不存在或已删除')
+
+    product = candidate.get('product')
+    if not isinstance(product, dict) or not product.get('id'):
+        raise RuntimeError('候选结果没有可发送的商品')
+
+    ready_clients = [
+        client
+        for client in bot_clients
+        if getattr(client, 'user_id', None) == user_id
+        and getattr(client, 'running', False)
+        and not client.is_closed()
+        and client.is_ready()
+    ]
+    if not ready_clients:
+        raise RuntimeError('当前没有在线机器人账号，无法发送')
+
+    last_error = None
+    for client in ready_clients:
+        try:
+            channel = client.get_channel(channel_id)
+            if channel is None:
+                channel = await client.fetch_channel(channel_id)
+            if channel is None:
+                raise RuntimeError(f'无法获取频道 {channel_id}')
+            message = await channel.fetch_message(message_id)
+            success = await client.schedule_reply(
+                message,
+                product,
+                None,
+                None,
+                website_configs_override=[website_config],
+            )
+            if success:
+                return {
+                    'success': True,
+                    'product_id': product.get('id'),
+                    'website_id': website_id,
+                }
+            last_error = RuntimeError('发送链路未返回成功状态')
+        except Exception as exc:
+            last_error = exc
+
+    raise last_error or RuntimeError('发送失败')
+
+
+@app.route('/api/keyword-image-search/jobs', methods=['GET'])
+def list_keyword_image_search_jobs():
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        current_user = get_current_user()
+        limit = request.args.get('limit', 50)
+        website_id = request.args.get('website_id')
+        status = request.args.get('status')
+        try:
+            website_id = int(website_id) if website_id not in {None, '', 'all'} else None
+        except (TypeError, ValueError):
+            website_id = None
+
+        jobs = db.list_keyword_image_search_jobs(
+            current_user['id'],
+            website_id=website_id,
+            status=status or None,
+            limit=limit,
+        )
+        return jsonify({'jobs': jobs})
+    except Exception as e:
+        logger.error(f"获取关键词搜图任务列表失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/keyword-image-search/jobs/<int:job_id>/send', methods=['POST'])
+def send_keyword_image_search_job(job_id):
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        current_user = get_current_user()
+        job = db.get_keyword_image_search_job(job_id, user_id=current_user['id'])
+        if not job:
+            return jsonify({'error': '任务不存在'}), 404
+
+        data = request.get_json(silent=True) or {}
+        try:
+            candidate_index = int(data.get('candidate_index', 0))
+        except (TypeError, ValueError):
+            return jsonify({'error': '候选项索引无效'}), 400
+
+        candidates = job.get('candidates') or []
+        if candidate_index < 0 or candidate_index >= len(candidates):
+            return jsonify({'error': '候选项索引超出范围'}), 400
+
+        candidate = candidates[candidate_index]
+        if not candidate.get('match_found') or not candidate.get('product'):
+            return jsonify({'error': '该候选项没有可发送的匹配商品'}), 400
+
+        if bot_loop is None or not getattr(bot_loop, 'is_running', lambda: False)():
+            return jsonify({'error': '机器人未运行，无法发送'}), 409
+
+        future = asyncio.run_coroutine_threadsafe(
+            _send_keyword_image_search_candidate_async(
+                user_id=current_user['id'],
+                job=job,
+                candidate=candidate,
+            ),
+            bot_loop,
+        )
+        result = future.result(timeout=60)
+        db.update_keyword_image_search_job(
+            job_id,
+            user_id=current_user['id'],
+            status='sent',
+            selected_candidate_index=candidate_index,
+            sent_product_id=(candidate.get('product') or {}).get('id'),
+            error_message=None,
+        )
+        return jsonify({
+            'success': True,
+            'message': '候选商品已发送',
+            'result': result,
+        })
+    except Exception as e:
+        logger.error(f"发送关键词搜图候选失败(job_id={job_id}): {e}")
+        current_user = get_current_user()
+        if current_user:
+            db.update_keyword_image_search_job(
+                job_id,
+                user_id=current_user['id'],
+                status='failed',
+                error_message=str(e),
+            )
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/keyword-review-items', methods=['GET'])
+def get_keyword_review_items():
+    """获取当前用户的关键词人工审核队列"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        current_user = get_current_user()
+        website_id = request.args.get('website_id', type=int)
+        status = (request.args.get('status') or 'pending').strip().lower()
+        if status in {'', 'all'}:
+            status = None
+
+        items = db.get_keyword_reply_review_items(
+            current_user['id'],
+            website_id=website_id,
+            status=status,
+        )
+        website_map = {
+            website['id']: website
+            for website in db.get_website_configs()
+        }
+
+        for item in items:
+            website = website_map.get(item.get('website_id')) or {}
+            item['website_name'] = website.get('display_name') or website.get('name') or ''
+            item['website_display_name'] = website.get('display_name') or ''
+            message_payload = (item.get('payload') or {}).get('message') or {}
+            item['message_time'] = message_payload.get('created_at') or item.get('created_at')
+            guild_name = item.get('guild_name') or message_payload.get('guild_name') or ''
+            channel_name = item.get('channel_name') or message_payload.get('channel_name') or ''
+            if guild_name and channel_name:
+                item['position'] = f'{guild_name} / #{channel_name}'
+            elif channel_name:
+                item['position'] = f'#{channel_name}'
+            else:
+                item['position'] = guild_name
+
+        return jsonify({'items': items})
+    except Exception as e:
+        logger.error(f"获取关键词审核队列失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/keyword-review-items/bulk-action', methods=['POST'])
+def bulk_action_keyword_review_items():
+    """批量审核关键词回复"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        current_user = get_current_user()
+        data = request.get_json() or {}
+        raw_item_ids = data.get('item_ids') or data.get('ids') or []
+        action = str(data.get('action') or '').strip().lower()
+
+        if not isinstance(raw_item_ids, list) or not raw_item_ids:
+            return jsonify({'error': '请选择要审核的消息'}), 400
+
+        normalized_action_map = {
+            'approve': 'approved',
+            'approved': 'approved',
+            'reject': 'rejected',
+            'rejected': 'rejected',
+        }
+        normalized_action = normalized_action_map.get(action)
+        if not normalized_action:
+            return jsonify({'error': '无效的审核动作'}), 400
+
+        results = []
+        for raw_item_id in raw_item_ids:
+            try:
+                item_id = int(raw_item_id)
+            except (TypeError, ValueError):
+                results.append({
+                    'item_id': raw_item_id,
+                    'success': False,
+                    'error': '无效的消息ID',
+                })
+                continue
+
+            item = db.get_keyword_reply_review_item(item_id, current_user['id'])
+            if not item:
+                results.append({
+                    'item_id': item_id,
+                    'success': False,
+                    'error': '消息不存在或无权限',
+                })
+                continue
+
+            if not db.update_keyword_reply_review_item_status(
+                item_id,
+                normalized_action,
+                reviewed_by_user_id=current_user['id'],
+            ):
+                results.append({
+                    'item_id': item_id,
+                    'success': False,
+                    'error': '更新审核状态失败',
+                })
+                continue
+
+            if normalized_action == 'approved':
+                scheduled, schedule_result = schedule_keyword_review_item_dispatch(item)
+                if not scheduled:
+                    db.update_keyword_reply_review_item_status(
+                        item_id,
+                        'failed',
+                        reviewed_by_user_id=current_user['id'],
+                        error_message=schedule_result,
+                    )
+                    results.append({
+                        'item_id': item_id,
+                        'success': False,
+                        'error': schedule_result,
+                    })
+                    continue
+
+            results.append({
+                'item_id': item_id,
+                'success': True,
+                'status': normalized_action,
+                'dispatched': normalized_action == 'approved',
+            })
+
+        failed_count = sum(1 for item in results if not item.get('success'))
+        try:
+            pending_count = db.count_pending_keyword_reply_review_items(current_user['id'])
+            db.update_user_settings(
+                user_id=current_user['id'],
+                review_bark_last_pending_count=pending_count,
+                review_bark_last_notified_at='' if pending_count <= 0 else None,
+            )
+        except Exception as sync_error:
+            logger.error(f"同步审核 Bark 待审数量失败: {sync_error}")
+        return jsonify({
+            'success': failed_count == 0,
+            'message': '审核完成' if failed_count == 0 else '部分消息审核失败',
+            'results': results,
+        })
+    except Exception as e:
+        logger.error(f"批量审核关键词回复失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/websites/<int:config_id>/similarity', methods=['PUT'])
@@ -3465,8 +3945,7 @@ def health_check():
     return jsonify({
         'status': 'ok',
         'backend': 'running',
-        'ai_ready': is_ai_model_ready(),
-        'desktop_mode_source': DESKTOP_RUNTIME_MODE.desktop_mode_source,
+        'ai_ready': ai_model_ready,
         'timestamp': datetime.now().isoformat()
     })
 
@@ -3878,9 +4357,6 @@ def delete_custom_reply(reply_id):
 @app.route('/api/users/<int:user_id>/shops', methods=['PUT'])
 def update_user_shops(user_id):
     """更新用户店铺权限（管理员权限）"""
-    if DESKTOP_SINGLE_USER:
-        return jsonify({'error': '桌面版已禁用多用户管理'}), 403
-
     if not require_admin():
         return jsonify({'error': '需要管理员权限'}), 403
 
@@ -3903,6 +4379,76 @@ def update_user_shops(user_id):
         logger.error(f"更新用户权限失败: {e}")
         return jsonify({'error': str(e)}), 500
 
+def _safe_string_attr(obj, *names):
+    for name in names:
+        try:
+            value = getattr(obj, name, None)
+        except Exception:
+            value = None
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ''
+
+
+def _build_runtime_account_details():
+    details = {}
+    for client in list(bot_clients):
+        account_id = getattr(client, 'account_id', None)
+        if account_id is None:
+            continue
+
+        user_obj = getattr(client, 'user', None)
+        is_ready = False
+        is_closed = False
+        try:
+            ready_fn = getattr(client, 'is_ready', None)
+            is_ready = bool(ready_fn()) if callable(ready_fn) else False
+        except Exception:
+            is_ready = False
+        try:
+            closed_fn = getattr(client, 'is_closed', None)
+            is_closed = bool(closed_fn()) if callable(closed_fn) else False
+        except Exception:
+            is_closed = False
+
+        avatar_url = ''
+        if user_obj is not None:
+            for avatar_attr in ('display_avatar', 'avatar'):
+                avatar = getattr(user_obj, avatar_attr, None)
+                if avatar is not None:
+                    avatar_url = _safe_string_attr(avatar, 'url')
+                    if avatar_url:
+                        break
+
+        discriminator = _safe_string_attr(user_obj, 'discriminator')
+        username = _safe_string_attr(user_obj, 'name')
+        user_tag = username
+        if discriminator and discriminator != '0':
+            user_tag = f'{username}#{discriminator}'
+
+        try:
+            guild_count = len(getattr(client, 'guilds', []) or [])
+        except Exception:
+            guild_count = 0
+
+        details[int(account_id)] = {
+            'discord_user_id': _safe_string_attr(user_obj, 'id'),
+            'discord_username': user_tag,
+            'discord_handle': username,
+            'discord_discriminator': discriminator,
+            'discord_global_name': _safe_string_attr(user_obj, 'global_name'),
+            'discord_display_name': _safe_string_attr(user_obj, 'display_name', 'global_name', 'name'),
+            'discord_avatar_url': avatar_url,
+            'runtime_ready': is_ready and not is_closed,
+            'runtime_running': bool(getattr(client, 'running', False)),
+            'runtime_role': getattr(client, 'role', '') or '',
+            'runtime_guild_count': guild_count,
+            'last_ready_at': getattr(client, 'last_ready_at', 0.0) or 0.0,
+            'last_disconnect_at': getattr(client, 'last_disconnect_at', 0.0) or 0.0,
+        }
+    return details
+
+
 @app.route('/api/accounts', methods=['GET'])
 def get_accounts():
     """获取所有 Discord 账号"""
@@ -3913,12 +4459,22 @@ def get_accounts():
     try:
         # 所有用户（包括管理员）只能看到自己的账号
         accounts = db.get_discord_accounts_by_user(current_user['id'])
+        runtime_details = _build_runtime_account_details()
+        enriched_accounts = []
+        for account in accounts:
+            item = dict(account)
+            account_id = item.get('id')
+            try:
+                runtime = runtime_details.get(int(account_id))
+            except (TypeError, ValueError):
+                runtime = None
+            if runtime:
+                item.update(runtime)
+            token_value = str(item.get('token') or '')
+            item['token_preview'] = f"{token_value[:8]}...{token_value[-6:]}" if len(token_value) > 18 else token_value
+            enriched_accounts.append(item)
 
-        response = jsonify({'accounts': _augment_accounts_with_runtime(accounts)})
-        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
-        response.headers['Pragma'] = 'no-cache'
-        response.headers['Expires'] = '0'
-        return response
+        return jsonify({'accounts': enriched_accounts})
     except Exception as e:
         logger.error(f"获取账号列表失败: {e}")
         return jsonify({'error': str(e)}), 500
@@ -3970,9 +4526,7 @@ def list_products():
 
         # 添加缓存头以优化性能（5分钟缓存）
         response = jsonify(response_data)
-        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
-        response.headers['Pragma'] = 'no-cache'
-        response.headers['Expires'] = '0'
+        response.headers['Cache-Control'] = 'private, max-age=300'
         return response
     except Exception as e:
         logger.error(f"列出商品失败: {e}")
@@ -4865,12 +5419,41 @@ def update_user_settings():
         keyword_reply = data.get('keyword_reply_enabled')
         image_reply = data.get('image_reply_enabled')
         bark_enabled = data.get('bark_enabled')
+        review_bark_enabled = data.get('review_bark_enabled')
+        keyword_reply_send_best_match_image = data.get('keyword_reply_send_best_match_image')
+        review_bark_mode = str(data.get('review_bark_mode') or 'count').strip().lower()
+        review_bark_count_threshold = data.get('review_bark_count_threshold')
+        review_bark_interval_minutes = data.get('review_bark_interval_minutes')
+        review_bark_last_notified_at = data.get('review_bark_last_notified_at')
+        review_bark_last_pending_count = data.get('review_bark_last_pending_count')
         if keyword_reply is not None:
             keyword_reply = 1 if keyword_reply else 0
         if image_reply is not None:
             image_reply = 1 if image_reply else 0
         if bark_enabled is not None:
             bark_enabled = 1 if bark_enabled else 0
+        if review_bark_enabled is not None:
+            review_bark_enabled = 1 if review_bark_enabled else 0
+        if keyword_reply_send_best_match_image is not None:
+            keyword_reply_send_best_match_image = 1 if keyword_reply_send_best_match_image else 0
+        if review_bark_mode not in {'count', 'interval'}:
+            review_bark_mode = 'count'
+
+        if review_bark_count_threshold is not None:
+            review_bark_count_threshold = int(review_bark_count_threshold)
+            if review_bark_count_threshold <= 0:
+                return jsonify({'error': '待审数量通知阈值必须大于 0'}), 400
+
+        if review_bark_interval_minutes is not None:
+            review_bark_interval_minutes = int(review_bark_interval_minutes)
+            if review_bark_interval_minutes <= 0:
+                return jsonify({'error': '时间通知间隔必须大于 0 分钟'}), 400
+
+        if review_bark_last_notified_at is not None:
+            review_bark_last_notified_at = str(review_bark_last_notified_at or '').strip()
+
+        if review_bark_last_pending_count is not None:
+            review_bark_last_pending_count = max(0, int(review_bark_last_pending_count))
 
         success = db.update_user_settings(
             user_id=user['id'],
@@ -4891,6 +5474,15 @@ def update_user_settings():
             bark_enabled=bark_enabled,
             bark_server_url=data.get('bark_server_url'),
             bark_device_key=data.get('bark_device_key'),
+            keyword_reply_send_best_match_image=keyword_reply_send_best_match_image,
+            keyword_image_search_api_key=data.get('keyword_image_search_api_key'),
+            keyword_image_search_cx=data.get('keyword_image_search_cx'),
+            review_bark_enabled=review_bark_enabled,
+            review_bark_mode=review_bark_mode if 'review_bark_mode' in data else None,
+            review_bark_count_threshold=review_bark_count_threshold,
+            review_bark_interval_minutes=review_bark_interval_minutes,
+            review_bark_last_notified_at=review_bark_last_notified_at,
+            review_bark_last_pending_count=review_bark_last_pending_count,
         )
 
         if success:
@@ -5813,6 +6405,46 @@ def get_search_history():
         logger.error(f"获取搜索历史失败: {e}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/skipped_image_history', methods=['GET'])
+def get_skipped_image_history():
+    """获取被略过的图片历史记录（支持分页）"""
+    try:
+        limit = int(request.args.get('limit', 20))
+        limit = max(1, min(limit, 100))
+        offset = max(int(request.args.get('offset', 0)), 0)
+        page = max(int(request.args.get('page', 1)), 1)
+
+        if 'page' in request.args and 'offset' not in request.args:
+            offset = (page - 1) * limit
+
+        result = db.get_skipped_image_history(limit, offset)
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"获取略过图片历史失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/skipped_image_history/<int:history_id>', methods=['DELETE'])
+def delete_skipped_image_history(history_id):
+    """删除单条略过图片历史"""
+    try:
+        if db.delete_skipped_image_history(history_id):
+            return jsonify({'success': True})
+        return jsonify({'error': '记录不存在'}), 404
+    except Exception as e:
+        logger.error(f"删除略过图片历史失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/skipped_image_history', methods=['DELETE'])
+def clear_skipped_image_history():
+    """清空所有略过图片历史"""
+    try:
+        if db.clear_skipped_image_history():
+            return jsonify({'success': True})
+        return jsonify({'error': '清空失败'}), 500
+    except Exception as e:
+        logger.error(f"清空略过图片历史失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
 @app.route('/api/search_similar_text', methods=['POST'])
 def search_similar_text():
     """根据文字关键词搜索相似商品"""
@@ -5852,16 +6484,25 @@ def search_similar_text():
             return re.sub(r'\s+', ' ', str(value)).strip().lower()
 
         scoped_shops = set()
+        user_record = None
+        is_admin_user = False
+        if user_id:
+            try:
+                user_record = db.get_user_by_id(user_id)
+                is_admin_user = str((user_record or {}).get('role') or '').lower() == 'admin'
+            except Exception as user_lookup_error:
+                logger.debug(f'文字搜索获取用户信息失败(user_id={user_id}): {user_lookup_error}')
+
         if isinstance(raw_user_shops, list):
             scoped_shops.update(_normalize_shop(v) for v in raw_user_shops if v is not None)
-        if user_id:
+        if user_id and not is_admin_user:
             scoped_shops.update(_normalize_shop(v) for v in build_user_shop_scope(user_id))
         scoped_shops.discard('')
         scoped_shop_list = sorted(scoped_shops)
 
         logger.debug(f'文字搜索请求: "{query}", 限制: {limit}')
 
-        if user_id is not None and not scoped_shop_list:
+        if user_id is not None and not scoped_shop_list and not is_admin_user:
             logger.debug(f'文字搜索被店铺权限拦截: user_id={user_id} 无可用店铺')
             return jsonify({
                 'success': True,

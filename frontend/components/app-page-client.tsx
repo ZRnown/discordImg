@@ -3,10 +3,12 @@
 import { useEffect, useRef, useState } from "react"
 import { DashboardView } from "@/components/dashboard-view"
 import { AccountsView } from "@/components/accounts-view"
+import { ReviewWindowView } from "@/components/review-window-view"
 import { ScraperView } from "@/components/scraper-view"
 import { ShopsView } from "@/components/shops-view"
 import { SystemSettingsView } from "@/components/system-settings-view"
 import { ImageSearchView } from "@/components/image-search-view"
+import { KeywordImageReviewView } from "@/components/keyword-image-review-view"
 import { LogsView } from "@/components/logs-view"
 import { LoginView } from "@/components/login-view"
 import { DesktopBootstrapPanel } from "@/components/desktop-bootstrap-panel"
@@ -31,14 +33,16 @@ interface UserData {
   shops: string[]
 }
 
-type AppView = "dashboard" | "accounts" | "shops" | "scraper" | "image-search" | "logs" | "system-settings"
+type AppView = "dashboard" | "accounts" | "review-window" | "shops" | "scraper" | "image-search" | "keyword-image-review" | "logs" | "system-settings"
 
 const INITIAL_VIEW_REFRESH_TOKENS: Record<AppView, number> = {
   dashboard: 0,
   accounts: 0,
+  "review-window": 0,
   shops: 0,
   scraper: 0,
   "image-search": 0,
+  "keyword-image-review": 0,
   logs: 0,
   "system-settings": 0,
 }
@@ -547,6 +551,13 @@ export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }
             />
           </div>
 
+          <div style={{ display: currentView === "review-window" ? "block" : "none", height: "100%" }}>
+            <ReviewWindowView
+              key={`review-window-${viewRefreshTokens["review-window"]}`}
+              isActive={currentView === "review-window"}
+            />
+          </div>
+
           <div style={{ display: currentView === "shops" ? "block" : "none", height: "100%" }}>
             <ShopsView key={`shops-${viewRefreshTokens.shops}`} currentUser={effectiveUser} />
           </div>
@@ -561,6 +572,13 @@ export function AppPageClient({ desktopMode = false }: { desktopMode?: boolean }
 
           <div style={{ display: currentView === "image-search" ? "block" : "none", height: "100%" }}>
             <ImageSearchView key={`image-search-${viewRefreshTokens["image-search"]}`} />
+          </div>
+
+          <div style={{ display: currentView === "keyword-image-review" ? "block" : "none", height: "100%" }}>
+            <KeywordImageReviewView
+              key={`keyword-image-review-${viewRefreshTokens["keyword-image-review"]}`}
+              isActive={currentView === "keyword-image-review"}
+            />
           </div>
 
           <div style={{ display: currentView === "logs" ? "block" : "none", height: "100%" }}>

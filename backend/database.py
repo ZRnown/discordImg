@@ -3,7 +3,6 @@ import numpy as np
 import os
 import logging
 import json
-import time
 from time import perf_counter
 from typing import List, Dict, Any, Optional, Sequence, Tuple
 from contextlib import contextmanager
@@ -40,10 +39,7 @@ USABLE_RETRIEVAL_CACHE_INDEX_NAME = 'idx_retrieval_cache_usable_image_strategy'
 class Database:
     def __init__(self, db_path: Optional[str] = None):
         # SQLite 数据库路径 (用于存储商品元数据和Discord账号信息)
-        configured_db_path = getattr(config, 'DATABASE_PATH', None)
-        self.db_path = os.path.abspath(
-            db_path or configured_db_path or os.path.join(os.path.dirname(__file__), 'data', 'metadata.db')
-        )
+        self.db_path = db_path or os.path.join(os.path.dirname(__file__), 'data', 'metadata.db')
 
         # 确保数据目录存在
         os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
@@ -64,21 +60,6 @@ class Database:
         conn.execute('PRAGMA busy_timeout=60000;')
         conn.execute('PRAGMA synchronous=NORMAL;')
         conn.execute('PRAGMA cache_size=-64000;')
-
-    def _has_required_tables(self) -> bool:
-        required_tables = {'users', 'shops', 'system_config', 'discord_accounts'}
-        try:
-            with sqlite3.connect(self.db_path, timeout=5.0) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name IN (?, ?, ?, ?)",
-                    tuple(required_tables),
-                )
-                existing_tables = {str(row[0]) for row in cursor.fetchall()}
-                return required_tables.issubset(existing_tables)
-        except Exception as e:
-            logger.debug("检查数据库表结构失败: %s", e)
-            return False
 
     def _migrate_legacy_product_images_schema(self, conn, cursor):
         columns = self._get_table_columns(cursor, 'product_images')
@@ -408,6 +389,30 @@ class Database:
             except Exception:
                 pass
 
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS skipped_image_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    query_image_path TEXT NOT NULL,
+                    matched_product_id INTEGER,
+                    matched_image_index INTEGER,
+                    similarity REAL NOT NULL,
+                    threshold REAL NOT NULL,
+                    discord_message_id TEXT,
+                    discord_channel_id TEXT,
+                    discord_channel_name TEXT DEFAULT '',
+                    discord_author_id TEXT,
+                    discord_author_name TEXT DEFAULT '',
+                    message_content TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (matched_product_id) REFERENCES products (id) ON DELETE SET NULL
+                )
+            ''')
+
+            try:
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_skipped_image_history_time ON skipped_image_history(created_at DESC)')
+            except Exception:
+                pass
+
             # 创建全局延迟配置表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS global_reply_config (
@@ -429,8 +434,6 @@ class Database:
                     cnfans_channel_id TEXT DEFAULT '',
                     acbuy_channel_id TEXT DEFAULT '',
                     scrape_threads INTEGER DEFAULT 2,
-                    http_proxy TEXT DEFAULT '',
-                    https_proxy TEXT DEFAULT '',
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
@@ -446,16 +449,6 @@ class Database:
                 cursor.execute('ALTER TABLE system_config ADD COLUMN scrape_threads INTEGER DEFAULT 2')
             except sqlite3.OperationalError:
                 pass  # 字段已存在
-
-            try:
-                cursor.execute("ALTER TABLE system_config ADD COLUMN http_proxy TEXT DEFAULT ''")
-            except sqlite3.OperationalError:
-                pass
-
-            try:
-                cursor.execute("ALTER TABLE system_config ADD COLUMN https_proxy TEXT DEFAULT ''")
-            except sqlite3.OperationalError:
-                pass
 
             # 创建网站配置表
             cursor.execute('''
@@ -608,14 +601,23 @@ class Database:
                             website_id INTEGER NOT NULL,
                             channel_id TEXT NOT NULL,
                             user_id INTEGER,
+                            keyword_review_enabled INTEGER DEFAULT 0,
                             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                             FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE,
                             UNIQUE(website_id, channel_id, user_id)
                         )
                     ''')
                     cursor.execute('''
-                        INSERT OR IGNORE INTO website_channel_bindings (id, website_id, channel_id, user_id, created_at)
-                        SELECT id, website_id, channel_id, user_id, created_at FROM website_channel_bindings_old
+                        INSERT OR IGNORE INTO website_channel_bindings (
+                            id,
+                            website_id,
+                            channel_id,
+                            user_id,
+                            keyword_review_enabled,
+                            created_at
+                        )
+                        SELECT id, website_id, channel_id, user_id, 0, created_at
+                        FROM website_channel_bindings_old
                     ''')
                     cursor.execute("DROP TABLE website_channel_bindings_old")
                     logger.info("✅ 频道绑定表结构迁移完成")
@@ -629,11 +631,50 @@ class Database:
                     website_id INTEGER NOT NULL,
                     channel_id TEXT NOT NULL,
                     user_id INTEGER,
+                    keyword_review_enabled INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE,
                     UNIQUE(website_id, channel_id, user_id)
                 )
             ''')
+            try:
+                cursor.execute('ALTER TABLE website_channel_bindings ADD COLUMN keyword_review_enabled INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS keyword_reply_review_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    website_id INTEGER NOT NULL,
+                    channel_id TEXT NOT NULL,
+                    guild_id TEXT DEFAULT '',
+                    guild_name TEXT DEFAULT '',
+                    channel_name TEXT DEFAULT '',
+                    account_ids_json TEXT DEFAULT '[]',
+                    account_names TEXT DEFAULT '',
+                    sender_id TEXT DEFAULT '',
+                    sender_name TEXT DEFAULT '',
+                    content TEXT DEFAULT '',
+                    source_content TEXT DEFAULT '',
+                    message_id TEXT DEFAULT '',
+                    reply_mode TEXT DEFAULT 'keyword',
+                    status TEXT DEFAULT 'pending',
+                    payload_json TEXT NOT NULL,
+                    reviewed_by_user_id INTEGER DEFAULT NULL,
+                    error_message TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    reviewed_at TIMESTAMP DEFAULT NULL,
+                    sent_at TIMESTAMP DEFAULT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+                    FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE
+                )
+            ''')
+            try:
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_keyword_reply_review_items_user_status ON keyword_reply_review_items(user_id, status, created_at DESC)')
+            except sqlite3.OperationalError:
+                pass
 
             # 创建网站账号绑定表
             cursor.execute('''
@@ -806,6 +847,15 @@ class Database:
                     bark_enabled INTEGER DEFAULT 0,  -- 是否启用 Bark 通知
                     bark_server_url TEXT DEFAULT 'https://api.day.app',  -- Bark 服务地址
                     bark_device_key TEXT DEFAULT '',  -- Bark 设备密钥
+                    keyword_reply_send_best_match_image INTEGER DEFAULT 0,
+                    keyword_image_search_api_key TEXT DEFAULT '',
+                    keyword_image_search_cx TEXT DEFAULT '',
+                    review_bark_enabled INTEGER DEFAULT 0,
+                    review_bark_mode TEXT DEFAULT 'count',
+                    review_bark_count_threshold INTEGER DEFAULT 5,
+                    review_bark_interval_minutes INTEGER DEFAULT 60,
+                    review_bark_last_notified_at TEXT DEFAULT '',
+                    review_bark_last_pending_count INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
@@ -864,6 +914,51 @@ class Database:
             except sqlite3.OperationalError:
                 pass
 
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN keyword_reply_send_best_match_image INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN keyword_image_search_api_key TEXT DEFAULT \'\'')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN keyword_image_search_cx TEXT DEFAULT \'\'')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN review_bark_enabled INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN review_bark_mode TEXT DEFAULT \'count\'')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN review_bark_count_threshold INTEGER DEFAULT 5')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN review_bark_interval_minutes INTEGER DEFAULT 60')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN review_bark_last_notified_at TEXT DEFAULT \'\'')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN review_bark_last_pending_count INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+
             # 创建用户级别的网站设置表（轮换设置和消息过滤）
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS user_website_settings (
@@ -879,6 +974,9 @@ class Database:
                     thread_reply_enabled INTEGER DEFAULT 0,
                     forum_post_reply_enabled INTEGER DEFAULT 0,
                     keyword_match_limit INTEGER DEFAULT NULL,
+                    keyword_image_search_enabled INTEGER DEFAULT 0,
+                    keyword_image_search_mode TEXT DEFAULT 'manual',
+                    keyword_image_search_max_images INTEGER DEFAULT 3,
                     message_filters TEXT DEFAULT '[]',
                     image_similarity_threshold REAL DEFAULT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -931,6 +1029,18 @@ class Database:
             except sqlite3.OperationalError:
                 pass
             try:
+                cursor.execute('ALTER TABLE user_website_settings ADD COLUMN keyword_image_search_enabled INTEGER DEFAULT 0')
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute("ALTER TABLE user_website_settings ADD COLUMN keyword_image_search_mode TEXT DEFAULT 'manual'")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute('ALTER TABLE user_website_settings ADD COLUMN keyword_image_search_max_images INTEGER DEFAULT 3')
+            except sqlite3.OperationalError:
+                pass
+            try:
                 cursor.execute('''
                     UPDATE user_website_settings
                     SET keyword_reply_interval = rotation_interval
@@ -960,6 +1070,48 @@ class Database:
                     ''')
                 except sqlite3.OperationalError:
                     pass
+
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS keyword_image_search_jobs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    website_id INTEGER NOT NULL,
+                    query_text TEXT NOT NULL,
+                    channel_id TEXT NOT NULL,
+                    message_id TEXT NOT NULL,
+                    guild_id TEXT,
+                    author_id TEXT,
+                    mode TEXT DEFAULT 'manual',
+                    provider TEXT DEFAULT 'searchapi_google_images',
+                    status TEXT DEFAULT 'pending',
+                    error_message TEXT,
+                    external_result_count INTEGER DEFAULT 0,
+                    matched_result_count INTEGER DEFAULT 0,
+                    selected_candidate_index INTEGER,
+                    sent_product_id INTEGER,
+                    candidates_json TEXT DEFAULT '[]',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+                    FOREIGN KEY (website_id) REFERENCES website_configs (id) ON DELETE CASCADE,
+                    FOREIGN KEY (sent_product_id) REFERENCES products (id) ON DELETE SET NULL
+                )
+            ''')
+
+            try:
+                cursor.execute(
+                    'CREATE INDEX IF NOT EXISTS idx_keyword_image_jobs_user_created '
+                    'ON keyword_image_search_jobs(user_id, created_at)'
+                )
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute(
+                    'CREATE INDEX IF NOT EXISTS idx_keyword_image_jobs_website_created '
+                    'ON keyword_image_search_jobs(website_id, created_at)'
+                )
+            except sqlite3.OperationalError:
+                pass
 
             # 创建抓取状态表（持久化存储抓取状态）
             cursor.execute('''
@@ -1031,26 +1183,6 @@ class Database:
             ''')
 
             conn.commit()
-
-    def ensure_schema_ready(self, retries: int = 3, retry_delay_seconds: float = 0.2) -> bool:
-        """确保核心表已就绪，兼容旧库或半初始化状态。"""
-        if self._has_required_tables():
-            return True
-
-        attempts = max(1, int(retries))
-        for attempt in range(attempts):
-            try:
-                self.init_sqlite_database()
-            except Exception as e:
-                logger.warning("数据库 schema 初始化失败，第 %s/%s 次: %s", attempt + 1, attempts, e)
-
-            if self._has_required_tables():
-                return True
-
-            if attempt < attempts - 1:
-                time.sleep(max(0.0, float(retry_delay_seconds)))
-
-        return self._has_required_tables()
 
     def cleanup_processed_messages(self):
         """清理旧的消息处理记录，只保留最近1小时的记录"""
@@ -2281,6 +2413,143 @@ class Database:
             logger.error(f"清空搜索历史失败: {e}")
             return False
 
+    def add_skipped_image_history(
+        self,
+        query_image_path: str,
+        similarity: float,
+        threshold: float,
+        discord_message_id: Optional[str] = None,
+        discord_channel_id: Optional[str] = None,
+        discord_channel_name: str = '',
+        discord_author_id: Optional[str] = None,
+        discord_author_name: str = '',
+        message_content: str = '',
+        matched_product_id: Optional[int] = None,
+        matched_image_index: Optional[int] = None,
+    ) -> Optional[int]:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    INSERT INTO skipped_image_history (
+                        query_image_path, matched_product_id, matched_image_index,
+                        similarity, threshold, discord_message_id, discord_channel_id,
+                        discord_channel_name, discord_author_id, discord_author_name,
+                        message_content
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''',
+                    (
+                        query_image_path,
+                        matched_product_id,
+                        matched_image_index,
+                        similarity,
+                        threshold,
+                        discord_message_id,
+                        discord_channel_id,
+                        discord_channel_name or '',
+                        discord_author_id,
+                        discord_author_name or '',
+                        message_content or '',
+                    ),
+                )
+                conn.commit()
+                return cursor.lastrowid
+        except Exception as e:
+            logger.error(f"保存略过图片历史失败: {e}")
+            return None
+
+    def get_skipped_image_history(self, limit: int = 50, offset: int = 0) -> Dict[str, Any]:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('SELECT COUNT(*) FROM skipped_image_history')
+                total = cursor.fetchone()[0]
+
+                cursor.execute(
+                    '''
+                    SELECT
+                        sih.id,
+                        sih.query_image_path,
+                        sih.matched_product_id,
+                        sih.matched_image_index,
+                        sih.similarity,
+                        sih.threshold,
+                        sih.discord_message_id,
+                        sih.discord_channel_id,
+                        sih.discord_channel_name,
+                        sih.discord_author_id,
+                        sih.discord_author_name,
+                        sih.message_content,
+                        sih.created_at,
+                        p.title,
+                        p.english_title,
+                        p.product_url AS weidian_url
+                    FROM skipped_image_history sih
+                    LEFT JOIN products p ON sih.matched_product_id = p.id
+                    ORDER BY sih.created_at DESC, sih.id DESC
+                    LIMIT ? OFFSET ?
+                    ''',
+                    (limit, offset),
+                )
+                rows = cursor.fetchall()
+                history = []
+                for row in rows:
+                    history.append({
+                        'id': row[0],
+                        'query_image_path': row[1],
+                        'matched_product_id': row[2],
+                        'matched_image_index': row[3],
+                        'similarity': float(row[4]),
+                        'threshold': float(row[5]),
+                        'discord_message_id': row[6] or '',
+                        'discord_channel_id': row[7] or '',
+                        'discord_channel_name': row[8] or '',
+                        'discord_author_id': row[9] or '',
+                        'discord_author_name': row[10] or '',
+                        'message_content': row[11] or '',
+                        'created_at': row[12],
+                        'title': row[13] or '',
+                        'english_title': row[14] or '',
+                        'weidian_url': row[15] or '',
+                    })
+
+                return {
+                    'history': history,
+                    'total': total,
+                    'has_more': offset + limit < total,
+                }
+        except Exception as e:
+            logger.error(f"获取略过图片历史失败: {e}")
+            return {
+                'history': [],
+                'total': 0,
+                'has_more': False,
+            }
+
+    def delete_skipped_image_history(self, history_id: int) -> bool:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('DELETE FROM skipped_image_history WHERE id = ?', (history_id,))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"删除略过图片历史失败: {e}")
+            return False
+
+    def clear_skipped_image_history(self) -> bool:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('DELETE FROM skipped_image_history')
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"清空略过图片历史失败: {e}")
+            return False
+
     # ===== 用户权限管理方法 =====
 
     def authenticate_user(self, username: str, password: str) -> Optional[Dict]:
@@ -3028,6 +3297,64 @@ class Database:
             logger.error(f"获取网站频道绑定失败: {e}")
             return []
 
+    def get_website_channel_bindings_details(self, website_id: int, user_id: int = None) -> List[Dict[str, Any]]:
+        """获取网站绑定的频道详情（包含审核开关）"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                if user_id is not None:
+                    cursor.execute(
+                        '''
+                        SELECT id, website_id, channel_id, user_id, keyword_review_enabled, created_at
+                        FROM website_channel_bindings
+                        WHERE website_id = ? AND user_id = ?
+                        ORDER BY created_at
+                        ''',
+                        (website_id, user_id),
+                    )
+                else:
+                    cursor.execute(
+                        '''
+                        SELECT id, website_id, channel_id, user_id, keyword_review_enabled, created_at
+                        FROM website_channel_bindings
+                        WHERE website_id = ?
+                        ORDER BY created_at
+                        ''',
+                        (website_id,),
+                    )
+                rows = []
+                for row in cursor.fetchall():
+                    item = dict(row)
+                    item['keyword_review_enabled'] = 1 if int(item.get('keyword_review_enabled') or 0) else 0
+                    rows.append(item)
+                return rows
+        except Exception as e:
+            logger.error(f"获取网站频道绑定详情失败: {e}")
+            return []
+
+    def get_website_channel_bindings_details_map(self, user_id: int) -> Dict[int, List[Dict[str, Any]]]:
+        """批量获取用户的网站频道绑定详情"""
+        bindings: Dict[int, List[Dict[str, Any]]] = {}
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    SELECT id, website_id, channel_id, user_id, keyword_review_enabled, created_at
+                    FROM website_channel_bindings
+                    WHERE user_id = ?
+                    ORDER BY website_id, created_at
+                    ''',
+                    (user_id,),
+                )
+                for row in cursor.fetchall():
+                    item = dict(row)
+                    item['keyword_review_enabled'] = 1 if int(item.get('keyword_review_enabled') or 0) else 0
+                    bindings.setdefault(item['website_id'], []).append(item)
+        except Exception as e:
+            logger.error(f"批量获取网站频道绑定详情失败: {e}")
+        return bindings
+
     def get_website_channel_bindings_map(self, user_id: int) -> Dict[int, List[str]]:
         """批量获取用户的网站频道绑定，避免逐站点查询"""
         bindings: Dict[int, List[str]] = {}
@@ -3060,6 +3387,48 @@ class Database:
                 return cursor.rowcount > 0
         except Exception as e:
             logger.error(f"添加网站频道绑定失败: {e}")
+            return False
+
+    def update_website_channel_binding_review_enabled(
+        self,
+        website_id: int,
+        channel_id: str,
+        user_id: int = None,
+        enabled: bool = True,
+    ) -> bool:
+        """更新网站频道的关键词人工审核开关"""
+        try:
+            normalized_channel_id = str(channel_id or '').strip()
+            if not normalized_channel_id:
+                return False
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                if user_id is None:
+                    cursor.execute(
+                        '''
+                        UPDATE website_channel_bindings
+                        SET keyword_review_enabled = ?
+                        WHERE website_id = ?
+                          AND channel_id = ?
+                        ''',
+                        (1 if enabled else 0, website_id, normalized_channel_id),
+                    )
+                else:
+                    cursor.execute(
+                        '''
+                        UPDATE website_channel_bindings
+                        SET keyword_review_enabled = ?
+                        WHERE website_id = ?
+                          AND channel_id = ?
+                          AND user_id = ?
+                        ''',
+                        (1 if enabled else 0, website_id, normalized_channel_id, user_id),
+                    )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"更新网站频道审核开关失败: {e}")
             return False
 
     def remove_website_channel_binding(self, website_id: int, channel_id: str, user_id: int) -> bool:
@@ -3130,10 +3499,11 @@ class Database:
                 for lookup_id in lookup_ids:
                     if user_id:
                         cursor.execute('''
-                            SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern,
+                        SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern,
                                    wc.badge_color, wc.reply_template, wc.reply_language,
                                    COALESCE(uws.image_similarity_threshold, wc.image_similarity_threshold) as image_similarity_threshold,
                                    COALESCE(uws.keyword_match_limit, NULL) as keyword_match_limit,
+                                   COALESCE(wcb.keyword_review_enabled, 0) as keyword_review_enabled,
                                    wc.blocked_role_ids, wc.rotation_interval, wc.rotation_enabled, wc.message_filters
                             FROM website_configs wc
                             JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
@@ -3144,8 +3514,9 @@ class Database:
                         ''', (lookup_id, user_id))
                     else:
                         cursor.execute('''
-                            SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern,
+                        SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern,
                                    wc.badge_color, wc.reply_template, wc.reply_language, wc.image_similarity_threshold, wc.blocked_role_ids,
+                                   COALESCE(wcb.keyword_review_enabled, 0) as keyword_review_enabled,
                                    wc.rotation_interval, wc.rotation_enabled, wc.message_filters
                             FROM website_configs wc
                             JOIN website_channel_bindings wcb ON wc.id = wcb.website_id
@@ -3568,6 +3939,169 @@ class Database:
             logger.error(f"更新网站消息过滤条件失败: {e}")
             return False
 
+    def add_keyword_reply_review_item(self, item: Dict[str, Any]) -> int:
+        """写入关键词回复人工审核队列"""
+        try:
+            payload = item.get('payload') or {}
+            account_ids = item.get('account_ids') or []
+            account_names = item.get('account_names') or []
+            payload_json = json.dumps(payload, ensure_ascii=False)
+            account_ids_json = json.dumps(account_ids, ensure_ascii=False)
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    INSERT INTO keyword_reply_review_items (
+                        user_id,
+                        website_id,
+                        channel_id,
+                        guild_id,
+                        guild_name,
+                        channel_name,
+                        account_ids_json,
+                        account_names,
+                        sender_id,
+                        sender_name,
+                        content,
+                        source_content,
+                        message_id,
+                        reply_mode,
+                        status,
+                        payload_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''',
+                    (
+                        int(item.get('user_id') or 0),
+                        int(item.get('website_id') or 0),
+                        str(item.get('channel_id') or ''),
+                        str(item.get('guild_id') or ''),
+                        str(item.get('guild_name') or ''),
+                        str(item.get('channel_name') or ''),
+                        account_ids_json,
+                        ', '.join(str(name).strip() for name in account_names if str(name).strip()),
+                        str(item.get('sender_id') or ''),
+                        str(item.get('sender_name') or ''),
+                        str(item.get('content') or ''),
+                        str(item.get('source_content') or ''),
+                        str(item.get('message_id') or ''),
+                        str(item.get('reply_mode') or 'keyword'),
+                        str(item.get('status') or 'pending'),
+                        payload_json,
+                    ),
+                )
+                conn.commit()
+                return int(cursor.lastrowid or 0)
+        except Exception as e:
+            logger.error(f"写入关键词审核队列失败: {e}")
+            return 0
+
+    def _parse_keyword_reply_review_item_row(self, row: Any) -> Dict[str, Any]:
+        item = dict(row)
+        try:
+            item['payload'] = json.loads(item.get('payload_json') or '{}')
+        except Exception:
+            item['payload'] = {}
+        try:
+            item['account_ids'] = json.loads(item.get('account_ids_json') or '[]')
+        except Exception:
+            item['account_ids'] = []
+        item['keyword_review_enabled'] = 1 if int(item.get('keyword_review_enabled') or 0) else 0
+        return item
+
+    def get_keyword_reply_review_item(self, item_id: int, user_id: int = None) -> Optional[Dict[str, Any]]:
+        """获取单条关键词审核队列记录"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                query = '''
+                    SELECT *
+                    FROM keyword_reply_review_items
+                    WHERE id = ?
+                '''
+                params: List[Any] = [item_id]
+                if user_id is not None:
+                    query += ' AND user_id = ?'
+                    params.append(user_id)
+                cursor.execute(query, params)
+                row = cursor.fetchone()
+                return self._parse_keyword_reply_review_item_row(row) if row else None
+        except Exception as e:
+            logger.error(f"获取关键词审核队列记录失败: {e}")
+            return None
+
+    def get_keyword_reply_review_items(
+        self,
+        user_id: int,
+        website_id: int = None,
+        status: str = 'pending',
+    ) -> List[Dict[str, Any]]:
+        """获取关键词审核队列列表"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                query = '''
+                    SELECT *
+                    FROM keyword_reply_review_items
+                    WHERE user_id = ?
+                '''
+                params: List[Any] = [user_id]
+                if website_id is not None:
+                    query += ' AND website_id = ?'
+                    params.append(website_id)
+                if status is not None:
+                    query += ' AND status = ?'
+                    params.append(status)
+                query += ' ORDER BY created_at DESC, id DESC'
+                cursor.execute(query, params)
+                return [self._parse_keyword_reply_review_item_row(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"获取关键词审核队列列表失败: {e}")
+            return []
+
+    def update_keyword_reply_review_item_status(
+        self,
+        item_id: int,
+        status: str,
+        reviewed_by_user_id: int = None,
+        error_message: str = None,
+    ) -> bool:
+        """更新关键词审核队列状态"""
+        try:
+            normalized_status = str(status or '').strip().lower()
+            if not normalized_status:
+                return False
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                updates = ['status = ?', 'updated_at = CURRENT_TIMESTAMP']
+                params: List[Any] = [normalized_status]
+                if reviewed_by_user_id is not None:
+                    updates.append('reviewed_by_user_id = ?')
+                    params.append(reviewed_by_user_id)
+                if error_message is not None:
+                    updates.append('error_message = ?')
+                    params.append(str(error_message))
+                if normalized_status in {'approved', 'rejected'}:
+                    updates.append('reviewed_at = CURRENT_TIMESTAMP')
+                if normalized_status in {'sent', 'failed'}:
+                    updates.append('sent_at = CURRENT_TIMESTAMP')
+                params.append(item_id)
+                cursor.execute(
+                    f'''
+                    UPDATE keyword_reply_review_items
+                    SET {', '.join(updates)}
+                    WHERE id = ?
+                    ''',
+                    params,
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"更新关键词审核队列状态失败: {e}")
+            return False
+
     # ===== 用户级别的网站设置方法 =====
 
     def _default_user_website_settings(self) -> Dict[str, Any]:
@@ -3581,6 +4115,9 @@ class Database:
             'thread_reply_enabled': 0,
             'forum_post_reply_enabled': 0,
             'keyword_match_limit': None,
+            'keyword_image_search_enabled': 0,
+            'keyword_image_search_mode': 'manual',
+            'keyword_image_search_max_images': 3,
             'message_filters': '[]',
             'image_similarity_threshold': None,
             'reply_min_delay': None,
@@ -3619,6 +4156,16 @@ class Database:
         keyword_batch_dispatch_mode = (row['keyword_batch_dispatch_mode'] or 'immediate').strip().lower()
         if keyword_batch_dispatch_mode not in {'immediate', 'window_end'}:
             keyword_batch_dispatch_mode = 'immediate'
+        keyword_image_search_mode = str(
+            row['keyword_image_search_mode'] or 'manual'
+        ).strip().lower()
+        if keyword_image_search_mode not in {'manual', 'auto'}:
+            keyword_image_search_mode = 'manual'
+        try:
+            keyword_image_search_max_images = int(row['keyword_image_search_max_images'] or 3)
+        except (TypeError, ValueError):
+            keyword_image_search_max_images = 3
+        keyword_image_search_max_images = max(1, min(keyword_image_search_max_images, 10))
 
         return {
             'rotation_interval': rotation_interval,
@@ -3630,6 +4177,9 @@ class Database:
             'thread_reply_enabled': 1 if int(row['thread_reply_enabled'] or 0) else 0,
             'forum_post_reply_enabled': 1 if int(row['forum_post_reply_enabled'] or 0) else 0,
             'keyword_match_limit': row['keyword_match_limit'],
+            'keyword_image_search_enabled': 1 if int(row['keyword_image_search_enabled'] or 0) else 0,
+            'keyword_image_search_mode': keyword_image_search_mode,
+            'keyword_image_search_max_images': keyword_image_search_max_images,
             'message_filters': row['message_filters'],
             'image_similarity_threshold': row['image_similarity_threshold'],
             'reply_min_delay': row['reply_min_delay'],
@@ -3644,7 +4194,8 @@ class Database:
                 cursor.execute('''
                     SELECT rotation_interval, rotation_enabled, reply_mode, keyword_reply_interval, keyword_reply_batch_size,
                            keyword_batch_dispatch_mode, thread_reply_enabled, forum_post_reply_enabled,
-                           keyword_match_limit, message_filters,
+                           keyword_match_limit, keyword_image_search_enabled, keyword_image_search_mode,
+                           keyword_image_search_max_images, message_filters,
                            image_similarity_threshold, reply_min_delay, reply_max_delay
                     FROM user_website_settings
                     WHERE user_id = ? AND website_id = ?
@@ -3665,7 +4216,8 @@ class Database:
                     SELECT website_id, rotation_interval, rotation_enabled, reply_mode, keyword_reply_interval,
                            keyword_reply_batch_size, keyword_batch_dispatch_mode, thread_reply_enabled,
                            forum_post_reply_enabled,
-                           keyword_match_limit, message_filters, image_similarity_threshold,
+                           keyword_match_limit, keyword_image_search_enabled, keyword_image_search_mode,
+                           keyword_image_search_max_images, message_filters, image_similarity_threshold,
                            reply_min_delay, reply_max_delay
                     FROM user_website_settings
                     WHERE user_id = ?
@@ -3749,6 +4301,9 @@ class Database:
         thread_reply_enabled: int = None,
         forum_post_reply_enabled: int = None,
         keyword_match_limit: int = None,
+        keyword_image_search_enabled: int = None,
+        keyword_image_search_mode: str = None,
+        keyword_image_search_max_images: int = None,
     ) -> bool:
         """更新用户的网站轮换设置"""
         try:
@@ -3766,6 +4321,24 @@ class Database:
                 normalized_forum_post_reply_enabled = None
                 if forum_post_reply_enabled is not None:
                     normalized_forum_post_reply_enabled = 1 if int(forum_post_reply_enabled) else 0
+                normalized_keyword_image_search_enabled = None
+                if keyword_image_search_enabled is not None:
+                    normalized_keyword_image_search_enabled = 1 if int(keyword_image_search_enabled) else 0
+                normalized_keyword_image_search_mode = None
+                if keyword_image_search_mode is not None:
+                    candidate_mode = str(keyword_image_search_mode).strip().lower()
+                    if candidate_mode in {'manual', 'auto'}:
+                        normalized_keyword_image_search_mode = candidate_mode
+                normalized_keyword_image_search_max_images = None
+                if keyword_image_search_max_images is not None:
+                    try:
+                        normalized_keyword_image_search_max_images = int(keyword_image_search_max_images)
+                    except (TypeError, ValueError):
+                        normalized_keyword_image_search_max_images = 3
+                    normalized_keyword_image_search_max_images = max(
+                        1,
+                        min(normalized_keyword_image_search_max_images, 10),
+                    )
                 if normalized_reply_mode is None:
                     if rotation_enabled == 0 and (keyword_reply_batch_size or 0) > 0:
                         normalized_reply_mode = 'keyword'
@@ -3819,6 +4392,15 @@ class Database:
                     if keyword_match_limit is not None:
                         updates.append('keyword_match_limit = ?')
                         params.append(keyword_match_limit)
+                    if normalized_keyword_image_search_enabled is not None:
+                        updates.append('keyword_image_search_enabled = ?')
+                        params.append(normalized_keyword_image_search_enabled)
+                    if normalized_keyword_image_search_mode is not None:
+                        updates.append('keyword_image_search_mode = ?')
+                        params.append(normalized_keyword_image_search_mode)
+                    if normalized_keyword_image_search_max_images is not None:
+                        updates.append('keyword_image_search_max_images = ?')
+                        params.append(normalized_keyword_image_search_max_images)
                     if updates:
                         updates.append('updated_at = CURRENT_TIMESTAMP')
                         params.extend([user_id, website_id])
@@ -3841,9 +4423,12 @@ class Database:
                             keyword_batch_dispatch_mode,
                             thread_reply_enabled,
                             forum_post_reply_enabled,
-                            keyword_match_limit
+                            keyword_match_limit,
+                            keyword_image_search_enabled,
+                            keyword_image_search_mode,
+                            keyword_image_search_max_images
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         user_id,
                         website_id,
@@ -3858,12 +4443,252 @@ class Database:
                         normalized_thread_reply_enabled if normalized_thread_reply_enabled is not None else 0,
                         normalized_forum_post_reply_enabled if normalized_forum_post_reply_enabled is not None else 0,
                         keyword_match_limit,
+                        normalized_keyword_image_search_enabled if normalized_keyword_image_search_enabled is not None else 0,
+                        normalized_keyword_image_search_mode or 'manual',
+                        normalized_keyword_image_search_max_images if normalized_keyword_image_search_max_images is not None else 3,
                     ))
 
                 conn.commit()
                 return True
         except Exception as e:
             logger.error(f"更新用户网站轮换设置失败: {e}")
+            return False
+
+    @staticmethod
+    def _normalize_keyword_image_search_job_status(value: Any) -> str:
+        candidate = str(value or 'pending').strip().lower()
+        if candidate in {'pending', 'ready', 'sent', 'no_match', 'failed'}:
+            return candidate
+        return 'pending'
+
+    @staticmethod
+    def _normalize_keyword_image_search_job_mode(value: Any) -> str:
+        candidate = str(value or 'manual').strip().lower()
+        if candidate in {'manual', 'auto'}:
+            return candidate
+        return 'manual'
+
+    @staticmethod
+    def _parse_keyword_image_search_candidates(raw_value: Any) -> List[Dict[str, Any]]:
+        if isinstance(raw_value, list):
+            return [item for item in raw_value if isinstance(item, dict)]
+        if not raw_value:
+            return []
+        try:
+            parsed = json.loads(raw_value)
+        except Exception:
+            return []
+        if not isinstance(parsed, list):
+            return []
+        return [item for item in parsed if isinstance(item, dict)]
+
+    def _normalize_keyword_image_search_job_row(self, row: Any) -> Optional[Dict[str, Any]]:
+        if not row:
+            return None
+
+        payload = dict(row)
+        payload['mode'] = self._normalize_keyword_image_search_job_mode(payload.get('mode'))
+        payload['status'] = self._normalize_keyword_image_search_job_status(payload.get('status'))
+        payload['candidates'] = self._parse_keyword_image_search_candidates(
+            payload.get('candidates_json')
+        )
+        payload.pop('candidates_json', None)
+        payload['external_result_count'] = int(payload.get('external_result_count') or 0)
+        payload['matched_result_count'] = int(payload.get('matched_result_count') or 0)
+        return payload
+
+    def create_keyword_image_search_job(
+        self,
+        *,
+        user_id: int,
+        website_id: int,
+        query_text: str,
+        channel_id: str,
+        message_id: str,
+        guild_id: Optional[str] = None,
+        author_id: Optional[str] = None,
+        mode: str = 'manual',
+        provider: str = 'searchapi_google_images',
+        status: str = 'pending',
+        error_message: Optional[str] = None,
+        candidates: Optional[List[Dict[str, Any]]] = None,
+        external_result_count: int = 0,
+        matched_result_count: int = 0,
+    ) -> Optional[int]:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    INSERT INTO keyword_image_search_jobs (
+                        user_id,
+                        website_id,
+                        query_text,
+                        channel_id,
+                        message_id,
+                        guild_id,
+                        author_id,
+                        mode,
+                        provider,
+                        status,
+                        error_message,
+                        external_result_count,
+                        matched_result_count,
+                        candidates_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''',
+                    (
+                        int(user_id),
+                        int(website_id),
+                        str(query_text or '').strip(),
+                        str(channel_id or ''),
+                        str(message_id or ''),
+                        str(guild_id) if guild_id is not None else None,
+                        str(author_id) if author_id is not None else None,
+                        self._normalize_keyword_image_search_job_mode(mode),
+                        str(provider or 'searchapi_google_images').strip() or 'searchapi_google_images',
+                        self._normalize_keyword_image_search_job_status(status),
+                        error_message,
+                        max(0, int(external_result_count or 0)),
+                        max(0, int(matched_result_count or 0)),
+                        json.dumps(candidates or [], ensure_ascii=False),
+                    ),
+                )
+                conn.commit()
+                return cursor.lastrowid
+        except Exception as e:
+            logger.error(f"创建关键词搜图任务失败: {e}")
+            return None
+
+    def get_keyword_image_search_job(
+        self,
+        job_id: int,
+        user_id: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                user_scope_sql = ' AND kij.user_id = ?' if user_id is not None else ''
+                params: List[Any] = [job_id]
+                if user_id is not None:
+                    params.append(user_id)
+                cursor.execute(
+                    f'''
+                    SELECT
+                        kij.*,
+                        wc.display_name AS website_display_name,
+                        wc.name AS website_name
+                    FROM keyword_image_search_jobs kij
+                    LEFT JOIN website_configs wc ON wc.id = kij.website_id
+                    WHERE kij.id = ?{user_scope_sql}
+                    ''',
+                    params,
+                )
+                return self._normalize_keyword_image_search_job_row(cursor.fetchone())
+        except Exception as e:
+            logger.error(f"获取关键词搜图任务失败: {e}")
+            return None
+
+    def list_keyword_image_search_jobs(
+        self,
+        user_id: int,
+        *,
+        website_id: Optional[int] = None,
+        status: Optional[str] = None,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        try:
+            normalized_limit = max(1, min(int(limit or 50), 200))
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                query = '''
+                    SELECT
+                        kij.*,
+                        wc.display_name AS website_display_name,
+                        wc.name AS website_name
+                    FROM keyword_image_search_jobs kij
+                    LEFT JOIN website_configs wc ON wc.id = kij.website_id
+                    WHERE kij.user_id = ?
+                '''
+                params: List[Any] = [user_id]
+                if website_id:
+                    query += ' AND kij.website_id = ?'
+                    params.append(website_id)
+                if status:
+                    query += ' AND kij.status = ?'
+                    params.append(self._normalize_keyword_image_search_job_status(status))
+                query += ' ORDER BY kij.created_at DESC, kij.id DESC LIMIT ?'
+                params.append(normalized_limit)
+                cursor.execute(query, params)
+                return [
+                    job
+                    for job in (
+                        self._normalize_keyword_image_search_job_row(row)
+                        for row in cursor.fetchall()
+                    )
+                    if job is not None
+                ]
+        except Exception as e:
+            logger.error(f"列出关键词搜图任务失败: {e}")
+            return []
+
+    def update_keyword_image_search_job(
+        self,
+        job_id: int,
+        *,
+        user_id: Optional[int] = None,
+        **updates: Any,
+    ) -> bool:
+        try:
+            update_pairs: List[str] = []
+            params: List[Any] = []
+            for field, value in updates.items():
+                if value is None and field not in {'error_message', 'selected_candidate_index', 'sent_product_id'}:
+                    continue
+                if field == 'status':
+                    update_pairs.append('status = ?')
+                    params.append(self._normalize_keyword_image_search_job_status(value))
+                elif field == 'mode':
+                    update_pairs.append('mode = ?')
+                    params.append(self._normalize_keyword_image_search_job_mode(value))
+                elif field == 'candidates':
+                    update_pairs.append('candidates_json = ?')
+                    params.append(json.dumps(value or [], ensure_ascii=False))
+                elif field in {
+                    'error_message',
+                    'selected_candidate_index',
+                    'sent_product_id',
+                    'external_result_count',
+                    'matched_result_count',
+                    'provider',
+                }:
+                    update_pairs.append(f'{field} = ?')
+                    params.append(value)
+
+            if not update_pairs:
+                return False
+
+            update_pairs.append('updated_at = CURRENT_TIMESTAMP')
+            user_scope_sql = ' AND user_id = ?' if user_id is not None else ''
+            params.append(job_id)
+            if user_id is not None:
+                params.append(user_id)
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f'''
+                    UPDATE keyword_image_search_jobs
+                    SET {', '.join(update_pairs)}
+                    WHERE id = ?{user_scope_sql}
+                    ''',
+                    params,
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"更新关键词搜图任务失败: {e}")
             return False
 
     def update_user_website_filters(self, user_id: int, website_id: int, message_filters: str) -> bool:
@@ -4129,6 +4954,135 @@ class Database:
             logger.error(f"删除消息过滤规则失败: {e}")
             return False
 
+    def upsert_message_filter_blocked_user(
+        self,
+        filter_id: int,
+        discord_user_id: str,
+        discord_username: str = '',
+        trigger_keyword: str = '',
+    ) -> bool:
+        try:
+            normalized_discord_user_id = str(discord_user_id or '').strip()
+            if not normalized_discord_user_id:
+                return False
+
+            normalized_username = str(discord_username or '').strip()
+            normalized_trigger_keyword = str(trigger_keyword or '').strip()
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    INSERT INTO message_filter_blocked_users (
+                        filter_id,
+                        discord_user_id,
+                        discord_username,
+                        trigger_keyword
+                    )
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(filter_id, discord_user_id) DO UPDATE SET
+                        discord_username = excluded.discord_username,
+                        trigger_keyword = excluded.trigger_keyword,
+                        updated_at = CURRENT_TIMESTAMP
+                    ''',
+                    (
+                        filter_id,
+                        normalized_discord_user_id,
+                        normalized_username,
+                        normalized_trigger_keyword,
+                    ),
+                )
+                conn.commit()
+                return True
+        except Exception as e:
+            logger.error(f"写入全局拉黑用户失败: {e}")
+            return False
+
+    def get_message_filter_blocked_users(self, filter_id: int) -> List[Dict]:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    SELECT
+                        id,
+                        filter_id,
+                        discord_user_id,
+                        discord_username,
+                        trigger_keyword,
+                        created_at,
+                        updated_at
+                    FROM message_filter_blocked_users
+                    WHERE filter_id = ?
+                    ORDER BY updated_at DESC, id DESC
+                    ''',
+                    (filter_id,),
+                )
+                return [dict(row) for row in cursor.fetchall()]
+        except Exception as e:
+            logger.error(f"获取全局拉黑用户失败: {e}")
+            return []
+
+    def delete_message_filter_blocked_user(self, filter_id: int, discord_user_id: str) -> bool:
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    DELETE FROM message_filter_blocked_users
+                    WHERE filter_id = ? AND discord_user_id = ?
+                    ''',
+                    (filter_id, str(discord_user_id or '').strip()),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"删除全局拉黑用户失败: {e}")
+            return False
+
+    def get_blocked_message_filter_ids_for_discord_user(
+        self,
+        *,
+        discord_user_id: str,
+        candidate_filter_ids: Optional[Sequence[int]] = None,
+    ) -> set[int]:
+        try:
+            normalized_discord_user_id = str(discord_user_id or '').strip()
+            if not normalized_discord_user_id:
+                return set()
+
+            filter_ids: Optional[List[int]] = None
+            if candidate_filter_ids is not None:
+                filter_ids = [
+                    int(filter_id)
+                    for filter_id in candidate_filter_ids
+                    if filter_id is not None and str(filter_id).strip()
+                ]
+                if not filter_ids:
+                    return set()
+
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                query = '''
+                    SELECT filter_id
+                    FROM message_filter_blocked_users
+                    WHERE discord_user_id = ?
+                '''
+                params: List[Any] = [normalized_discord_user_id]
+                if filter_ids is not None:
+                    placeholders = ','.join('?' * len(filter_ids))
+                    query += f' AND filter_id IN ({placeholders})'
+                    params.extend(filter_ids)
+                cursor.execute(query, params)
+                return {
+                    int(row['filter_id'])
+                    for row in cursor.fetchall()
+                    if row['filter_id'] is not None
+                }
+        except Exception as e:
+            logger.error(f"获取用户命中全局拉黑列表失败: {e}")
+            return set()
+
     def add_message_filter_image(self, filter_id: int, image_path: str, features: np.ndarray) -> int:
         """添加消息过滤图片，返回记录ID"""
         try:
@@ -4353,135 +5307,6 @@ class Database:
         except Exception as e:
             logger.error(f"删除网站拉黑用户失败: {e}")
             return False
-
-    def upsert_message_filter_blocked_user(
-        self,
-        filter_id: int,
-        discord_user_id: str,
-        discord_username: str = '',
-        trigger_keyword: str = '',
-    ) -> bool:
-        try:
-            normalized_discord_user_id = str(discord_user_id or '').strip()
-            if not normalized_discord_user_id:
-                return False
-
-            normalized_username = str(discord_username or '').strip()
-            normalized_trigger_keyword = str(trigger_keyword or '').strip()
-
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    '''
-                    INSERT INTO message_filter_blocked_users (
-                        filter_id,
-                        discord_user_id,
-                        discord_username,
-                        trigger_keyword
-                    )
-                    VALUES (?, ?, ?, ?)
-                    ON CONFLICT(filter_id, discord_user_id) DO UPDATE SET
-                        discord_username = excluded.discord_username,
-                        trigger_keyword = excluded.trigger_keyword,
-                        updated_at = CURRENT_TIMESTAMP
-                    ''',
-                    (
-                        filter_id,
-                        normalized_discord_user_id,
-                        normalized_username,
-                        normalized_trigger_keyword,
-                    ),
-                )
-                conn.commit()
-                return True
-        except Exception as e:
-            logger.error(f"写入全局拉黑用户失败: {e}")
-            return False
-
-    def get_message_filter_blocked_users(self, filter_id: int) -> List[Dict]:
-        try:
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    '''
-                    SELECT
-                        id,
-                        filter_id,
-                        discord_user_id,
-                        discord_username,
-                        trigger_keyword,
-                        created_at,
-                        updated_at
-                    FROM message_filter_blocked_users
-                    WHERE filter_id = ?
-                    ORDER BY updated_at DESC, id DESC
-                    ''',
-                    (filter_id,),
-                )
-                return [dict(row) for row in cursor.fetchall()]
-        except Exception as e:
-            logger.error(f"获取全局拉黑用户失败: {e}")
-            return []
-
-    def delete_message_filter_blocked_user(self, filter_id: int, discord_user_id: str) -> bool:
-        try:
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    '''
-                    DELETE FROM message_filter_blocked_users
-                    WHERE filter_id = ? AND discord_user_id = ?
-                    ''',
-                    (filter_id, str(discord_user_id or '').strip()),
-                )
-                conn.commit()
-                return cursor.rowcount > 0
-        except Exception as e:
-            logger.error(f"删除全局拉黑用户失败: {e}")
-            return False
-
-    def get_blocked_message_filter_ids_for_discord_user(
-        self,
-        *,
-        discord_user_id: str,
-        candidate_filter_ids: Optional[Sequence[int]] = None,
-    ) -> set[int]:
-        try:
-            normalized_discord_user_id = str(discord_user_id or '').strip()
-            if not normalized_discord_user_id:
-                return set()
-
-            filter_ids: Optional[List[int]] = None
-            if candidate_filter_ids is not None:
-                filter_ids = [
-                    int(filter_id)
-                    for filter_id in candidate_filter_ids
-                    if filter_id is not None and str(filter_id).strip()
-                ]
-                if not filter_ids:
-                    return set()
-
-            with self.get_connection() as conn:
-                cursor = conn.cursor()
-                query = '''
-                    SELECT filter_id
-                    FROM message_filter_blocked_users
-                    WHERE discord_user_id = ?
-                '''
-                params: List[Any] = [normalized_discord_user_id]
-                if filter_ids is not None:
-                    placeholders = ','.join('?' * len(filter_ids))
-                    query += f' AND filter_id IN ({placeholders})'
-                    params.extend(filter_ids)
-                cursor.execute(query, params)
-                return {
-                    int(row['filter_id'])
-                    for row in cursor.fetchall()
-                    if row['filter_id'] is not None
-                }
-        except Exception as e:
-            logger.error(f"获取用户命中全局拉黑列表失败: {e}")
-            return set()
 
     def get_blocked_website_ids_for_discord_user(
         self,
@@ -4983,14 +5808,7 @@ class Database:
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    '''
-                    SELECT discord_channel_id, download_threads, feature_extract_threads,
-                           discord_similarity_threshold, cnfans_channel_id, acbuy_channel_id,
-                           scrape_threads, http_proxy, https_proxy
-                    FROM system_config WHERE id = 1
-                    '''
-                )
+                cursor.execute('SELECT discord_channel_id, download_threads, feature_extract_threads, discord_similarity_threshold, cnfans_channel_id, acbuy_channel_id, scrape_threads FROM system_config WHERE id = 1')
                 row = cursor.fetchone()
                 if row:
                     return {
@@ -5000,9 +5818,7 @@ class Database:
                         'discord_similarity_threshold': row[3] or 0.6,
                         'cnfans_channel_id': row[4] or '',
                         'acbuy_channel_id': row[5] or '',
-                        'scrape_threads': row[6] or 2,
-                        'http_proxy': row[7] or '',
-                        'https_proxy': row[8] or '',
+                        'scrape_threads': row[6] or 2
                     }
                 # 如果没有配置记录，创建默认配置
                 cursor.execute('''
@@ -5017,9 +5833,7 @@ class Database:
                     'discord_similarity_threshold': 0.6,
                     'cnfans_channel_id': '',
                     'acbuy_channel_id': '',
-                    'scrape_threads': 2,
-                    'http_proxy': '',
-                    'https_proxy': '',
+                    'scrape_threads': 2
                 }
         except Exception as e:
             logger.error(f"获取系统配置失败: {e}")
@@ -5030,9 +5844,7 @@ class Database:
                 'discord_similarity_threshold': 0.6,
                 'cnfans_channel_id': '',
                 'acbuy_channel_id': '',
-                'scrape_threads': 2,
-                'http_proxy': '',
-                'https_proxy': '',
+                'scrape_threads': 2
             }
 
     def get_user_settings(self, user_id: int) -> Dict[str, any]:
@@ -5045,7 +5857,12 @@ class Database:
                            global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
                            keyword_reply_enabled, image_reply_enabled, keyword_match_limit,
                            global_reply_template, numeric_filter_keyword, filter_size_min, filter_size_max,
-                           bark_enabled, bark_server_url, bark_device_key
+                           bark_enabled, bark_server_url, bark_device_key,
+                           keyword_reply_send_best_match_image,
+                           keyword_image_search_api_key, keyword_image_search_cx,
+                           review_bark_enabled, review_bark_mode, review_bark_count_threshold,
+                           review_bark_interval_minutes, review_bark_last_notified_at,
+                           review_bark_last_pending_count
                     FROM user_settings WHERE user_id = ?
                 ''', (user_id,))
                 row = cursor.fetchone()
@@ -5069,6 +5886,15 @@ class Database:
                         'bark_enabled': row[14] if row[14] is not None else 0,
                         'bark_server_url': row[15] or 'https://api.day.app',
                         'bark_device_key': row[16] or '',
+                        'keyword_reply_send_best_match_image': row[17] if row[17] is not None else 0,
+                        'keyword_image_search_api_key': row[18] or '',
+                        'keyword_image_search_cx': row[19] or '',
+                        'review_bark_enabled': row[20] if row[20] is not None else 0,
+                        'review_bark_mode': row[21] or 'count',
+                        'review_bark_count_threshold': row[22] if row[22] is not None else 5,
+                        'review_bark_interval_minutes': row[23] if row[23] is not None else 60,
+                        'review_bark_last_notified_at': row[24] or '',
+                        'review_bark_last_pending_count': row[25] if row[25] is not None else 0,
                     }
                 # 如果用户没有设置，返回默认值
                 return {
@@ -5089,6 +5915,15 @@ class Database:
                     'bark_enabled': 0,
                     'bark_server_url': 'https://api.day.app',
                     'bark_device_key': '',
+                    'keyword_reply_send_best_match_image': 0,
+                    'keyword_image_search_api_key': '',
+                    'keyword_image_search_cx': '',
+                    'review_bark_enabled': 0,
+                    'review_bark_mode': 'count',
+                    'review_bark_count_threshold': 5,
+                    'review_bark_interval_minutes': 60,
+                    'review_bark_last_notified_at': '',
+                    'review_bark_last_pending_count': 0,
                 }
         except Exception as e:
             logger.error(f"获取用户设置失败: {e}")
@@ -5110,6 +5945,15 @@ class Database:
                 'bark_enabled': 0,
                 'bark_server_url': 'https://api.day.app',
                 'bark_device_key': '',
+                'keyword_reply_send_best_match_image': 0,
+                'keyword_image_search_api_key': '',
+                'keyword_image_search_cx': '',
+                'review_bark_enabled': 0,
+                'review_bark_mode': 'count',
+                'review_bark_count_threshold': 5,
+                'review_bark_interval_minutes': 60,
+                'review_bark_last_notified_at': '',
+                'review_bark_last_pending_count': 0,
             }
 
     def update_user_settings(self, user_id: int, download_threads: int = None,
@@ -5121,7 +5965,16 @@ class Database:
                            global_reply_template: str = None, numeric_filter_keyword: str = None,
                            filter_size_min: int = None, filter_size_max: int = None,
                            bark_enabled: int = None, bark_server_url: str = None,
-                           bark_device_key: str = None) -> bool:
+                           bark_device_key: str = None,
+                           keyword_reply_send_best_match_image: int = None,
+                           keyword_image_search_api_key: str = None,
+                           keyword_image_search_cx: str = None,
+                           review_bark_enabled: int = None,
+                           review_bark_mode: str = None,
+                           review_bark_count_threshold: int = None,
+                           review_bark_interval_minutes: int = None,
+                           review_bark_last_notified_at: str = None,
+                           review_bark_last_pending_count: int = None) -> bool:
         """更新用户个性化设置"""
         try:
             with self.get_connection() as conn:
@@ -5204,6 +6057,42 @@ class Database:
                         update_fields.append('bark_device_key = ?')
                         params.append(bark_device_key)
 
+                    if keyword_reply_send_best_match_image is not None:
+                        update_fields.append('keyword_reply_send_best_match_image = ?')
+                        params.append(keyword_reply_send_best_match_image)
+
+                    if keyword_image_search_api_key is not None:
+                        update_fields.append('keyword_image_search_api_key = ?')
+                        params.append(keyword_image_search_api_key)
+
+                    if keyword_image_search_cx is not None:
+                        update_fields.append('keyword_image_search_cx = ?')
+                        params.append(keyword_image_search_cx)
+
+                    if review_bark_enabled is not None:
+                        update_fields.append('review_bark_enabled = ?')
+                        params.append(review_bark_enabled)
+
+                    if review_bark_mode is not None:
+                        update_fields.append('review_bark_mode = ?')
+                        params.append(review_bark_mode)
+
+                    if review_bark_count_threshold is not None:
+                        update_fields.append('review_bark_count_threshold = ?')
+                        params.append(review_bark_count_threshold)
+
+                    if review_bark_interval_minutes is not None:
+                        update_fields.append('review_bark_interval_minutes = ?')
+                        params.append(review_bark_interval_minutes)
+
+                    if review_bark_last_notified_at is not None:
+                        update_fields.append('review_bark_last_notified_at = ?')
+                        params.append(review_bark_last_notified_at)
+
+                    if review_bark_last_pending_count is not None:
+                        update_fields.append('review_bark_last_pending_count = ?')
+                        params.append(review_bark_last_pending_count)
+
                     if update_fields:
                         update_fields.append('updated_at = CURRENT_TIMESTAMP')
                         sql = f'UPDATE user_settings SET {", ".join(update_fields)} WHERE user_id = ?'
@@ -5216,8 +6105,12 @@ class Database:
                         (user_id, download_threads, feature_extract_threads, discord_similarity_threshold,
                          global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
                          keyword_reply_enabled, image_reply_enabled, keyword_match_limit, global_reply_template,
-                         numeric_filter_keyword, filter_size_min, filter_size_max, bark_enabled, bark_server_url, bark_device_key)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         numeric_filter_keyword, filter_size_min, filter_size_max, bark_enabled, bark_server_url, bark_device_key,
+                         keyword_reply_send_best_match_image, keyword_image_search_api_key, keyword_image_search_cx,
+                         review_bark_enabled, review_bark_mode,
+                         review_bark_count_threshold, review_bark_interval_minutes,
+                         review_bark_last_notified_at, review_bark_last_pending_count)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         user_id,
                         download_threads or 4,
@@ -5237,6 +6130,15 @@ class Database:
                         bark_enabled if bark_enabled is not None else 0,
                         bark_server_url if bark_server_url is not None else 'https://api.day.app',
                         bark_device_key or '',
+                        keyword_reply_send_best_match_image if keyword_reply_send_best_match_image is not None else 0,
+                        keyword_image_search_api_key or '',
+                        keyword_image_search_cx or '',
+                        review_bark_enabled if review_bark_enabled is not None else 0,
+                        review_bark_mode or 'count',
+                        review_bark_count_threshold if review_bark_count_threshold is not None else 5,
+                        review_bark_interval_minutes if review_bark_interval_minutes is not None else 60,
+                        review_bark_last_notified_at or '',
+                        review_bark_last_pending_count if review_bark_last_pending_count is not None else 0,
                     ))
 
                 conn.commit()
@@ -5245,15 +6147,49 @@ class Database:
             logger.error(f"更新用户设置失败: {e}")
             return False
 
-    def update_system_config(
-        self,
-        discord_channel_id: str = None,
-        discord_similarity_threshold: float = None,
-        cnfans_channel_id: str = None,
-        acbuy_channel_id: str = None,
-        http_proxy: str = None,
-        https_proxy: str = None,
-    ) -> bool:
+    def count_pending_keyword_reply_review_items(self, user_id: int) -> int:
+        """统计用户当前待审核的关键词回复数量"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    SELECT COUNT(1)
+                    FROM keyword_reply_review_items
+                    WHERE user_id = ? AND status = 'pending'
+                    ''',
+                    (user_id,),
+                )
+                row = cursor.fetchone()
+                return int((row[0] if row else 0) or 0)
+        except Exception as e:
+            logger.error(f"统计关键词审核队列数量失败: {e}")
+            return 0
+
+    def get_pending_keyword_reply_review_user_ids(self) -> List[int]:
+        """获取当前存在待审核关键词回复的用户ID列表"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    SELECT DISTINCT user_id
+                    FROM keyword_reply_review_items
+                    WHERE status = 'pending' AND user_id IS NOT NULL
+                    ORDER BY user_id ASC
+                    '''
+                )
+                return [
+                    int(row[0])
+                    for row in cursor.fetchall()
+                    if row and row[0] is not None
+                ]
+        except Exception as e:
+            logger.error(f"获取待审核关键词回复用户列表失败: {e}")
+            return []
+
+    def update_system_config(self, discord_channel_id: str = None, discord_similarity_threshold: float = None,
+                           cnfans_channel_id: str = None, acbuy_channel_id: str = None) -> bool:
         """更新系统配置"""
         try:
             with self.get_connection() as conn:
@@ -5284,14 +6220,6 @@ class Database:
                 if acbuy_channel_id is not None:
                     update_fields.append('acbuy_channel_id = ?')
                     params.append(acbuy_channel_id)
-
-                if http_proxy is not None:
-                    update_fields.append('http_proxy = ?')
-                    params.append(http_proxy)
-
-                if https_proxy is not None:
-                    update_fields.append('https_proxy = ?')
-                    params.append(https_proxy)
 
                 if update_fields:
                     update_fields.append('updated_at = CURRENT_TIMESTAMP')

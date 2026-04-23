@@ -1,11 +1,5 @@
 import os
-import sys
-
-try:
-    from dotenv import load_dotenv
-except ImportError:
-    def load_dotenv(*_args, **_kwargs):
-        return False
+from dotenv import load_dotenv
 
 # 加载环境变量
 load_dotenv()
@@ -45,7 +39,7 @@ def _env_float(name: str, default: float) -> float:
 class Config:
     # === 基础配置 ===
     HOST = '0.0.0.0'
-    PORT = int(os.getenv('BACKEND_PORT', '5001'))
+    PORT = 5001
     DEBUG = False  # 生产环境建议关闭调试模式以减少日志
 
     # === 关键修复：SECRET_KEY 必须在类里面 ===
@@ -97,6 +91,18 @@ class Config:
     # === API 地址 ===
     BACKEND_API_URL = os.getenv('BACKEND_API_URL', 'http://127.0.0.1:5001')
     NEXTJS_API_URL = f'{BACKEND_API_URL}/api'
+    KEYWORD_IMAGE_SEARCH_PROVIDER = os.getenv('KEYWORD_IMAGE_SEARCH_PROVIDER', 'searchapi_google_images')
+    GOOGLE_IMAGE_SEARCH_API_KEY = os.getenv('GOOGLE_IMAGE_SEARCH_API_KEY', '')
+    GOOGLE_IMAGE_SEARCH_CX = os.getenv('GOOGLE_IMAGE_SEARCH_CX', '')
+    SEARCHAPI_IMAGE_SEARCH_API_KEY = os.getenv('SEARCHAPI_IMAGE_SEARCH_API_KEY', '')
+    KEYWORD_IMAGE_SEARCH_REQUEST_TIMEOUT_SECONDS = _env_float(
+        'KEYWORD_IMAGE_SEARCH_REQUEST_TIMEOUT_SECONDS',
+        20.0,
+    )
+    KEYWORD_IMAGE_SEARCH_INTERNAL_TIMEOUT_SECONDS = _env_float(
+        'KEYWORD_IMAGE_SEARCH_INTERNAL_TIMEOUT_SECONDS',
+        45.0,
+    )
 
     # === 机器人 ===
     COMMAND_PREFIX = '!'
@@ -118,11 +124,7 @@ class Config:
 
     # === AI 模型 ===
     DINO_MODEL_NAME = 'facebook/dinov2-small'
-    if getattr(sys, 'frozen', False):
-        _RESOURCE_BASE = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
-    else:
-        _RESOURCE_BASE = os.path.dirname(os.path.dirname(__file__))
-    YOLO_MODEL_PATH = os.getenv('YOLO_MODEL_PATH', os.path.join(_RESOURCE_BASE, 'yolov8s-world.pt'))
+    YOLO_MODEL_PATH = 'yolov8s-world.pt'
     USE_YOLO_CROP = True
 
     # === 多线程配置 (针对 10核 CPU 优化) ===
@@ -146,19 +148,7 @@ class Config:
 
     # === 路径 ===
     BASE_DIR = os.path.dirname(os.path.dirname(__file__))
-    DATA_DIR = os.getenv('APP_DATA_DIR') or os.path.join(BASE_DIR, 'backend', 'data')
-    CACHE_DIR = os.path.join(DATA_DIR, 'cache')
-    HF_HOME = os.path.join(CACHE_DIR, 'huggingface')
-    HF_HUB_CACHE = os.path.join(HF_HOME, 'hub')
-    TRANSFORMERS_CACHE = os.path.join(HF_HOME, 'transformers')
-    TORCH_HOME = os.path.join(CACHE_DIR, 'torch')
-    XDG_CACHE_HOME = os.path.join(CACHE_DIR, 'xdg')
-    os.environ.setdefault('HF_HOME', HF_HOME)
-    os.environ.setdefault('HUGGINGFACE_HUB_CACHE', HF_HUB_CACHE)
-    os.environ.setdefault('HF_HUB_CACHE', HF_HUB_CACHE)
-    os.environ.setdefault('TRANSFORMERS_CACHE', TRANSFORMERS_CACHE)
-    os.environ.setdefault('TORCH_HOME', TORCH_HOME)
-    os.environ.setdefault('XDG_CACHE_HOME', XDG_CACHE_HOME)
+    DATA_DIR = os.path.join(BASE_DIR, 'backend', 'data')
     # 确保这些路径是绝对路径
     IMAGE_SAVE_DIR = os.path.join(DATA_DIR, 'scraped_images')
     MESSAGE_FILTER_IMAGE_DIR = os.path.join(DATA_DIR, 'message_filter_images')
@@ -169,32 +159,11 @@ class Config:
     # === 网络 ===
     REQUEST_TIMEOUT = 30
     MAX_RETRIES = 3
-    HTTP_PROXY = os.getenv('HTTP_PROXY', '').strip()
-    HTTPS_PROXY = os.getenv('HTTPS_PROXY', '').strip()
-
-    @classmethod
-    def get_request_proxies(cls):
-        http_proxy = (getattr(cls, 'HTTP_PROXY', '') or '').strip()
-        https_proxy = (getattr(cls, 'HTTPS_PROXY', '') or '').strip()
-
-        if not http_proxy and not https_proxy:
-            return {'http': None, 'https': None}
-
-        return {
-            'http': http_proxy or https_proxy,
-            'https': https_proxy or http_proxy,
-        }
 
     @classmethod
     def init_dirs(cls):
         for dir_path in [
             cls.DATA_DIR,
-            cls.CACHE_DIR,
-            cls.HF_HOME,
-            cls.HF_HUB_CACHE,
-            cls.TRANSFORMERS_CACHE,
-            cls.TORCH_HOME,
-            cls.XDG_CACHE_HOME,
             cls.IMAGE_SAVE_DIR,
             cls.MESSAGE_FILTER_IMAGE_DIR,
             cls.WEBSITE_FILTER_IMAGE_DIR,

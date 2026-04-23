@@ -8,6 +8,7 @@ from backend.bot import (
     _auto_reply_thread_ids,
     filter_forum_channel_configs_for_message,
     _get_image_recognition_request_timeout_seconds,
+    _is_image_match_above_reply_threshold,
     _resolve_message_reply_channel,
     _resolve_cooldown_channel_id,
     resolve_reply_target_channel,
@@ -132,6 +133,102 @@ class BotTimeoutHelpersTestCase(unittest.TestCase):
 
         self.assertEqual(filtered, parent_configs)
 
+    def test_image_match_threshold_uses_website_override(self):
+        self.assertFalse(
+            _is_image_match_above_reply_threshold(
+                {"type": "image", "similarity": 0.72, "base_threshold": 0.6},
+                {"image_similarity_threshold": 0.8},
+            )
+        )
+        self.assertTrue(
+            _is_image_match_above_reply_threshold(
+                {"type": "image", "similarity": 0.72, "base_threshold": 0.6},
+                {"image_similarity_threshold": None},
+            )
+        )
+
+    def test_summarize_exception_for_log_collapses_whitespace_and_truncates(self):
+        error = RuntimeError("429 Too Many Requests\n\n" + ("x" * 260))
+
+        summary = bot_module._summarize_exception_for_log(error, limit=80)
+
+        self.assertNotIn("\n", summary)
+        self.assertLessEqual(len(summary), 80)
+        self.assertTrue(summary.endswith("..."))
+
+    def test_log_rate_limited_bark_issue_suppresses_duplicates_within_window(self):
+        with patch.object(bot_module.time, "monotonic", side_effect=[100.0, 110.0, 180.0]), patch.object(
+            bot_module.logger, "error"
+        ) as mock_error, patch.object(bot_module.logger, "warning") as mock_warning:
+            bot_module._log_rate_limited_bark_issue("表情互动 Bark 通知失败", RuntimeError("first failure"))
+            bot_module._log_rate_limited_bark_issue("表情互动 Bark 通知失败", RuntimeError("second failure"))
+            bot_module._log_rate_limited_bark_issue("表情互动 Bark 通知失败", RuntimeError("third failure"))
+
+        self.assertEqual(mock_error.call_count, 2)
+        self.assertEqual(mock_warning.call_count, 1)
+        self.assertIn("重复 1 次", mock_warning.call_args.args[0])
+
+
+class RecognizeImageRetryPolicyTestCase(unittest.IsolatedAsyncioTestCase):
+    async def test_recognize_image_does_not_retry_on_backend_busy_503(self):
+        class FakeResponse:
+            def __init__(self, status, body):
+                self.status = status
+                self._body = body
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def text(self):
+                return self._body
+
+        class FakeSession:
+            def __init__(self, responses):
+                self._responses = list(responses)
+                self.post_calls = 0
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def post(self, *args, **kwargs):
+                response = self._responses[self.post_calls]
+                self.post_calls += 1
+                return response
+
+        fake_session = FakeSession(
+            [FakeResponse(503, '{"error":"search busy","retryable":true}')]
+        )
+
+        with patch.object(
+            bot_module.aiohttp,
+            "ClientSession",
+            return_value=fake_session,
+        ) as _mock_client_session, patch.object(
+            bot_module.asyncio,
+            "sleep",
+            AsyncMock(),
+        ) as mock_sleep, patch.object(
+            bot_module.config,
+            "BACKEND_API_URL",
+            "http://127.0.0.1:5001",
+            create=True,
+        ):
+            result = await bot_module.DiscordBotClient.recognize_image(
+                SimpleNamespace(user_id=None),
+                b"fake-image-bytes",
+                user_shops=["Vibeo"],
+            )
+
+        self.assertIsNone(result)
+        self.assertEqual(fake_session.post_calls, 1)
+        mock_sleep.assert_not_awaited()
+
 
 class _SlottedMessage:
     __slots__ = ("id", "channel", "thread", "flags", "fetch_thread")
@@ -148,12 +245,13 @@ class ResolveReplyTargetChannelTestCase(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         _auto_reply_thread_ids.clear()
 
-    async def test_creates_thread_without_mutating_message_instance(self):
-        created_thread = SimpleNamespace(id=555001, parent_id=123001)
+    async def test_does_not_create_thread_when_no_existing_message_thread(self):
         target_channel = SimpleNamespace(
             id=123001,
             parent_id=None,
-            create_thread=AsyncMock(return_value=created_thread),
+            fetch_message=AsyncMock(return_value=SimpleNamespace(id=777001, flags=SimpleNamespace(has_thread=False))),
+            threads=[],
+            create_thread=AsyncMock(side_effect=AssertionError("should not create a thread")),
         )
         message = _SlottedMessage(
             message_id=777001,
@@ -161,7 +259,7 @@ class ResolveReplyTargetChannelTestCase(unittest.IsolatedAsyncioTestCase):
             fetch_thread=AsyncMock(return_value=None),
         )
         target_client = SimpleNamespace(
-            get_channel=lambda channel_id: created_thread if channel_id == 555001 else None,
+            get_channel=lambda channel_id: None,
             fetch_channel=AsyncMock(return_value=None),
         )
 
@@ -172,10 +270,10 @@ class ResolveReplyTargetChannelTestCase(unittest.IsolatedAsyncioTestCase):
             thread_reply_enabled=True,
         )
 
-        self.assertIs(reply_target_channel, created_thread)
-        self.assertTrue(used_thread_reply)
-        target_channel.create_thread.assert_awaited_once()
-        self.assertEqual(_auto_reply_thread_ids.get(777001), 555001)
+        self.assertIs(reply_target_channel, target_channel)
+        self.assertFalse(used_thread_reply)
+        target_channel.create_thread.assert_not_awaited()
+        self.assertNotIn(777001, _auto_reply_thread_ids)
 
     async def test_reuses_cached_thread_when_same_message_hits_again(self):
         existing_thread = SimpleNamespace(id=555001, parent_id=123001)
@@ -232,3 +330,37 @@ class ResolveMessageReplyChannelTestCase(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(resolved, fetched_thread)
         target_client.fetch_channel.assert_awaited_once_with(555001)
+
+
+class KeywordReviewMessageProxyTestCase(unittest.TestCase):
+    def test_saved_thread_reply_target_wins_over_original_parent_channel(self):
+        review_item = {
+            "channel_id": "123001",
+            "message_id": "777001",
+            "sender_id": "42",
+            "payload": {
+                "message": {
+                    "id": 777001,
+                    "channel_id": 123001,
+                    "channel_name": "parent-channel",
+                    "guild_id": 9001,
+                    "author_id": 42,
+                    "author_name": "buyer",
+                    "content": "keyword",
+                },
+                "reply_target_channel": {
+                    "used_thread_reply": True,
+                    "channel_id": 555001,
+                    "channel_name": "auto-reply-thread",
+                    "parent_channel_id": 123001,
+                    "parent_channel_name": "parent-channel",
+                },
+            },
+        }
+
+        message = bot_module._build_keyword_review_message_proxy(review_item)
+
+        self.assertEqual(message.channel.id, 555001)
+        self.assertEqual(message.channel.name, "auto-reply-thread")
+        self.assertEqual(message.channel.parent_id, 123001)
+        self.assertEqual(message.channel.parent.name, "parent-channel")

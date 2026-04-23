@@ -1,6 +1,6 @@
-"use client"
+﻿"use client"
 
-import { BarChart3, Bot, ImageIcon, ScrollText, Search, Settings, Store, Users } from "lucide-react"
+import { BarChart3, Bot, ImageIcon, ListTree, ScrollText, Search, Settings, ShieldCheck, Store, Users } from "lucide-react"
 import {
   Sidebar,
   SidebarContent,
@@ -21,13 +21,15 @@ interface User {
   shops: string[]
 }
 
-type AppView = "dashboard" | "accounts" | "shops" | "scraper" | "image-search" | "logs" | "system-settings"
+type AppView = "dashboard" | "accounts" | "review-window" | "shops" | "scraper" | "image-search" | "keyword-image-review" | "logs" | "system-settings"
 
 const baseMenuItems = [
   { id: "dashboard", icon: BarChart3, label: "仪表盘" },
   { id: "accounts", icon: Users, label: "账号与规则" },
+  { id: "review-window", icon: ShieldCheck, label: "审核窗口" },
   { id: "scraper", icon: Search, label: "微店抓取" },
   { id: "image-search", icon: ImageIcon, label: "以图搜图" },
+  { id: "keyword-image-review", icon: ListTree, label: "关键词搜图" },
   { id: "shops", icon: Store, label: "店铺管理" },
   { id: "logs", icon: ScrollText, label: "实时日志" },
   { id: "system-settings", icon: Settings, label: "系统设置" },
@@ -71,7 +73,7 @@ export function AppSidebar({
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="border-t p-4">
-        <p className="text-xs text-muted-foreground text-center">v1.0.0 · 技术支持</p>
+        <p className="text-xs text-muted-foreground text-center">v1.0.0 • 技术支持</p>
         <p className="text-xs text-muted-foreground text-center mt-1">微信: OceanSeaWang</p>
         <p className="text-xs text-muted-foreground text-center mt-1">Discord: zrnown</p>
       </SidebarFooter>
