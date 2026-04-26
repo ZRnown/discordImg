@@ -80,6 +80,13 @@ test('low similarity image matches are skipped instead of sent', () => {
   assert.match(handleImageSource, /return False/)
 })
 
+test('keyword replies from messages with attachments bypass keyword review', () => {
+  const source = readSource()
+
+  assert.match(source, /skip_keyword_review_check = bool\(getattr\(message, 'attachments', None\)\)/)
+  assert.match(source, /skip_review_check=skip_keyword_review_check/)
+})
+
 test('thread reply mode falls back to the source channel without creating new threads', () => {
   const source = readSource()
 

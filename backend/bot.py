@@ -2201,6 +2201,7 @@ class DiscordBotClient(discord.Client):
         custom_reply,
         website_config,
         match_context=None,
+        skip_review_check=False,
     ):
         if not website_config or not website_config.get('id'):
             return None
@@ -2519,6 +2520,7 @@ class DiscordBotClient(discord.Client):
                 direct_custom_reply,
                 match_context,
                 website_configs_override=[website_config],
+                skip_review_check=skip_review_check,
             )
 
         if batch_size <= 0:
@@ -2528,6 +2530,7 @@ class DiscordBotClient(discord.Client):
                 custom_reply,
                 match_context,
                 website_configs_override=[website_config],
+                skip_review_check=skip_review_check,
             )
 
         if not use_keyword_window_mode:
@@ -2542,6 +2545,7 @@ class DiscordBotClient(discord.Client):
                 custom_reply,
                 match_context,
                 website_configs_override=[website_config],
+                skip_review_check=skip_review_check,
             )
 
         job = await self._build_keyword_reply_job(
@@ -5612,6 +5616,7 @@ class DiscordBotClient(discord.Client):
 
             any_reply_scheduled = False
             keyword_image_job_created = False
+            skip_keyword_review_check = bool(getattr(message, 'attachments', None))
 
             try:
                 if db is None:
@@ -5661,6 +5666,7 @@ class DiscordBotClient(discord.Client):
                             prepared_product,
                             custom_reply,
                             website_config,
+                            skip_review_check=skip_keyword_review_check,
                         ),
                         task_name=(
                             f"keyword-single website={website_config.get('id')} "
@@ -5697,6 +5703,7 @@ class DiscordBotClient(discord.Client):
                                 entry['product'],
                                 entry['custom_reply'],
                                 website_config,
+                                skip_review_check=skip_keyword_review_check,
                             ),
                             task_name=(
                                 f"keyword-single website={website_config.get('id')} "
@@ -5756,6 +5763,7 @@ class DiscordBotClient(discord.Client):
                         base_product,
                         agg_custom_reply,
                         website_config,
+                        skip_review_check=skip_keyword_review_check,
                     ),
                     task_name=(
                         f"keyword-aggregate website={website_config.get('id')} "
