@@ -3941,11 +3941,10 @@ class DiscordBotClient(discord.Client):
                             reply_target_channel = reply_target_channel or target_channel
                             if thread_reply_enabled and not used_thread_reply:
                                 logger.info(
-                                    f"⏭️ [子区回复跳过] 源消息没有可用子区: "
+                                    f"↪️ [子区回复回退] 源消息没有可用子区，改回原频道: "
                                     f"message={getattr(message, 'id', None)} "
                                     f"channel={getattr(target_channel, 'id', None)}"
                                 )
-                                continue
 
                             if (
                                 website_config
@@ -4891,7 +4890,7 @@ class DiscordBotClient(discord.Client):
             MESSAGE_FORWARD_TIMEOUT_SECONDS,
         )
 
-        # 处理关键词搜索
+        # 处理关键词搜索。图文同发时优先让文字关键词决定回复；关键词没命中再走图片识别。
         keyword_search_hit = False
         if keyword_reply_enabled:
             keyword_search_hit = bool(await self._run_message_stage_with_timeout(
@@ -5089,7 +5088,7 @@ class DiscordBotClient(discord.Client):
                 else await self.get_website_configs_by_channel_async(message.channel)
             )
             if not website_configs:
-                return
+                return False
 
             user_website_settings_map = await self._get_user_website_settings_map_for_configs(
                 website_configs
@@ -5138,7 +5137,7 @@ class DiscordBotClient(discord.Client):
 
             if image_data is None:
                 logger.error("图片下载失败，已达到最大重试次数")
-                return  # 静默失败，不发送错误消息
+                return False  # 静默失败，不发送错误消息
 
             user_settings = {}
             user_threshold = config.DISCORD_SIMILARITY_THRESHOLD
@@ -5166,7 +5165,7 @@ class DiscordBotClient(discord.Client):
                 result = await self.recognize_image(
                     image_data,
                     user_shops=scoped_user_shops,
-                    threshold=skip_threshold,
+                    threshold=0.0,
                 )
 
                 logger.debug(f"🔓 释放AI并发锁")
@@ -5188,7 +5187,7 @@ class DiscordBotClient(discord.Client):
                                 f'🚫 命中图片过滤: 规则 {blocked_filter_match.get("filter_id")} '
                                 f'相似度 {sim:.3f} >= {threshold_val:.3f} | 频道: {message.channel.name}'
                             )
-                            return
+                            return False
                 except Exception:
                     pass
 
@@ -5212,7 +5211,7 @@ class DiscordBotClient(discord.Client):
                     logger.info(
                         f'⏭️ 图片命中未过阈值，跳过回复: 相似度 {similarity:.3f} < {skip_threshold:.3f} | 频道: {message.channel.name}'
                     )
-                    return
+                    return False
 
                 product = best_match.get('product', {})
                 product_title = (product.get('title') or '').strip()
@@ -5287,7 +5286,7 @@ class DiscordBotClient(discord.Client):
                 elif product_rule_enabled:
                     custom_reply = self._get_custom_reply()
 
-                await self.schedule_reply(
+                reply_sent = await self.schedule_reply(
                     message,
                     product,
                     custom_reply,
@@ -5303,6 +5302,7 @@ class DiscordBotClient(discord.Client):
                 )
 
                 logger.debug(f'图片识别完成，相似度: {similarity:.4f}')
+                return bool(reply_sent)
             elif result and result.get('success'):
                 await self._record_skipped_image_history(
                     image_data=image_data,
@@ -5315,10 +5315,12 @@ class DiscordBotClient(discord.Client):
                 logger.info(
                     f'⏭️ 图片未命中任何商品，已记录历史: 阈值 {skip_threshold:.3f} | 频道: {message.channel.name}'
                 )
+                return False
 
         except Exception as e:
             logger.error(f'Error handling image: {e}')
             # 不发送错误消息到Discord，只记录日志
+            return False
 
     async def handle_keyword_forward(self, message):
         """处理关键词消息转发"""

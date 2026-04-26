@@ -53,12 +53,17 @@ test('keyword image search runtime is disabled on main', () => {
   assert.doesNotMatch(source, /allow_keyword_image_search=not bool/)
 })
 
-test('image recognition uses the resolved reply threshold', () => {
+test('image recognition retrieves the best candidate before applying reply threshold', () => {
   const source = readSource()
+  const start = source.indexOf('result = await self.recognize_image(')
+  const end = source.indexOf('logger.debug(f"🔓 释放AI并发锁")', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+  const recognizeCallSource = source.slice(start, end)
 
-  assert.match(source, /threshold=skip_threshold/)
+  assert.match(recognizeCallSource, /threshold=0\.0/)
+  assert.doesNotMatch(recognizeCallSource, /threshold=skip_threshold/)
   assert.match(source, /form\.add_field\('threshold', str\(api_threshold\)\)/)
-  assert.doesNotMatch(source, /form\.add_field\('threshold', '0'\)/)
   assert.doesNotMatch(source, /allow_below_threshold_link_only/)
   assert.doesNotMatch(source, /仅发送链接/)
 })
@@ -72,16 +77,17 @@ test('low similarity image matches are skipped instead of sent', () => {
 
   const handleImageSource = source.slice(start, end)
   assert.match(handleImageSource, /图片命中未过阈值，跳过回复/)
-  assert.match(handleImageSource, /return/)
+  assert.match(handleImageSource, /return False/)
 })
 
-test('thread reply mode resolves existing threads without creating new ones', () => {
+test('thread reply mode falls back to the source channel without creating new threads', () => {
   const source = readSource()
 
   assert.match(source, /disable_thread_creation=True/)
   assert.match(source, /thread_reply_enabled=thread_reply_enabled,\n\s+\)/)
   assert.match(source, /if thread_reply_enabled and not used_thread_reply:/)
-  assert.match(source, /子区回复跳过/)
+  assert.match(source, /子区回复回退/)
+  assert.doesNotMatch(source, /子区回复跳过/)
   assert.doesNotMatch(source, /create_thread = getattr\(target_channel, 'create_thread'/)
   assert.doesNotMatch(source, /await create_thread\(/)
 })
