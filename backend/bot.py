@@ -4895,8 +4895,9 @@ class DiscordBotClient(discord.Client):
             MESSAGE_FORWARD_TIMEOUT_SECONDS,
         )
 
-        # 处理关键词搜索。图文同发时优先让文字关键词决定回复；关键词没命中再走图片识别。
+        # 处理关键词搜索。图文同发时只走文字关键词路径，避免图片预热阻塞关键词回复。
         keyword_search_hit = False
+        message_has_text_content = bool((getattr(message, 'content', '') or '').strip())
         if keyword_reply_enabled:
             keyword_search_hit = bool(await self._run_message_stage_with_timeout(
                 message,
@@ -4911,6 +4912,13 @@ class DiscordBotClient(discord.Client):
 
         # 处理图片
         if image_reply_enabled and message.attachments and not keyword_search_hit:
+            if message_has_text_content and keyword_reply_enabled:
+                logger.info(
+                    '⏭️ 图文消息已处理文字关键词路径，跳过图片识别: message_id=%s channel_id=%s',
+                    getattr(message, 'id', None),
+                    getattr(getattr(message, 'channel', None), 'id', None),
+                )
+                return
             if self._should_filter_message(message):
                 return
             for attachment in message.attachments:
@@ -5868,7 +5876,16 @@ class DiscordBotClient(discord.Client):
                             attempt + 1,
                             compact_response_text or '<empty>',
                         )
-                        # 后端在预热或繁忙时会返回 503，短暂退避后重试通常能恢复。
+                        if resp.status == 503 and (
+                            'search warming up' in compact_response_text
+                            or '图搜服务预热中' in compact_response_text
+                            or '预热中' in compact_response_text
+                        ):
+                            logger.warning(
+                                'recognize_image search service warming up; skip image reply for this message'
+                            )
+                            return None
+                        # 后端繁忙时短暂退避；预热状态会拖长消息处理，前面已直接结束本次图片识别。
                         if resp.status in {429, 503} and attempt < max_attempts - 1:
                             await asyncio.sleep(retry_delay)
                             retry_delay = min(retry_delay * 1.8, 6.0)

@@ -87,6 +87,20 @@ test('keyword replies from messages with attachments bypass keyword review', () 
   assert.match(source, /skip_review_check=skip_keyword_review_check/)
 })
 
+test('text messages with image attachments skip image recognition after keyword search', () => {
+  const source = readSource()
+  const start = source.indexOf('# 处理关键词搜索')
+  const end = source.indexOf('    async def on_raw_reaction_add', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+
+  const onMessageTailSource = source.slice(start, end)
+  assert.match(onMessageTailSource, /message_has_text_content = bool\(\(getattr\(message, 'content', ''\) or ''\)\.strip\(\)\)/)
+  assert.match(onMessageTailSource, /if image_reply_enabled and message\.attachments and not keyword_search_hit:/)
+  assert.match(onMessageTailSource, /if message_has_text_content and keyword_reply_enabled:/)
+  assert.match(onMessageTailSource, /图文消息已处理文字关键词路径，跳过图片识别/)
+})
+
 test('thread reply mode falls back to the source channel without creating new threads', () => {
   const source = readSource()
 
