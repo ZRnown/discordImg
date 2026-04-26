@@ -53,4 +53,7 @@ test('account list shows detailed Discord account metadata', () => {
   assert.match(source, /Discord ID/)
   assert.match(source, /runtime_guild_count/)
   assert.match(source, /token_preview/)
+  assert.doesNotMatch(source, /账号ID: \{account\.id\}/)
+  assert.doesNotMatch(source, /角色: \{getAccountRuntimeRoleLabel\(account\.runtime_role\)\}/)
+  assert.doesNotMatch(source, /监听\+发送/)
 })

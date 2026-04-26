@@ -50,7 +50,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch"
 import { Textarea } from "@/components/ui/textarea"
 import { toast } from "sonner"
-import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit, Clock, ChevronDown, ChevronRight, ShieldCheck, UserRound, Fingerprint, KeyRound, CalendarClock } from "lucide-react"
+import { Plus, Settings, Save, Trash2, Globe, Link, Hash, X, Edit, Clock, ChevronDown, ChevronRight, ShieldCheck, UserRound, KeyRound, CalendarClock } from "lucide-react"
 
 type NumericRangeFilterValue = {
   keyword: string
@@ -129,13 +129,6 @@ const getAccountSecondaryName = (account: any) => {
     account.username,
   ].filter(Boolean)
   return names.find(name => name !== getAccountPrimaryName(account)) || ''
-}
-
-const getAccountRuntimeRoleLabel = (role: string) => {
-  if (role === 'listener') return '监听'
-  if (role === 'sender') return '发送'
-  if (role === 'both') return '监听+发送'
-  return '未绑定'
 }
 
 const getAccountTokenPreview = (account: any) => {
@@ -2856,11 +2849,7 @@ const formatWebsiteForEdit = (website: any) => ({
                       ) : null}
                     </div>
 
-                    <div className="mt-4 grid grid-cols-1 gap-2 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-4">
-                      <div className="flex items-center gap-2 rounded-md bg-muted/40 px-3 py-2">
-                        <Fingerprint className="size-3.5" />
-                        <span className="truncate">账号ID: {account.id}</span>
-                      </div>
+                    <div className="mt-4 grid grid-cols-1 gap-2 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-3">
                       <div className="flex items-center gap-2 rounded-md bg-muted/40 px-3 py-2">
                         <UserRound className="size-3.5" />
                         <span className="truncate">
@@ -2880,7 +2869,6 @@ const formatWebsiteForEdit = (website: any) => ({
                     <div className="mt-3 grid grid-cols-1 gap-2 text-xs text-muted-foreground sm:grid-cols-2 xl:grid-cols-4">
                       <div className="truncate">Discord ID: {account.discord_user_id || '未获取'}</div>
                       <div className="truncate">昵称: {account.discord_global_name || account.discord_display_name || '未设置'}</div>
-                      <div className="truncate">角色: {getAccountRuntimeRoleLabel(account.runtime_role)}</div>
                       <div className="truncate">服务器: {account.runtime_guild_count ?? 0} 个</div>
                     </div>
                   </div>

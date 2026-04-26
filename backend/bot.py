@@ -2469,6 +2469,7 @@ class DiscordBotClient(discord.Client):
         custom_reply,
         website_config,
         match_context=None,
+        skip_review_check=False,
     ):
         if not website_config or not website_config.get('id'):
             return False
