@@ -156,6 +156,21 @@ except ModuleNotFoundError as e:
     else:
         raise
 try:
+    from search_similar_runtime import (
+        SearchExecutionTimeoutError,
+        log_search_similar_no_match,
+        run_with_timeout,
+    )
+except ModuleNotFoundError as e:
+    if e.name == 'search_similar_runtime':
+        from .search_similar_runtime import (
+            SearchExecutionTimeoutError,
+            log_search_similar_no_match,
+            run_with_timeout,
+        )
+    else:
+        raise
+try:
     from shop_scrape_helpers import (
         build_weidian_shop_api_headers,
         clear_stale_scrape_stop_state,
@@ -262,6 +277,16 @@ def _get_live_search_queue_timeout_seconds() -> float:
         return max(float(getattr(config, 'LIVE_IMAGE_SEARCH_QUEUE_TIMEOUT_SECONDS', 2.5) or 2.5), 0.0)
     except (TypeError, ValueError):
         return 2.5
+
+
+def _get_live_search_execution_timeout_seconds() -> float:
+    try:
+        return max(
+            float(getattr(config, 'LIVE_IMAGE_SEARCH_EXECUTION_TIMEOUT_SECONDS', 30.0) or 30.0),
+            0.0,
+        )
+    except (TypeError, ValueError):
+        return 30.0
 
 
 def _normalize_message_filter_value(filter_type, filter_value):
@@ -1029,7 +1054,8 @@ def extract_features(image_path):
         if extractor is None:
             logger.error("特征提取器未初始化")
             return None
-        features = extractor.extract_feature(image_path)
+        with GLOBAL_AI_SEMAPHORE:
+            features = extractor.extract_feature(image_path)
         # 如果特征提取失败，返回 None（上层将处理并返回错误）
         if features is None:
             logger.warning(f"特征提取失败: {image_path}")
@@ -1434,6 +1460,8 @@ def search_similar():
                 logger.debug("No image_url and no uploaded file")
             return jsonify({'error': 'No image provided (url or file)'}), 400
 
+        release_live_search_slot = None
+        search_worker_started = False
         try:
             blocked_filter_match = None
             blocked_website_filter_matches = []
@@ -1596,6 +1624,7 @@ def search_similar():
             strategy_name = getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank')
             filter_stage_elapsed = time.perf_counter() - filter_stage_started_at
             retrieval_timeout_seconds = _get_live_search_queue_timeout_seconds()
+            search_timeout_seconds = _get_live_search_execution_timeout_seconds()
             release_live_search_slot = LIVE_SEARCH_REQUEST_GATE.try_acquire(
                 timeout_seconds=retrieval_timeout_seconds
             )
@@ -1616,13 +1645,31 @@ def search_similar():
                 ), 503
 
             retrieval_started_at = time.perf_counter()
+            search_worker_started = True
             try:
-                retrieval_result = retriever.search(
-                    image_path=image_path,
-                    query_text=query_text,
-                    top_k=limit,
-                    threshold=threshold,
-                    user_shops=user_shops,
+                def _run_live_retrieval():
+                    try:
+                        return retriever.search(
+                            image_path=image_path,
+                            query_text=query_text,
+                            top_k=limit,
+                            threshold=threshold,
+                            user_shops=user_shops,
+                        )
+                    finally:
+                        try:
+                            release_live_search_slot()
+                        except Exception:
+                            pass
+                        try:
+                            if os.path.exists(image_path):
+                                os.unlink(image_path)
+                        except Exception as cleanup_error:
+                            logger.warning("清理搜索临时文件失败: %s", cleanup_error)
+
+                retrieval_result = run_with_timeout(
+                    _run_live_retrieval,
+                    search_timeout_seconds,
                 )
             except live_retrieval_module.LiveCatalogPreparingError:
                 logger.warning(
@@ -1637,8 +1684,29 @@ def search_similar():
                         'message': '图搜服务预热中，请稍后重试',
                     }
                 ), 503
-            finally:
-                release_live_search_slot()
+            except SearchExecutionTimeoutError:
+                retrieval_elapsed = time.perf_counter() - retrieval_started_at
+                log_search_similar_no_match(
+                    logger,
+                    total_elapsed=time.perf_counter() - request_started_at,
+                    filter_stage_elapsed=filter_stage_elapsed,
+                    retrieval_elapsed=retrieval_elapsed,
+                    has_global_filter_images=has_global_filter_images,
+                    has_user_website_filter_images=has_user_website_filter_images,
+                    result_count=0,
+                    threshold=threshold,
+                    user_id=user_id,
+                    user_shops=user_shops,
+                    timed_out=True,
+                    timeout_seconds=search_timeout_seconds,
+                )
+                return jsonify(
+                    {
+                        'error': 'search timeout',
+                        'retryable': True,
+                        'message': '图搜请求超时，请稍后重试',
+                    }
+                ), 503
             retrieval_elapsed = time.perf_counter() - retrieval_started_at
             results = retrieval_result.get('ranked_products', [])
 
@@ -1800,12 +1868,33 @@ def search_similar():
                     user_id,
                     user_shops,
                 )
+            if not results:
+                log_search_similar_no_match(
+                    logger,
+                    total_elapsed=total_elapsed,
+                    filter_stage_elapsed=filter_stage_elapsed,
+                    retrieval_elapsed=retrieval_elapsed,
+                    has_global_filter_images=has_global_filter_images,
+                    has_user_website_filter_images=has_user_website_filter_images,
+                    result_count=len(results),
+                    threshold=threshold,
+                    user_id=user_id,
+                    user_shops=user_shops,
+                )
             return jsonify(response_data)
 
         finally:
-            # 清理临时文件
-            if os.path.exists(image_path):
-                os.unlink(image_path)
+            if not search_worker_started:
+                try:
+                    if release_live_search_slot is not None:
+                        release_live_search_slot()
+                except Exception:
+                    pass
+                try:
+                    if os.path.exists(image_path):
+                        os.unlink(image_path)
+                except Exception:
+                    pass
 
     except Exception as e:
         logger.error(f"搜索失败: {e}")
