@@ -693,6 +693,71 @@ def _is_image_match_above_reply_threshold(match_context, website_config):
     return similarity >= threshold_to_use
 
 
+def _extract_image_match_top1_margin(payload):
+    if not isinstance(payload, dict):
+        return None
+
+    margin = _coerce_float(payload.get('top1_margin'))
+    if margin is not None:
+        return margin
+
+    score_breakdown = payload.get('scoreBreakdown') or payload.get('score_breakdown') or {}
+    if isinstance(score_breakdown, dict):
+        margin = _coerce_float(
+            score_breakdown.get('top1Margin', score_breakdown.get('top1_margin'))
+        )
+        if margin is not None:
+            return margin
+
+    return None
+
+
+def _should_allow_below_threshold_link_reply(match_context):
+    return bool(
+        isinstance(match_context, dict)
+        and match_context.get('type') == 'image'
+        and match_context.get('allow_below_threshold_link_reply')
+    )
+
+
+def _resolve_image_reply_min_top1_margin():
+    configured = _coerce_float(
+        getattr(config, 'DISCORD_IMAGE_REPLY_MIN_TOP1_MARGIN', 0.0)
+    )
+    return max(configured or 0.0, 0.0)
+
+
+def _get_image_match_reply_block_reason(match_context, website_config):
+    if not isinstance(match_context, dict) or match_context.get('type') != 'image':
+        return None
+
+    similarity = _coerce_float(match_context.get('similarity')) or 0.0
+    threshold_to_use = _resolve_image_reply_threshold(match_context, website_config)
+    allow_below_threshold_link_reply = _should_allow_below_threshold_link_reply(match_context)
+
+    if similarity < threshold_to_use:
+        if allow_below_threshold_link_reply:
+            return None
+        return (
+            f"📷 图片相似度 {similarity:.3f} 低于网站阈值 {threshold_to_use:.3f}，跳过回复"
+        )
+
+    margin_threshold = _resolve_image_reply_min_top1_margin()
+    if margin_threshold <= 0:
+        return None
+
+    top1_margin = _extract_image_match_top1_margin(match_context)
+    if top1_margin is None:
+        return None
+
+    if top1_margin < margin_threshold:
+        return (
+            f"📷 图片命中分差过小: top1-top2分差 {top1_margin:.3f} < {margin_threshold:.3f}，跳过回复"
+        )
+
+    return None
+
+
 def _build_keyword_review_message_proxy(review_item):
     payload = review_item.get('payload') or {}
     message_payload = payload.get('message') or {}
@@ -2316,13 +2381,9 @@ class DiscordBotClient(discord.Client):
                 except Exception:
                     return None
 
-            similarity = _coerce_float(match_context.get('similarity')) or 0.0
-            threshold_to_use = _resolve_image_reply_threshold(match_context, website_config)
-
-            if similarity < threshold_to_use:
-                logger.info(
-                    f"📷 图片相似度 {similarity:.3f} 低于网站阈值 {threshold_to_use:.3f}，跳过回复"
-                )
+            block_reason = _get_image_match_reply_block_reason(match_context, website_config)
+            if block_reason:
+                logger.info(block_reason)
                 return None
 
         rotation_interval = _coerce_int(
@@ -3831,13 +3892,9 @@ class DiscordBotClient(discord.Client):
                         except Exception:
                             continue
                 if not skip_filters and not prevalidated_batch and match_context and match_context.get('type') == 'image':
-                    similarity = _coerce_float(match_context.get('similarity')) or 0.0
-                    threshold_to_use = _resolve_image_reply_threshold(match_context, website_config)
-
-                    if similarity < threshold_to_use:
-                        logger.info(
-                            f"📷 图片相似度 {similarity:.3f} 低于网站阈值 {threshold_to_use:.3f}，跳过回复"
-                        )
+                    block_reason = _get_image_match_reply_block_reason(match_context, website_config)
+                    if block_reason:
+                        logger.info(block_reason)
                         continue
 
                 active_product, website_product_custom_reply, _, _ = _prepare_effective_product_reply(
@@ -5305,8 +5362,17 @@ class DiscordBotClient(discord.Client):
                 # 获取最佳匹配结果
                 best_match = result['results'][0]
                 similarity = best_match.get('similarity', 0)
+                top1_margin = _extract_image_match_top1_margin(best_match)
 
                 logger.debug(f'最佳匹配相似度: {similarity:.4f}, 用户阈值: {user_threshold:.4f}')
+
+                image_match_context = {
+                    'type': 'image',
+                    'similarity': similarity,
+                    'base_threshold': user_threshold,
+                    'top1_margin': top1_margin,
+                    'website_filter_matches': blocked_website_filter_matches,
+                }
 
                 below_reply_threshold = similarity < skip_threshold
                 if below_reply_threshold:
@@ -5322,6 +5388,26 @@ class DiscordBotClient(discord.Client):
                         f'⏭️ 图片命中未过阈值，记录略过历史并继续发送链接: '
                         f'相似度 {similarity:.3f} < {skip_threshold:.3f} | 频道: {message.channel.name}'
                     )
+                    image_match_context['allow_below_threshold_link_reply'] = True
+                else:
+                    confidence_block_reason = _get_image_match_reply_block_reason(
+                        image_match_context,
+                        {'image_similarity_threshold': skip_threshold},
+                    )
+                    if confidence_block_reason:
+                        await self._record_skipped_image_history(
+                            image_data=image_data,
+                            attachment=attachment,
+                            message=message,
+                            similarity=similarity,
+                            threshold=skip_threshold,
+                            best_match=best_match,
+                        )
+                        logger.info(
+                            f'⏭️ 图片命中不够稳，记录略过历史并跳过回复: '
+                            f'{confidence_block_reason} | 频道: {message.channel.name}'
+                        )
+                        return False
 
                 product = best_match.get('product', {})
                 product_title = (product.get('title') or '').strip()
@@ -5401,11 +5487,8 @@ class DiscordBotClient(discord.Client):
                     product,
                     custom_reply,
                     match_context={
-                        'type': 'image',
-                        'similarity': similarity,
-                        'base_threshold': user_threshold,
+                        **image_match_context,
                         'best_match_image_index': best_match.get('imageIndex', best_match.get('image_index')),
-                        'website_filter_matches': blocked_website_filter_matches,
                         'ocr_text': ocr_text,
                     },
                     website_configs_override=website_configs,

@@ -7,6 +7,7 @@ from backend import bot as bot_module
 from backend.bot import (
     MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS,
     _auto_reply_thread_ids,
+    _get_image_match_reply_block_reason,
     filter_forum_channel_configs_for_message,
     _get_image_recognition_request_timeout_seconds,
     _is_image_match_above_reply_threshold,
@@ -147,6 +148,64 @@ class BotTimeoutHelpersTestCase(unittest.TestCase):
                 {"image_similarity_threshold": None},
             )
         )
+
+    def test_image_match_block_reason_allows_below_threshold_link_fallback(self):
+        with patch.object(
+            bot_module.config,
+            "DISCORD_IMAGE_REPLY_MIN_TOP1_MARGIN",
+            0.03,
+            create=True,
+        ):
+            reason = _get_image_match_reply_block_reason(
+                {
+                    "type": "image",
+                    "similarity": 0.58,
+                    "base_threshold": 0.63,
+                    "top1_margin": 0.01,
+                    "allow_below_threshold_link_reply": True,
+                },
+                {"image_similarity_threshold": None},
+            )
+
+        self.assertIsNone(reason)
+
+    def test_image_match_block_reason_rejects_when_top1_margin_too_small(self):
+        with patch.object(
+            bot_module.config,
+            "DISCORD_IMAGE_REPLY_MIN_TOP1_MARGIN",
+            0.03,
+            create=True,
+        ):
+            reason = _get_image_match_reply_block_reason(
+                {
+                    "type": "image",
+                    "similarity": 0.72,
+                    "base_threshold": 0.63,
+                    "top1_margin": 0.01,
+                },
+                {"image_similarity_threshold": None},
+            )
+
+        self.assertIn("top1-top2分差", reason)
+
+    def test_image_match_block_reason_accepts_when_margin_is_large_enough(self):
+        with patch.object(
+            bot_module.config,
+            "DISCORD_IMAGE_REPLY_MIN_TOP1_MARGIN",
+            0.03,
+            create=True,
+        ):
+            reason = _get_image_match_reply_block_reason(
+                {
+                    "type": "image",
+                    "similarity": 0.72,
+                    "base_threshold": 0.63,
+                    "top1_margin": 0.06,
+                },
+                {"image_similarity_threshold": None},
+            )
+
+        self.assertIsNone(reason)
 
     def test_below_threshold_image_match_records_skip_then_continues_to_link_reply(self):
         source = Path(bot_module.__file__).read_text(encoding="utf-8")
