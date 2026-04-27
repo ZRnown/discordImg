@@ -397,9 +397,13 @@ export function ImageSearchView() {
           toast.info(result.message || "未找到相似商品");
         }
       } else {
-        const errorText = await searchRes.text();
-        console.error('Search failed:', errorText);
-        toast.error("搜索失败");
+        const errorData = await searchRes.json().catch(() => ({}))
+        console.error('Search failed:', errorData);
+        const message =
+          typeof (errorData as { message?: unknown }).message === 'string'
+            ? (errorData as { message: string }).message.trim()
+            : ''
+        toast.error(message || getApiErrorMessage(errorData, "搜索失败"));
       }
     } catch (error) {
       console.error('Search error:', error);

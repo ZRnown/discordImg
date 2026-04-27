@@ -15,8 +15,18 @@ export async function POST(request: NextRequest) {
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error('Backend search_similar error:', errorText);
-      return NextResponse.json({ error: 'Search failed' }, { status: response.status });
+      let errorData: Record<string, unknown> = { error: 'Search failed' };
+
+      if (errorText.trim()) {
+        try {
+          errorData = JSON.parse(errorText);
+        } catch {
+          errorData = { error: errorText.trim() };
+        }
+      }
+
+      console.error('Backend search_similar error:', errorData);
+      return NextResponse.json(errorData, { status: response.status });
     }
 
     const data = await response.json();
