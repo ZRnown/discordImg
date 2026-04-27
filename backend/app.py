@@ -1007,11 +1007,7 @@ def initialize_runtime():
                         f"catalog_size={warm_summary.get('catalog_size', 0)}"
                     )
 
-                ai_model_ready = not strategy_requires_persisted_catalog_cache(strategy_name) or getattr(
-                    config,
-                    'LIVE_IMAGE_SEARCH_STARTUP_PREPARE_CATALOG',
-                    True,
-                )
+                ai_model_ready = True
                 print("✅ [系统] AI模型预热完成，系统已就绪")
 
                 if should_run_startup_cache_compaction(config, strategy_name):
