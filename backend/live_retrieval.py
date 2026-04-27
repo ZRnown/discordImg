@@ -1735,7 +1735,14 @@ class LiveImageRetriever:
                 if self._catalog_refresh_required:
                     self._start_background_refresh_locked()
                 return self._strategy, self._prepared_catalog
-        return self._prepare_catalog_now()
+            started = self._start_background_refresh_locked()
+        if started:
+            raise LiveCatalogPreparingError(
+                f"Live retrieval catalog is preparing: strategy={self.strategy_name}"
+            )
+        raise LiveCatalogPreparingError(
+            f"Live retrieval catalog is already preparing: strategy={self.strategy_name}"
+        )
 
     def _search_streaming(
         self,
