@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -146,6 +147,12 @@ class BotTimeoutHelpersTestCase(unittest.TestCase):
                 {"image_similarity_threshold": None},
             )
         )
+
+    def test_below_threshold_image_match_records_skip_without_sending_reply(self):
+        source = Path(bot_module.__file__).read_text(encoding="utf-8")
+
+        self.assertIn("图片命中未过阈值，记录略过历史并跳过回复", source)
+        self.assertNotIn("图片命中未过阈值，记录略过历史并继续发送链接", source)
 
     def test_summarize_exception_for_log_collapses_whitespace_and_truncates(self):
         error = RuntimeError("429 Too Many Requests\n\n" + ("x" * 260))

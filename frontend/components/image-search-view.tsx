@@ -28,6 +28,7 @@ export function ImageSearchView() {
   const [hasMoreHistory, setHasMoreHistory] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
   const [historyFilter, setHistoryFilter] = useState<"all" | "normal" | "skipped">("all")
+  const [previewImage, setPreviewImage] = useState<{ src: string; title: string } | null>(null)
   const [availableWebsites, setAvailableWebsites] = useState<any[]>([])
   const historyPageSize = 10
   const historyPageCacheRef = useRef(new Map<string, { history: any[]; total: number; hasMore: boolean }>())
@@ -198,16 +199,22 @@ export function ImageSearchView() {
 
   const getHistoryPageItems = () => {
     const totalPages = Math.max(1, Math.ceil(totalHistory / historyPageSize))
-    if (totalPages <= 7) {
+    if (totalPages <= 11) {
       return Array.from({ length: totalPages }, (_, index) => index + 1)
     }
 
-    const pages = new Set([1, totalPages, currentPage - 1, currentPage, currentPage + 1])
-    if (currentPage <= 4) {
-      ;[2, 3, 4, 5].forEach(page => pages.add(page))
+    const firstWindowEnd = 3
+    const lastWindowStart = totalPages - 2
+    const pages = new Set<number>()
+
+    for (let page = 1; page <= firstWindowEnd; page += 1) {
+      pages.add(page)
     }
-    if (currentPage >= totalPages - 3) {
-      ;[totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1].forEach(page => pages.add(page))
+    for (let page = currentPage - 2; page <= currentPage + 2; page += 1) {
+      pages.add(page)
+    }
+    for (let page = lastWindowStart; page <= totalPages; page += 1) {
+      pages.add(page)
     }
 
     const sorted = Array.from(pages)
@@ -733,11 +740,17 @@ export function ImageSearchView() {
           <CardHeader className="pb-4">
             <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4">
               <div>
-                <CardTitle className="text-lg">搜索记录</CardTitle>
-                <CardDescription>历史搜索结果和群内图片略过记录，按时间倒序排列</CardDescription>
+                <CardTitle className="text-lg">
+                  {historyFilter === "skipped" ? "被略过的商品" : "搜索记录"}
+                </CardTitle>
+                <CardDescription>
+                  {historyFilter === "skipped"
+                    ? "没有达到阈值的群内图片消息会记录在这里"
+                    : "历史搜索结果和群内图片略过记录，按时间倒序排列"}
+                </CardDescription>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <label className="text-sm text-muted-foreground" htmlFor="image-search-history-filter">是否略过</label>
+                <label className="text-sm text-muted-foreground" htmlFor="image-search-history-filter">记录类型</label>
                 <select
                   id="image-search-history-filter"
                   value={historyFilter}
@@ -759,7 +772,7 @@ export function ImageSearchView() {
                     className="shrink-0"
                   >
                     <Trash2 className="w-4 h-4 mr-1" />
-                    清空历史
+                    {historyFilter === "skipped" ? "清空记录" : "清空历史"}
                   </Button>
                 )}
               </div>
@@ -776,6 +789,9 @@ export function ImageSearchView() {
               <div className="space-y-3">
                 {searchHistory.map((history) => {
                   const isSkipped = Boolean(Number(history.is_skipped || 0))
+                  const matchedImageSrc = history.matched_product_id && history.matched_image_index !== null && history.matched_image_index !== undefined
+                    ? `/api/image/${history.matched_product_id}/${history.matched_image_index}`
+                    : ''
                   const historyLinks = (history.websiteUrls && history.websiteUrls.length > 0)
                     ? history.websiteUrls
                     : [
@@ -791,23 +807,34 @@ export function ImageSearchView() {
                       {/* 匹配图片和基本信息 */}
                       <div className="flex gap-3 items-center flex-1">
                         {/* 匹配的商品图片 */}
-                        {history.matched_product_id && (
+                        {matchedImageSrc && (
                           <div className="flex-shrink-0">
-                            <div className="w-16 h-16 bg-muted rounded-lg overflow-hidden">
+                            <button
+                              type="button"
+                              className="w-16 h-16 bg-muted rounded-lg overflow-hidden border border-transparent hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                              onClick={() => setPreviewImage({
+                                src: matchedImageSrc,
+                                title: isSkipped ? "最高相似商品图" : "匹配商品图",
+                              })}
+                              title="预览商品图片"
+                            >
                               <img
-                                src={`/api/image/${history.matched_product_id}/${history.matched_image_index}`}
-                                alt="匹配的商品图片"
+                                src={matchedImageSrc}
+                                alt={isSkipped ? "最高相似商品图" : "匹配的商品图片"}
                                 className="w-full h-full object-cover"
                                 onError={(e) => {
                                   e.currentTarget.src = '/placeholder.jpg'
                                 }}
                               />
-                            </div>
+                            </button>
                           </div>
                         )}
 
                         <div className="space-y-0.5 min-w-0 flex-1">
                           <div className="flex items-center gap-2">
+                            {isSkipped && (
+                              <span className="text-xs font-medium text-muted-foreground shrink-0">最高相似商品图</span>
+                            )}
                             <h4 className="font-bold text-base truncate max-w-[200px] sm:max-w-[400px]">{history.title || '未命中商品'}</h4>
                             {isSkipped && (
                               <Badge variant="outline" className="border-red-200 bg-red-50 text-red-700">
@@ -955,6 +982,24 @@ export function ImageSearchView() {
             )}
           </CardContent>
         </Card>
+
+        <Dialog open={Boolean(previewImage)} onOpenChange={(open) => !open && setPreviewImage(null)}>
+          <DialogContent className="sm:max-w-2xl">
+            <DialogHeader>
+              <DialogTitle>{previewImage?.title || "图片预览"}</DialogTitle>
+              <DialogDescription>点击图片外区域或关闭按钮返回列表</DialogDescription>
+            </DialogHeader>
+            {previewImage && (
+              <div className="max-h-[70vh] overflow-hidden rounded-md bg-muted">
+                <img
+                  src={previewImage.src}
+                  alt={previewImage.title}
+                  className="mx-auto max-h-[70vh] w-full object-contain"
+                />
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
 
         {/* 清空历史确认对话框 */}
         <Dialog open={showClearConfirm} onOpenChange={setShowClearConfirm}>

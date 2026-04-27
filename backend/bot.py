@@ -1130,7 +1130,7 @@ async def resolve_reply_target_channel(
     if not thread_reply_enabled or target_channel is None or message is None:
         return target_channel, False
 
-    if getattr(target_channel, 'parent_id', None) is not None:
+    if _resolve_forum_parent_channel_id(target_channel) is not None:
         target_thread_id = getattr(target_channel, 'id', None)
         if target_thread_id is not None:
             _store_cached_auto_reply_thread_id(message, target_thread_id)
@@ -1144,7 +1144,7 @@ async def resolve_reply_target_channel(
         _clear_cached_auto_reply_thread_id(message)
 
     current_channel = getattr(message, 'channel', None)
-    current_channel_parent_id = getattr(current_channel, 'parent_id', None)
+    current_channel_parent_id = _resolve_forum_parent_channel_id(current_channel)
     if current_channel_parent_id is not None:
         current_thread = await _resolve_client_channel(target_client, getattr(current_channel, 'id', None))
         if current_thread is not None:
@@ -5319,7 +5319,8 @@ class DiscordBotClient(discord.Client):
                         best_match=best_match,
                     )
                     logger.info(
-                        f'⏭️ 图片命中未过阈值，跳过回复: 相似度 {similarity:.3f} < {skip_threshold:.3f} | 频道: {message.channel.name}'
+                        f'⏭️ 图片命中未过阈值，记录略过历史并跳过回复: '
+                        f'相似度 {similarity:.3f} < {skip_threshold:.3f} | 频道: {message.channel.name}'
                     )
                     return False
 

@@ -7,16 +7,26 @@ test('accounts personal settings expose the best-match-image toggle', () => {
 
   assert.equal(source.includes('keyword_reply_send_best_match_image'), true)
   assert.equal(source.includes('图片过阈值时发送图和链接'), true)
-  assert.equal(source.includes('未达到阈值时不发送'), true)
+  assert.equal(source.includes('未达到阈值时不发送，并记录到被略过的商品'), true)
 })
 
-test('image search view folds skipped images into search history with a filter', () => {
+test('image search view defaults to all history while keeping skipped filter', () => {
   const source = readFileSync(new URL('./components/image-search-view.tsx', import.meta.url), 'utf8')
 
-  assert.equal(source.includes('historyFilter'), true)
-  assert.equal(source.includes('是否略过'), true)
+  assert.equal(source.includes('useState<"all" | "normal" | "skipped">("all")'), true)
+  assert.equal(source.includes('被略过的商品'), true)
+  assert.equal(source.includes('搜索记录'), true)
   assert.equal(source.includes('已略过'), true)
   assert.equal(source.includes('/api/skipped_image_history'), false)
+})
+
+test('image search history preview and pagination expose far pages', () => {
+  const source = readFileSync(new URL('./components/image-search-view.tsx', import.meta.url), 'utf8')
+
+  assert.equal(source.includes('previewImage'), true)
+  assert.equal(source.includes('setPreviewImage'), true)
+  assert.equal(source.includes('firstWindowEnd'), true)
+  assert.equal(source.includes('lastWindowStart'), true)
 })
 
 test('image search history pages are cached for faster pagination', () => {
@@ -32,4 +42,12 @@ test('search history api route forwards skipped filter requests', () => {
 
   assert.equal(source.includes("url.searchParams.get('skipped')"), true)
   assert.equal(source.includes('skipped=${encodeURIComponent(skipped)}'), true)
+})
+
+test('accounts view scopes cached settings by current logged-in user', () => {
+  const source = readFileSync(new URL('./components/accounts-view.tsx', import.meta.url), 'utf8')
+
+  assert.equal(source.includes('discord_marketing_bark_settings_v1:'), true)
+  assert.equal(source.includes('preload_settings:'), true)
+  assert.equal(source.includes('currentUser?.id'), true)
 })

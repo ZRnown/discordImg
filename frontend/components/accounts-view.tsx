@@ -237,7 +237,16 @@ const createFilterId = () => {
   return `f_${Date.now()}_${Math.random().toString(16).slice(2)}`
 }
 
-const BARK_SETTINGS_CACHE_KEY = 'discord_marketing_bark_settings_v1'
+const BARK_SETTINGS_CACHE_KEY_PREFIX = 'discord_marketing_bark_settings_v1:'
+const PRELOAD_SETTINGS_KEY_PREFIX = 'preload_settings:'
+
+const buildScopedSettingsCacheKey = (prefix: string, userId: unknown) => {
+  const normalizedUserId = String(userId ?? '').trim()
+  if (!normalizedUserId) {
+    return ''
+  }
+  return `${prefix}${normalizedUserId}`
+}
 
 const hasOwn = (obj: any, key: string) => Object.prototype.hasOwnProperty.call(obj, key)
 const WEBSITE_REPLY_LANGUAGE_LABELS = Object.fromEntries(
@@ -281,12 +290,16 @@ const pickBarkSettings = (source: any) => ({
   bark_device_key: String(source?.bark_device_key || ''),
 })
 
-const readBarkSettingsCache = () => {
+const readBarkSettingsCache = (userId: unknown) => {
   if (typeof window === 'undefined') {
     return {}
   }
+  const cacheKey = buildScopedSettingsCacheKey(BARK_SETTINGS_CACHE_KEY_PREFIX, userId)
+  if (!cacheKey) {
+    return {}
+  }
   try {
-    const raw = localStorage.getItem(BARK_SETTINGS_CACHE_KEY)
+    const raw = localStorage.getItem(cacheKey)
     if (!raw) return {}
     const parsed = JSON.parse(raw)
     return {
@@ -299,13 +312,17 @@ const readBarkSettingsCache = () => {
   }
 }
 
-const writeBarkSettingsCache = (settings: any) => {
+const writeBarkSettingsCache = (userId: unknown, settings: any) => {
   if (typeof window === 'undefined') {
+    return
+  }
+  const cacheKey = buildScopedSettingsCacheKey(BARK_SETTINGS_CACHE_KEY_PREFIX, userId)
+  if (!cacheKey) {
     return
   }
   try {
     localStorage.setItem(
-      BARK_SETTINGS_CACHE_KEY,
+      cacheKey,
       JSON.stringify({
         bark_enabled: !!settings?.bark_enabled,
         bark_server_url: settings?.bark_server_url || 'https://api.day.app',
@@ -1176,31 +1193,35 @@ const formatWebsiteForEdit = (website: any) => ({
 
   useEffect(() => {
     if (!isActive) return
-    // 先恢复本地 Bark 配置缓存，避免后端响应缺字段时把输入框清空
-    const cached = readBarkSettingsCache()
-    if (Object.keys(cached).length > 0) {
-      setSettings(prev => ({ ...prev, ...cached }))
-    }
-    barkCacheHydratedRef.current = true
+    barkCacheHydratedRef.current = false
 
     // 先获取当前用户，再决定是否获取用户列表
     const init = async () => {
-        const userRes = await fetch('/api/auth/me', { credentials: 'include' });
-        if (userRes.ok) {
-            const userData = await userRes.json();
-            setCurrentUser(userData.user);
+      const userRes = await fetch('/api/auth/me', { credentials: 'include' })
+      if (!userRes.ok) {
+        barkCacheHydratedRef.current = true
+        fetchSettings(false)
+        return
+      }
 
-            // 并行获取数据
-            fetchAccounts(); // 所有人都能获取账号(自己的)
+      const userData = await userRes.json()
+      const nextUser = userData.user || null
+      setCurrentUser(nextUser)
 
-            // 只有管理员才获取用户列表
-            if (userData.user.role === 'admin') {
-                fetchUsers();
-            }
-        }
-    };
-    init();
-    fetchSettings();
+      const cached = readBarkSettingsCache(nextUser?.id)
+      if (Object.keys(cached).length > 0) {
+        setSettings(prev => ({ ...prev, ...cached }))
+      }
+      barkCacheHydratedRef.current = true
+
+      fetchAccounts()
+      if (nextUser?.role === 'admin') {
+        fetchUsers()
+      }
+      fetchSettings(true, nextUser?.id)
+    }
+
+    init()
     fetchWebsites(true); // 强制刷新，清除旧的缓存数据
     fetchMessageFilters();
     fetchCooldowns();
@@ -1261,8 +1282,8 @@ const formatWebsiteForEdit = (website: any) => ({
     if (!barkCacheHydratedRef.current) {
       return
     }
-    writeBarkSettingsCache(settings)
-  }, [settings.bark_enabled, settings.bark_server_url, settings.bark_device_key])
+    writeBarkSettingsCache(currentUser?.id, settings)
+  }, [currentUser?.id, settings.bark_enabled, settings.bark_server_url, settings.bark_device_key])
 
   useEffect(() => {
     return () => {
@@ -1319,11 +1340,13 @@ const formatWebsiteForEdit = (website: any) => ({
     }
   }, [])
 
-  const fetchSettings = async (usePreload: boolean = true) => {
+  const fetchSettings = async (usePreload: boolean = true, scopedUserId: unknown = currentUser?.id) => {
     try {
+      const preloadSettingsKey = buildScopedSettingsCacheKey(PRELOAD_SETTINGS_KEY_PREFIX, scopedUserId)
+
       // 首先检查是否有预加载数据
-      if (usePreload) {
-        const preloadData = sessionStorage.getItem('preload_settings')
+      if (usePreload && preloadSettingsKey) {
+        const preloadData = sessionStorage.getItem(preloadSettingsKey)
         if (preloadData) {
           try {
             console.log('使用预加载设置数据')
@@ -1336,24 +1359,24 @@ const formatWebsiteForEdit = (website: any) => ({
             setSettingsFetchedOnce(true)
 
             // 清除预加载数据，避免重复使用
-            sessionStorage.removeItem('preload_settings')
+            sessionStorage.removeItem(preloadSettingsKey)
 
             // 在后台获取最新数据，但不显示加载状态
-            setTimeout(() => fetchSettings(false), 500)
+            setTimeout(() => fetchSettings(false, scopedUserId), 500)
             return
           } catch (e) {
             console.error('预加载设置数据解析失败:', e)
             // 预加载数据损坏，清除并重新获取
-            sessionStorage.removeItem('preload_settings')
+            sessionStorage.removeItem(preloadSettingsKey)
           }
         } else {
           // 如果没有预加载数据，等待一下再试
           setTimeout(() => {
-            const retryPreload = sessionStorage.getItem('preload_settings')
+            const retryPreload = sessionStorage.getItem(preloadSettingsKey)
             if (retryPreload) {
-              fetchSettings(true)
+              fetchSettings(true, scopedUserId)
             } else {
-              fetchSettings(false)
+              fetchSettings(false, scopedUserId)
             }
           }, 200)
           return
