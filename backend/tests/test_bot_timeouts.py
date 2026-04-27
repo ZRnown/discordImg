@@ -8,6 +8,7 @@ from backend.bot import (
     MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS,
     _auto_reply_thread_ids,
     _get_image_match_reply_block_reason,
+    dispatch_keyword_review_item,
     filter_forum_channel_configs_for_message,
     _get_image_recognition_request_timeout_seconds,
     _is_image_match_above_reply_threshold,
@@ -506,6 +507,150 @@ class ResolveMessageReplyChannelTestCase(unittest.IsolatedAsyncioTestCase):
 
         self.assertIs(resolved, fetched_thread)
         target_client.fetch_channel.assert_awaited_once_with(555001)
+
+    async def test_falls_back_to_parent_channel_when_saved_thread_is_unavailable(self):
+        parent_channel = SimpleNamespace(id=123001, parent_id=None)
+        target_client = SimpleNamespace(
+            get_channel=lambda channel_id: parent_channel if channel_id == 123001 else None,
+            fetch_channel=AsyncMock(side_effect=RuntimeError("thread gone")),
+        )
+        message = SimpleNamespace(channel=SimpleNamespace(id=555001, parent_id=123001))
+
+        resolved = await _resolve_message_reply_channel(target_client, message)
+
+        self.assertIs(resolved, parent_channel)
+        target_client.fetch_channel.assert_awaited_once_with(555001)
+
+
+class DispatchKeywordReviewItemTestCase(unittest.IsolatedAsyncioTestCase):
+    async def test_uses_current_website_thresholds_when_dispatching_review_item(self):
+        review_item = {
+            "id": 77,
+            "user_id": 9,
+            "website_id": 12,
+            "payload": {
+                "website_config": {
+                    "id": 12,
+                    "name": "old-site",
+                    "image_similarity_threshold": 0.63,
+                    "best_match_image_similarity_threshold": 0.75,
+                },
+                "message": {
+                    "id": 7001,
+                    "channel_id": 123001,
+                    "channel_name": "parent-channel",
+                    "guild_id": 9001,
+                    "author_id": 42,
+                    "author_name": "buyer",
+                    "content": "keyword",
+                },
+                "product": {"id": 1001},
+                "match_context": {
+                    "type": "image",
+                    "similarity": 0.99,
+                    "base_threshold": 0.63,
+                    "best_match_image_base_threshold": 0.97,
+                    "top1_margin": 0.08,
+                },
+            },
+        }
+        fake_client = SimpleNamespace(
+            schedule_reply=AsyncMock(return_value=True),
+        )
+
+        from backend.database import db as database_db
+
+        with patch.object(
+            bot_module,
+            "_select_keyword_review_dispatch_client",
+            return_value=fake_client,
+        ), patch.object(
+            database_db,
+            "get_website_configs_by_channel",
+            return_value=[
+                {
+                    "id": 12,
+                    "name": "new-site",
+                    "image_similarity_threshold": 0.93,
+                    "best_match_image_similarity_threshold": 0.97,
+                    "keyword_review_enabled": 1,
+                }
+            ],
+        ), patch.object(
+            database_db,
+            "update_keyword_reply_review_item_status",
+        ):
+            success = await dispatch_keyword_review_item(review_item)
+
+        self.assertTrue(success)
+        fake_client.schedule_reply.assert_awaited_once()
+        website_configs_override = fake_client.schedule_reply.await_args.kwargs["website_configs_override"]
+        self.assertEqual(website_configs_override[0]["image_similarity_threshold"], 0.93)
+        self.assertEqual(
+            website_configs_override[0]["best_match_image_similarity_threshold"],
+            0.97,
+        )
+
+    async def test_blocks_review_dispatch_when_current_threshold_rejects_image_match(self):
+        review_item = {
+            "id": 78,
+            "user_id": 9,
+            "website_id": 12,
+            "payload": {
+                "website_config": {
+                    "id": 12,
+                    "name": "old-site",
+                    "image_similarity_threshold": 0.63,
+                },
+                "message": {
+                    "id": 7002,
+                    "channel_id": 123001,
+                    "channel_name": "parent-channel",
+                    "guild_id": 9001,
+                    "author_id": 42,
+                    "author_name": "buyer",
+                    "content": "keyword",
+                },
+                "product": {"id": 1002},
+                "match_context": {
+                    "type": "image",
+                    "similarity": 0.91,
+                    "base_threshold": 0.63,
+                    "top1_margin": 0.08,
+                },
+            },
+        }
+        fake_client = SimpleNamespace(
+            schedule_reply=AsyncMock(return_value=True),
+        )
+
+        from backend.database import db as database_db
+
+        with patch.object(
+            bot_module,
+            "_select_keyword_review_dispatch_client",
+            return_value=fake_client,
+        ), patch.object(
+            database_db,
+            "get_website_configs_by_channel",
+            return_value=[
+                {
+                    "id": 12,
+                    "name": "new-site",
+                    "image_similarity_threshold": 0.93,
+                    "keyword_review_enabled": 1,
+                }
+            ],
+        ), patch.object(
+            database_db,
+            "update_keyword_reply_review_item_status",
+        ) as mock_update_status:
+            success = await dispatch_keyword_review_item(review_item)
+
+        self.assertFalse(success)
+        fake_client.schedule_reply.assert_not_awaited()
+        mock_update_status.assert_called_once()
+        self.assertEqual(mock_update_status.call_args.args[1], "failed")
 
 
 class KeywordReviewMessageProxyTestCase(unittest.TestCase):

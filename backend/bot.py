@@ -932,6 +932,35 @@ def _select_keyword_review_dispatch_client(review_item):
     return running_clients[0]
 
 
+def _resolve_current_review_dispatch_website_config(review_item, message, payload_website_config):
+    website_config = payload_website_config if isinstance(payload_website_config, dict) else {}
+    website_id = _coerce_int(website_config.get('id') or review_item.get('website_id'), None)
+    user_id = _coerce_int(review_item.get('user_id'), None)
+    if website_id is None or user_id is None or message is None:
+        return website_config
+
+    try:
+        try:
+            from database import db
+        except ImportError:
+            from .database import db
+
+        lookup_ids = DiscordBotClient._resolve_channel_lookup_ids(getattr(message, 'channel', None))
+        current_configs = db.get_website_configs_by_channel(lookup_ids, user_id)
+        matched_config = next(
+            (config for config in (current_configs or []) if _coerce_int(config.get('id'), None) == website_id),
+            None,
+        )
+        if matched_config:
+            return matched_config
+    except Exception as exc:
+        logger.warning(
+            f"刷新审核派发网站配置失败: website_id={website_id} user_id={user_id} | {exc}"
+        )
+
+    return website_config
+
+
 async def dispatch_keyword_review_item(review_item):
     """审批通过后，按当前网站配置和账号状态发送待审关键词回复。"""
     item_id = _coerce_int(review_item.get('id'), None)
@@ -946,18 +975,32 @@ async def dispatch_keyword_review_item(review_item):
             raise RuntimeError('没有可用的在线机器人账号来发送审核通过的消息')
 
         payload = review_item.get('payload') or {}
-        website_config = payload.get('website_config') or {}
+        message = _build_keyword_review_message_proxy(review_item)
+        website_config = _resolve_current_review_dispatch_website_config(
+            review_item,
+            message,
+            payload.get('website_config') or {},
+        )
         if not isinstance(website_config, dict):
             website_config = {}
         if not website_config.get('id'):
             website_config = {
                 'id': review_item.get('website_id'),
             }
-
-        message = _build_keyword_review_message_proxy(review_item)
         product = payload.get('product') or {}
         custom_reply = _prepare_review_dispatch_custom_reply(payload.get('custom_reply'))
         match_context = payload.get('match_context')
+
+        block_reason = _get_image_match_reply_block_reason(match_context, website_config)
+        if block_reason:
+            logger.info(f"审批后发送前命中图片阈值拦截: {block_reason}")
+            if item_id:
+                db.update_keyword_reply_review_item_status(
+                    item_id,
+                    'failed',
+                    error_message=block_reason,
+                )
+            return False
 
         success = await client.schedule_reply(
             message,
@@ -1116,7 +1159,21 @@ async def _resolve_message_reply_channel(target_client, message):
         return None
     message_channel = getattr(message, "channel", None)
     message_channel_id = getattr(message_channel, "id", None)
-    return await _resolve_client_channel(target_client, message_channel_id)
+    resolved_channel = await _resolve_client_channel(target_client, message_channel_id)
+    if resolved_channel is not None:
+        return resolved_channel
+
+    parent_channel_id = getattr(message_channel, "parent_id", None)
+    if parent_channel_id is None:
+        parent_channel = getattr(message_channel, "parent", None)
+        parent_channel_id = getattr(parent_channel, "id", None)
+    if parent_channel_id is not None:
+        logger.info(
+            f"子区频道不可达，回退到父频道继续查找: "
+            f"channel={message_channel_id} parent={parent_channel_id}"
+        )
+        return await _resolve_client_channel(target_client, parent_channel_id)
+    return None
 
 
 async def _resolve_message_thread_id(message):
