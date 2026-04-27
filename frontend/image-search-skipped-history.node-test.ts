@@ -2,12 +2,22 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-test('accounts personal settings expose the best-match-image toggle', () => {
+test('accounts personal settings expose the best-match-image toggle and threshold', () => {
   const source = readFileSync(new URL('./components/accounts-view.tsx', import.meta.url), 'utf8')
 
   assert.equal(source.includes('keyword_reply_send_best_match_image'), true)
+  assert.equal(source.includes('keyword_reply_best_match_image_threshold'), true)
   assert.equal(source.includes('图片过阈值时发送图和链接'), true)
-  assert.equal(source.includes('未达到阈值时发送链接，并记录到被略过的商品'), true)
+  assert.equal(source.includes('相似度达到基础阈值时发送链接'), true)
+  assert.equal(source.includes('达到图片阈值时再发送商品图'), true)
+})
+
+test('website overrides expose image-send threshold fallback', () => {
+  const source = readFileSync(new URL('./components/accounts-view.tsx', import.meta.url), 'utf8')
+
+  assert.equal(source.includes('best_match_image_similarity_threshold'), true)
+  assert.equal(source.includes('发图阈值'), true)
+  assert.equal(source.includes('继承全局'), true)
 })
 
 test('image search view defaults to all history while keeping skipped filter', () => {

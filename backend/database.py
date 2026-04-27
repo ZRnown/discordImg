@@ -870,6 +870,7 @@ class Database:
                     bark_server_url TEXT DEFAULT 'https://api.day.app',  -- Bark 服务地址
                     bark_device_key TEXT DEFAULT '',  -- Bark 设备密钥
                     keyword_reply_send_best_match_image INTEGER DEFAULT 0,
+                    keyword_reply_best_match_image_threshold REAL DEFAULT 0.75,
                     keyword_image_search_api_key TEXT DEFAULT '',
                     keyword_image_search_cx TEXT DEFAULT '',
                     review_bark_enabled INTEGER DEFAULT 0,
@@ -942,6 +943,11 @@ class Database:
                 pass
 
             try:
+                cursor.execute('ALTER TABLE user_settings ADD COLUMN keyword_reply_best_match_image_threshold REAL DEFAULT 0.75')
+            except sqlite3.OperationalError:
+                pass
+
+            try:
                 cursor.execute('ALTER TABLE user_settings ADD COLUMN keyword_image_search_api_key TEXT DEFAULT \'\'')
             except sqlite3.OperationalError:
                 pass
@@ -1001,6 +1007,7 @@ class Database:
                     keyword_image_search_max_images INTEGER DEFAULT 3,
                     message_filters TEXT DEFAULT '[]',
                     image_similarity_threshold REAL DEFAULT NULL,
+                    best_match_image_similarity_threshold REAL DEFAULT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
@@ -1020,6 +1027,10 @@ class Database:
                 pass
             try:
                 cursor.execute('ALTER TABLE user_website_settings ADD COLUMN image_similarity_threshold REAL DEFAULT NULL')
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute('ALTER TABLE user_website_settings ADD COLUMN best_match_image_similarity_threshold REAL DEFAULT NULL')
             except sqlite3.OperationalError:
                 pass
             try:
@@ -3579,6 +3590,7 @@ class Database:
                         SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern,
                                    wc.badge_color, wc.reply_template, wc.reply_language,
                                    COALESCE(uws.image_similarity_threshold, wc.image_similarity_threshold) as image_similarity_threshold,
+                                   uws.best_match_image_similarity_threshold as best_match_image_similarity_threshold,
                                    COALESCE(uws.keyword_match_limit, NULL) as keyword_match_limit,
                                    COALESCE(wcb.keyword_review_enabled, 0) as keyword_review_enabled,
                                    wc.blocked_role_ids, wc.rotation_interval, wc.rotation_enabled, wc.message_filters
@@ -3592,7 +3604,8 @@ class Database:
                     else:
                         cursor.execute('''
                         SELECT wc.id, wc.name, wc.display_name, wc.url_template, wc.id_pattern,
-                                   wc.badge_color, wc.reply_template, wc.reply_language, wc.image_similarity_threshold, wc.blocked_role_ids,
+                                   wc.badge_color, wc.reply_template, wc.reply_language, wc.image_similarity_threshold,
+                                   NULL as best_match_image_similarity_threshold, wc.blocked_role_ids,
                                    COALESCE(wcb.keyword_review_enabled, 0) as keyword_review_enabled,
                                    wc.rotation_interval, wc.rotation_enabled, wc.message_filters
                             FROM website_configs wc
@@ -4197,6 +4210,7 @@ class Database:
             'keyword_image_search_max_images': 3,
             'message_filters': '[]',
             'image_similarity_threshold': None,
+            'best_match_image_similarity_threshold': None,
             'reply_min_delay': None,
             'reply_max_delay': None,
         }
@@ -4259,6 +4273,7 @@ class Database:
             'keyword_image_search_max_images': keyword_image_search_max_images,
             'message_filters': row['message_filters'],
             'image_similarity_threshold': row['image_similarity_threshold'],
+            'best_match_image_similarity_threshold': row['best_match_image_similarity_threshold'],
             'reply_min_delay': row['reply_min_delay'],
             'reply_max_delay': row['reply_max_delay'],
         }
@@ -4273,7 +4288,8 @@ class Database:
                            keyword_batch_dispatch_mode, thread_reply_enabled, forum_post_reply_enabled,
                            keyword_match_limit, keyword_image_search_enabled, keyword_image_search_mode,
                            keyword_image_search_max_images, message_filters,
-                           image_similarity_threshold, reply_min_delay, reply_max_delay
+                           image_similarity_threshold, best_match_image_similarity_threshold,
+                           reply_min_delay, reply_max_delay
                     FROM user_website_settings
                     WHERE user_id = ? AND website_id = ?
                 ''', (user_id, website_id))
@@ -4295,6 +4311,7 @@ class Database:
                            forum_post_reply_enabled,
                            keyword_match_limit, keyword_image_search_enabled, keyword_image_search_mode,
                            keyword_image_search_max_images, message_filters, image_similarity_threshold,
+                           best_match_image_similarity_threshold,
                            reply_min_delay, reply_max_delay
                     FROM user_website_settings
                     WHERE user_id = ?
@@ -4310,18 +4327,30 @@ class Database:
             logger.error(f"批量获取用户网站设置失败: {e}")
         return settings_map
 
-    def update_user_website_similarity(self, user_id: int, website_id: int, threshold: float = None) -> bool:
-        """更新用户的网站图片相似度阈值"""
+    def update_user_website_similarity(
+        self,
+        user_id: int,
+        website_id: int,
+        threshold: float = None,
+        best_match_image_threshold: float = None,
+    ) -> bool:
+        """更新用户的网站图片阈值设置"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    INSERT INTO user_website_settings (user_id, website_id, image_similarity_threshold)
-                    VALUES (?, ?, ?)
+                    INSERT INTO user_website_settings (
+                        user_id,
+                        website_id,
+                        image_similarity_threshold,
+                        best_match_image_similarity_threshold
+                    )
+                    VALUES (?, ?, ?, ?)
                     ON CONFLICT(user_id, website_id) DO UPDATE SET
                         image_similarity_threshold = excluded.image_similarity_threshold,
+                        best_match_image_similarity_threshold = excluded.best_match_image_similarity_threshold,
                         updated_at = CURRENT_TIMESTAMP
-                ''', (user_id, website_id, threshold))
+                ''', (user_id, website_id, threshold, best_match_image_threshold))
                 conn.commit()
                 return True
         except Exception as e:
@@ -5936,6 +5965,7 @@ class Database:
                            global_reply_template, numeric_filter_keyword, filter_size_min, filter_size_max,
                            bark_enabled, bark_server_url, bark_device_key,
                            keyword_reply_send_best_match_image,
+                           keyword_reply_best_match_image_threshold,
                            keyword_image_search_api_key, keyword_image_search_cx,
                            review_bark_enabled, review_bark_mode, review_bark_count_threshold,
                            review_bark_interval_minutes, review_bark_last_notified_at,
@@ -5964,14 +5994,15 @@ class Database:
                         'bark_server_url': row[15] or 'https://api.day.app',
                         'bark_device_key': row[16] or '',
                         'keyword_reply_send_best_match_image': row[17] if row[17] is not None else 0,
-                        'keyword_image_search_api_key': row[18] or '',
-                        'keyword_image_search_cx': row[19] or '',
-                        'review_bark_enabled': row[20] if row[20] is not None else 0,
-                        'review_bark_mode': row[21] or 'count',
-                        'review_bark_count_threshold': row[22] if row[22] is not None else 5,
-                        'review_bark_interval_minutes': row[23] if row[23] is not None else 60,
-                        'review_bark_last_notified_at': row[24] or '',
-                        'review_bark_last_pending_count': row[25] if row[25] is not None else 0,
+                        'keyword_reply_best_match_image_threshold': row[18] if row[18] is not None else 0.75,
+                        'keyword_image_search_api_key': row[19] or '',
+                        'keyword_image_search_cx': row[20] or '',
+                        'review_bark_enabled': row[21] if row[21] is not None else 0,
+                        'review_bark_mode': row[22] or 'count',
+                        'review_bark_count_threshold': row[23] if row[23] is not None else 5,
+                        'review_bark_interval_minutes': row[24] if row[24] is not None else 60,
+                        'review_bark_last_notified_at': row[25] or '',
+                        'review_bark_last_pending_count': row[26] if row[26] is not None else 0,
                     }
                 # 如果用户没有设置，返回默认值
                 return {
@@ -5993,6 +6024,7 @@ class Database:
                     'bark_server_url': 'https://api.day.app',
                     'bark_device_key': '',
                     'keyword_reply_send_best_match_image': 0,
+                    'keyword_reply_best_match_image_threshold': 0.75,
                     'keyword_image_search_api_key': '',
                     'keyword_image_search_cx': '',
                     'review_bark_enabled': 0,
@@ -6023,6 +6055,7 @@ class Database:
                 'bark_server_url': 'https://api.day.app',
                 'bark_device_key': '',
                 'keyword_reply_send_best_match_image': 0,
+                'keyword_reply_best_match_image_threshold': 0.75,
                 'keyword_image_search_api_key': '',
                 'keyword_image_search_cx': '',
                 'review_bark_enabled': 0,
@@ -6044,6 +6077,7 @@ class Database:
                            bark_enabled: int = None, bark_server_url: str = None,
                            bark_device_key: str = None,
                            keyword_reply_send_best_match_image: int = None,
+                           keyword_reply_best_match_image_threshold: float = None,
                            keyword_image_search_api_key: str = None,
                            keyword_image_search_cx: str = None,
                            review_bark_enabled: int = None,
@@ -6138,6 +6172,10 @@ class Database:
                         update_fields.append('keyword_reply_send_best_match_image = ?')
                         params.append(keyword_reply_send_best_match_image)
 
+                    if keyword_reply_best_match_image_threshold is not None:
+                        update_fields.append('keyword_reply_best_match_image_threshold = ?')
+                        params.append(keyword_reply_best_match_image_threshold)
+
                     if keyword_image_search_api_key is not None:
                         update_fields.append('keyword_image_search_api_key = ?')
                         params.append(keyword_image_search_api_key)
@@ -6183,11 +6221,12 @@ class Database:
                          global_reply_min_delay, global_reply_max_delay, user_blacklist, keyword_filters,
                          keyword_reply_enabled, image_reply_enabled, keyword_match_limit, global_reply_template,
                          numeric_filter_keyword, filter_size_min, filter_size_max, bark_enabled, bark_server_url, bark_device_key,
-                         keyword_reply_send_best_match_image, keyword_image_search_api_key, keyword_image_search_cx,
+                         keyword_reply_send_best_match_image, keyword_reply_best_match_image_threshold,
+                         keyword_image_search_api_key, keyword_image_search_cx,
                          review_bark_enabled, review_bark_mode,
                          review_bark_count_threshold, review_bark_interval_minutes,
                          review_bark_last_notified_at, review_bark_last_pending_count)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         user_id,
                         download_threads or 4,
@@ -6208,6 +6247,7 @@ class Database:
                         bark_server_url if bark_server_url is not None else 'https://api.day.app',
                         bark_device_key or '',
                         keyword_reply_send_best_match_image if keyword_reply_send_best_match_image is not None else 0,
+                        keyword_reply_best_match_image_threshold if keyword_reply_best_match_image_threshold is not None else 0.75,
                         keyword_image_search_api_key or '',
                         keyword_image_search_cx or '',
                         review_bark_enabled if review_bark_enabled is not None else 0,

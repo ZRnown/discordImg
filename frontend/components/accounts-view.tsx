@@ -356,6 +356,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
   })
   const [settings, setSettings] = useState({
     discord_similarity_threshold: 0.6,
+    keyword_reply_best_match_image_threshold: 0.75,
     global_reply_min_delay: 1.0,
     global_reply_max_delay: 3.0,
     keyword_match_limit: 0,
@@ -411,6 +412,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
   const [websiteBlockedUsers, setWebsiteBlockedUsers] = useState<{[key: number]: any[]}>({})
   const [showAddWebsiteFilter, setShowAddWebsiteFilter] = useState<number | null>(null)
   const [websiteSimilarityInputs, setWebsiteSimilarityInputs] = useState<{[key: number]: string}>({})
+  const [websiteBestMatchImageThresholdInputs, setWebsiteBestMatchImageThresholdInputs] = useState<{[key: number]: string}>({})
   const [websiteReplyDelayInputs, setWebsiteReplyDelayInputs] = useState<{[key: number]: { min: string, max: string }}>({})
   const [websiteKeywordMatchInputs, setWebsiteKeywordMatchInputs] = useState<{[key: number]: string}>({})
   const [websiteNewFilter, setWebsiteNewFilter] = useState({
@@ -447,6 +449,8 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
   const newFilterImageInputRef = useRef<HTMLInputElement | null>(null)
   const editingFilterImageInputRef = useRef<HTMLInputElement | null>(null)
   const websiteSimilaritySaveTimersRef = useRef<{[key: number]: ReturnType<typeof setTimeout> | undefined}>({})
+  const websiteSimilarityInputsRef = useRef<{[key: number]: string}>({})
+  const websiteBestMatchImageThresholdInputsRef = useRef<{[key: number]: string}>({})
   const websiteReplyDelaySaveTimersRef = useRef<{[key: number]: ReturnType<typeof setTimeout> | undefined}>({})
   const websiteReplyDelayInputsRef = useRef<{[key: number]: { min: string, max: string }}>({})
   const websiteKeywordMatchSaveTimersRef = useRef<{[key: number]: ReturnType<typeof setTimeout> | undefined}>({})
@@ -466,16 +470,31 @@ const formatWebsiteForEdit = (website: any) => ({
   ...website,
   reply_language: normalizeWebsiteReplyLanguages(website?.reply_language),
   reply_template: String(website?.reply_template || '{url}'),
-  image_similarity_threshold: formatThresholdForInput(website?.image_similarity_threshold)
+  image_similarity_threshold: formatThresholdForInput(website?.image_similarity_threshold),
+  best_match_image_similarity_threshold: formatThresholdForInput(website?.best_match_image_similarity_threshold)
 })
 
-  const applyWebsiteSimilarityState = (websiteId: number, threshold: string) => {
+  const applyWebsiteThresholdState = (
+    websiteId: number,
+    threshold: string,
+    bestMatchImageThreshold: string,
+  ) => {
     setWebsites(prev => prev.map(website => (
       website.id === websiteId
-        ? { ...website, image_similarity_threshold: threshold === '' ? null : Number(threshold) }
+        ? {
+            ...website,
+            image_similarity_threshold: threshold === '' ? null : Number(threshold),
+            best_match_image_similarity_threshold: bestMatchImageThreshold === '' ? null : Number(bestMatchImageThreshold),
+          }
         : website
     )))
+    websiteSimilarityInputsRef.current = { ...websiteSimilarityInputsRef.current, [websiteId]: threshold }
+    websiteBestMatchImageThresholdInputsRef.current = {
+      ...websiteBestMatchImageThresholdInputsRef.current,
+      [websiteId]: bestMatchImageThreshold,
+    }
     setWebsiteSimilarityInputs(prev => ({ ...prev, [websiteId]: threshold }))
+    setWebsiteBestMatchImageThresholdInputs(prev => ({ ...prev, [websiteId]: bestMatchImageThreshold }))
   }
 
   const applyWebsiteReplyDelayState = (websiteId: number, minDelay: string, maxDelay: string) => {
@@ -510,6 +529,8 @@ const formatWebsiteForEdit = (website: any) => ({
     const next = {
       ...prev,
       discord_similarity_threshold: data?.discord_similarity_threshold ?? prev.discord_similarity_threshold ?? 0.6,
+      keyword_reply_best_match_image_threshold:
+        Number(data?.keyword_reply_best_match_image_threshold ?? prev.keyword_reply_best_match_image_threshold ?? 0.75),
       global_reply_min_delay: delayRange.minDelay,
       global_reply_max_delay: delayRange.maxDelay,
       keyword_match_limit: Number(data?.keyword_match_limit ?? prev.keyword_match_limit ?? 0),
@@ -614,6 +635,7 @@ const formatWebsiteForEdit = (website: any) => ({
       const keywordBatchInputs: {[key: number]: string} = {}
       const keywordDispatchModes: {[key: number]: string} = {}
       const similarityInputs: {[key: number]: string} = {}
+      const bestMatchImageThresholdInputs: {[key: number]: string} = {}
       const replyDelayInputs: {[key: number]: { min: string, max: string }} = {}
       const keywordMatchInputs: {[key: number]: string} = {}
 
@@ -627,6 +649,7 @@ const formatWebsiteForEdit = (website: any) => ({
         keywordBatchInputs[website.id] = (website.keyword_reply_batch_size ?? 0).toString()
         keywordDispatchModes[website.id] = website.keyword_batch_dispatch_mode ?? 'immediate'
         similarityInputs[website.id] = formatThresholdForInput(website.image_similarity_threshold)
+        bestMatchImageThresholdInputs[website.id] = formatThresholdForInput(website.best_match_image_similarity_threshold)
         replyDelayInputs[website.id] = {
           min: formatReplyDelayForInput(website.reply_min_delay),
           max: formatReplyDelayForInput(website.reply_max_delay),
@@ -673,7 +696,10 @@ const formatWebsiteForEdit = (website: any) => ({
         setKeywordIntervalInputs(keywordIntervalInputs)
         setKeywordBatchInputs(keywordBatchInputs)
         setKeywordDispatchModes(keywordDispatchModes)
+        websiteSimilarityInputsRef.current = similarityInputs
         setWebsiteSimilarityInputs(similarityInputs)
+        websiteBestMatchImageThresholdInputsRef.current = bestMatchImageThresholdInputs
+        setWebsiteBestMatchImageThresholdInputs(bestMatchImageThresholdInputs)
         setWebsiteReplyDelayInputs(replyDelayInputs)
         setWebsiteKeywordMatchInputs(keywordMatchInputs)
       })
@@ -1418,6 +1444,10 @@ const formatWebsiteForEdit = (website: any) => ({
       toast.error("关键词命中上限不能小于 0")
       return
     }
+    if (settings.keyword_reply_best_match_image_threshold <= settings.discord_similarity_threshold) {
+      toast.error("发图阈值必须大于相似度阈值")
+      return
+    }
     if (settings.global_reply_min_delay < REPLY_DELAY_MIN || settings.global_reply_max_delay > REPLY_DELAY_MAX) {
       toast.error("回复延迟范围无效")
       return
@@ -1691,21 +1721,24 @@ const formatWebsiteForEdit = (website: any) => ({
     }
   }
 
-  const saveWebsiteSimilarity = async (websiteId: number, rawValue: string, options?: { silent?: boolean }) => {
+  const saveWebsiteSimilarity = async (websiteId: number, options?: { silent?: boolean }) => {
+    const rawValue = websiteSimilarityInputsRef.current[websiteId] ?? ''
+    const rawBestMatchImageValue = websiteBestMatchImageThresholdInputsRef.current[websiteId] ?? ''
     try {
       const res = await fetch(`/api/websites/${websiteId}/similarity`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          image_similarity_threshold: rawValue === '' ? '' : rawValue
+          image_similarity_threshold: rawValue === '' ? '' : rawValue,
+          best_match_image_similarity_threshold: rawBestMatchImageValue === '' ? '' : rawBestMatchImageValue,
         })
       })
       const data = await res.json().catch(() => ({}))
       if (res.ok) {
-        applyWebsiteSimilarityState(websiteId, rawValue)
+        applyWebsiteThresholdState(websiteId, rawValue, rawBestMatchImageValue)
         if (!options?.silent) {
-          toast.success('图片相似度已更新')
+          toast.success('图片阈值已更新')
         }
       } else {
         toast.error(getApiErrorMessage(data, '更新失败'))
@@ -1715,12 +1748,12 @@ const formatWebsiteForEdit = (website: any) => ({
     }
   }
 
-  const scheduleWebsiteSimilaritySave = (websiteId: number, rawValue: string) => {
+  const scheduleWebsiteSimilaritySave = (websiteId: number) => {
     if (websiteSimilaritySaveTimersRef.current[websiteId]) {
       clearTimeout(websiteSimilaritySaveTimersRef.current[websiteId])
     }
     websiteSimilaritySaveTimersRef.current[websiteId] = setTimeout(() => {
-      void saveWebsiteSimilarity(websiteId, rawValue, { silent: true })
+      void saveWebsiteSimilarity(websiteId, { silent: true })
     }, 450)
   }
 
@@ -2990,6 +3023,33 @@ const formatWebsiteForEdit = (website: any) => ({
                 </div>
               </div>
 
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="best-match-image-threshold" className="text-sm font-medium">发图阈值</Label>
+                  <span className="text-sm font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                    {(settings.keyword_reply_best_match_image_threshold * 100).toFixed(0)}%
+                  </span>
+                </div>
+                <div className="space-y-1">
+                  <Input
+                    id="best-match-image-threshold"
+                    type="number"
+                    step="0.01"
+                    min="0.1"
+                    max="1.0"
+                    value={settings.keyword_reply_best_match_image_threshold}
+                    onChange={(e) => setSettings(prev => ({
+                      ...prev,
+                      keyword_reply_best_match_image_threshold: parseFloat(e.target.value),
+                    }))}
+                    className="h-9"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    相似度达到基础阈值时发送链接，达到图片阈值时再发送商品图
+                  </p>
+                </div>
+              </div>
+
               <div className="space-y-2" data-tutorial="accounts-delay-settings">
                 <div className="flex items-center justify-between">
                   <Label className="text-sm font-medium" htmlFor="min-delay">回复延迟</Label>
@@ -3061,7 +3121,7 @@ const formatWebsiteForEdit = (website: any) => ({
                 <div>
                   <Label htmlFor="keyword-best-match-image" className="text-sm font-medium">图片过阈值时发送图和链接</Label>
                   <p className="text-xs text-muted-foreground mt-1">
-                    开启后，客户来图相似度达到阈值时发送最相似商品图和链接；未达到阈值时发送链接，并记录到被略过的商品
+                    开启后，相似度达到基础阈值时发送链接；达到图片阈值时再发送商品图；低于基础阈值不发送
                   </p>
                 </div>
                 <Switch
@@ -3876,8 +3936,40 @@ const formatWebsiteForEdit = (website: any) => ({
                             value={websiteSimilarityInputs[website.id] ?? ''}
                             onChange={e => {
                               const value = e.target.value
+                              websiteSimilarityInputsRef.current = { ...websiteSimilarityInputsRef.current, [website.id]: value }
                               setWebsiteSimilarityInputs(prev => ({ ...prev, [website.id]: value }))
-                              scheduleWebsiteSimilaritySave(website.id, value)
+                              scheduleWebsiteSimilaritySave(website.id)
+                            }}
+                            className="h-9 text-xs"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between gap-3">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="text-sm font-medium truncate">发图阈值</div>
+                            <span className="text-xs font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded shrink-0">
+                              {websiteBestMatchImageThresholdInputs[website.id] === '' || websiteBestMatchImageThresholdInputs[website.id] === undefined
+                                ? '继承全局'
+                                : Number(websiteBestMatchImageThresholdInputs[website.id]).toFixed(2)}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="space-y-1">
+                          <Input
+                            type="number"
+                            step="0.01"
+                            placeholder="继承全局"
+                            value={websiteBestMatchImageThresholdInputs[website.id] ?? ''}
+                            onChange={e => {
+                              const value = e.target.value
+                              websiteBestMatchImageThresholdInputsRef.current = {
+                                ...websiteBestMatchImageThresholdInputsRef.current,
+                                [website.id]: value,
+                              }
+                              setWebsiteBestMatchImageThresholdInputs(prev => ({ ...prev, [website.id]: value }))
+                              scheduleWebsiteSimilaritySave(website.id)
                             }}
                             className="h-9 text-xs"
                           />

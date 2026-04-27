@@ -2315,6 +2315,12 @@ def get_website_configs():
             user_threshold = user_settings.get('image_similarity_threshold') if user_settings else None
             if user_threshold is not None:
                 config['image_similarity_threshold'] = user_threshold
+            best_match_image_threshold = (
+                user_settings.get('best_match_image_similarity_threshold')
+                if user_settings else None
+            )
+            if best_match_image_threshold is not None:
+                config['best_match_image_similarity_threshold'] = best_match_image_threshold
 
         return jsonify({'websites': configs})
     except Exception as e:
@@ -3351,26 +3357,58 @@ def bulk_action_keyword_review_items():
 
 @app.route('/api/websites/<int:config_id>/similarity', methods=['PUT'])
 def update_website_similarity(config_id):
-    """更新用户的网站图片相似度阈值"""
+    """更新用户的网站图片阈值设置"""
     if not require_login():
         return jsonify({'error': '需要登录'}), 401
     try:
         current_user = get_current_user()
         data = request.get_json() or {}
         raw_value = data.get('image_similarity_threshold', None)
+        raw_best_match_value = data.get('best_match_image_similarity_threshold', None)
 
-        if raw_value is None or raw_value == '':
-            threshold = None
-        else:
+        def _normalize_similarity(raw_threshold, field_name):
+            if raw_threshold is None or raw_threshold == '':
+                return None
             try:
-                threshold = float(raw_value)
+                normalized = float(raw_threshold)
             except (TypeError, ValueError):
-                return jsonify({'error': '相似度必须是数字'}), 400
-            if not (0.0 <= threshold <= 1.0):
-                return jsonify({'error': '相似度必须在0.0-1.0之间'}), 400
+                raise ValueError(f'{field_name}必须是数字')
+            if not (0.0 <= normalized <= 1.0):
+                raise ValueError(f'{field_name}必须在0.0-1.0之间')
+            return normalized
 
-        if db.update_user_website_similarity(current_user['id'], config_id, threshold):
-            return jsonify({'success': True, 'message': '相似度阈值已更新'})
+        try:
+            threshold = _normalize_similarity(raw_value, '相似度阈值')
+            best_match_image_threshold = _normalize_similarity(raw_best_match_value, '发图阈值')
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+
+        current_settings = db.get_user_settings(current_user['id']) or {}
+        current_website_settings = db.get_user_website_settings(current_user['id'], config_id) or {}
+        effective_reply_threshold = (
+            threshold
+            if threshold is not None
+            else current_website_settings.get('image_similarity_threshold')
+        )
+        if effective_reply_threshold is None:
+            effective_reply_threshold = current_settings.get('discord_similarity_threshold', 0.6)
+        effective_image_threshold = (
+            best_match_image_threshold
+            if best_match_image_threshold is not None
+            else current_website_settings.get('best_match_image_similarity_threshold')
+        )
+        if effective_image_threshold is None:
+            effective_image_threshold = current_settings.get('keyword_reply_best_match_image_threshold', 0.75)
+        if float(effective_image_threshold) <= float(effective_reply_threshold):
+            return jsonify({'error': '发图阈值必须大于相似度阈值'}), 400
+
+        if db.update_user_website_similarity(
+            current_user['id'],
+            config_id,
+            threshold,
+            best_match_image_threshold,
+        ):
+            return jsonify({'success': True, 'message': '图片阈值已更新'})
         return jsonify({'error': '更新失败'}), 500
     except Exception as e:
         logger.error(f"更新网站相似度阈值失败: {e}")
@@ -5166,6 +5204,7 @@ def update_user_settings():
         bark_enabled = data.get('bark_enabled')
         review_bark_enabled = data.get('review_bark_enabled')
         keyword_reply_send_best_match_image = data.get('keyword_reply_send_best_match_image')
+        keyword_reply_best_match_image_threshold = data.get('keyword_reply_best_match_image_threshold')
         review_bark_mode = str(data.get('review_bark_mode') or 'count').strip().lower()
         review_bark_count_threshold = data.get('review_bark_count_threshold')
         review_bark_interval_minutes = data.get('review_bark_interval_minutes')
@@ -5183,6 +5222,45 @@ def update_user_settings():
             keyword_reply_send_best_match_image = 1 if keyword_reply_send_best_match_image else 0
         if review_bark_mode not in {'count', 'interval'}:
             review_bark_mode = 'count'
+
+        def _normalize_similarity(value, *, field_name: str):
+            if value is None or value == '':
+                return None
+            try:
+                normalized = float(value)
+            except (TypeError, ValueError):
+                raise ValueError(f'{field_name}必须是数字')
+            if not (0.0 <= normalized <= 1.0):
+                raise ValueError(f'{field_name}必须在0.0-1.0之间')
+            return normalized
+
+        try:
+            discord_similarity_threshold = _normalize_similarity(
+                data.get('discord_similarity_threshold'),
+                field_name='相似度阈值',
+            )
+            keyword_reply_best_match_image_threshold = _normalize_similarity(
+                keyword_reply_best_match_image_threshold,
+                field_name='发图阈值',
+            )
+        except ValueError as e:
+            return jsonify({'error': str(e)}), 400
+
+        current_settings = None
+        if discord_similarity_threshold is not None or keyword_reply_best_match_image_threshold is not None:
+            current_settings = db.get_user_settings(user['id']) or {}
+            effective_reply_threshold = (
+                discord_similarity_threshold
+                if discord_similarity_threshold is not None
+                else float(current_settings.get('discord_similarity_threshold') or 0.6)
+            )
+            effective_image_threshold = (
+                keyword_reply_best_match_image_threshold
+                if keyword_reply_best_match_image_threshold is not None
+                else float(current_settings.get('keyword_reply_best_match_image_threshold') or 0.75)
+            )
+            if effective_image_threshold <= effective_reply_threshold:
+                return jsonify({'error': '发图阈值必须大于相似度阈值'}), 400
 
         if review_bark_count_threshold is not None:
             review_bark_count_threshold = int(review_bark_count_threshold)
@@ -5204,7 +5282,7 @@ def update_user_settings():
             user_id=user['id'],
             download_threads=data.get('download_threads'),
             feature_extract_threads=data.get('feature_extract_threads'),
-            discord_similarity_threshold=data.get('discord_similarity_threshold'),
+            discord_similarity_threshold=discord_similarity_threshold,
             global_reply_min_delay=min_delay,
             global_reply_max_delay=max_delay,
             user_blacklist=data.get('user_blacklist'),
@@ -5220,6 +5298,7 @@ def update_user_settings():
             bark_server_url=data.get('bark_server_url'),
             bark_device_key=data.get('bark_device_key'),
             keyword_reply_send_best_match_image=keyword_reply_send_best_match_image,
+            keyword_reply_best_match_image_threshold=keyword_reply_best_match_image_threshold,
             keyword_image_search_api_key=data.get('keyword_image_search_api_key'),
             keyword_image_search_cx=data.get('keyword_image_search_cx'),
             review_bark_enabled=review_bark_enabled,

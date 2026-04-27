@@ -11,8 +11,10 @@ from backend.bot import (
     filter_forum_channel_configs_for_message,
     _get_image_recognition_request_timeout_seconds,
     _is_image_match_above_reply_threshold,
+    _resolve_best_match_image_threshold,
     _resolve_message_reply_channel,
     _resolve_cooldown_channel_id,
+    _should_send_best_match_reply_image,
     resolve_reply_target_channel,
 )
 
@@ -149,7 +151,44 @@ class BotTimeoutHelpersTestCase(unittest.TestCase):
             )
         )
 
-    def test_image_match_block_reason_allows_below_threshold_link_fallback(self):
+    def test_best_match_image_threshold_uses_website_override(self):
+        threshold = _resolve_best_match_image_threshold(
+            {
+                "type": "image",
+                "similarity": 0.76,
+                "base_threshold": 0.63,
+                "best_match_image_base_threshold": 0.78,
+            },
+            {"best_match_image_similarity_threshold": 0.74},
+        )
+
+        self.assertEqual(threshold, 0.74)
+
+    def test_best_match_image_send_requires_second_threshold(self):
+        self.assertFalse(
+            _should_send_best_match_reply_image(
+                {
+                    "type": "image",
+                    "similarity": 0.72,
+                    "base_threshold": 0.63,
+                    "best_match_image_base_threshold": 0.78,
+                },
+                {"best_match_image_similarity_threshold": None},
+            )
+        )
+        self.assertTrue(
+            _should_send_best_match_reply_image(
+                {
+                    "type": "image",
+                    "similarity": 0.79,
+                    "base_threshold": 0.63,
+                    "best_match_image_base_threshold": 0.78,
+                },
+                {"best_match_image_similarity_threshold": None},
+            )
+        )
+
+    def test_image_match_block_reason_rejects_when_below_first_threshold(self):
         with patch.object(
             bot_module.config,
             "DISCORD_IMAGE_REPLY_MIN_TOP1_MARGIN",
@@ -162,12 +201,11 @@ class BotTimeoutHelpersTestCase(unittest.TestCase):
                     "similarity": 0.58,
                     "base_threshold": 0.63,
                     "top1_margin": 0.01,
-                    "allow_below_threshold_link_reply": True,
                 },
                 {"image_similarity_threshold": None},
             )
 
-        self.assertIsNone(reason)
+        self.assertIn("低于网站阈值", reason)
 
     def test_image_match_block_reason_rejects_when_top1_margin_too_small(self):
         with patch.object(
@@ -207,11 +245,11 @@ class BotTimeoutHelpersTestCase(unittest.TestCase):
 
         self.assertIsNone(reason)
 
-    def test_below_threshold_image_match_records_skip_then_continues_to_link_reply(self):
+    def test_below_threshold_image_match_records_skip_then_stops_reply(self):
         source = Path(bot_module.__file__).read_text(encoding="utf-8")
 
-        self.assertIn("图片命中未过阈值，记录略过历史并继续发送链接", source)
-        self.assertNotIn("图片命中未过阈值，记录略过历史并跳过回复", source)
+        self.assertIn("图片命中未过阈值，记录略过历史并跳过回复", source)
+        self.assertNotIn("图片命中未过阈值，记录略过历史并继续发送链接", source)
 
     def test_summarize_exception_for_log_collapses_whitespace_and_truncates(self):
         error = RuntimeError("429 Too Many Requests\n\n" + ("x" * 260))

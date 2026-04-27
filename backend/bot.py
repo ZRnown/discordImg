@@ -693,6 +693,35 @@ def _is_image_match_above_reply_threshold(match_context, website_config):
     return similarity >= threshold_to_use
 
 
+def _resolve_best_match_image_threshold(match_context, website_config):
+    if not isinstance(match_context, dict) or match_context.get('type') != 'image':
+        return None
+
+    reply_threshold = _resolve_image_reply_threshold(match_context, website_config)
+    base_threshold = _coerce_float((match_context or {}).get('best_match_image_base_threshold'))
+    website_threshold = _coerce_float(
+        (website_config or {}).get('best_match_image_similarity_threshold')
+    )
+    threshold_to_use = website_threshold if website_threshold is not None else base_threshold
+    if threshold_to_use is None:
+        threshold_to_use = reply_threshold
+    return max(threshold_to_use, reply_threshold)
+
+
+def _should_send_best_match_reply_image(match_context, website_config):
+    if not isinstance(match_context, dict) or match_context.get('type') != 'image':
+        return False
+
+    similarity = _coerce_float(match_context.get('similarity')) or 0.0
+    if not _is_image_match_above_reply_threshold(match_context, website_config):
+        return False
+
+    threshold_to_use = _resolve_best_match_image_threshold(match_context, website_config)
+    if threshold_to_use is None:
+        return False
+    return similarity >= threshold_to_use
+
+
 def _extract_image_match_top1_margin(payload):
     if not isinstance(payload, dict):
         return None
@@ -733,11 +762,8 @@ def _get_image_match_reply_block_reason(match_context, website_config):
 
     similarity = _coerce_float(match_context.get('similarity')) or 0.0
     threshold_to_use = _resolve_image_reply_threshold(match_context, website_config)
-    allow_below_threshold_link_reply = _should_allow_below_threshold_link_reply(match_context)
 
     if similarity < threshold_to_use:
-        if allow_below_threshold_link_reply:
-            return None
         return (
             f"📷 图片相似度 {similarity:.3f} 低于网站阈值 {threshold_to_use:.3f}，跳过回复"
         )
@@ -3642,13 +3668,10 @@ class DiscordBotClient(discord.Client):
                     return []
 
                 if not bool(user_settings.get('keyword_reply_send_best_match_image')):
-                    return await self._collect_custom_reply_files(
-                        session,
-                        product,
-                        custom_reply,
-                        website_config,
-                        channel_id,
-                    )
+                    return []
+
+                if not _should_send_best_match_reply_image(match_context, website_config):
+                    return []
 
                 best_match_files = await self._collect_best_match_reply_files(
                     session,
@@ -5308,6 +5331,7 @@ class DiscordBotClient(discord.Client):
 
             user_settings = {}
             user_threshold = config.DISCORD_SIMILARITY_THRESHOLD
+            best_match_image_threshold = 0.75
             if self.user_id:
                 try:
                     try:
@@ -5317,6 +5341,8 @@ class DiscordBotClient(discord.Client):
                     user_settings = await asyncio.get_event_loop().run_in_executor(None, db.get_user_settings, self.user_id)
                     if user_settings and user_settings.get('discord_similarity_threshold') is not None:
                         user_threshold = user_settings['discord_similarity_threshold']
+                    if user_settings and user_settings.get('keyword_reply_best_match_image_threshold') is not None:
+                        best_match_image_threshold = user_settings['keyword_reply_best_match_image_threshold']
                 except Exception as e:
                     logger.error(f'获取用户相似度设置失败: {e}')
 
@@ -5370,6 +5396,7 @@ class DiscordBotClient(discord.Client):
                     'type': 'image',
                     'similarity': similarity,
                     'base_threshold': user_threshold,
+                    'best_match_image_base_threshold': best_match_image_threshold,
                     'top1_margin': top1_margin,
                     'website_filter_matches': blocked_website_filter_matches,
                 }
@@ -5385,10 +5412,10 @@ class DiscordBotClient(discord.Client):
                         best_match=best_match,
                     )
                     logger.info(
-                        f'⏭️ 图片命中未过阈值，记录略过历史并继续发送链接: '
+                        f'⏭️ 图片命中未过阈值，记录略过历史并跳过回复: '
                         f'相似度 {similarity:.3f} < {skip_threshold:.3f} | 频道: {message.channel.name}'
                     )
-                    image_match_context['allow_below_threshold_link_reply'] = True
+                    return False
                 else:
                     confidence_block_reason = _get_image_match_reply_block_reason(
                         image_match_context,

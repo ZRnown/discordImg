@@ -76,8 +76,17 @@ test('low similarity image matches are skipped instead of sent', () => {
   assert.notEqual(end, -1)
 
   const handleImageSource = source.slice(start, end)
-  assert.match(handleImageSource, /图片命中未过阈值，跳过回复/)
+  assert.match(handleImageSource, /图片命中未过阈值，记录略过历史并跳过回复/)
   assert.match(handleImageSource, /return False/)
+})
+
+test('image replies use a dedicated higher threshold before attaching product images', () => {
+  const source = readSource()
+
+  assert.match(source, /def _resolve_best_match_image_threshold/)
+  assert.match(source, /def _should_send_best_match_reply_image/)
+  assert.match(source, /best_match_image_base_threshold/)
+  assert.match(source, /best_match_image_similarity_threshold/)
 })
 
 test('keyword replies from messages with attachments still respect keyword review', () => {
