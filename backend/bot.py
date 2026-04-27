@@ -5319,10 +5319,9 @@ class DiscordBotClient(discord.Client):
                         best_match=best_match,
                     )
                     logger.info(
-                        f'⏭️ 图片命中未过阈值，记录略过历史并跳过回复: '
+                        f'⏭️ 图片命中未过阈值，记录略过历史并继续发送链接: '
                         f'相似度 {similarity:.3f} < {skip_threshold:.3f} | 频道: {message.channel.name}'
                     )
-                    return False
 
                 product = best_match.get('product', {})
                 product_title = (product.get('title') or '').strip()
