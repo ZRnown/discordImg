@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 import unittest
 
@@ -26,6 +27,18 @@ class SearchSimilarRuntimeTestCase(unittest.TestCase):
             run_with_timeout(_slow_job, timeout_seconds=0.01)
 
         self.assertLess(time.perf_counter() - started_at, 0.08)
+
+    def test_run_with_timeout_sets_cancel_event_when_it_times_out(self):
+        cancel_event = threading.Event()
+
+        def slow_task():
+            time.sleep(0.05)
+            return "done"
+
+        with self.assertRaises(SearchExecutionTimeoutError):
+            run_with_timeout(slow_task, 0.01, cancel_event=cancel_event)
+
+        self.assertTrue(cancel_event.is_set())
 
     def test_log_search_similar_no_match_logs_info(self):
         logger = logging.getLogger("backend.search_similar_runtime.test.no_match")

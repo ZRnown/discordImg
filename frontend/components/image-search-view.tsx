@@ -1,7 +1,7 @@
 "use client"
 
 import type React from "react"
-import { useState, useCallback, useEffect } from "react"
+import { useState, useCallback, useEffect, useRef } from "react"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { getApiErrorMessage } from "@/lib/utils"
@@ -30,6 +30,8 @@ export function ImageSearchView() {
   const [historyFilter, setHistoryFilter] = useState<"all" | "normal" | "skipped">("all")
   const [availableWebsites, setAvailableWebsites] = useState<any[]>([])
   const historyPageSize = 10
+  const historyPageCacheRef = useRef(new Map<string, { history: any[]; total: number; hasMore: boolean }>())
+  const historyRequestVersionRef = useRef(0)
 
   const copyToClipboard = async (text: string) => {
     if (!text) return
@@ -161,6 +163,39 @@ export function ImageSearchView() {
     return `${base} grid-cols-4`
   }
 
+  const buildHistoryCacheKey = (page: number) => `${historyFilter}:${page}`
+
+  const clearHistoryPageCache = () => {
+    historyPageCacheRef.current.clear()
+  }
+
+  const prefetchSearchHistory = async (page: number) => {
+    if (page < 1) return
+
+    const cacheKey = buildHistoryCacheKey(page)
+    if (historyPageCacheRef.current.has(cacheKey)) {
+      return
+    }
+
+    try {
+      const limit = historyPageSize
+      const offset = (page - 1) * limit
+      const response = await fetch(`/api/search_history?limit=${limit}&offset=${offset}&skipped=${historyFilter}`)
+      if (!response.ok) {
+        return
+      }
+
+      const result = await response.json()
+      historyPageCacheRef.current.set(cacheKey, {
+        history: result.history || [],
+        total: result.total || 0,
+        hasMore: result.has_more || false,
+      })
+    } catch {
+      // 预取失败不影响当前页
+    }
+  }
+
   const getHistoryPageItems = () => {
     const totalPages = Math.max(1, Math.ceil(totalHistory / historyPageSize))
     if (totalPages <= 7) {
@@ -192,7 +227,8 @@ export function ImageSearchView() {
 
   // 加载搜索历史
   useEffect(() => {
-    fetchSearchHistory()
+    clearHistoryPageCache()
+    void fetchSearchHistory(1, { forceRefresh: true })
   }, [historyFilter])
 
   useEffect(() => {
@@ -229,17 +265,47 @@ export function ImageSearchView() {
     }
   }, [uploadedFile])
 
-  const fetchSearchHistory = async (page: number = 1) => {
+  const fetchSearchHistory = async (
+    page: number = 1,
+    options?: { forceRefresh?: boolean },
+  ) => {
     try {
+      const cacheKey = buildHistoryCacheKey(page)
+      if (!options?.forceRefresh) {
+        const cached = historyPageCacheRef.current.get(cacheKey)
+        if (cached) {
+          setSearchHistory(cached.history)
+          setTotalHistory(cached.total)
+          setHasMoreHistory(cached.hasMore)
+          setCurrentPage(page)
+          return
+        }
+      }
+
+      const requestVersion = historyRequestVersionRef.current + 1
+      historyRequestVersionRef.current = requestVersion
       const limit = historyPageSize
       const offset = (page - 1) * limit
       const response = await fetch(`/api/search_history?limit=${limit}&offset=${offset}&skipped=${historyFilter}`)
       if (response.ok) {
         const result = await response.json()
-        setSearchHistory(result.history || [])
-        setTotalHistory(result.total || 0)
-        setHasMoreHistory(result.has_more || false)
-        setCurrentPage(page)
+        const nextHistory = result.history || []
+        const nextTotal = result.total || 0
+        const nextHasMore = result.has_more || false
+        historyPageCacheRef.current.set(cacheKey, {
+          history: nextHistory,
+          total: nextTotal,
+          hasMore: nextHasMore,
+        })
+        if (historyRequestVersionRef.current === requestVersion) {
+          setSearchHistory(nextHistory)
+          setTotalHistory(nextTotal)
+          setHasMoreHistory(nextHasMore)
+          setCurrentPage(page)
+        }
+        if (nextHasMore) {
+          void prefetchSearchHistory(page + 1)
+        }
       } else {
         const errorData = await response.json().catch(() => ({}))
         toast.error(getApiErrorMessage(errorData, '加载搜索历史失败'))
@@ -257,8 +323,8 @@ export function ImageSearchView() {
         method: 'DELETE',
       })
       if (response.ok) {
-        setSearchHistory(prev => prev.filter(h => h.id !== historyId))
-        setTotalHistory(prev => prev - 1)
+        clearHistoryPageCache()
+        await fetchSearchHistory(currentPage, { forceRefresh: true })
         toast.success('搜索记录已删除')
       } else {
         const errorData = await response.json().catch(() => ({}))
@@ -282,8 +348,11 @@ export function ImageSearchView() {
         method: 'DELETE',
       })
       if (response.ok) {
+        clearHistoryPageCache()
         setSearchHistory([])
         setTotalHistory(0)
+        setHasMoreHistory(false)
+        setCurrentPage(1)
         toast.success('所有搜索记录已清空')
       } else {
         const errorData = await response.json().catch(() => ({}))
@@ -352,7 +421,8 @@ export function ImageSearchView() {
           // 设置搜索结果
           setSearchResults(result.results)
           // 重新加载搜索历史（新记录已保存到数据库）
-          await fetchSearchHistory()
+          clearHistoryPageCache()
+          await fetchSearchHistory(1, { forceRefresh: true })
           toast.success(`找到 ${result.results.length} 个相似商品，最佳相似度 ${(result.results[0].similarity * 100).toFixed(1)}%`);
         } else {
           setSearchResults([])

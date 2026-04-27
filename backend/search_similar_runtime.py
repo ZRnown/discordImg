@@ -10,7 +10,11 @@ class SearchExecutionTimeoutError(TimeoutError):
         super().__init__(f"search execution timed out after {self.timeout_seconds:.2f}s")
 
 
-def run_with_timeout(func: Callable[[], Any], timeout_seconds: float) -> Any:
+def run_with_timeout(
+    func: Callable[[], Any],
+    timeout_seconds: float,
+    cancel_event: threading.Event | None = None,
+) -> Any:
     result_holder: dict[str, Any] = {}
     error_holder: dict[str, BaseException] = {}
     done = threading.Event()
@@ -28,6 +32,8 @@ def run_with_timeout(func: Callable[[], Any], timeout_seconds: float) -> Any:
 
     timeout = max(float(timeout_seconds or 0.0), 0.0)
     if not done.wait(timeout):
+        if cancel_event is not None:
+            cancel_event.set()
         raise SearchExecutionTimeoutError(timeout)
 
     if "error" in error_holder:

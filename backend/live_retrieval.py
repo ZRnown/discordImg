@@ -40,6 +40,20 @@ logger = logging.getLogger(__name__)
 _STREAMING_PROGRESS_LOG_INTERVAL_SECONDS = 5.0
 
 
+def _is_search_cancelled(cancel_event: Optional[Any]) -> bool:
+    if cancel_event is None:
+        return False
+
+    is_set = getattr(cancel_event, "is_set", None)
+    if not callable(is_set):
+        return False
+
+    try:
+        return bool(is_set())
+    except Exception:
+        return False
+
+
 class LiveCatalogPreparingError(RuntimeError):
     """Raised when the live-search catalog is still warming in the background."""
 
@@ -1333,9 +1347,15 @@ def _rank_products_for_query(
     prepared_catalog: Sequence[Dict[str, Any]],
     query_context: Dict[str, Any],
     top_k: int,
+    cancel_event: Optional[Any] = None,
 ) -> Dict[str, Any]:
+    if _is_search_cancelled(cancel_event):
+        return {"ranked_products": []}
+
     custom_ranker = getattr(strategy, "rank_products", None)
     if callable(custom_ranker):
+        if _is_search_cancelled(cancel_event):
+            return {"ranked_products": []}
         custom_result = custom_ranker(
             query_context=query_context,
             prepared_catalog=prepared_catalog,
@@ -1348,6 +1368,8 @@ def _rank_products_for_query(
 
     image_rankings: List[Dict[str, Any]] = []
     for entry in prepared_catalog:
+        if _is_search_cancelled(cancel_event):
+            break
         record: LiveCatalogImageRecord = entry["record"]
         score = float(strategy.score(query_context, entry["context"]))
         image_rankings.append(
@@ -1372,7 +1394,11 @@ def rank_query_products(
     top_k: int = 5,
     threshold: float = 0.0,
     user_shops: Optional[Sequence[str]] = None,
+    cancel_event: Optional[Any] = None,
 ) -> List[Dict[str, Any]]:
+    if _is_search_cancelled(cancel_event):
+        return []
+
     query_context = strategy.prepare_query_image(query_record)
     product_metadata: Dict[str, Dict[str, Any]] = {}
 
@@ -1384,6 +1410,8 @@ def rank_query_products(
             return []
 
     for entry in prepared_catalog:
+        if _is_search_cancelled(cancel_event):
+            return []
         record: LiveCatalogImageRecord = entry["record"]
         if allowed_shops is not None and record.shop_name not in allowed_shops:
             continue
@@ -1407,16 +1435,23 @@ def rank_query_products(
             },
         )
 
-    filtered_catalog = [
-        entry
-        for entry in prepared_catalog
-        if allowed_shops is None or entry["record"].shop_name in allowed_shops
-    ]
+    if _is_search_cancelled(cancel_event):
+        return []
+
+    filtered_catalog = []
+    for entry in prepared_catalog:
+        if _is_search_cancelled(cancel_event):
+            return []
+        if allowed_shops is not None and entry["record"].shop_name not in allowed_shops:
+            continue
+        filtered_catalog.append(entry)
+
     rank_payload = _rank_products_for_query(
         strategy,
         filtered_catalog,
         query_context,
         top_k=max(int(top_k or 1), 1),
+        cancel_event=cancel_event,
     )
     ranked_products = list(rank_payload.get("ranked_products", []))
     filtered_ranked_products = [
@@ -1751,13 +1786,33 @@ class LiveImageRetriever:
         top_k: int = 5,
         threshold: float = 0.0,
         user_shops: Optional[Sequence[str]] = None,
+        cancel_event: Optional[Any] = None,
     ) -> Dict[str, Any]:
+        if _is_search_cancelled(cancel_event):
+            return {
+                "strategy": self.strategy_name,
+                "catalog_size": 0,
+                "ranked_products": [],
+                "top1_score": 0.0,
+                "top1_margin": 0.0,
+                "streaming": True,
+            }
+
         started_at = perf_counter()
         strategy = self._get_strategy_instance()
         query_record = build_query_record(image_path=image_path, query_text=query_text)
         query_prepare_started_at = perf_counter()
         query_context = strategy.prepare_query_image(query_record)
         query_prepare_elapsed = perf_counter() - query_prepare_started_at
+        if _is_search_cancelled(cancel_event):
+            return {
+                "strategy": self.strategy_name,
+                "catalog_size": 0,
+                "ranked_products": [],
+                "top1_score": 0.0,
+                "top1_margin": 0.0,
+                "streaming": True,
+            }
 
         if user_shops is None:
             allowed_shops: Optional[set[str]] = None
@@ -1795,6 +1850,8 @@ class LiveImageRetriever:
             shop_names=normalized_user_shops,
             ordered=False,
         ):
+            if _is_search_cancelled(cancel_event):
+                break
             raw_shop_name = str(row.get("shop_name") or "")
             if allowed_shops is not None and raw_shop_name not in allowed_shops:
                 continue
@@ -1882,6 +1939,7 @@ class LiveImageRetriever:
         top_k: int = 5,
         threshold: float = 0.0,
         user_shops: Optional[Sequence[str]] = None,
+        cancel_event: Optional[Any] = None,
     ) -> Dict[str, Any]:
         strategy = self._get_strategy_instance()
         if self._supports_streaming_search(strategy):
@@ -1891,6 +1949,7 @@ class LiveImageRetriever:
                 top_k=top_k,
                 threshold=threshold,
                 user_shops=user_shops,
+                cancel_event=cancel_event,
             )
 
         strategy, prepared_catalog = self._ensure_prepared_catalog()
@@ -1902,6 +1961,7 @@ class LiveImageRetriever:
             top_k=top_k,
             threshold=threshold,
             user_shops=user_shops,
+            cancel_event=cancel_event,
         )
         top1_score = float(ranked_products[0]["score"]) if ranked_products else 0.0
         top2_score = float(ranked_products[1]["score"]) if len(ranked_products) > 1 else 0.0

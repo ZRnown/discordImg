@@ -19,6 +19,14 @@ test('image search view folds skipped images into search history with a filter',
   assert.equal(source.includes('/api/skipped_image_history'), false)
 })
 
+test('image search history pages are cached for faster pagination', () => {
+  const source = readFileSync(new URL('./components/image-search-view.tsx', import.meta.url), 'utf8')
+
+  assert.equal(source.includes('historyPageCacheRef'), true)
+  assert.equal(source.includes('prefetchSearchHistory'), true)
+  assert.equal(source.includes('forceRefresh'), true)
+})
+
 test('search history api route forwards skipped filter requests', () => {
   const source = readFileSync(new URL('./app/api/search_history/route.ts', import.meta.url), 'utf8')
 

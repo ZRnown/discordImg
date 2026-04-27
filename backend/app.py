@@ -1642,6 +1642,7 @@ def search_similar():
 
             retrieval_started_at = time.perf_counter()
             search_worker_started = True
+            search_cancel_event = threading.Event()
             try:
                 def _run_live_retrieval():
                     try:
@@ -1651,6 +1652,7 @@ def search_similar():
                             top_k=limit,
                             threshold=threshold,
                             user_shops=user_shops,
+                            cancel_event=search_cancel_event,
                         )
                     finally:
                         try:
@@ -1666,6 +1668,7 @@ def search_similar():
                 retrieval_result = run_with_timeout(
                     _run_live_retrieval,
                     search_timeout_seconds,
+                    cancel_event=search_cancel_event,
                 )
             except live_retrieval_module.LiveCatalogPreparingError:
                 logger.warning(
@@ -1681,6 +1684,16 @@ def search_similar():
                     }
                 ), 503
             except SearchExecutionTimeoutError:
+                try:
+                    if release_live_search_slot is not None:
+                        release_live_search_slot()
+                except Exception:
+                    pass
+                try:
+                    if os.path.exists(image_path):
+                        os.unlink(image_path)
+                except Exception:
+                    pass
                 retrieval_elapsed = time.perf_counter() - retrieval_started_at
                 log_search_similar_no_match(
                     logger,
