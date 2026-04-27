@@ -59,3 +59,11 @@ test('review window contains review bark notification controls', () => {
   assert.match(source, /待审达到/)
   assert.match(source, /通知间隔/)
 })
+
+test('review window shows pending reply image previews', () => {
+  const source = readSource()
+
+  assert.match(source, /normalizeReviewImagePreviews/)
+  assert.match(source, /reply_image_previews/)
+  assert.match(source, /src=\{preview\.url\}/)
+})

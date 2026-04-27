@@ -378,14 +378,36 @@ class Database:
                     matched_image_index INTEGER,
                     similarity REAL NOT NULL,
                     threshold REAL NOT NULL,
+                    is_skipped INTEGER DEFAULT 0,
+                    discord_message_id TEXT,
+                    discord_channel_id TEXT,
+                    discord_channel_name TEXT DEFAULT '',
+                    discord_author_id TEXT,
+                    discord_author_name TEXT DEFAULT '',
+                    message_content TEXT DEFAULT '',
                     search_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (matched_product_id) REFERENCES products (id) ON DELETE SET NULL
                 )
             ''')
 
+            for column_name, column_definition in (
+                ('is_skipped', 'INTEGER DEFAULT 0'),
+                ('discord_message_id', 'TEXT'),
+                ('discord_channel_id', 'TEXT'),
+                ('discord_channel_name', "TEXT DEFAULT ''"),
+                ('discord_author_id', 'TEXT'),
+                ('discord_author_name', "TEXT DEFAULT ''"),
+                ('message_content', "TEXT DEFAULT ''"),
+            ):
+                try:
+                    cursor.execute(f'ALTER TABLE search_history ADD COLUMN {column_name} {column_definition}')
+                except Exception:
+                    pass
+
             # 【新增优化】为搜索历史创建时间索引，极大提升翻页速度
             try:
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_search_history_time ON search_history(search_time DESC)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_search_history_skipped_time ON search_history(is_skipped, search_time DESC, id DESC)')
             except Exception:
                 pass
 
@@ -2289,35 +2311,74 @@ class Database:
             logger.error(f"获取已建立检索缓存的商品URL失败: {e}")
             return []
 
-    def add_search_history(self, query_image_path: str, matched_product_id: int,
-                          matched_image_index: int, similarity: float, threshold: float) -> bool:
+    def add_search_history(
+        self,
+        query_image_path: str,
+        matched_product_id: int,
+        matched_image_index: int,
+        similarity: float,
+        threshold: float,
+        is_skipped: bool = False,
+        discord_message_id: Optional[str] = None,
+        discord_channel_id: Optional[str] = None,
+        discord_channel_name: str = '',
+        discord_author_id: Optional[str] = None,
+        discord_author_name: str = '',
+        message_content: str = '',
+    ) -> bool:
         """添加搜索历史记录"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     INSERT INTO search_history
-                    (query_image_path, matched_product_id, matched_image_index, similarity, threshold)
-                    VALUES (?, ?, ?, ?, ?)
-                ''', (query_image_path, matched_product_id, matched_image_index, similarity, threshold))
+                    (
+                        query_image_path, matched_product_id, matched_image_index,
+                        similarity, threshold, is_skipped, discord_message_id,
+                        discord_channel_id, discord_channel_name, discord_author_id,
+                        discord_author_name, message_content
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    query_image_path,
+                    matched_product_id,
+                    matched_image_index,
+                    similarity,
+                    threshold,
+                    1 if is_skipped else 0,
+                    discord_message_id,
+                    discord_channel_id,
+                    discord_channel_name or '',
+                    discord_author_id,
+                    discord_author_name or '',
+                    message_content or '',
+                ))
                 conn.commit()
                 return True
         except Exception as e:
             logger.error(f"添加搜索历史失败: {e}")
             return False
 
-    def get_search_history(self, limit: int = 50, offset: int = 0) -> Dict:
+    def get_search_history(self, limit: int = 50, offset: int = 0, skipped: Optional[bool] = None) -> Dict:
         """获取搜索历史记录（支持分页）"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
+                where_clause = ''
+                params: List[Any] = []
+                if skipped is not None:
+                    where_clause = 'WHERE sh.is_skipped = ?'
+                    params.append(1 if skipped else 0)
 
                 # 获取总数
-                cursor.execute('SELECT COUNT(*) FROM search_history')
+                count_query = 'SELECT COUNT(*) FROM search_history sh'
+                if where_clause:
+                    count_query += f' {where_clause}'
+                cursor.execute(count_query, params)
                 total = cursor.fetchone()[0]
 
                 # 获取分页数据
-                cursor.execute('''
+                query = f'''
                     SELECT
                         sh.id,
                         sh.query_image_path,
@@ -2325,6 +2386,13 @@ class Database:
                         sh.matched_image_index,
                         sh.similarity,
                         sh.threshold,
+                        COALESCE(sh.is_skipped, 0) as is_skipped,
+                        sh.discord_message_id,
+                        sh.discord_channel_id,
+                        sh.discord_channel_name,
+                        sh.discord_author_id,
+                        sh.discord_author_name,
+                        sh.message_content,
                         sh.search_time,
                         p.title,
                         p.english_title,
@@ -2336,9 +2404,11 @@ class Database:
                     FROM search_history sh
                     LEFT JOIN products p ON sh.matched_product_id = p.id
                     LEFT JOIN product_images pi ON sh.matched_product_id = pi.product_id AND sh.matched_image_index = pi.image_index
+                    {where_clause}
                     ORDER BY sh.search_time DESC, sh.id DESC
                     LIMIT ? OFFSET ?
-                ''', (limit, offset))
+                '''
+                cursor.execute(query, (*params, limit, offset))
                 rows = cursor.fetchall()
                 history = []
                 for row in rows:
@@ -2367,6 +2437,13 @@ class Database:
                         'matched_image_index': row['matched_image_index'],
                         'similarity': row['similarity'],
                         'threshold': row['threshold'],
+                        'is_skipped': 1 if int(row['is_skipped'] or 0) else 0,
+                        'discord_message_id': row['discord_message_id'] or '',
+                        'discord_channel_id': row['discord_channel_id'] or '',
+                        'discord_channel_name': row['discord_channel_name'] or '',
+                        'discord_author_id': row['discord_author_id'] or '',
+                        'discord_author_name': row['discord_author_name'] or '',
+                        'message_content': row['message_content'] or '',
                         'search_time': row['search_time'],
                         'title': row['title'],
                         'english_title': row['english_title'],

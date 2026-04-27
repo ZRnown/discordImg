@@ -87,6 +87,18 @@ const normalizeReviewAccounts = (value: unknown) => {
     .filter(Boolean)
 }
 
+const normalizeReviewImagePreviews = (payload: any) => {
+  const previews = payload?.reply_image_previews
+  if (!Array.isArray(previews)) return []
+  return previews
+    .map((item: any) => ({
+      url: String(item?.url || "").trim(),
+      label: String(item?.label || "图片").trim() || "图片",
+    }))
+    .filter((item) => item.url)
+    .slice(0, 10)
+}
+
 export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
   const [websites, setWebsites] = useState<any[]>([])
   const [items, setItems] = useState<ReviewItem[]>([])
@@ -589,6 +601,7 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
                 const content = String(item.content || "").trim() || "（无文本内容）"
                 const sourceContent = String(item.source_content || "").trim()
                 const websiteLabel = item.website_display_name || item.website_name || `网站 ${item.website_id}`
+                const imagePreviews = normalizeReviewImagePreviews(item.payload)
 
                 return (
                   <div
@@ -637,6 +650,27 @@ export function ReviewWindowView({ isActive = true }: { isActive?: boolean }) {
                         <div className="mt-2 max-h-36 overflow-auto whitespace-pre-wrap break-words text-sm leading-6">
                           {content}
                         </div>
+                        {imagePreviews.length > 0 ? (
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {imagePreviews.map((preview, index) => (
+                              <div key={`${preview.url}-${index}`} className="w-20 space-y-1">
+                                <div className="h-20 w-20 overflow-hidden rounded-md border bg-background">
+                                  <img
+                                    src={preview.url}
+                                    alt={preview.label}
+                                    className="h-full w-full object-cover"
+                                    onError={(event) => {
+                                      event.currentTarget.src = "/placeholder.jpg"
+                                    }}
+                                  />
+                                </div>
+                                <div className="truncate text-[11px] text-muted-foreground" title={preview.label}>
+                                  {preview.label}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
                       </div>
                     </div>
 

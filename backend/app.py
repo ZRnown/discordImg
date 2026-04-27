@@ -6017,12 +6017,18 @@ def get_search_history():
         limit = max(1, min(limit, 100))  # 1~100
         offset = max(int(request.args.get('offset', 0)), 0)
         page = max(int(request.args.get('page', 1)), 1)
+        skipped_arg = (request.args.get('skipped') or 'all').strip().lower()
+        skipped_filter = None
+        if skipped_arg in {'1', 'true', 'yes', 'skipped'}:
+            skipped_filter = True
+        elif skipped_arg in {'0', 'false', 'no', 'normal'}:
+            skipped_filter = False
 
         # 如果提供了page参数，计算offset
         if 'page' in request.args and 'offset' not in request.args:
             offset = (page - 1) * limit
 
-        result = db.get_search_history(limit, offset)
+        result = db.get_search_history(limit, offset, skipped=skipped_filter)
         return jsonify(result)
     except Exception as e:
         logger.error(f"获取搜索历史失败: {e}")

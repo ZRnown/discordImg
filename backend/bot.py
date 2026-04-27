@@ -1091,6 +1091,36 @@ async def _resolve_existing_reply_thread_after_create_failure(
     return None
 
 
+async def _resolve_archived_reply_thread(target_client, target_channel, message):
+    message_id = getattr(message, 'id', None)
+    if target_channel is None or message_id is None:
+        return None
+
+    archived_threads = getattr(target_channel, 'archived_threads', None)
+    if not callable(archived_threads):
+        return None
+
+    for private in (False, True):
+        try:
+            iterator = archived_threads(private=private, limit=100)
+            async for thread in iterator:
+                starter_message_id = getattr(getattr(thread, 'starter_message', None), 'id', None)
+                if starter_message_id != message_id:
+                    continue
+                thread_id = getattr(thread, 'id', None)
+                resolved_thread = await _resolve_client_channel(target_client, thread_id)
+                resolved_thread = resolved_thread or thread
+                if thread_id is not None:
+                    _store_cached_auto_reply_thread_id(message, thread_id)
+                return resolved_thread
+        except Exception as exc:
+            logger.warning(
+                f"查找归档子区失败: message={message_id} channel={getattr(target_channel, 'id', None)} private={private} | {exc}"
+            )
+
+    return None
+
+
 async def resolve_reply_target_channel(
     target_client,
     target_channel,
@@ -1137,6 +1167,10 @@ async def resolve_reply_target_channel(
     )
     if existing_thread is not None:
         return existing_thread, True
+
+    archived_thread = await _resolve_archived_reply_thread(target_client, target_channel, message)
+    if archived_thread is not None:
+        return archived_thread, True
 
     logger.info(
         f"未找到消息已有子区: message={getattr(message, 'id', None)} "
@@ -2607,6 +2641,47 @@ class DiscordBotClient(discord.Client):
         )
         return False
 
+    def _build_review_reply_image_previews(self, product, custom_reply, match_context=None):
+        previews = []
+        seen = set()
+
+        def add_preview(url, label):
+            url = str(url or '').strip()
+            if not url or url in seen:
+                return
+            seen.add(url)
+            previews.append({'url': url, 'label': label})
+
+        product = product if isinstance(product, dict) else {}
+        product_id = product.get('id')
+        if isinstance(match_context, dict) and match_context.get('type') == 'image':
+            matched_index = match_context.get('best_match_image_index')
+            if product_id is not None and matched_index is not None:
+                add_preview(f"/api/image/{product_id}/{matched_index}", '图片命中')
+
+        active_product = product
+        if isinstance(custom_reply, dict) and isinstance(custom_reply.get('product_data'), dict):
+            active_product = custom_reply.get('product_data') or product
+            product_id = active_product.get('id') or product_id
+
+        if isinstance(custom_reply, dict) and custom_reply.get('skip_images'):
+            return previews
+
+        image_source = active_product.get('imageSource') or active_product.get('image_source') or 'product'
+        if image_source == 'custom':
+            for index, url in enumerate(self._coerce_list(active_product.get('customImageUrls') or active_product.get('custom_image_urls'))[:10], start=1):
+                add_preview(url, f'自定义图片 {index}')
+        elif image_source == 'upload':
+            for filename in self._coerce_list(active_product.get('uploaded_reply_images'))[:10]:
+                if product_id is not None:
+                    add_preview(f"/api/custom_reply_image/{product_id}/{filename}", str(filename))
+        else:
+            for index in self._coerce_list(active_product.get('selectedImageIndexes') or active_product.get('custom_reply_images'))[:10]:
+                if product_id is not None:
+                    add_preview(f"/api/image/{product_id}/{index}", f'商品图片 {index}')
+
+        return previews[:10]
+
     def _queue_keyword_review_item(
         self,
         *,
@@ -2662,9 +2737,15 @@ class DiscordBotClient(discord.Client):
             if not account_names and selected_sender_ids:
                 account_names = [str(item) for item in selected_sender_ids if item is not None]
 
+            reply_image_previews = self._build_review_reply_image_previews(
+                product,
+                custom_reply,
+                match_context,
+            )
+
             preview_text = (reply_content or '').strip()
             if not preview_text:
-                file_count = len(files or [])
+                file_count = len(files or []) or len(reply_image_previews)
                 preview_text = f"[图片 {file_count}]" if file_count else ''
 
             message_time = getattr(message, 'created_at', None)
@@ -2685,6 +2766,7 @@ class DiscordBotClient(discord.Client):
                 'selected_sender_ids': list(selected_sender_ids or []),
                 'reply_mode': reply_mode,
                 'files_count': len(files or []),
+                'reply_image_previews': reply_image_previews,
                 'prevalidated_batch': bool(prevalidated_batch),
                 'broadcast_mode': bool(broadcast_mode),
                 'thread_reply_enabled': bool(thread_reply_enabled),
@@ -3585,6 +3667,21 @@ class DiscordBotClient(discord.Client):
                 matched_product_id,
                 matched_image_index,
             )
+            await asyncio.to_thread(
+                db.add_search_history,
+                query_image_path=query_image_path,
+                matched_product_id=matched_product_id,
+                matched_image_index=matched_image_index,
+                similarity=float(similarity),
+                threshold=float(threshold),
+                is_skipped=True,
+                discord_message_id=str(getattr(message, 'id', '') or ''),
+                discord_channel_id=str(getattr(getattr(message, 'channel', None), 'id', '') or ''),
+                discord_channel_name=str(getattr(getattr(message, 'channel', None), 'name', '') or ''),
+                discord_author_id=str(getattr(getattr(message, 'author', None), 'id', '') or ''),
+                discord_author_name=self._get_message_author_name(message),
+                message_content=str(getattr(message, 'content', '') or ''),
+            )
         except Exception as e:
             logger.error(f"记录略过图片历史失败: {e}")
 
@@ -3738,7 +3835,7 @@ class DiscordBotClient(discord.Client):
                     threshold_to_use = _resolve_image_reply_threshold(match_context, website_config)
 
                     if similarity < threshold_to_use:
-                        logger.debug(
+                        logger.info(
                             f"📷 图片相似度 {similarity:.3f} 低于网站阈值 {threshold_to_use:.3f}，跳过回复"
                         )
                         continue
@@ -5625,7 +5722,7 @@ class DiscordBotClient(discord.Client):
 
             any_reply_scheduled = False
             keyword_image_job_created = False
-            skip_keyword_review_check = bool(getattr(message, 'attachments', None))
+            skip_keyword_review_check = False
 
             try:
                 if db is None:

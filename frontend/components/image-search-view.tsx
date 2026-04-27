@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
-import { Upload, Search, ExternalLink, Settings, X, Clock, Trash2, Copy } from "lucide-react"
+import { Upload, Search, ExternalLink, Settings, X, Trash2, Copy } from "lucide-react"
 import { toast } from "sonner"
 
 export function ImageSearchView() {
@@ -27,12 +27,9 @@ export function ImageSearchView() {
   const [totalHistory, setTotalHistory] = useState(0)
   const [hasMoreHistory, setHasMoreHistory] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
-  const [skippedHistory, setSkippedHistory] = useState<any[]>([])
-  const [skippedCurrentPage, setSkippedCurrentPage] = useState(1)
-  const [skippedTotalHistory, setSkippedTotalHistory] = useState(0)
-  const [skippedHasMoreHistory, setSkippedHasMoreHistory] = useState(false)
-  const [showClearSkippedConfirm, setShowClearSkippedConfirm] = useState(false)
+  const [historyFilter, setHistoryFilter] = useState<"all" | "normal" | "skipped">("all")
   const [availableWebsites, setAvailableWebsites] = useState<any[]>([])
+  const historyPageSize = 10
 
   const copyToClipboard = async (text: string) => {
     if (!text) return
@@ -164,11 +161,39 @@ export function ImageSearchView() {
     return `${base} grid-cols-4`
   }
 
+  const getHistoryPageItems = () => {
+    const totalPages = Math.max(1, Math.ceil(totalHistory / historyPageSize))
+    if (totalPages <= 7) {
+      return Array.from({ length: totalPages }, (_, index) => index + 1)
+    }
+
+    const pages = new Set([1, totalPages, currentPage - 1, currentPage, currentPage + 1])
+    if (currentPage <= 4) {
+      ;[2, 3, 4, 5].forEach(page => pages.add(page))
+    }
+    if (currentPage >= totalPages - 3) {
+      ;[totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1].forEach(page => pages.add(page))
+    }
+
+    const sorted = Array.from(pages)
+      .filter(page => page >= 1 && page <= totalPages)
+      .sort((a, b) => a - b)
+
+    const items: Array<number | string> = []
+    sorted.forEach((page, index) => {
+      const previous = sorted[index - 1]
+      if (previous && page - previous > 1) {
+        items.push(`ellipsis-${previous}-${page}`)
+      }
+      items.push(page)
+    })
+    return items
+  }
+
   // 加载搜索历史
   useEffect(() => {
     fetchSearchHistory()
-    fetchSkippedHistory()
-  }, [])
+  }, [historyFilter])
 
   useEffect(() => {
     const fetchWebsites = async () => {
@@ -206,9 +231,9 @@ export function ImageSearchView() {
 
   const fetchSearchHistory = async (page: number = 1) => {
     try {
-      const limit = 10 // 每页显示10条记录
+      const limit = historyPageSize
       const offset = (page - 1) * limit
-      const response = await fetch(`/api/search_history?limit=${limit}&offset=${offset}`)
+      const response = await fetch(`/api/search_history?limit=${limit}&offset=${offset}&skipped=${historyFilter}`)
       if (response.ok) {
         const result = await response.json()
         setSearchHistory(result.history || [])
@@ -222,27 +247,6 @@ export function ImageSearchView() {
     } catch (error) {
       console.error('Failed to fetch search history:', error)
       toast.error(getApiErrorMessage(error, '加载搜索历史失败'))
-    }
-  }
-
-  const fetchSkippedHistory = async (page: number = 1) => {
-    try {
-      const limit = 10
-      const offset = (page - 1) * limit
-      const response = await fetch(`/api/skipped_image_history?limit=${limit}&offset=${offset}`)
-      if (response.ok) {
-        const result = await response.json()
-        setSkippedHistory(result.history || [])
-        setSkippedTotalHistory(result.total || 0)
-        setSkippedHasMoreHistory(result.has_more || false)
-        setSkippedCurrentPage(page)
-      } else {
-        const errorData = await response.json().catch(() => ({}))
-        toast.error(getApiErrorMessage(errorData, '加载略过记录失败'))
-      }
-    } catch (error) {
-      console.error('Failed to fetch skipped image history:', error)
-      toast.error(getApiErrorMessage(error, '加载略过记录失败'))
     }
   }
 
@@ -291,48 +295,6 @@ export function ImageSearchView() {
     }
   }
 
-  const handleDeleteSkippedHistory = async (historyId: number) => {
-    try {
-      const response = await fetch(`/api/skipped_image_history/${historyId}`, {
-        method: 'DELETE',
-      })
-      if (response.ok) {
-        setSkippedHistory(prev => prev.filter(h => h.id !== historyId))
-        setSkippedTotalHistory(prev => prev - 1)
-        toast.success('略过记录已删除')
-      } else {
-        const errorData = await response.json().catch(() => ({}))
-        toast.error(getApiErrorMessage(errorData, '删除失败'))
-      }
-    } catch (error) {
-      console.error('Failed to delete skipped history:', error)
-      toast.error(getApiErrorMessage(error, '删除失败'))
-    }
-  }
-
-  const handleClearSkippedHistory = () => {
-    setShowClearSkippedConfirm(true)
-  }
-
-  const confirmClearSkippedHistory = async () => {
-    setShowClearSkippedConfirm(false)
-    try {
-      const response = await fetch('/api/skipped_image_history', {
-        method: 'DELETE',
-      })
-      if (response.ok) {
-        setSkippedHistory([])
-        setSkippedTotalHistory(0)
-        toast.success('所有略过记录已清空')
-      } else {
-        const errorData = await response.json().catch(() => ({}))
-        toast.error(getApiErrorMessage(errorData, '清空失败'))
-      }
-    } catch (error) {
-      console.error('Failed to clear skipped history:', error)
-      toast.error(getApiErrorMessage(error, '清空失败'))
-    }
-  }
 
   const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -702,19 +664,35 @@ export function ImageSearchView() {
             <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4">
               <div>
                 <CardTitle className="text-lg">搜索记录</CardTitle>
-                <CardDescription>历史搜索结果，按时间倒序排列</CardDescription>
+                <CardDescription>历史搜索结果和群内图片略过记录，按时间倒序排列</CardDescription>
               </div>
-              {searchHistory.length > 0 && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleClearAllHistory}
-                  className="shrink-0"
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="text-sm text-muted-foreground" htmlFor="image-search-history-filter">是否略过</label>
+                <select
+                  id="image-search-history-filter"
+                  value={historyFilter}
+                  onChange={(event) => {
+                    setCurrentPage(1)
+                    setHistoryFilter(event.target.value as "all" | "normal" | "skipped")
+                  }}
+                  className="h-8 rounded-md border border-input bg-background px-2 text-sm"
                 >
-                  <Trash2 className="w-4 h-4 mr-1" />
-                  清空历史
-                </Button>
-              )}
+                  <option value="all">全部</option>
+                  <option value="normal">未略过</option>
+                  <option value="skipped">已略过</option>
+                </select>
+                {searchHistory.length > 0 && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleClearAllHistory}
+                    className="shrink-0"
+                  >
+                    <Trash2 className="w-4 h-4 mr-1" />
+                    清空历史
+                  </Button>
+                )}
+              </div>
             </div>
           </CardHeader>
           <CardContent className="pt-0">
@@ -727,6 +705,7 @@ export function ImageSearchView() {
             ) : (
               <div className="space-y-3">
                 {searchHistory.map((history) => {
+                  const isSkipped = Boolean(Number(history.is_skipped || 0))
                   const historyLinks = (history.websiteUrls && history.websiteUrls.length > 0)
                     ? history.websiteUrls
                     : [
@@ -759,10 +738,17 @@ export function ImageSearchView() {
 
                         <div className="space-y-0.5 min-w-0 flex-1">
                           <div className="flex items-center gap-2">
-                            <h4 className="font-bold text-base truncate max-w-[200px] sm:max-w-[400px]">{history.title}</h4>
+                            <h4 className="font-bold text-base truncate max-w-[200px] sm:max-w-[400px]">{history.title || '未命中商品'}</h4>
+                            {isSkipped && (
+                              <Badge variant="outline" className="border-red-200 bg-red-50 text-red-700">
+                                已略过
+                              </Badge>
+                            )}
                             <Badge
                               className={
-                                history.similarity >= 0.95
+                                isSkipped
+                                  ? "bg-red-600 hover:bg-red-700"
+                                  : history.similarity >= 0.95
                                   ? "bg-green-600 hover:bg-green-700"
                                   : history.similarity >= 0.85
                                   ? "bg-blue-600 hover:bg-blue-700"
@@ -775,12 +761,23 @@ export function ImageSearchView() {
                           <div className="flex items-center gap-2 mt-1">
                             <p className="text-sm font-bold text-blue-600 truncate max-w-[240px] sm:max-w-[500px]">{history.english_title || "No English Title"}</p>
                           </div>
+                          {isSkipped && (
+                            <p className="text-xs text-muted-foreground truncate max-w-[520px]">
+                              {history.message_content || '群内图片未达到阈值，未发送回复'}
+                            </p>
+                          )}
                           <div className="flex items-center gap-2 mt-1 text-[11px] text-muted-foreground">
                             <span className="font-mono">ID: {history.weidian_url?.split('itemID=')?.[1] || 'N/A'}</span>
                             <span>|</span>
                             <span>匹配图片: #{history.matched_image_index}</span>
                             <span>|</span>
                             <span>阈值: {history.threshold * 100}%</span>
+                            {isSkipped && (
+                              <>
+                                <span>|</span>
+                                <span>频道: {history.discord_channel_name || history.discord_channel_id || '未知频道'}</span>
+                              </>
+                            )}
                             <span>|</span>
                             <span>搜索时间: {new Date(history.search_time).toLocaleString('zh-CN')}</span>
                           </div>
@@ -845,9 +842,9 @@ export function ImageSearchView() {
                 {searchHistory.length > 0 && (
                   <div className="flex flex-col sm:flex-row justify-between items-center gap-4 pt-4 border-t mt-4">
                     <div className="text-sm text-muted-foreground font-medium">
-                      显示第 {((currentPage - 1) * 10) + 1} - {Math.min(currentPage * 10, totalHistory)} 条，共 {totalHistory} 条记录
+                      显示第 {((currentPage - 1) * historyPageSize) + 1} - {Math.min(currentPage * historyPageSize, totalHistory)} 条，共 {totalHistory} 条记录
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center justify-center gap-1">
                       <Button
                         variant="outline"
                         size="sm"
@@ -857,131 +854,26 @@ export function ImageSearchView() {
                       >
                         上一页
                       </Button>
-                      <div className="text-sm font-medium bg-primary text-primary-foreground px-3 py-1 rounded">
-                        {currentPage}
-                      </div>
+                      {getHistoryPageItems().map((item) => (
+                        typeof item === "number" ? (
+                          <Button
+                            key={item}
+                            variant={item === currentPage ? "default" : "outline"}
+                            size="sm"
+                            onClick={() => fetchSearchHistory(item)}
+                            className="h-8 min-w-8 px-2"
+                          >
+                            {item}
+                          </Button>
+                        ) : (
+                          <span key={item} className="px-2 text-sm text-muted-foreground">...</span>
+                        )
+                      ))}
                       <Button
                         variant="outline"
                         size="sm"
                         onClick={() => fetchSearchHistory(currentPage + 1)}
                         disabled={!hasMoreHistory || searchHistory.length === 0}
-                        className="h-8 px-3"
-                      >
-                        下一页
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="pb-4">
-            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-4">
-              <div>
-                <CardTitle className="text-lg">被略过的商品</CardTitle>
-                <CardDescription>没有达到阈值的群内图片消息会记录在这里</CardDescription>
-              </div>
-              {skippedHistory.length > 0 && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleClearSkippedHistory}
-                  className="shrink-0"
-                >
-                  <Trash2 className="w-4 h-4 mr-1" />
-                  清空记录
-                </Button>
-              )}
-            </div>
-          </CardHeader>
-          <CardContent className="pt-0">
-            {skippedHistory.length === 0 ? (
-              <div className="text-center py-12 text-muted-foreground">
-                <Clock className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                <p>暂无略过记录</p>
-                <p className="text-sm">群里图片未过阈值时，会自动出现在这里</p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {skippedHistory.map((history) => (
-                  <div key={history.id} className="flex flex-col lg:flex-row lg:items-center justify-between p-3 hover:bg-muted/20 transition-colors gap-3">
-                    <div className="flex gap-3 items-center flex-1">
-                      {history.matched_product_id && history.matched_image_index !== null && history.matched_image_index !== undefined && (
-                        <div className="flex-shrink-0">
-                          <div className="w-16 h-16 bg-muted rounded-lg overflow-hidden">
-                            <img
-                              src={`/api/image/${history.matched_product_id}/${history.matched_image_index}`}
-                              alt="最高相似商品图"
-                              className="w-full h-full object-cover"
-                              onError={(e) => {
-                                e.currentTarget.src = '/placeholder.jpg'
-                              }}
-                            />
-                          </div>
-                        </div>
-                      )}
-
-                      <div className="space-y-1 min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <h4 className="font-bold text-base truncate max-w-[200px] sm:max-w-[420px]">
-                            {history.title || '未命中商品'}
-                          </h4>
-                          <Badge className="bg-red-600 hover:bg-red-700">
-                            {(Number(history.similarity || 0) * 100).toFixed(1)}%
-                          </Badge>
-                        </div>
-                        <p className="text-sm text-muted-foreground truncate">
-                          {history.message_content || '这条消息没有附带文字内容'}
-                        </p>
-                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-                          <span>频道: {history.discord_channel_name || history.discord_channel_id || '未知频道'}</span>
-                          <span>|</span>
-                          <span>发送者: {history.discord_author_name || history.discord_author_id || '未知用户'}</span>
-                          <span>|</span>
-                          <span>阈值: {(Number(history.threshold || 0) * 100).toFixed(0)}%</span>
-                          <span>|</span>
-                          <span>时间: {new Date(history.created_at).toLocaleString('zh-CN')}</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <Button
-                      variant="outline"
-                      size="icon"
-                      className="h-8 w-8 shrink-0 hover:bg-red-50 hover:text-red-600"
-                      onClick={() => handleDeleteSkippedHistory(history.id)}
-                    >
-                      <X className="size-3.5" />
-                    </Button>
-                  </div>
-                ))}
-
-                {skippedHistory.length > 0 && (
-                  <div className="flex flex-col sm:flex-row justify-between items-center gap-4 pt-4 border-t mt-4">
-                    <div className="text-sm text-muted-foreground font-medium">
-                      显示第 {((skippedCurrentPage - 1) * 10) + 1} - {Math.min(skippedCurrentPage * 10, skippedTotalHistory)} 条，共 {skippedTotalHistory} 条记录
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => fetchSkippedHistory(skippedCurrentPage - 1)}
-                        disabled={skippedCurrentPage <= 1}
-                        className="h-8 px-3"
-                      >
-                        上一页
-                      </Button>
-                      <div className="text-sm font-medium bg-primary text-primary-foreground px-3 py-1 rounded">
-                        {skippedCurrentPage}
-                      </div>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => fetchSkippedHistory(skippedCurrentPage + 1)}
-                        disabled={!skippedHasMoreHistory || skippedHistory.length === 0}
                         className="h-8 px-3"
                       >
                         下一页
@@ -1014,24 +906,6 @@ export function ImageSearchView() {
           </DialogContent>
         </Dialog>
 
-        <Dialog open={showClearSkippedConfirm} onOpenChange={setShowClearSkippedConfirm}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>确认清空略过记录</DialogTitle>
-              <DialogDescription>
-                确定要清空所有被略过的商品记录吗？此操作不可撤销。
-              </DialogDescription>
-            </DialogHeader>
-            <DialogFooter>
-              <Button variant="outline" onClick={() => setShowClearSkippedConfirm(false)}>
-                取消
-              </Button>
-              <Button variant="destructive" onClick={confirmClearSkippedHistory}>
-                确认清空
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
       </div>
     </div>
   )

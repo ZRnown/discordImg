@@ -8,9 +8,10 @@ export async function GET(request: NextRequest) {
     const limit = url.searchParams.get('limit') || '50';
     // 【修复】获取 offset 参数
     const offset = url.searchParams.get('offset') || '0';
+    const skipped = url.searchParams.get('skipped') || 'all';
 
     // 【修复】将 offset 参数拼接到后端请求中
-    const response = await fetch(`${BACKEND_URL}/api/search_history?limit=${limit}&offset=${offset}`);
+    const response = await fetch(`${BACKEND_URL}/api/search_history?limit=${limit}&offset=${offset}&skipped=${encodeURIComponent(skipped)}`);
     if (!response.ok) {
       const errorData = await response.json();
       return NextResponse.json(errorData, { status: response.status });

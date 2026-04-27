@@ -80,11 +80,23 @@ test('low similarity image matches are skipped instead of sent', () => {
   assert.match(handleImageSource, /return False/)
 })
 
-test('keyword replies from messages with attachments bypass keyword review', () => {
+test('keyword replies from messages with attachments still respect keyword review', () => {
   const source = readSource()
 
-  assert.match(source, /skip_keyword_review_check = bool\(getattr\(message, 'attachments', None\)\)/)
-  assert.match(source, /skip_review_check=skip_keyword_review_check/)
+  assert.match(source, /skip_keyword_review_check = False/)
+  assert.doesNotMatch(source, /skip_keyword_review_check = bool\(getattr\(message, 'attachments', None\)\)/)
+})
+
+test('skipped image matches are also saved into search history', () => {
+  const source = readSource()
+  const start = source.indexOf('async def _record_skipped_image_history')
+  const end = source.indexOf('    async def schedule_reply', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+
+  const skippedSource = source.slice(start, end)
+  assert.match(skippedSource, /db\.add_search_history/)
+  assert.match(skippedSource, /is_skipped=True/)
 })
 
 test('text messages with image attachments skip image recognition after keyword search', () => {
@@ -108,6 +120,8 @@ test('thread reply mode falls back to the source channel without creating new th
   assert.match(source, /thread_reply_enabled=thread_reply_enabled,\n\s+\)/)
   assert.match(source, /if thread_reply_enabled and not used_thread_reply:/)
   assert.match(source, /子区回复回退/)
+  assert.match(source, /_resolve_archived_reply_thread/)
+  assert.match(source, /archived_threads\(private=private, limit=100\)/)
   assert.doesNotMatch(source, /子区回复跳过/)
   assert.doesNotMatch(source, /create_thread = getattr\(target_channel, 'create_thread'/)
   assert.doesNotMatch(source, /await create_thread\(/)
