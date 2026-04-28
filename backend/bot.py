@@ -784,14 +784,39 @@ def _get_image_match_reply_block_reason(match_context, website_config):
     return None
 
 
+def _normalize_sender_id_override(sender_ids):
+    normalized_ids = []
+    for sender_id in sender_ids or []:
+        normalized = _coerce_int(sender_id, None)
+        if normalized is None or normalized in normalized_ids:
+            continue
+        normalized_ids.append(normalized)
+    return normalized_ids
+
+
+def _normalize_saved_review_reply_target_payload(payload):
+    if not isinstance(payload, dict):
+        return {}
+
+    channel_id = _coerce_int(payload.get('channel_id'), None)
+    parent_channel_id = _coerce_int(payload.get('parent_channel_id'), None)
+
+    return {
+        'used_thread_reply': bool(payload.get('used_thread_reply') and channel_id is not None),
+        'channel_id': channel_id,
+        'channel_name': str(payload.get('channel_name') or ''),
+        'parent_channel_id': parent_channel_id,
+        'parent_channel_name': str(payload.get('parent_channel_name') or ''),
+    }
+
+
 def _build_keyword_review_message_proxy(review_item):
     payload = review_item.get('payload') or {}
     message_payload = payload.get('message') or {}
-    reply_target_payload = payload.get('reply_target_channel') or {}
-    use_saved_reply_target = bool(
-        reply_target_payload.get('used_thread_reply')
-        and _coerce_int(reply_target_payload.get('channel_id'), None) is not None
+    reply_target_payload = _normalize_saved_review_reply_target_payload(
+        payload.get('reply_target_channel') or {}
     )
+    use_saved_reply_target = bool(reply_target_payload.get('used_thread_reply'))
 
     def _parse_message_time(value):
         if isinstance(value, datetime):
@@ -976,6 +1001,7 @@ async def dispatch_keyword_review_item(review_item):
 
         payload = review_item.get('payload') or {}
         message = _build_keyword_review_message_proxy(review_item)
+        saved_reply_target_payload = payload.get('reply_target_channel') or {}
         website_config = _resolve_current_review_dispatch_website_config(
             review_item,
             message,
@@ -1013,6 +1039,9 @@ async def dispatch_keyword_review_item(review_item):
             skip_review_check=True,
             force_reference_reply=True,
             disable_thread_creation=True,
+            sender_ids_override=payload.get('selected_sender_ids') or review_item.get('account_ids'),
+            saved_reply_target_payload=saved_reply_target_payload,
+            strict_saved_reply_target=bool(saved_reply_target_payload.get('used_thread_reply')),
         )
         if item_id:
             db.update_keyword_reply_review_item_status(
@@ -3839,6 +3868,9 @@ class DiscordBotClient(discord.Client):
         force_plain_send=False,
         force_reference_reply=False,
         disable_thread_creation=False,
+        sender_ids_override=None,
+        saved_reply_target_payload=None,
+        strict_saved_reply_target=False,
     ):
         """调度回复到合适的发送账号 (增强版：带详细状态诊断)"""
 
@@ -3851,6 +3883,14 @@ class DiscordBotClient(discord.Client):
                 from database import db
             except ImportError:
                 from .database import db
+
+            sender_ids_override = _normalize_sender_id_override(sender_ids_override)
+            saved_reply_target_payload = _normalize_saved_review_reply_target_payload(
+                saved_reply_target_payload
+            )
+            strict_saved_reply_target = bool(
+                strict_saved_reply_target and saved_reply_target_payload.get('used_thread_reply')
+            )
 
             # 获取用户设置以确定全局延迟时间
             user_settings = await asyncio.get_event_loop().run_in_executor(None, db.get_user_settings, self.user_id)
@@ -4028,7 +4068,7 @@ class DiscordBotClient(discord.Client):
                     None, db.get_website_senders, website_config['id'], self.user_id
                 )
 
-                if not db_sender_ids:
+                if not db_sender_ids and not sender_ids_override:
                     logger.warning(
                         f"❌ [配置错误] 网站配置 '{website_config.get('name')}' 未绑定任何【发送】账号。请在网站配置中绑定账号。"
                     )
@@ -4037,8 +4077,15 @@ class DiscordBotClient(discord.Client):
                 logger.info(f"配置账号ID: {db_sender_ids} | 在线账号ID: {online_client_ids}")
 
                 valid_senders = [uid for uid in db_sender_ids if uid in online_client_ids]
+                override_sender_ids = [uid for uid in sender_ids_override if uid in online_client_ids]
 
-                if not valid_senders:
+                if sender_ids_override and not override_sender_ids:
+                    logger.warning(
+                        f"❌ [审核发送失败] 审核记录指定的发送账号当前均不在线: {sender_ids_override}"
+                    )
+                    continue
+
+                if not valid_senders and not override_sender_ids:
                     logger.warning("❌ [状态错误] 配置的发送账号均不在线。请检查 Discord 账号连接状态。")
                     continue
 
@@ -4046,6 +4093,8 @@ class DiscordBotClient(discord.Client):
                     isinstance(active_custom_reply, dict)
                     and active_custom_reply.get('skip_sender_cooldown')
                 )
+                if override_sender_ids:
+                    skip_sender_cooldown = True
 
                 # 3. 冷却逻辑：始终生效，轮换开关仅控制选人策略
                 website_id = website_config.get('id')
@@ -4095,48 +4144,51 @@ class DiscordBotClient(discord.Client):
 
                 cooldown_channel_id = _resolve_cooldown_channel_id(message.channel)
 
-                dispatch_plan = build_sender_dispatch_plan(
-                    db_sender_ids=db_sender_ids,
-                    valid_senders=valid_senders,
-                    channel_id=cooldown_channel_id,
-                    rotation_interval=rotation_interval,
-                    rotation_enabled=rotation_enabled,
-                    skip_sender_cooldown=skip_sender_cooldown,
-                    reply_mode=reply_mode,
-                )
-                selected_sender_ids = list(dispatch_plan.get('selected_ids') or [])
-
-                if not selected_sender_ids and not skip_sender_cooldown:
-                    wait_seconds = float(dispatch_plan.get('wait_seconds') or 0.0)
-                    if wait_seconds > 0:
-                        if wait_seconds > MAX_COOLDOWN_WAIT_SECONDS:
-                            logger.info(
-                                f"⏭️ [跳过长等待] 频道 {message.channel.id} 冷却等待 {wait_seconds:.1f} 秒，"
-                                f"超过阈值 {MAX_COOLDOWN_WAIT_SECONDS:.1f} 秒，跳过本次发送"
-                            )
-                            continue
-                        logger.info(
-                            f"⏳ [排队等待] 频道 {message.channel.id} 暂无可用发送账号，"
-                            f"等待 {wait_seconds:.1f} 秒后重试"
-                        )
-                        await asyncio.sleep(wait_seconds + 0.05)
-                        dispatch_plan = build_sender_dispatch_plan(
-                            db_sender_ids=db_sender_ids,
-                            valid_senders=valid_senders,
-                            channel_id=cooldown_channel_id,
-                            rotation_interval=rotation_interval,
-                            rotation_enabled=rotation_enabled,
-                            skip_sender_cooldown=skip_sender_cooldown,
-                            reply_mode=reply_mode,
-                        )
-                        selected_sender_ids = list(dispatch_plan.get('selected_ids') or [])
-
-                if not selected_sender_ids:
-                    logger.warning(
-                        f"⏳ [重试后仍冷却] 频道 {message.channel.id} 在线账号 ({len(valid_senders)}个) "
-                        f"均不可用，跳过当前网站配置"
+                if override_sender_ids:
+                    selected_sender_ids = list(override_sender_ids)
+                else:
+                    dispatch_plan = build_sender_dispatch_plan(
+                        db_sender_ids=db_sender_ids,
+                        valid_senders=valid_senders,
+                        channel_id=cooldown_channel_id,
+                        rotation_interval=rotation_interval,
+                        rotation_enabled=rotation_enabled,
+                        skip_sender_cooldown=skip_sender_cooldown,
+                        reply_mode=reply_mode,
                     )
-                    continue
+                    selected_sender_ids = list(dispatch_plan.get('selected_ids') or [])
+
+                    if not selected_sender_ids and not skip_sender_cooldown:
+                        wait_seconds = float(dispatch_plan.get('wait_seconds') or 0.0)
+                        if wait_seconds > 0:
+                            if wait_seconds > MAX_COOLDOWN_WAIT_SECONDS:
+                                logger.info(
+                                    f"⏭️ [跳过长等待] 频道 {message.channel.id} 冷却等待 {wait_seconds:.1f} 秒，"
+                                    f"超过阈值 {MAX_COOLDOWN_WAIT_SECONDS:.1f} 秒，跳过本次发送"
+                                )
+                                continue
+                            logger.info(
+                                f"⏳ [排队等待] 频道 {message.channel.id} 暂无可用发送账号，"
+                                f"等待 {wait_seconds:.1f} 秒后重试"
+                            )
+                            await asyncio.sleep(wait_seconds + 0.05)
+                            dispatch_plan = build_sender_dispatch_plan(
+                                db_sender_ids=db_sender_ids,
+                                valid_senders=valid_senders,
+                                channel_id=cooldown_channel_id,
+                                rotation_interval=rotation_interval,
+                                rotation_enabled=rotation_enabled,
+                                skip_sender_cooldown=skip_sender_cooldown,
+                                reply_mode=reply_mode,
+                            )
+                            selected_sender_ids = list(dispatch_plan.get('selected_ids') or [])
+
+                    if not selected_sender_ids:
+                        logger.warning(
+                            f"⏳ [重试后仍冷却] 频道 {message.channel.id} 在线账号 ({len(valid_senders)}个) "
+                            f"均不可用，跳过当前网站配置"
+                        )
+                        continue
 
                 target_clients = [
                     c for c in bot_clients
@@ -4168,16 +4220,59 @@ class DiscordBotClient(discord.Client):
 
                 for target_index, target_client in enumerate(target_clients):
                     try:
-                        target_channel = await _resolve_message_reply_channel(target_client, message)
+                        used_thread_reply = False
+                        saved_reply_target_requested = bool(
+                            saved_reply_target_payload.get('used_thread_reply')
+                        )
+                        saved_reply_target_id = _coerce_int(
+                            saved_reply_target_payload.get('channel_id'),
+                            None,
+                        )
+                        target_channel = None
+                        reply_target_channel = None
+
+                        if saved_reply_target_requested and saved_reply_target_id is not None:
+                            # 审核通过后的补发必须优先命中入队时保存的子区目标。
+                            reply_target_channel = await _resolve_client_channel(
+                                target_client,
+                                saved_reply_target_id,
+                            )
+                            if reply_target_channel is not None:
+                                target_channel = reply_target_channel
+                                used_thread_reply = True
+
+                        if target_channel is None:
+                            target_channel = await _resolve_message_reply_channel(target_client, message)
 
                         if target_channel:
-                            reply_target_channel, used_thread_reply = await resolve_reply_target_channel(
-                                target_client=target_client,
-                                target_channel=target_channel,
-                                message=message,
-                                thread_reply_enabled=thread_reply_enabled,
-                            )
-                            reply_target_channel = reply_target_channel or target_channel
+                            if not used_thread_reply:
+                                reply_target_channel, used_thread_reply = await resolve_reply_target_channel(
+                                    target_client=target_client,
+                                    target_channel=target_channel,
+                                    message=message,
+                                    thread_reply_enabled=thread_reply_enabled or saved_reply_target_requested,
+                                )
+                                reply_target_channel = reply_target_channel or target_channel
+
+                            if strict_saved_reply_target:
+                                resolved_reply_target_id = _coerce_int(
+                                    getattr(reply_target_channel, 'id', None),
+                                    None,
+                                )
+                                if (
+                                    not used_thread_reply
+                                    or saved_reply_target_id is None
+                                    or resolved_reply_target_id != saved_reply_target_id
+                                ):
+                                    logger.warning(
+                                        "审批后发送必须命中已保存子区，拒绝回退到原频道: "
+                                        f"message={getattr(message, 'id', None)} "
+                                        f"saved_target={saved_reply_target_id} "
+                                        f"resolved_target={resolved_reply_target_id} "
+                                        f"account_id={getattr(target_client, 'account_id', None)}"
+                                    )
+                                    continue
+
                             if thread_reply_enabled and not used_thread_reply:
                                 logger.info(
                                     f"↪️ [子区回复回退] 源消息没有可用子区，改回原频道: "

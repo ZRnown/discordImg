@@ -33,6 +33,19 @@ test('approved review dispatch does not force plain sends', () => {
   assert.doesNotMatch(source, /force_plain_send=True/)
 })
 
+test('approved review dispatch preserves saved sender ids and thread targets', () => {
+  const source = readSource()
+  const start = source.indexOf('async def dispatch_keyword_review_item')
+  const end = source.indexOf('def _build_multi_reply_content', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+
+  const dispatchSource = source.slice(start, end)
+  assert.match(dispatchSource, /sender_ids_override=payload\.get\('selected_sender_ids'\) or review_item\.get\('account_ids'\)/)
+  assert.match(dispatchSource, /saved_reply_target_payload=saved_reply_target_payload/)
+  assert.match(dispatchSource, /strict_saved_reply_target=bool\(saved_reply_target_payload\.get\('used_thread_reply'\)\)/)
+})
+
 test('image attachment replies do not bypass channel review', () => {
   const source = readSource()
   const start = source.indexOf('async def handle_image')
@@ -126,7 +139,7 @@ test('thread reply mode falls back to the source channel without creating new th
   const source = readSource()
 
   assert.match(source, /disable_thread_creation=True/)
-  assert.match(source, /thread_reply_enabled=thread_reply_enabled,\n\s+\)/)
+  assert.match(source, /thread_reply_enabled=thread_reply_enabled or saved_reply_target_requested,\n\s+\)/)
   assert.match(source, /if thread_reply_enabled and not used_thread_reply:/)
   assert.match(source, /子区回复回退/)
   assert.match(source, /_resolve_archived_reply_thread/)
