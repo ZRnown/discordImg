@@ -481,6 +481,55 @@ class ResolveReplyTargetChannelTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(used_thread_reply)
         target_channel.create_thread.assert_not_awaited()
 
+    async def test_uses_raw_message_thread_when_library_message_lacks_thread_object(self):
+        existing_thread = SimpleNamespace(id=777001, parent_id=123001)
+        target_channel = SimpleNamespace(
+            id=123001,
+            parent_id=None,
+            fetch_message=AsyncMock(
+                return_value=SimpleNamespace(
+                    id=777001,
+                    channel=SimpleNamespace(id=123001, parent_id=None),
+                    thread=None,
+                    flags=SimpleNamespace(has_thread=False),
+                )
+            ),
+            threads=[],
+        )
+        message = _SlottedMessage(
+            message_id=777001,
+            channel=SimpleNamespace(id=123001, parent_id=None),
+            has_thread=True,
+            fetch_thread=None,
+        )
+        target_client = SimpleNamespace(
+            get_channel=lambda channel_id: existing_thread if channel_id == 777001 else None,
+            fetch_channel=AsyncMock(return_value=existing_thread),
+            http=SimpleNamespace(
+                get_message=AsyncMock(
+                    return_value={
+                        "id": "777001",
+                        "channel_id": "123001",
+                        "flags": 32,
+                        "thread": {
+                            "id": "777001",
+                        },
+                    }
+                )
+            ),
+        )
+
+        reply_target_channel, used_thread_reply = await resolve_reply_target_channel(
+            target_client=target_client,
+            target_channel=target_channel,
+            message=message,
+            thread_reply_enabled=True,
+        )
+
+        self.assertIs(reply_target_channel, existing_thread)
+        self.assertTrue(used_thread_reply)
+        target_client.http.get_message.assert_awaited_once_with(123001, 777001)
+
 
 class ResolveMessageReplyChannelTestCase(unittest.IsolatedAsyncioTestCase):
     async def test_prefers_cached_channel_when_available(self):
@@ -685,3 +734,5 @@ class KeywordReviewMessageProxyTestCase(unittest.TestCase):
         self.assertEqual(message.channel.name, "auto-reply-thread")
         self.assertEqual(message.channel.parent_id, 123001)
         self.assertEqual(message.channel.parent.name, "parent-channel")
+        self.assertEqual(message.thread.id, 555001)
+        self.assertTrue(message.flags.has_thread)

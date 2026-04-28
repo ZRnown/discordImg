@@ -854,11 +854,16 @@ def _build_keyword_review_message_proxy(review_item):
     guild_id = _coerce_int(message_payload.get('guild_id') or review_item.get('guild_id'), None)
     channel_id = _coerce_int(message_payload.get('channel_id') or review_item.get('channel_id'), None)
     parent_channel_id = _coerce_int(message_payload.get('parent_channel_id'), None)
+    message_thread_id = _coerce_int(message_payload.get('thread_id'), None)
     if use_saved_reply_target:
         channel_id = _coerce_int(reply_target_payload.get('channel_id'), channel_id)
         parent_channel_id = _coerce_int(
             reply_target_payload.get('parent_channel_id'),
             parent_channel_id,
+        )
+        message_thread_id = _coerce_int(
+            reply_target_payload.get('channel_id'),
+            message_thread_id,
         )
     author_id = _coerce_int(
         message_payload.get('author_id')
@@ -925,6 +930,11 @@ def _build_keyword_review_message_proxy(review_item):
         or review_item.get('source_content')
         or ''
     )
+    message_has_thread = bool(
+        message_payload.get('has_thread')
+        or message_thread_id is not None
+        or use_saved_reply_target
+    )
     message = SimpleNamespace(
         id=_coerce_int(message_payload.get('id') or review_item.get('message_id'), None),
         content=message_content,
@@ -938,6 +948,8 @@ def _build_keyword_review_message_proxy(review_item):
         mention_everyone=False,
         reference=None,
         type=getattr(discord.MessageType, 'default', None),
+        thread=SimpleNamespace(id=message_thread_id) if message_thread_id is not None else None,
+        flags=SimpleNamespace(has_thread=message_has_thread),
     )
     return message
 
@@ -1229,19 +1241,65 @@ async def _resolve_message_thread_id(message):
     if message_thread_id is not None:
         return message_thread_id
 
+    message_thread_id = _coerce_int(getattr(message, 'thread_id', None), None)
+    if message_thread_id is not None:
+        return message_thread_id
+
     message_flags = getattr(message, 'flags', None)
     has_thread = bool(getattr(message_flags, 'has_thread', False))
     fetch_thread = getattr(message, 'fetch_thread', None)
-    if not has_thread or not callable(fetch_thread):
+    if has_thread and callable(fetch_thread):
+        try:
+            fetched_thread = await fetch_thread()
+        except Exception as exc:
+            logger.warning(f"获取消息关联子分区失败: {getattr(message, 'id', None)} | {exc}")
+        else:
+            fetched_thread_id = _coerce_int(getattr(fetched_thread, 'id', None), None)
+            if fetched_thread_id is not None:
+                return fetched_thread_id
+
+    return None
+
+
+def _extract_raw_message_thread_id(raw_message):
+    if not isinstance(raw_message, dict):
+        return None
+
+    raw_thread = raw_message.get('thread') or {}
+    raw_thread_id = _coerce_int(raw_thread.get('id'), None)
+    if raw_thread_id is not None:
+        return raw_thread_id
+
+    raw_message_id = _coerce_int(raw_message.get('id'), None)
+    raw_flags = _coerce_int(raw_message.get('flags'), None)
+    if raw_message_id is not None and raw_flags is not None and raw_flags & 32:
+        return raw_message_id
+
+    return None
+
+
+async def _resolve_message_thread_id_from_raw_message(target_client, message):
+    if target_client is None or message is None:
+        return None
+
+    message_id = _coerce_int(getattr(message, 'id', None), None)
+    message_channel = getattr(message, 'channel', None)
+    channel_id = _coerce_int(getattr(message_channel, 'id', None), None)
+    if message_id is None or channel_id is None:
+        return None
+
+    http_client = getattr(target_client, 'http', None)
+    get_message = getattr(http_client, 'get_message', None)
+    if not callable(get_message):
         return None
 
     try:
-        fetched_thread = await fetch_thread()
+        raw_message = await get_message(channel_id, message_id)
     except Exception as exc:
-        logger.warning(f"获取消息关联子分区失败: {getattr(message, 'id', None)} | {exc}")
+        logger.warning(f"通过原始消息接口获取子分区失败: {message_id} | {exc}")
         return None
 
-    return getattr(fetched_thread, 'id', None)
+    return _extract_raw_message_thread_id(raw_message)
 
 
 async def _resolve_existing_reply_thread_after_create_failure(
@@ -1250,6 +1308,11 @@ async def _resolve_existing_reply_thread_after_create_failure(
     message,
 ):
     message_thread_id = await _resolve_message_thread_id(message)
+    if message_thread_id is None:
+        message_thread_id = await _resolve_message_thread_id_from_raw_message(
+            target_client,
+            message,
+        )
     if message_thread_id is not None:
         existing_thread = await _resolve_client_channel(target_client, message_thread_id)
         if existing_thread is not None:
@@ -1265,6 +1328,11 @@ async def _resolve_existing_reply_thread_after_create_failure(
             logger.warning(f"刷新消息以获取子分区失败: {message_id} | {exc}")
         else:
             refreshed_thread_id = await _resolve_message_thread_id(refreshed_message)
+            if refreshed_thread_id is None:
+                refreshed_thread_id = await _resolve_message_thread_id_from_raw_message(
+                    target_client,
+                    refreshed_message,
+                )
             if refreshed_thread_id is not None:
                 existing_thread = await _resolve_client_channel(target_client, refreshed_thread_id)
                 if existing_thread is not None:
@@ -1347,6 +1415,11 @@ async def resolve_reply_target_channel(
             return current_thread, True
 
     message_thread_id = await _resolve_message_thread_id(message)
+    if message_thread_id is None:
+        message_thread_id = await _resolve_message_thread_id_from_raw_message(
+            target_client,
+            message,
+        )
     if message_thread_id is not None:
         existing_thread = await _resolve_client_channel(target_client, message_thread_id)
         if existing_thread is not None:
