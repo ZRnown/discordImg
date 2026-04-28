@@ -810,6 +810,22 @@ def _normalize_saved_review_reply_target_payload(payload):
     }
 
 
+def _message_has_existing_thread_hint(message):
+    if message is None:
+        return False
+
+    channel = getattr(message, 'channel', None)
+    if _resolve_forum_parent_channel_id(channel) is not None:
+        return True
+
+    thread_obj = getattr(message, 'thread', None)
+    if _coerce_int(getattr(thread_obj, 'id', None), None) is not None:
+        return True
+
+    flags = getattr(message, 'flags', None)
+    return bool(getattr(flags, 'has_thread', False))
+
+
 def _build_keyword_review_message_proxy(review_item):
     payload = review_item.get('payload') or {}
     message_payload = payload.get('message') or {}
@@ -4272,6 +4288,19 @@ class DiscordBotClient(discord.Client):
                                         f"account_id={getattr(target_client, 'account_id', None)}"
                                     )
                                     continue
+
+                            if (
+                                thread_reply_enabled
+                                and _message_has_existing_thread_hint(message)
+                                and not used_thread_reply
+                            ):
+                                logger.warning(
+                                    "源消息声明存在子区，但当前发送账号无法进入，拒绝回退到原频道: "
+                                    f"message={getattr(message, 'id', None)} "
+                                    f"channel={getattr(target_channel, 'id', None)} "
+                                    f"account_id={getattr(target_client, 'account_id', None)}"
+                                )
+                                continue
 
                             if thread_reply_enabled and not used_thread_reply:
                                 logger.info(

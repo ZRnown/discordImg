@@ -148,3 +148,11 @@ test('thread reply mode falls back to the source channel without creating new th
   assert.doesNotMatch(source, /create_thread = getattr\(target_channel, 'create_thread'/)
   assert.doesNotMatch(source, /await create_thread\(/)
 })
+
+test('messages that already indicate an existing thread do not fall back to the parent channel', () => {
+  const source = readSource()
+
+  assert.match(source, /def _message_has_existing_thread_hint\(message\):/)
+  assert.match(source, /getattr\(flags, 'has_thread', False\)/)
+  assert.match(source, /源消息声明存在子区，但当前发送账号无法进入，拒绝回退到原频道/)
+})
