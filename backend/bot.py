@@ -3876,7 +3876,11 @@ class DiscordBotClient(discord.Client):
         ext = os.path.splitext(filename or '')[1].lower()
         if not ext:
             ext = '.jpg'
-        target_dir = os.path.join(config.DATA_DIR, 'skipped_image_queries')
+        target_dir = getattr(
+            config,
+            'SEARCH_QUERY_IMAGE_DIR',
+            os.path.join(config.DATA_DIR, 'search_query_images'),
+        )
         os.makedirs(target_dir, exist_ok=True)
         basename = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{random.randint(1000, 9999)}{ext}"
         target_path = os.path.join(target_dir, basename)

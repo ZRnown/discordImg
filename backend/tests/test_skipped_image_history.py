@@ -99,6 +99,64 @@ class SkippedImageHistoryTestCase(unittest.TestCase):
         self.assertEqual(result["total"], 0)
         self.assertEqual(result["history"], [])
 
+    def test_cleanup_search_query_images_removes_expired_files_and_clears_paths(self):
+        expired_search_path = Path(self.temp_dir.name) / "expired-search.jpg"
+        expired_search_path.write_bytes(b"expired-search")
+        fresh_search_path = Path(self.temp_dir.name) / "fresh-search.jpg"
+        fresh_search_path.write_bytes(b"fresh-search")
+        expired_skipped_path = Path(self.temp_dir.name) / "expired-skipped.jpg"
+        expired_skipped_path.write_bytes(b"expired-skipped")
+
+        self.db.add_search_history(
+            query_image_path=str(expired_search_path),
+            matched_product_id=None,
+            matched_image_index=None,
+            similarity=0.5,
+            threshold=0.6,
+        )
+        self.db.add_search_history(
+            query_image_path=str(fresh_search_path),
+            matched_product_id=None,
+            matched_image_index=None,
+            similarity=0.7,
+            threshold=0.6,
+        )
+        self.db.add_skipped_image_history(
+            query_image_path=str(expired_skipped_path),
+            similarity=0.3,
+            threshold=0.6,
+        )
+
+        with self.db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE search_history SET search_time = datetime('now', '-2 day') WHERE query_image_path = ?",
+                (str(expired_search_path),),
+            )
+            cursor.execute(
+                "UPDATE skipped_image_history SET created_at = datetime('now', '-2 day') WHERE query_image_path = ?",
+                (str(expired_skipped_path),),
+            )
+            conn.commit()
+
+        summary = self.db.cleanup_search_query_images(max_age_days=1)
+
+        self.assertEqual(summary["deleted_files"], 2)
+        self.assertEqual(summary["cleared_search_history"], 1)
+        self.assertEqual(summary["cleared_skipped_image_history"], 1)
+        self.assertFalse(expired_search_path.exists())
+        self.assertFalse(expired_skipped_path.exists())
+        self.assertTrue(fresh_search_path.exists())
+
+        history = self.db.get_search_history(limit=10, offset=0)["history"]
+        cleared_row = next(item for item in history if item["similarity"] == 0.5)
+        fresh_row = next(item for item in history if item["similarity"] == 0.7)
+        self.assertEqual(cleared_row["query_image_path"], "")
+        self.assertEqual(fresh_row["query_image_path"], str(fresh_search_path))
+
+        skipped_history = self.db.get_skipped_image_history(limit=10, offset=0)["history"]
+        self.assertEqual(skipped_history[0]["query_image_path"], "")
+
 
 if __name__ == "__main__":
     unittest.main()

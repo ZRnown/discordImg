@@ -158,8 +158,10 @@ class Config:
     IMAGE_SAVE_DIR = os.path.join(DATA_DIR, 'scraped_images')
     MESSAGE_FILTER_IMAGE_DIR = os.path.join(DATA_DIR, 'message_filter_images')
     WEBSITE_FILTER_IMAGE_DIR = os.path.join(DATA_DIR, 'website_filter_images')
+    SEARCH_QUERY_IMAGE_DIR = os.path.join(DATA_DIR, 'search_query_images')
     LOG_DIR = os.path.join(DATA_DIR, 'logs')
     DATABASE_PATH = os.path.join(DATA_DIR, 'metadata.db')
+    SEARCH_QUERY_IMAGE_RETENTION_DAYS = _env_int('SEARCH_QUERY_IMAGE_RETENTION_DAYS', 1)
 
     # === 网络 ===
     REQUEST_TIMEOUT = 30
@@ -172,6 +174,7 @@ class Config:
             cls.IMAGE_SAVE_DIR,
             cls.MESSAGE_FILTER_IMAGE_DIR,
             cls.WEBSITE_FILTER_IMAGE_DIR,
+            cls.SEARCH_QUERY_IMAGE_DIR,
             cls.LOG_DIR
         ]:
             os.makedirs(dir_path, exist_ok=True)

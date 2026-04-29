@@ -885,6 +885,30 @@ TEMP_DIR = os.path.join(BASE_DIR, 'data', 'tmp')
 # 确保目录存在
 os.makedirs(TEMP_DIR, exist_ok=True)
 
+
+def _persist_search_history_query_image(source_path: str, original_filename: str = '') -> str:
+    """将查询图复制到持久目录，供搜索历史预览和短期保留清理使用。"""
+    normalized_source_path = str(source_path or '').strip()
+    if not normalized_source_path or not os.path.exists(normalized_source_path):
+        return ''
+
+    ext = os.path.splitext(original_filename or normalized_source_path)[1].lower() or '.jpg'
+    target_dir = str(
+        getattr(config, 'SEARCH_QUERY_IMAGE_DIR', os.path.join(BASE_DIR, 'data', 'search_query_images'))
+        or ''
+    ).strip()
+    if not target_dir:
+        return ''
+
+    os.makedirs(target_dir, exist_ok=True)
+
+    import shutil
+
+    basename = f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}{ext}"
+    target_path = os.path.join(target_dir, basename)
+    shutil.copy2(normalized_source_path, target_path)
+    return target_path
+
 # Flask配置初始化（简化版 - 解决HTTP IP访问问题）
 app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
@@ -1648,6 +1672,7 @@ def search_similar():
         import uuid
         import os
         image_file = None  # 初始化变量，避免作用域问题
+        history_source_filename = ''
 
         if image_url:
             if debug_enabled:
@@ -1677,6 +1702,7 @@ def search_similar():
                         logger.debug(f"Warning - Content-Type '{content_type}' may not be an image")
 
                 temp_filename = f"{uuid.uuid4()}.jpg"
+                history_source_filename = os.path.basename(temp_filename)
                 # 【修改】使用项目目录下的 TEMP_DIR
                 image_path = os.path.join(TEMP_DIR, temp_filename)
 
@@ -1714,6 +1740,7 @@ def search_similar():
                 logger.debug(f"Found uploaded file: {image_file.filename if image_file else 'None'}")
 
             temp_filename = f"{uuid.uuid4()}.jpg"
+            history_source_filename = getattr(image_file, 'filename', '') or temp_filename
             # 【修改】使用项目目录下的 TEMP_DIR
             image_path = os.path.join(TEMP_DIR, temp_filename)
             image_file.save(image_path)
@@ -1926,11 +1953,6 @@ def search_similar():
                             release_live_search_slot()
                         except Exception:
                             pass
-                        try:
-                            if os.path.exists(image_path):
-                                os.unlink(image_path)
-                        except Exception as cleanup_error:
-                            logger.warning("清理搜索临时文件失败: %s", cleanup_error)
 
                 retrieval_result = run_with_timeout(
                     _run_live_retrieval,
@@ -2105,13 +2127,22 @@ def search_similar():
                 # 保存最佳匹配的搜索历史
                 if processed_results:
                     best_match = processed_results[0]
-                    db.add_search_history(
-                        query_image_path=image_path,
+                    persisted_query_image_path = _persist_search_history_query_image(
+                        image_path,
+                        history_source_filename,
+                    )
+                    saved_history = db.add_search_history(
+                        query_image_path=persisted_query_image_path or '',
                         matched_product_id=best_match['product']['id'],
                         matched_image_index=best_match['imageIndex'],
                         similarity=best_match['similarity'],
                         threshold=threshold
                     )
+                    if not saved_history and persisted_query_image_path and os.path.exists(persisted_query_image_path):
+                        try:
+                            os.unlink(persisted_query_image_path)
+                        except Exception as cleanup_error:
+                            logger.warning("清理未入库的搜索原图失败: %s", cleanup_error)
 
                 response_data = {
                     'success': True,
@@ -2166,11 +2197,11 @@ def search_similar():
                         release_live_search_slot()
                 except Exception:
                     pass
-                try:
-                    if os.path.exists(image_path):
-                        os.unlink(image_path)
-                except Exception:
-                    pass
+            try:
+                if os.path.exists(image_path):
+                    os.unlink(image_path)
+            except Exception:
+                pass
 
     except Exception as e:
         logger.error(f"搜索失败: {e}")
@@ -9102,6 +9133,19 @@ def run_cleanup_task():
                 logger.info("✅ 已清理内存中过期的冷却状态")
             except ImportError:
                 logger.warning("无法导入bot模块进行冷却清理，跳过")
+
+            # 3. 清理过期的搜索原图，只保留短期预览所需文件
+            query_image_cleanup = db.cleanup_search_query_images(
+                getattr(config, 'SEARCH_QUERY_IMAGE_RETENTION_DAYS', 1)
+            )
+            if any(query_image_cleanup.values()):
+                logger.info(
+                    "✅ 已清理过期搜索原图: deleted_files=%s orphan_files=%s cleared_search_history=%s cleared_skipped_image_history=%s",
+                    query_image_cleanup.get('deleted_files', 0),
+                    query_image_cleanup.get('deleted_orphan_files', 0),
+                    query_image_cleanup.get('cleared_search_history', 0),
+                    query_image_cleanup.get('cleared_skipped_image_history', 0),
+                )
 
         except Exception as e:
             logger.error(f"后台清理任务异常: {e}")

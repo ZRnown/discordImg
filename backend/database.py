@@ -2501,6 +2501,114 @@ class Database:
             logger.error(f"清空搜索历史失败: {e}")
             return False
 
+    def cleanup_search_query_images(self, max_age_days: int = 1) -> Dict[str, int]:
+        """清理过期的搜索原图，并清空数据库中的文件路径引用。"""
+        try:
+            retention_days = max(int(max_age_days or 1), 1)
+        except (TypeError, ValueError):
+            retention_days = 1
+
+        cutoff_modifier = f'-{retention_days} day'
+        summary = {
+            'deleted_files': 0,
+            'deleted_orphan_files': 0,
+            'cleared_search_history': 0,
+            'cleared_skipped_image_history': 0,
+        }
+
+        def _clear_rows(cursor, table_name: str, timestamp_column: str, summary_key: str) -> set[str]:
+            cursor.execute(
+                f'''
+                SELECT id, query_image_path
+                FROM {table_name}
+                WHERE TRIM(COALESCE(query_image_path, '')) != ''
+                  AND {timestamp_column} < datetime('now', ?)
+                ''',
+                (cutoff_modifier,),
+            )
+            rows = cursor.fetchall()
+            if not rows:
+                return set()
+
+            cleared_ids: List[int] = []
+            deleted_paths: set[str] = set()
+            processed_paths: dict[str, bool] = {}
+
+            for row in rows:
+                row_id = int(row['id'])
+                raw_path = str(row['query_image_path'] or '').strip()
+                if not raw_path:
+                    continue
+
+                can_clear = processed_paths.get(raw_path)
+                if can_clear is None:
+                    can_clear = True
+                    if os.path.exists(raw_path):
+                        try:
+                            os.remove(raw_path)
+                            summary['deleted_files'] += 1
+                            deleted_paths.add(raw_path)
+                        except Exception as delete_error:
+                            logger.warning("删除过期搜索原图失败 %s: %s", raw_path, delete_error)
+                            can_clear = False
+                    processed_paths[raw_path] = can_clear
+
+                if can_clear:
+                    cleared_ids.append(row_id)
+
+            if cleared_ids:
+                placeholders = ','.join('?' for _ in cleared_ids)
+                cursor.execute(
+                    f"UPDATE {table_name} SET query_image_path = '' WHERE id IN ({placeholders})",
+                    tuple(cleared_ids),
+                )
+                summary[summary_key] += cursor.rowcount
+
+            return deleted_paths
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            deleted_paths = set()
+            deleted_paths.update(_clear_rows(cursor, 'search_history', 'search_time', 'cleared_search_history'))
+            deleted_paths.update(_clear_rows(cursor, 'skipped_image_history', 'created_at', 'cleared_skipped_image_history'))
+
+            referenced_paths = set()
+            for table_name in ('search_history', 'skipped_image_history'):
+                cursor.execute(
+                    f"SELECT query_image_path FROM {table_name} WHERE TRIM(COALESCE(query_image_path, '')) != ''"
+                )
+                referenced_paths.update(
+                    str(row['query_image_path'] or '').strip()
+                    for row in cursor.fetchall()
+                    if str(row['query_image_path'] or '').strip()
+                )
+
+            conn.commit()
+
+        query_dir = str(getattr(config, 'SEARCH_QUERY_IMAGE_DIR', '') or '').strip()
+        if query_dir and os.path.isdir(query_dir):
+            cutoff_seconds = retention_days * 24 * 60 * 60
+            import time
+
+            current_time = time.time()
+            for root, _, filenames in os.walk(query_dir):
+                for filename in filenames:
+                    file_path = os.path.join(root, filename)
+                    if file_path in referenced_paths or file_path in deleted_paths:
+                        continue
+                    try:
+                        if current_time - os.path.getmtime(file_path) < cutoff_seconds:
+                            continue
+                        os.remove(file_path)
+                        summary['deleted_files'] += 1
+                        summary['deleted_orphan_files'] += 1
+                    except FileNotFoundError:
+                        continue
+                    except Exception as delete_error:
+                        logger.warning("删除孤立搜索原图失败 %s: %s", file_path, delete_error)
+
+        return summary
+
     def add_skipped_image_history(
         self,
         query_image_path: str,
