@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 
 test('accounts personal settings expose the best-match-image toggle and threshold', () => {
   const source = readFileSync(new URL('./components/accounts-view.tsx', import.meta.url), 'utf8')
@@ -45,6 +45,22 @@ test('image search history pages are cached for faster pagination', () => {
   assert.equal(source.includes('historyPageCacheRef'), true)
   assert.equal(source.includes('prefetchSearchHistory'), true)
   assert.equal(source.includes('forceRefresh'), true)
+})
+
+test('image search history shows both query and matched images', () => {
+  const source = readFileSync(new URL('./components/image-search-view.tsx', import.meta.url), 'utf8')
+
+  assert.equal(source.includes('搜索图'), true)
+  assert.equal(source.includes('命中图'), true)
+  assert.equal(source.includes('/api/search_history/${history.id}/query-image'), true)
+})
+
+test('search history query image api route proxies the backend image file', () => {
+  const routePath = new URL('./app/api/search_history/[id]/query-image/route.ts', import.meta.url)
+  const source = existsSync(routePath) ? readFileSync(routePath, 'utf8') : ''
+
+  assert.equal(existsSync(routePath), true)
+  assert.equal(source.includes('/api/search_history/${historyId}/query-image'), true)
 })
 
 test('search history api route forwards skipped filter requests', () => {

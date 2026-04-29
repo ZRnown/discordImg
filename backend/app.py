@@ -25,6 +25,7 @@ import sys
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, Dict
+from html import escape as html_escape
 
 # 自动加载.env文件
 try:
@@ -66,6 +67,7 @@ import subprocess
 from urllib.parse import quote
 import hashlib
 import uuid
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 try:
     from settings_validation import validate_reply_delay_range
 except ModuleNotFoundError as e:
@@ -899,6 +901,271 @@ app.config.update(
     SESSION_COOKIE_DOMAIN=None,
     PERMANENT_SESSION_LIFETIME=config.SESSION_LIFETIME,  # 30天不过期
 )
+
+KEYWORD_REVIEW_ACTION_TOKEN_SALT = "keyword-review-action"
+KEYWORD_REVIEW_ACTION_TOKEN_MAX_AGE_SECONDS = 7 * 24 * 3600
+
+
+def _get_keyword_review_action_serializer():
+    return URLSafeTimedSerializer(str(app.secret_key or config.SECRET_KEY or ""))
+
+
+def _create_keyword_review_action_token(user_id: int, item_id: int) -> str:
+    return _get_keyword_review_action_serializer().dumps(
+        {
+            "user_id": int(user_id),
+            "item_id": int(item_id),
+        },
+        salt=KEYWORD_REVIEW_ACTION_TOKEN_SALT,
+    )
+
+
+def _load_keyword_review_action_token(token: str, max_age: int = KEYWORD_REVIEW_ACTION_TOKEN_MAX_AGE_SECONDS):
+    try:
+        payload = _get_keyword_review_action_serializer().loads(
+            str(token or "").strip(),
+            salt=KEYWORD_REVIEW_ACTION_TOKEN_SALT,
+            max_age=max_age,
+        )
+    except SignatureExpired:
+        return None, "链接已过期"
+    except BadSignature:
+        return None, "无效的审核链接"
+
+    try:
+        user_id = int(payload.get("user_id"))
+        item_id = int(payload.get("item_id"))
+    except (TypeError, ValueError, AttributeError):
+        return None, "审核链接缺少必要参数"
+
+    return {"user_id": user_id, "item_id": item_id}, None
+
+
+def _normalize_keyword_review_action(action: str):
+    normalized_action_map = {
+        "approve": "approved",
+        "approved": "approved",
+        "reject": "rejected",
+        "rejected": "rejected",
+    }
+    return normalized_action_map.get(str(action or "").strip().lower())
+
+
+def _sync_keyword_review_pending_count(user_id: int):
+    try:
+        pending_count = db.count_pending_keyword_reply_review_items(user_id)
+        db.update_user_settings(
+            user_id=user_id,
+            review_bark_last_pending_count=pending_count,
+            review_bark_last_notified_at='' if pending_count <= 0 else None,
+        )
+        return pending_count
+    except Exception as sync_error:
+        logger.error(f"同步审核 Bark 待审数量失败: {sync_error}")
+        return None
+
+
+def _apply_keyword_review_action(item: Dict[str, Any], normalized_action: str, *, reviewed_by_user_id: int):
+    item_id = int(item.get("id"))
+    current_status = str(item.get("status") or "pending").strip().lower()
+    if current_status != "pending":
+        return False, f"该消息当前状态为 {current_status}，无法重复审核", current_status
+
+    if not db.update_keyword_reply_review_item_status(
+        item_id,
+        normalized_action,
+        reviewed_by_user_id=reviewed_by_user_id,
+    ):
+        return False, "更新审核状态失败", current_status
+
+    if normalized_action == "approved":
+        scheduled, schedule_result = schedule_keyword_review_item_dispatch(item)
+        if not scheduled:
+            db.update_keyword_reply_review_item_status(
+                item_id,
+                "failed",
+                reviewed_by_user_id=reviewed_by_user_id,
+                error_message=schedule_result,
+            )
+            return False, schedule_result, "failed"
+
+    return True, "审核已处理", normalized_action
+
+
+def _format_keyword_review_item_summary(item: Dict[str, Any]):
+    payload = item.get("payload") or {}
+    message_payload = payload.get("message") or {}
+    website_name = (
+        item.get("website_name")
+        or item.get("website_display_name")
+        or (payload.get("website_config") or {}).get("display_name")
+        or (payload.get("website_config") or {}).get("name")
+        or f"网站 {item.get('website_id')}"
+    )
+    message_time = message_payload.get("created_at") or item.get("created_at") or ""
+    return {
+        "website_name": str(website_name or ""),
+        "guild_name": str(item.get("guild_name") or message_payload.get("guild_name") or ""),
+        "channel_name": str(item.get("channel_name") or message_payload.get("channel_name") or ""),
+        "sender_name": str(item.get("sender_name") or message_payload.get("author_display_name") or message_payload.get("author_name") or ""),
+        "content": str(item.get("content") or ""),
+        "source_content": str(item.get("source_content") or message_payload.get("content") or ""),
+        "message_time": str(message_time or ""),
+        "status": str(item.get("status") or "pending"),
+    }
+
+
+def _render_keyword_review_action_html(
+    *,
+    title: str,
+    item: Dict[str, Any] | None = None,
+    token: str = "",
+    allow_actions: bool = False,
+    notice: str = "",
+    result_status: str = "",
+):
+    summary = _format_keyword_review_item_summary(item or {})
+    title_text = html_escape(title or "审核处理")
+    notice_text = html_escape(notice or "")
+    result_text = html_escape(result_status or "")
+    website_name = html_escape(summary.get("website_name") or "")
+    guild_name = html_escape(summary.get("guild_name") or "")
+    channel_name = html_escape(summary.get("channel_name") or "")
+    sender_name = html_escape(summary.get("sender_name") or "")
+    content = html_escape(summary.get("content") or "")
+    source_content = html_escape(summary.get("source_content") or "")
+    message_time = html_escape(summary.get("message_time") or "")
+    status_text = html_escape(summary.get("status") or "")
+    token_value = html_escape(token or "")
+
+    action_forms = ""
+    if allow_actions and token_value:
+        action_forms = f"""
+        <div class="actions">
+          <form method="post">
+            <input type="hidden" name="action" value="approved" />
+            <button class="approve" type="submit">批准并发送</button>
+          </form>
+          <form method="post">
+            <input type="hidden" name="action" value="rejected" />
+            <button class="reject" type="submit">拒绝</button>
+          </form>
+        </div>
+        """
+
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{title_text}</title>
+  <style>
+    body {{
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
+      background: #f4f1ea;
+      color: #1f2937;
+    }}
+    .wrap {{
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 24px 16px 48px;
+    }}
+    .card {{
+      background: #fffdf7;
+      border: 1px solid #e5dccf;
+      border-radius: 18px;
+      padding: 20px;
+      box-shadow: 0 10px 30px rgba(28, 31, 35, 0.08);
+    }}
+    h1 {{
+      margin: 0 0 12px;
+      font-size: 24px;
+      line-height: 1.25;
+    }}
+    .notice {{
+      margin: 0 0 16px;
+      color: #7c4a03;
+      background: #fff4db;
+      border: 1px solid #f2d39a;
+      border-radius: 12px;
+      padding: 12px 14px;
+      white-space: pre-wrap;
+    }}
+    .meta {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+      margin-bottom: 16px;
+    }}
+    .meta div {{
+      background: #f8f5ee;
+      border-radius: 12px;
+      padding: 10px 12px;
+      font-size: 14px;
+    }}
+    .label {{
+      display: block;
+      margin-bottom: 4px;
+      color: #6b7280;
+      font-size: 12px;
+    }}
+    .value {{
+      white-space: pre-wrap;
+      word-break: break-word;
+    }}
+    .actions {{
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-top: 18px;
+    }}
+    button {{
+      width: 100%;
+      border: 0;
+      border-radius: 12px;
+      padding: 14px 16px;
+      font-size: 16px;
+      font-weight: 600;
+    }}
+    .approve {{
+      background: #166534;
+      color: white;
+    }}
+    .reject {{
+      background: #991b1b;
+      color: white;
+    }}
+    .footer {{
+      margin-top: 16px;
+      color: #6b7280;
+      font-size: 12px;
+    }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>{title_text}</h1>
+      {f'<div class="notice">{notice_text}</div>' if notice_text else ''}
+      <div class="meta">
+        <div><span class="label">网站</span><span class="value">{website_name}</span></div>
+        <div><span class="label">服务器 / 频道</span><span class="value">{guild_name} / #{channel_name}</span></div>
+        <div><span class="label">触发用户</span><span class="value">{sender_name}</span></div>
+        <div><span class="label">消息时间</span><span class="value">{message_time}</span></div>
+        <div><span class="label">当前状态</span><span class="value">{status_text}</span></div>
+        <div><span class="label">结果</span><span class="value">{result_text}</span></div>
+      </div>
+      <div class="meta">
+        <div style="grid-column: 1 / -1;"><span class="label">待发内容</span><span class="value">{content}</span></div>
+        <div style="grid-column: 1 / -1;"><span class="label">触发原文</span><span class="value">{source_content}</span></div>
+      </div>
+      {action_forms}
+      <div class="footer">该页面当前已具备审核能力，但默认未接入现有 Bark 通知。</div>
+    </div>
+  </div>
+</body>
+</html>"""
 
 def initialize_runtime():
     """
@@ -3301,51 +3568,28 @@ def bulk_action_keyword_review_items():
                 })
                 continue
 
-            if not db.update_keyword_reply_review_item_status(
-                item_id,
+            success, message, final_status = _apply_keyword_review_action(
+                item,
                 normalized_action,
                 reviewed_by_user_id=current_user['id'],
-            ):
+            )
+            if not success:
                 results.append({
                     'item_id': item_id,
                     'success': False,
-                    'error': '更新审核状态失败',
+                    'error': message,
                 })
                 continue
-
-            if normalized_action == 'approved':
-                scheduled, schedule_result = schedule_keyword_review_item_dispatch(item)
-                if not scheduled:
-                    db.update_keyword_reply_review_item_status(
-                        item_id,
-                        'failed',
-                        reviewed_by_user_id=current_user['id'],
-                        error_message=schedule_result,
-                    )
-                    results.append({
-                        'item_id': item_id,
-                        'success': False,
-                        'error': schedule_result,
-                    })
-                    continue
 
             results.append({
                 'item_id': item_id,
                 'success': True,
-                'status': normalized_action,
+                'status': final_status,
                 'dispatched': normalized_action == 'approved',
             })
 
         failed_count = sum(1 for item in results if not item.get('success'))
-        try:
-            pending_count = db.count_pending_keyword_reply_review_items(current_user['id'])
-            db.update_user_settings(
-                user_id=current_user['id'],
-                review_bark_last_pending_count=pending_count,
-                review_bark_last_notified_at='' if pending_count <= 0 else None,
-            )
-        except Exception as sync_error:
-            logger.error(f"同步审核 Bark 待审数量失败: {sync_error}")
+        _sync_keyword_review_pending_count(current_user['id'])
         return jsonify({
             'success': failed_count == 0,
             'message': '审核完成' if failed_count == 0 else '部分消息审核失败',
@@ -3354,6 +3598,94 @@ def bulk_action_keyword_review_items():
     except Exception as e:
         logger.error(f"批量审核关键词回复失败: {e}")
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/review-actions/<token>', methods=['GET', 'POST'])
+def review_action_page(token):
+    payload, error_message = _load_keyword_review_action_token(token)
+    if error_message:
+        return Response(
+            _render_keyword_review_action_html(
+                title='审核链接不可用',
+                notice=error_message,
+                result_status='invalid',
+            ),
+            status=400,
+            mimetype='text/html',
+        )
+
+    item = db.get_keyword_reply_review_item(payload['item_id'], payload['user_id'])
+    if not item:
+        return Response(
+            _render_keyword_review_action_html(
+                title='待审核消息不存在',
+                notice='该待审核消息不存在，或者链接所属用户已失效。',
+                result_status='missing',
+            ),
+            status=404,
+            mimetype='text/html',
+        )
+
+    if request.method == 'POST':
+        normalized_action = _normalize_keyword_review_action(request.form.get('action'))
+        if not normalized_action:
+            return Response(
+                _render_keyword_review_action_html(
+                    title='审核动作无效',
+                    item=item,
+                    token=token,
+                    allow_actions=str(item.get('status') or 'pending').strip().lower() == 'pending',
+                    notice='提交的审核动作无效，请返回后重试。',
+                    result_status='invalid_action',
+                ),
+                status=400,
+                mimetype='text/html',
+            )
+
+        success, message, final_status = _apply_keyword_review_action(
+            item,
+            normalized_action,
+            reviewed_by_user_id=payload['user_id'],
+        )
+        _sync_keyword_review_pending_count(payload['user_id'])
+        latest_item = db.get_keyword_reply_review_item(payload['item_id'], payload['user_id']) or item
+        latest_item['status'] = final_status
+        return Response(
+            _render_keyword_review_action_html(
+                title='审核已处理',
+                item=latest_item,
+                notice=message,
+                result_status=final_status if success else 'failed',
+            ),
+            status=200 if success else 409,
+            mimetype='text/html',
+        )
+
+    current_status = str(item.get('status') or 'pending').strip().lower()
+    if current_status != 'pending':
+        return Response(
+            _render_keyword_review_action_html(
+                title='该消息已处理',
+                item=item,
+                notice=f'该待审核消息当前状态为 {current_status}，不再允许重复审核。',
+                result_status=current_status,
+            ),
+            status=200,
+            mimetype='text/html',
+        )
+
+    return Response(
+        _render_keyword_review_action_html(
+            title='审核待处理消息',
+            item=item,
+            token=token,
+            allow_actions=True,
+            notice='该页面已支持从手机上直接批准或拒绝，但当前版本默认未接入现有 Bark 通知。',
+            result_status='pending',
+        ),
+        status=200,
+        mimetype='text/html',
+    )
 
 @app.route('/api/websites/<int:config_id>/similarity', methods=['PUT'])
 def update_website_similarity(config_id):
@@ -6451,6 +6783,36 @@ def delete_search_history(history_id):
             return jsonify({'error': '记录不存在'}), 404
     except Exception as e:
         logger.error(f"删除搜索历史失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/search_history/<int:history_id>/query-image', methods=['GET'])
+def serve_search_history_query_image(history_id: int):
+    """返回指定搜索历史对应的原始查询图片"""
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                'SELECT query_image_path FROM search_history WHERE id = ?',
+                (history_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return jsonify({'error': '记录不存在'}), 404
+            image_path = str(row[0] or '').strip()
+
+        if not image_path:
+            return jsonify({'error': '图片不存在'}), 404
+        if not os.path.exists(image_path):
+            return jsonify({'error': '图片文件缺失'}), 404
+
+        import mimetypes
+        from flask import send_file
+
+        mimetype = mimetypes.guess_type(image_path)[0] or 'image/jpeg'
+        return send_file(image_path, mimetype=mimetype)
+    except Exception as e:
+        logger.error(f"serve_search_history_query_image 失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 

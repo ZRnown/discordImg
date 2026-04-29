@@ -164,6 +164,7 @@ export function ImageSearchView() {
     return `${base} grid-cols-4`
   }
 
+  const currentQueryPreviewSrc = uploadedImage || imageUrl.trim()
   const buildHistoryCacheKey = (page: number) => `${historyFilter}:${page}`
 
   const clearHistoryPageCache = () => {
@@ -640,22 +641,57 @@ export function ImageSearchView() {
                     : []
                   const weidianId = getWeidianIdFromUrl(result.product?.weidianUrl)
                   const displayedLinks = mergeWebsiteLinks(websiteLinks, weidianId).slice(0, 12)
+                  const matchedImageTitle = `${result.product.title || '命中商品'} - 命中图`
 
                   return (
                     <div key={index} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3">
                     {/* 匹配图片和基本信息 */}
                     <div className="flex gap-3 items-center flex-1">
-                      {/* 匹配的商品图片 */}
-                      <div className="flex-shrink-0">
-                        <div className="w-16 h-16 bg-muted rounded-lg overflow-hidden">
-                          <img
-                            src={result.matchedImage}
-                            alt={result.product.title}
-                            className="w-full h-full object-cover"
-                            onError={(e) => {
-                              e.currentTarget.src = '/placeholder.jpg'
-                            }}
-                          />
+                      <div className="flex shrink-0 gap-3">
+                        {currentQueryPreviewSrc && (
+                          <div className="space-y-1">
+                            <p className="text-[11px] font-medium text-muted-foreground">搜索图</p>
+                            <button
+                              type="button"
+                              className="w-16 h-16 bg-muted rounded-lg overflow-hidden border border-transparent hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                              onClick={() => setPreviewImage({
+                                src: currentQueryPreviewSrc,
+                                title: '搜索图',
+                              })}
+                              title="预览搜索图"
+                            >
+                              <img
+                                src={currentQueryPreviewSrc}
+                                alt="搜索图"
+                                className="w-full h-full object-cover"
+                                onError={(e) => {
+                                  e.currentTarget.src = '/placeholder.jpg'
+                                }}
+                              />
+                            </button>
+                          </div>
+                        )}
+
+                        <div className="space-y-1">
+                          <p className="text-[11px] font-medium text-muted-foreground">命中图</p>
+                          <button
+                            type="button"
+                            className="w-16 h-16 bg-muted rounded-lg overflow-hidden border border-transparent hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            onClick={() => setPreviewImage({
+                              src: result.matchedImage,
+                              title: matchedImageTitle,
+                            })}
+                            title="预览命中图"
+                          >
+                            <img
+                              src={result.matchedImage}
+                              alt={matchedImageTitle}
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                e.currentTarget.src = '/placeholder.jpg'
+                              }}
+                            />
+                          </button>
                         </div>
                       </div>
 
@@ -789,9 +825,13 @@ export function ImageSearchView() {
               <div className="space-y-3">
                 {searchHistory.map((history) => {
                   const isSkipped = Boolean(Number(history.is_skipped || 0))
+                  const queryImageSrc = history.query_image_path ? `/api/search_history/${history.id}/query-image` : ''
                   const matchedImageSrc = history.matched_product_id && history.matched_image_index !== null && history.matched_image_index !== undefined
                     ? `/api/image/${history.matched_product_id}/${history.matched_image_index}`
                     : ''
+                  const matchedImageTitle = history.title
+                    ? `${history.title} - 命中图`
+                    : '命中图'
                   const historyLinks = (history.websiteUrls && history.websiteUrls.length > 0)
                     ? history.websiteUrls
                     : [
@@ -806,35 +846,58 @@ export function ImageSearchView() {
                     <div key={history.id} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3">
                       {/* 匹配图片和基本信息 */}
                       <div className="flex gap-3 items-center flex-1">
-                        {/* 匹配的商品图片 */}
-                        {matchedImageSrc && (
-                          <div className="flex-shrink-0">
-                            <button
-                              type="button"
-                              className="w-16 h-16 bg-muted rounded-lg overflow-hidden border border-transparent hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                              onClick={() => setPreviewImage({
-                                src: matchedImageSrc,
-                                title: isSkipped ? "最高相似商品图" : "匹配商品图",
-                              })}
-                              title="预览商品图片"
-                            >
-                              <img
-                                src={matchedImageSrc}
-                                alt={isSkipped ? "最高相似商品图" : "匹配的商品图片"}
-                                className="w-full h-full object-cover"
-                                onError={(e) => {
-                                  e.currentTarget.src = '/placeholder.jpg'
-                                }}
-                              />
-                            </button>
-                          </div>
-                        )}
+                        <div className="flex shrink-0 gap-3">
+                          {queryImageSrc && (
+                            <div className="space-y-1">
+                              <p className="text-[11px] font-medium text-muted-foreground">搜索图</p>
+                              <button
+                                type="button"
+                                className="w-16 h-16 bg-muted rounded-lg overflow-hidden border border-transparent hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                onClick={() => setPreviewImage({
+                                  src: queryImageSrc,
+                                  title: '搜索图',
+                                })}
+                                title="预览搜索图"
+                              >
+                                <img
+                                  src={queryImageSrc}
+                                  alt="搜索图"
+                                  className="w-full h-full object-cover"
+                                  onError={(e) => {
+                                    e.currentTarget.src = '/placeholder.jpg'
+                                  }}
+                                />
+                              </button>
+                            </div>
+                          )}
+
+                          {matchedImageSrc && (
+                            <div className="space-y-1">
+                              <p className="text-[11px] font-medium text-muted-foreground">命中图</p>
+                              <button
+                                type="button"
+                                className="w-16 h-16 bg-muted rounded-lg overflow-hidden border border-transparent hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                onClick={() => setPreviewImage({
+                                  src: matchedImageSrc,
+                                  title: isSkipped ? "最高相似商品图" : matchedImageTitle,
+                                })}
+                                title="预览命中图"
+                              >
+                                <img
+                                  src={matchedImageSrc}
+                                  alt={isSkipped ? "最高相似商品图" : matchedImageTitle}
+                                  className="w-full h-full object-cover"
+                                  onError={(e) => {
+                                    e.currentTarget.src = '/placeholder.jpg'
+                                  }}
+                                />
+                              </button>
+                            </div>
+                          )}
+                        </div>
 
                         <div className="space-y-0.5 min-w-0 flex-1">
                           <div className="flex items-center gap-2">
-                            {isSkipped && (
-                              <span className="text-xs font-medium text-muted-foreground shrink-0">最高相似商品图</span>
-                            )}
                             <h4 className="font-bold text-base truncate max-w-[200px] sm:max-w-[400px]">{history.title || '未命中商品'}</h4>
                             {isSkipped && (
                               <Badge variant="outline" className="border-red-200 bg-red-50 text-red-700">
