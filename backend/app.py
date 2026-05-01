@@ -3747,6 +3747,7 @@ def update_website_similarity(config_id):
             return jsonify({'error': str(e)}), 400
 
         current_settings = db.get_user_settings(current_user['id']) or {}
+        send_best_match_image_enabled = bool(current_settings.get('keyword_reply_send_best_match_image', 0))
         current_website_settings = db.get_user_website_settings(current_user['id'], config_id) or {}
         effective_reply_threshold = (
             threshold
@@ -3762,7 +3763,7 @@ def update_website_similarity(config_id):
         )
         if effective_image_threshold is None:
             effective_image_threshold = current_settings.get('keyword_reply_best_match_image_threshold', 0.75)
-        if float(effective_image_threshold) <= float(effective_reply_threshold):
+        if send_best_match_image_enabled and float(effective_image_threshold) <= float(effective_reply_threshold):
             return jsonify({'error': '发图阈值必须大于相似度阈值'}), 400
 
         if db.update_user_website_similarity(
@@ -5609,9 +5610,15 @@ def update_user_settings():
         except ValueError as e:
             return jsonify({'error': str(e)}), 400
 
-        current_settings = None
-        if discord_similarity_threshold is not None or keyword_reply_best_match_image_threshold is not None:
-            current_settings = db.get_user_settings(user['id']) or {}
+        current_settings = db.get_user_settings(user['id']) or {}
+        send_best_match_image_enabled = bool(
+            keyword_reply_send_best_match_image
+            if keyword_reply_send_best_match_image is not None
+            else current_settings.get('keyword_reply_send_best_match_image', 0)
+        )
+        if send_best_match_image_enabled and (
+            discord_similarity_threshold is not None or keyword_reply_best_match_image_threshold is not None
+        ):
             effective_reply_threshold = (
                 discord_similarity_threshold
                 if discord_similarity_threshold is not None
