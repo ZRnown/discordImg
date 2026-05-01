@@ -1444,7 +1444,10 @@ const formatWebsiteForEdit = (website: any) => ({
       toast.error("关键词命中上限不能小于 0")
       return
     }
-    if (settings.keyword_reply_best_match_image_threshold <= settings.discord_similarity_threshold) {
+    if (
+      settings.keyword_reply_send_best_match_image &&
+      settings.keyword_reply_best_match_image_threshold <= settings.discord_similarity_threshold
+    ) {
       toast.error("发图阈值必须大于相似度阈值")
       return
     }
@@ -3023,32 +3026,34 @@ const formatWebsiteForEdit = (website: any) => ({
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="best-match-image-threshold" className="text-sm font-medium">发图阈值</Label>
-                  <span className="text-sm font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded">
-                    {(settings.keyword_reply_best_match_image_threshold * 100).toFixed(0)}%
-                  </span>
+              {settings.keyword_reply_send_best_match_image && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="best-match-image-threshold" className="text-sm font-medium">发图阈值</Label>
+                    <span className="text-sm font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                      {(settings.keyword_reply_best_match_image_threshold * 100).toFixed(0)}%
+                    </span>
+                  </div>
+                  <div className="space-y-1">
+                    <Input
+                      id="best-match-image-threshold"
+                      type="number"
+                      step="0.01"
+                      min="0.1"
+                      max="1.0"
+                      value={settings.keyword_reply_best_match_image_threshold}
+                      onChange={(e) => setSettings(prev => ({
+                        ...prev,
+                        keyword_reply_best_match_image_threshold: parseFloat(e.target.value),
+                      }))}
+                      className="h-9"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      相似度达到基础阈值时发送链接，达到图片阈值时再发送商品图
+                    </p>
+                  </div>
                 </div>
-                <div className="space-y-1">
-                  <Input
-                    id="best-match-image-threshold"
-                    type="number"
-                    step="0.01"
-                    min="0.1"
-                    max="1.0"
-                    value={settings.keyword_reply_best_match_image_threshold}
-                    onChange={(e) => setSettings(prev => ({
-                      ...prev,
-                      keyword_reply_best_match_image_threshold: parseFloat(e.target.value),
-                    }))}
-                    className="h-9"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    相似度达到基础阈值时发送链接，达到图片阈值时再发送商品图
-                  </p>
-                </div>
-              </div>
+              )}
 
               <div className="space-y-2" data-tutorial="accounts-delay-settings">
                 <div className="flex items-center justify-between">
@@ -3945,36 +3950,38 @@ const formatWebsiteForEdit = (website: any) => ({
                         </div>
                       </div>
 
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between gap-3">
-                          <div className="flex items-center gap-2 min-w-0">
-                            <div className="text-sm font-medium truncate">发图阈值</div>
-                            <span className="text-xs font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded shrink-0">
-                              {websiteBestMatchImageThresholdInputs[website.id] === '' || websiteBestMatchImageThresholdInputs[website.id] === undefined
-                                ? '继承全局'
-                                : Number(websiteBestMatchImageThresholdInputs[website.id]).toFixed(2)}
-                            </span>
+                      {settings.keyword_reply_send_best_match_image && (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between gap-3">
+                            <div className="flex items-center gap-2 min-w-0">
+                              <div className="text-sm font-medium truncate">发图阈值</div>
+                              <span className="text-xs font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded shrink-0">
+                                {websiteBestMatchImageThresholdInputs[website.id] === '' || websiteBestMatchImageThresholdInputs[website.id] === undefined
+                                  ? '继承全局'
+                                  : Number(websiteBestMatchImageThresholdInputs[website.id]).toFixed(2)}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="space-y-1">
+                            <Input
+                              type="number"
+                              step="0.01"
+                              placeholder="继承全局"
+                              value={websiteBestMatchImageThresholdInputs[website.id] ?? ''}
+                              onChange={e => {
+                                const value = e.target.value
+                                websiteBestMatchImageThresholdInputsRef.current = {
+                                  ...websiteBestMatchImageThresholdInputsRef.current,
+                                  [website.id]: value,
+                                }
+                                setWebsiteBestMatchImageThresholdInputs(prev => ({ ...prev, [website.id]: value }))
+                                scheduleWebsiteSimilaritySave(website.id)
+                              }}
+                              className="h-9 text-xs"
+                            />
                           </div>
                         </div>
-                        <div className="space-y-1">
-                          <Input
-                            type="number"
-                            step="0.01"
-                            placeholder="继承全局"
-                            value={websiteBestMatchImageThresholdInputs[website.id] ?? ''}
-                            onChange={e => {
-                              const value = e.target.value
-                              websiteBestMatchImageThresholdInputsRef.current = {
-                                ...websiteBestMatchImageThresholdInputsRef.current,
-                                [website.id]: value,
-                              }
-                              setWebsiteBestMatchImageThresholdInputs(prev => ({ ...prev, [website.id]: value }))
-                              scheduleWebsiteSimilaritySave(website.id)
-                            }}
-                            className="h-9 text-xs"
-                          />
-                        </div>
-                      </div>
+                      )}
 
                       <div className="space-y-2" data-tutorial="accounts-website-delay">
                         <div className="flex items-center justify-between gap-3">

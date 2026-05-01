@@ -10,6 +10,7 @@ test('accounts personal settings expose the best-match-image toggle and threshol
   assert.equal(source.includes('图片过阈值时发送图和链接'), true)
   assert.equal(source.includes('相似度达到基础阈值时发送链接'), true)
   assert.equal(source.includes('达到图片阈值时再发送商品图'), true)
+  assert.equal(source.includes('{settings.keyword_reply_send_best_match_image && ('), true)
 })
 
 test('website overrides expose image-send threshold fallback', () => {
