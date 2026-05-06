@@ -2270,6 +2270,15 @@ def warm_live_image_retriever(db_handle, strategy_name: str) -> Dict[str, Any]:
     return get_live_image_retriever(db_handle, strategy_name).warm()
 
 
+def warm_live_image_strategy(db_handle, strategy_name: str) -> Dict[str, Any]:
+    retriever = get_live_image_retriever(db_handle, strategy_name)
+    retriever._get_strategy_instance()
+    return {
+        "strategy": strategy_name,
+        "strategy_ready": True,
+    }
+
+
 def invalidate_live_image_retriever(strategy_name: Optional[str] = None):
     with _retriever_registry_lock:
         if strategy_name:

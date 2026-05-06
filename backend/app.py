@@ -1297,6 +1297,18 @@ def initialize_runtime():
                         f"✅ [系统] {strategy_name} 实时检索目录预热完成: "
                         f"catalog_size={warm_summary.get('catalog_size', 0)}"
                     )
+                else:
+                    try:
+                        from live_retrieval import warm_live_image_strategy
+                    except ModuleNotFoundError as import_error:
+                        if import_error.name == 'live_retrieval':
+                            from .live_retrieval import warm_live_image_strategy
+                        else:
+                            raise
+
+                    print(f"🧠 [系统] 正在预热 {strategy_name} 检索模型...")
+                    warm_live_image_strategy(db, strategy_name)
+                    print(f"✅ [系统] {strategy_name} 检索模型预热完成")
 
                 ai_model_ready = True
                 print("✅ [系统] AI模型预热完成，系统已就绪")
