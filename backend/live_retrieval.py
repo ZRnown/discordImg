@@ -1437,11 +1437,13 @@ def rank_query_products(
     threshold: float = 0.0,
     user_shops: Optional[Sequence[str]] = None,
     cancel_event: Optional[Any] = None,
+    query_context: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     if _is_search_cancelled(cancel_event):
         return []
 
-    query_context = strategy.prepare_query_image(query_record)
+    if query_context is None:
+        query_context = strategy.prepare_query_image(query_record)
     product_metadata: Dict[str, Dict[str, Any]] = {}
 
     if user_shops is None:
@@ -2295,17 +2297,37 @@ class LiveImageRetriever:
             else:
                 strategy, prepared_catalog = scoped_catalog
         query_record = build_query_record(image_path=image_path, query_text=query_text)
+        started_at = perf_counter()
+        query_prepare_started_at = perf_counter()
+        query_context = strategy.prepare_query_image(query_record)
+        query_prepare_elapsed = perf_counter() - query_prepare_started_at
+        rank_started_at = perf_counter()
         ranked_products = rank_query_products(
             strategy=strategy,
             prepared_catalog=prepared_catalog,
             query_record=query_record,
+            query_context=query_context,
             top_k=top_k,
             threshold=threshold,
             user_shops=None if scoped_catalog is not None else user_shops,
             cancel_event=cancel_event,
         )
+        rank_elapsed = perf_counter() - rank_started_at
         top1_score = float(ranked_products[0]["score"]) if ranked_products else 0.0
         top2_score = float(ranked_products[1]["score"]) if len(ranked_products) > 1 else 0.0
+        total_elapsed = perf_counter() - started_at
+        if total_elapsed >= 5.0:
+            logger.warning(
+                "Live retrieval cached search slow: strategy=%s total=%.2fs query_prepare=%.2fs rank=%.2fs catalog_size=%s result_count=%s scoped=%s shops=%s",
+                self.strategy_name,
+                total_elapsed,
+                query_prepare_elapsed,
+                rank_elapsed,
+                len(prepared_catalog),
+                len(ranked_products),
+                scoped_catalog is not None,
+                list(user_shops or []),
+            )
         return {
             "strategy": self.strategy_name,
             "catalog_size": len(prepared_catalog),
