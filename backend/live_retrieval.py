@@ -2011,6 +2011,42 @@ class LiveImageRetriever:
                 self._scoped_catalog_cache.popitem(last=False)
         return strategy, prepared_catalog
 
+    def load_scoped_prepared_catalog_if_cached(
+        self,
+        user_shops: Optional[Sequence[str]],
+    ) -> bool:
+        shop_scope = self._normalize_shop_scope(user_shops)
+        if not shop_scope:
+            return False
+
+        refresh_generation = self._refresh_generation
+        with self._lock:
+            cached = self._scoped_catalog_cache.get(shop_scope)
+            if cached is not None and cached[3] == refresh_generation:
+                self._scoped_catalog_cache.move_to_end(shop_scope)
+                return True
+
+        cached_snapshot = self._load_scoped_prepared_catalog_from_disk(shop_scope)
+        if cached_snapshot is None:
+            return False
+
+        strategy, prepared_catalog, signature = cached_snapshot
+        max_scopes = max(_env_int("LIVE_IMAGE_SEARCH_SCOPED_CATALOG_CACHE_SCOPES", 8), 1)
+        with self._lock:
+            if refresh_generation != self._refresh_generation:
+                return False
+            self._strategy = strategy
+            self._scoped_catalog_cache[shop_scope] = (
+                strategy,
+                prepared_catalog,
+                signature,
+                refresh_generation,
+            )
+            self._scoped_catalog_cache.move_to_end(shop_scope)
+            while len(self._scoped_catalog_cache) > max_scopes:
+                self._scoped_catalog_cache.popitem(last=False)
+        return True
+
     def _ensure_prepared_catalog(self):
         with self._lock:
             if self._has_active_catalog_locked():
@@ -2276,6 +2312,26 @@ def warm_live_image_strategy(db_handle, strategy_name: str) -> Dict[str, Any]:
     return {
         "strategy": strategy_name,
         "strategy_ready": True,
+    }
+
+
+def warm_live_image_scoped_catalogs(
+    db_handle,
+    strategy_name: str,
+    shop_scopes: Sequence[Sequence[str]],
+) -> Dict[str, Any]:
+    retriever = get_live_image_retriever(db_handle, strategy_name)
+    loaded = 0
+    skipped = 0
+    for scope in shop_scopes:
+        if retriever.load_scoped_prepared_catalog_if_cached(scope):
+            loaded += 1
+        else:
+            skipped += 1
+    return {
+        "strategy": strategy_name,
+        "loaded": loaded,
+        "skipped": skipped,
     }
 
 

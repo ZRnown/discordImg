@@ -1299,16 +1299,43 @@ def initialize_runtime():
                     )
                 else:
                     try:
-                        from live_retrieval import warm_live_image_strategy
+                        from live_retrieval import (
+                            warm_live_image_scoped_catalogs,
+                            warm_live_image_strategy,
+                        )
                     except ModuleNotFoundError as import_error:
                         if import_error.name == 'live_retrieval':
-                            from .live_retrieval import warm_live_image_strategy
+                            from .live_retrieval import (
+                                warm_live_image_scoped_catalogs,
+                                warm_live_image_strategy,
+                            )
                         else:
                             raise
 
                     print(f"🧠 [系统] 正在预热 {strategy_name} 检索模型...")
                     warm_live_image_strategy(db, strategy_name)
                     print(f"✅ [系统] {strategy_name} 检索模型预热完成")
+                    try:
+                        startup_shop_scopes = []
+                        seen_shop_scopes = set()
+                        for account in db.get_discord_accounts_marked_for_autostart():
+                            scoped_shops = tuple(sorted(build_user_shop_scope(account.get('user_id'))))
+                            if scoped_shops and scoped_shops not in seen_shop_scopes:
+                                seen_shop_scopes.add(scoped_shops)
+                                startup_shop_scopes.append(scoped_shops)
+                        if startup_shop_scopes:
+                            print(f"🧠 [系统] 正在加载已有店铺检索目录缓存: scopes={len(startup_shop_scopes)}")
+                            scoped_summary = warm_live_image_scoped_catalogs(
+                                db,
+                                strategy_name,
+                                startup_shop_scopes,
+                            )
+                            print(
+                                f"✅ [系统] 店铺检索目录缓存加载完成: "
+                                f"loaded={scoped_summary.get('loaded', 0)} skipped={scoped_summary.get('skipped', 0)}"
+                            )
+                    except Exception as scoped_cache_error:
+                        logger.warning("加载店铺检索目录缓存失败: %s", scoped_cache_error)
 
                 ai_model_ready = True
                 print("✅ [系统] AI模型预热完成，系统已就绪")
