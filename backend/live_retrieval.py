@@ -1351,6 +1351,20 @@ def _rank_products_for_query(
     if _is_search_cancelled(cancel_event):
         return {"ranked_products": []}
 
+    fast_ranker = getattr(strategy, "rank_products_fast", None)
+    if callable(fast_ranker):
+        if _is_search_cancelled(cancel_event):
+            return {"ranked_products": []}
+        fast_result = fast_ranker(
+            query_context=query_context,
+            prepared_catalog=prepared_catalog,
+            top_k=top_k,
+        )
+        if isinstance(fast_result, dict):
+            return fast_result
+        if fast_result is not None:
+            return {"ranked_products": list(fast_result)}
+
     custom_ranker = getattr(strategy, "rank_products", None)
     if callable(custom_ranker):
         if _is_search_cancelled(cancel_event):
@@ -1408,12 +1422,14 @@ def rank_query_products(
         if not allowed_shops:
             return []
 
+    filtered_catalog = []
     for entry in prepared_catalog:
         if _is_search_cancelled(cancel_event):
             return []
         record: LiveCatalogImageRecord = entry["record"]
         if allowed_shops is not None and record.shop_name not in allowed_shops:
             continue
+        filtered_catalog.append(entry)
         product_metadata.setdefault(
             record.product_id,
             {
@@ -1433,17 +1449,6 @@ def rank_query_products(
                 "queries": list(record.queries),
             },
         )
-
-    if _is_search_cancelled(cancel_event):
-        return []
-
-    filtered_catalog = []
-    for entry in prepared_catalog:
-        if _is_search_cancelled(cancel_event):
-            return []
-        if allowed_shops is not None and entry["record"].shop_name not in allowed_shops:
-            continue
-        filtered_catalog.append(entry)
 
     rank_payload = _rank_products_for_query(
         strategy,

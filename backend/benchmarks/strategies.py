@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+from threading import Lock
 from types import SimpleNamespace
 from typing import Any, Dict, Optional, Sequence, Type
 
@@ -17,6 +18,9 @@ from PIL import Image, ImageOps
 try:
     from .common import (
         _normalize_product_pair,
+        _PRODUCT_RANK_SECOND_BEST_WEIGHT,
+        _PRODUCT_RANK_TOP3_MEAN_WEIGHT,
+        _PRODUCT_RANK_TOP5_MEAN_WEIGHT,
         aggregate_product_rankings,
         extract_directional_hard_negative_pairs,
         extract_hard_negative_pairs,
@@ -37,6 +41,9 @@ try:
 except ImportError:
     from common import (
         _normalize_product_pair,
+        _PRODUCT_RANK_SECOND_BEST_WEIGHT,
+        _PRODUCT_RANK_TOP3_MEAN_WEIGHT,
+        _PRODUCT_RANK_TOP5_MEAN_WEIGHT,
         aggregate_product_rankings,
         extract_directional_hard_negative_pairs,
         extract_hard_negative_pairs,
@@ -1283,6 +1290,12 @@ class Siglip2RerankStrategy:
         self._stage2_query_pair_catalog_only_classifier_cache = {}
         self._stage2_catalog_query_payload_signature = None
         self._stage2_catalog_query_payload_cache = OrderedDict()
+        self.fast_rank_cache_scopes = _load_non_negative_env_int(
+            "SIGLIP2_RERANK_FAST_RANK_CACHE_SCOPES",
+            4,
+        )
+        self._fast_rank_cache = OrderedDict()
+        self._fast_rank_cache_lock = Lock()
         self._stage2_dynamic_cluster_classifier_signature = None
         self._stage2_dynamic_cluster_classifier_cache = {}
         self._stage2_query_cluster_samples_signature = None
@@ -1667,6 +1680,279 @@ class Siglip2RerankStrategy:
                 support_limit=self.product_support_limit,
             )
         return image_rankings
+
+    def _can_use_fast_rank_products(self) -> bool:
+        return not any(
+            (
+                bool(getattr(self, "product_support_enabled", False)),
+                bool(getattr(self, "adaptive_raw_center_enabled", False)),
+                bool(getattr(self, "stage2_ridge_enabled", False)),
+                bool(getattr(self, "stage2_hard_negative_enabled", False)),
+                bool(getattr(self, "stage2_query_pair_enabled", False)),
+                bool(getattr(self, "stage2_dynamic_cluster_enabled", False)),
+                bool(getattr(self, "stage2_query_cluster_enabled", False)),
+                bool(getattr(self, "stage2_targeted_support_enabled", False)),
+                bool(getattr(self, "stage2_targeted_cluster_enabled", False)),
+                bool(getattr(self, "stage2_targeted_pair_enabled", False)),
+                bool(getattr(self, "stage2_support_stats_enabled", False)),
+                bool(getattr(self, "query_fusion_enabled", False)),
+            )
+        )
+
+    @staticmethod
+    def _rank_vectorized_product_scores(
+        image_rankings: Sequence[Dict[str, Any]],
+        *,
+        top_k: int,
+    ) -> list[Dict[str, Any]]:
+        grouped_by_product: Dict[str, list[Dict[str, Any]]] = {}
+        for row in image_rankings:
+            product_id = str(row.get("product_id") or "")
+            if not product_id:
+                continue
+            grouped_by_product.setdefault(product_id, []).append(row)
+
+        ranked_with_signal = []
+        for product_id, rows in grouped_by_product.items():
+            scored_rows = sorted(
+                rows,
+                key=lambda item: float(item.get("score", 0.0)),
+                reverse=True,
+            )
+            if not scored_rows:
+                continue
+            best_row = scored_rows[0]
+            scores = [float(item.get("score", 0.0)) for item in scored_rows[:5]]
+            best_score = float(scores[0])
+            second_best_score = float(scores[1]) if len(scores) > 1 else 0.0
+            top3_mean_score = float(np.mean(scores[:3])) if scores else 0.0
+            top5_mean_score = float(np.mean(scores[:5])) if scores else 0.0
+            rank_score = (
+                best_score
+                + _PRODUCT_RANK_SECOND_BEST_WEIGHT * second_best_score
+                + _PRODUCT_RANK_TOP3_MEAN_WEIGHT * top3_mean_score
+                + _PRODUCT_RANK_TOP5_MEAN_WEIGHT * top5_mean_score
+            )
+            ranked_with_signal.append(
+                (
+                    rank_score,
+                    {
+                        "product_id": product_id,
+                        "score": best_score,
+                        "title": best_row.get("title", ""),
+                        "image_path": best_row.get("image_path", ""),
+                        "image_index": best_row.get("image_index"),
+                    },
+                )
+            )
+
+        return [
+            item
+            for _rank_score, item in sorted(
+                ranked_with_signal,
+                key=lambda pair: (
+                    -float(pair[0]),
+                    -float(pair[1].get("score", 0.0)),
+                    str(pair[1].get("product_id") or ""),
+                    int(pair[1].get("image_index") or 0),
+                    str(pair[1].get("image_path") or ""),
+                ),
+            )
+        ][: max(int(top_k or 1), 1)]
+
+    @staticmethod
+    def _build_fast_rank_cache_key(
+        prepared_catalog: list[Dict[str, Any]],
+    ) -> tuple[tuple[str, str], ...]:
+        return tuple(
+            (
+                str(getattr(entry.get("record"), "product_id", "") or ""),
+                str(getattr(entry.get("record"), "image_path", "") or ""),
+            )
+            for entry in prepared_catalog
+        )
+
+    @staticmethod
+    def _catalog_contexts_for_fast_rank(
+        prepared_catalog: list[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        entries: list[tuple[Any, Dict[str, Any]]] = []
+        embeddings: list[np.ndarray] = []
+        for entry in prepared_catalog:
+            context = entry.get("context") or {}
+            embedding = context.get("embedding")
+            if embedding is None:
+                continue
+            vector = np.asarray(embedding, dtype=np.float32).reshape(-1)
+            if vector.size == 0:
+                continue
+            record = entry.get("record")
+            if record is None:
+                continue
+            entries.append((record, context))
+            embeddings.append(vector)
+
+        if not entries:
+            return None
+
+        matrix = np.vstack(embeddings).astype(np.float32, copy=False)
+        return {
+            "entries": entries,
+            "matrix": matrix,
+        }
+
+    def _get_fast_rank_catalog_contexts(
+        self,
+        prepared_catalog: list[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        max_scopes = max(int(getattr(self, "fast_rank_cache_scopes", 0) or 0), 0)
+        cache_key = self._build_fast_rank_cache_key(prepared_catalog)
+        if max_scopes > 0:
+            with self._fast_rank_cache_lock:
+                cached = self._fast_rank_cache.get(cache_key)
+                if cached is not None:
+                    self._fast_rank_cache.move_to_end(cache_key)
+                    return cached
+
+        built = self._catalog_contexts_for_fast_rank(prepared_catalog)
+        if built is None or max_scopes <= 0:
+            return built
+
+        with self._fast_rank_cache_lock:
+            self._fast_rank_cache[cache_key] = built
+            self._fast_rank_cache.move_to_end(cache_key)
+            while len(self._fast_rank_cache) > max_scopes:
+                self._fast_rank_cache.popitem(last=False)
+        return built
+
+    def rank_products_fast(
+        self,
+        query_context: Dict[str, Any],
+        prepared_catalog: list[Dict[str, Any]],
+        top_k: int = 10,
+    ) -> Optional[Dict[str, Any]]:
+        if not self._can_use_fast_rank_products():
+            return None
+
+        query_embedding = query_context.get("embedding")
+        if query_embedding is None or not prepared_catalog:
+            return {"ranked_products": []}
+
+        catalog_contexts = self._get_fast_rank_catalog_contexts(prepared_catalog)
+        if not catalog_contexts:
+            return {"ranked_products": []}
+
+        entries = catalog_contexts["entries"]
+        query_vector = np.asarray(query_embedding, dtype=np.float32).reshape(-1)
+        matrix = catalog_contexts["matrix"]
+        if matrix.ndim != 2 or matrix.shape[1] != query_vector.size:
+            return None
+
+        image_weight = float(getattr(self, "image_weight", 0.74))
+        color_weight = float(getattr(self, "color_weight", 0.11))
+        text_weight = float(getattr(self, "text_weight", 0.15))
+        category_weight = float(getattr(self, "category_weight", 0.0))
+        bonus_score = float(getattr(self, "bonus_score", 0.05))
+        bonus_text_gate = float(getattr(self, "bonus_text_gate", 0.5))
+        bonus_image_gate = float(getattr(self, "bonus_image_gate", 0.5))
+
+        image_scores = matrix @ query_vector
+        final_scores = image_scores.astype(np.float32, copy=True) * image_weight
+        total_weights = np.full(final_scores.shape, image_weight, dtype=np.float32)
+
+        query_hist = query_context.get("hist")
+        query_hist_vector = (
+            np.asarray(query_hist, dtype=np.float32).reshape(-1)
+            if query_hist is not None
+            else None
+        )
+        if query_hist_vector is not None and query_hist_vector.size and color_weight > 0:
+            hist_rows: list[Optional[np.ndarray]] = []
+            hist_indices: list[int] = []
+            for index, (_record, context) in enumerate(entries):
+                raw_hist = context.get("hist")
+                if raw_hist is None:
+                    hist_rows.append(None)
+                    continue
+                hist_vector = np.asarray(raw_hist, dtype=np.float32).reshape(-1)
+                if hist_vector.shape != query_hist_vector.shape:
+                    hist_rows.append(None)
+                    continue
+                hist_rows.append(hist_vector)
+                hist_indices.append(index)
+            if hist_indices:
+                hist_matrix = np.vstack([hist_rows[index] for index in hist_indices])
+                query_centered = query_hist_vector - float(query_hist_vector.mean())
+                hist_centered = hist_matrix - hist_matrix.mean(axis=1, keepdims=True)
+                denom = np.linalg.norm(hist_centered, axis=1) * float(np.linalg.norm(query_centered))
+                color_scores = np.zeros(len(hist_indices), dtype=np.float32)
+                valid = denom > 0
+                if np.any(valid):
+                    color_scores[valid] = (
+                        hist_centered[valid] @ query_centered
+                    ) / denom[valid]
+                color_scores = np.maximum(color_scores, 0.0)
+                final_scores[hist_indices] += color_weight * color_scores
+                total_weights[hist_indices] += color_weight
+
+        query_tokens = query_context.get("tokens")
+        has_query_tokens = bool(query_tokens)
+        text_scores = np.zeros(final_scores.shape, dtype=np.float32)
+        if has_query_tokens and text_weight > 0:
+            query_token_set = set(query_tokens)
+            query_token_count = float(len(query_token_set))
+            if query_token_count > 0:
+                for index, (_record, context) in enumerate(entries):
+                    catalog_tokens = context.get("tokens")
+                    if not catalog_tokens:
+                        continue
+                    text_score = len(query_token_set & set(catalog_tokens)) / query_token_count
+                    text_scores[index] = float(text_score)
+                    final_scores[index] += text_weight * float(text_score)
+                    total_weights[index] += text_weight
+
+        query_category = str(query_context.get("category") or "").strip()
+        if query_category and category_weight > 0:
+            for index, (_record, context) in enumerate(entries):
+                catalog_category = str(context.get("category") or "").strip()
+                if not catalog_category:
+                    continue
+                category_score = 1.0 if query_category == catalog_category else 0.0
+                final_scores[index] += category_weight * category_score
+                total_weights[index] += category_weight
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            final_scores = np.divide(
+                final_scores,
+                total_weights,
+                out=np.zeros_like(final_scores, dtype=np.float32),
+                where=total_weights > 0,
+            )
+        if has_query_tokens and bonus_score > 0:
+            bonus_mask = (text_scores > bonus_text_gate) & (image_scores > bonus_image_gate)
+            final_scores[bonus_mask] += bonus_score
+        final_scores = np.minimum(final_scores, 1.0)
+
+        image_rankings = []
+        for index, (record, _context) in enumerate(entries):
+            if record is None:
+                continue
+            image_rankings.append(
+                {
+                    "product_id": record.product_id,
+                    "title": record.title,
+                    "score": float(final_scores[index]),
+                    "image_path": record.image_path,
+                    "image_index": record.image_index,
+                }
+            )
+
+        return {
+            "ranked_products": self._rank_vectorized_product_scores(
+                image_rankings,
+                top_k=max(int(top_k or 1), 1),
+            )
+        }
 
     @staticmethod
     def _build_catalog_signature(

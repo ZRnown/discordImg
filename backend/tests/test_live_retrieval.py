@@ -1,4 +1,5 @@
 import json
+from collections import OrderedDict
 from pathlib import Path
 
 import numpy as np
@@ -265,6 +266,177 @@ def test_rank_query_products_returns_empty_for_explicit_empty_shop_scope():
     )
 
     assert ranked == []
+
+
+def test_rank_query_products_uses_vectorized_ranker_when_available(monkeypatch):
+    calls = []
+
+    class VectorizedStrategy:
+        def prepare_query_image(self, record):
+            return {"embedding": np.array([1.0, 0.0], dtype=np.float32)}
+
+        def rank_products_fast(self, *, query_context, prepared_catalog, top_k):
+            calls.append((len(prepared_catalog), top_k))
+            return {
+                "ranked_products": [
+                    {
+                        "product_id": "1001",
+                        "title": "Alpha Runner",
+                        "score": 0.97,
+                        "image_path": "/tmp/a-1.jpg",
+                        "image_index": 0,
+                    }
+                ]
+            }
+
+        def score(self, query_context, catalog_context):
+            raise AssertionError("rank_query_products should use fast ranker before per-image score loop")
+
+    prepared = [
+        {
+            "record": LiveCatalogImageRecord(
+                product_id="1001",
+                title="Alpha Runner",
+                english_title="Alpha Runner",
+                description="demo",
+                shop_name="shop-a",
+                image_path="/tmp/a-1.jpg",
+                image_index=0,
+                product_url="https://weidian.com/item.html?itemID=1001",
+            ),
+            "context": {"embedding": np.array([1.0, 0.0], dtype=np.float32)},
+        },
+        {
+            "record": LiveCatalogImageRecord(
+                product_id="1002",
+                title="Beta Runner",
+                english_title="Beta Runner",
+                description="demo",
+                shop_name="shop-b",
+                image_path="/tmp/b-1.jpg",
+                image_index=0,
+                product_url="https://weidian.com/item.html?itemID=1002",
+            ),
+            "context": {"embedding": np.array([0.0, 1.0], dtype=np.float32)},
+        },
+    ]
+
+    ranked = rank_query_products(
+        strategy=VectorizedStrategy(),
+        prepared_catalog=prepared,
+        query_record=LiveQueryRecord(image_path="/tmp/query.jpg", query=""),
+        top_k=1,
+        threshold=0.5,
+        user_shops=["shop-a"],
+    )
+
+    assert calls == [(1, 1)]
+    assert [item["product_id"] for item in ranked] == ["1001"]
+    assert ranked[0]["shop_name"] == "shop-a"
+
+
+def test_siglip2_fast_rank_matches_standard_score_path(monkeypatch):
+    monkeypatch.setenv("SIGLIP2_RERANK_PRODUCT_SUPPORT_ENABLED", "0")
+    monkeypatch.setenv("SIGLIP2_RERANK_ADAPTIVE_RAW_CENTER", "0")
+    monkeypatch.setenv("SIGLIP2_RERANK_QUERY_FUSION", "0")
+    strategy = Siglip2RerankStrategy.__new__(Siglip2RerankStrategy)
+    strategy.image_weight = 0.74
+    strategy.color_weight = 0.11
+    strategy.text_weight = 0.15
+    strategy.category_weight = 0.0
+    strategy.bonus_score = 0.05
+    strategy.bonus_text_gate = 0.5
+    strategy.bonus_image_gate = 0.5
+    strategy.product_support_enabled = False
+    strategy.adaptive_raw_center_enabled = False
+    strategy.stage2_ridge_enabled = False
+    strategy.stage2_hard_negative_enabled = False
+    strategy.stage2_query_pair_enabled = False
+    strategy.stage2_dynamic_cluster_enabled = False
+    strategy.stage2_query_cluster_enabled = False
+    strategy.stage2_targeted_support_enabled = False
+    strategy.stage2_targeted_cluster_enabled = False
+    strategy.stage2_targeted_pair_enabled = False
+    strategy.stage2_support_stats_enabled = False
+    strategy.query_fusion_enabled = False
+    strategy.fast_rank_cache_scopes = 4
+    strategy._fast_rank_cache = OrderedDict()
+    strategy._fast_rank_cache_lock = type("NoopLock", (), {
+        "__enter__": lambda self: self,
+        "__exit__": lambda self, *_args: None,
+    })()
+
+    prepared = [
+        {
+            "record": LiveCatalogImageRecord(
+                product_id="1001",
+                title="Alpha",
+                english_title="",
+                description="",
+                shop_name="shop-a",
+                image_path="/tmp/a-1.jpg",
+                image_index=0,
+            ),
+            "context": {
+                "embedding": np.array([1.0, 0.0], dtype=np.float32),
+                "hist": np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+                "tokens": {"alpha", "runner"},
+                "category": "",
+            },
+        },
+        {
+            "record": LiveCatalogImageRecord(
+                product_id="1002",
+                title="Beta",
+                english_title="",
+                description="",
+                shop_name="shop-a",
+                image_path="/tmp/b-1.jpg",
+                image_index=0,
+            ),
+            "context": {
+                "embedding": np.array([0.0, 1.0], dtype=np.float32),
+                "hist": np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32),
+                "tokens": {"beta"},
+                "category": "",
+            },
+        },
+    ]
+    query_context = {
+        "embedding": np.array([1.0, 0.0], dtype=np.float32),
+        "hist": np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
+        "tokens": {"alpha"},
+        "category": "",
+    }
+
+    fast_payload = strategy.rank_products_fast(
+        query_context=query_context,
+        prepared_catalog=prepared,
+        top_k=2,
+    )
+    standard_rankings = [
+        {
+            "product_id": entry["record"].product_id,
+            "title": entry["record"].title,
+            "score": float(strategy.score(query_context, entry["context"])),
+            "image_path": entry["record"].image_path,
+            "image_index": entry["record"].image_index,
+        }
+        for entry in prepared
+    ]
+    standard_payload = {
+        "ranked_products": strategy._rank_vectorized_product_scores(
+            standard_rankings,
+            top_k=2,
+        )
+    }
+
+    assert fast_payload is not None
+    assert [item["product_id"] for item in fast_payload["ranked_products"]] == ["1001", "1002"]
+    assert np.allclose(
+        [item["score"] for item in fast_payload["ranked_products"]],
+        [item["score"] for item in standard_payload["ranked_products"]],
+    )
 
 
 def test_build_catalog_records_deserializes_siglip2_cache_fields():
