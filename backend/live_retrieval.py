@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections import OrderedDict
 import hashlib
 import json
 import logging
@@ -1587,6 +1588,7 @@ class LiveImageRetriever:
         self._lock = Lock()
         self._catalog_signature: Optional[Tuple[Any, ...]] = None
         self._prepared_catalog: List[Dict[str, Any]] = []
+        self._scoped_catalog_cache: OrderedDict[Tuple[str, ...], Tuple[Any, List[Dict[str, Any]], Tuple[Any, ...], int]] = OrderedDict()
         self._strategy = None
         self._catalog_refresh_required = True
         self._prepare_inflight = False
@@ -1597,6 +1599,16 @@ class LiveImageRetriever:
             self.db.get_searchable_product_image_records(
                 strategy_name=self.strategy_name,
                 require_cache=strategy_requires_persisted_catalog_cache(self.strategy_name),
+            )
+        )
+
+    def _load_catalog_rows_for_shops(self, shop_names: Sequence[str]) -> List[Dict[str, Any]]:
+        return list(
+            self.db.get_searchable_product_image_records(
+                strategy_name=self.strategy_name,
+                require_cache=strategy_requires_persisted_catalog_cache(self.strategy_name),
+                shop_names=shop_names,
+                ordered=False,
             )
         )
 
@@ -1668,6 +1680,7 @@ class LiveImageRetriever:
         with self._lock:
             self._refresh_generation += 1
             self._catalog_refresh_required = True
+            self._scoped_catalog_cache.clear()
             if self._catalog_signature is None:
                 self._prepared_catalog = []
 
@@ -1767,6 +1780,68 @@ class LiveImageRetriever:
                 refresh_generation,
             )
             return self._strategy, self._prepared_catalog
+
+    @staticmethod
+    def _normalize_shop_scope(user_shops: Optional[Sequence[str]]) -> Optional[Tuple[str, ...]]:
+        if user_shops is None:
+            return None
+        normalized = tuple(
+            sorted(
+                {
+                    str(shop).strip()
+                    for shop in user_shops
+                    if str(shop).strip()
+                }
+            )
+        )
+        return normalized
+
+    def _build_prepared_catalog_snapshot_for_shops(self, shop_scope: Tuple[str, ...]):
+        try:
+            from .benchmarks.strategies import create_strategy
+        except ImportError:
+            from benchmarks.strategies import create_strategy
+
+        rows = self._load_catalog_rows_for_shops(shop_scope)
+        catalog_records = build_catalog_records(rows)
+        runtime_signature = _build_runtime_env_signature(self.strategy_name)
+        signature = self._build_signature(rows) + ("shops",) + shop_scope + runtime_signature
+
+        strategy = self._get_strategy_instance() or create_strategy(self.strategy_name)
+        prepared_catalog = prepare_catalog_entries(strategy, catalog_records)
+        return strategy, prepared_catalog, signature
+
+    def _ensure_scoped_prepared_catalog(
+        self,
+        user_shops: Optional[Sequence[str]],
+    ) -> Optional[Tuple[Any, List[Dict[str, Any]]]]:
+        shop_scope = self._normalize_shop_scope(user_shops)
+        if not shop_scope:
+            return None
+
+        refresh_generation = self._refresh_generation
+        with self._lock:
+            cached = self._scoped_catalog_cache.get(shop_scope)
+            if cached is not None and cached[3] == refresh_generation:
+                self._scoped_catalog_cache.move_to_end(shop_scope)
+                return cached[0], cached[1]
+
+        strategy, prepared_catalog, signature = self._build_prepared_catalog_snapshot_for_shops(shop_scope)
+        max_scopes = max(_env_int("LIVE_IMAGE_SEARCH_SCOPED_CATALOG_CACHE_SCOPES", 8), 1)
+        with self._lock:
+            if refresh_generation != self._refresh_generation:
+                return strategy, prepared_catalog
+            self._strategy = strategy
+            self._scoped_catalog_cache[shop_scope] = (
+                strategy,
+                prepared_catalog,
+                signature,
+                refresh_generation,
+            )
+            self._scoped_catalog_cache.move_to_end(shop_scope)
+            while len(self._scoped_catalog_cache) > max_scopes:
+                self._scoped_catalog_cache.popitem(last=False)
+        return strategy, prepared_catalog
 
     def _ensure_prepared_catalog(self):
         with self._lock:
@@ -1956,7 +2031,17 @@ class LiveImageRetriever:
                 cancel_event=cancel_event,
             )
 
-        strategy, prepared_catalog = self._ensure_prepared_catalog()
+        with self._lock:
+            has_global_catalog = self._has_active_catalog_locked()
+        if has_global_catalog:
+            strategy, prepared_catalog = self._ensure_prepared_catalog()
+            scoped_catalog = None
+        else:
+            scoped_catalog = self._ensure_scoped_prepared_catalog(user_shops)
+            if scoped_catalog is None:
+                strategy, prepared_catalog = self._ensure_prepared_catalog()
+            else:
+                strategy, prepared_catalog = scoped_catalog
         query_record = build_query_record(image_path=image_path, query_text=query_text)
         ranked_products = rank_query_products(
             strategy=strategy,
@@ -1964,7 +2049,7 @@ class LiveImageRetriever:
             query_record=query_record,
             top_k=top_k,
             threshold=threshold,
-            user_shops=user_shops,
+            user_shops=None if scoped_catalog is not None else user_shops,
             cancel_event=cancel_event,
         )
         top1_score = float(ranked_products[0]["score"]) if ranked_products else 0.0

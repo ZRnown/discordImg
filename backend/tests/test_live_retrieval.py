@@ -1056,6 +1056,80 @@ def test_live_image_retriever_search_prefers_prepared_catalog_by_default(monkeyp
     ]
 
 
+def test_live_image_retriever_reuses_scoped_catalog_for_same_shop_scope(monkeypatch):
+    class FakeDB:
+        def __init__(self):
+            self.materialized_calls = []
+
+        def get_searchable_product_image_records(self, **kwargs):
+            self.materialized_calls.append(kwargs)
+            shop_names = kwargs.get("shop_names") or []
+            assert shop_names
+            shop_name = shop_names[0]
+            return [
+                {
+                    "product_id": "2001",
+                    "title": "Allowed Alpha",
+                    "english_title": "Allowed Alpha",
+                    "description": "demo",
+                    "shop_name": shop_name,
+                    "image_path": "/tmp/allowed.jpg",
+                    "image_index": 0,
+                    "product_url": "https://weidian.com/item.html?itemID=2001",
+                    "retrieval_cache_strategy": "siglip2_rerank",
+                    "retrieval_cache_version": "siglip2_rerank_v1",
+                    "retrieval_embedding": "[0.1, 0.2, 0.3]",
+                    "retrieval_color_hist": None,
+                    "retrieval_tokens": "[\"alpha\"]",
+                }
+            ]
+
+    class FakeStrategy:
+        def supports_streaming_live_search(self):
+            return False
+
+        def prepare_query_image(self, record):
+            return {"query": record.query}
+
+        def prepare_catalog_image(self, record):
+            return {"score": 0.93}
+
+        def score(self, query_context, catalog_context):
+            return catalog_context["score"]
+
+    monkeypatch.setattr(
+        "backend.live_retrieval.get_retrieval_strategy_instance",
+        lambda *args, **kwargs: FakeStrategy(),
+    )
+
+    retriever = LiveImageRetriever(FakeDB(), "siglip2_rerank")
+    first = retriever.search(
+        "/tmp/query-a.jpg",
+        query_text="ignored",
+        top_k=3,
+        threshold=0.2,
+        user_shops=["shop-allowed"],
+    )
+    second = retriever.search(
+        "/tmp/query-b.jpg",
+        query_text="ignored",
+        top_k=3,
+        threshold=0.2,
+        user_shops=["shop-allowed"],
+    )
+
+    assert [item["product_id"] for item in first["ranked_products"]] == ["2001"]
+    assert [item["product_id"] for item in second["ranked_products"]] == ["2001"]
+    assert retriever.db.materialized_calls == [
+        {
+            "strategy_name": "siglip2_rerank",
+            "require_cache": True,
+            "shop_names": ("shop-allowed",),
+            "ordered": False,
+        }
+    ]
+
+
 def test_live_image_retriever_warm_skips_streaming_catalog_count(monkeypatch):
     class FakeDB:
         def __init__(self):
