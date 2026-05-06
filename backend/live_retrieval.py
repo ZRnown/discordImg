@@ -1619,6 +1619,7 @@ class LiveImageRetriever:
         self._catalog_signature: Optional[Tuple[Any, ...]] = None
         self._prepared_catalog: List[Dict[str, Any]] = []
         self._scoped_catalog_cache: OrderedDict[Tuple[str, ...], Tuple[Any, List[Dict[str, Any]], Tuple[Any, ...], int]] = OrderedDict()
+        self._scoped_catalog_prepare_inflight: set[Tuple[str, ...]] = set()
         self._strategy = None
         self._catalog_refresh_required = True
         self._prepare_inflight = False
@@ -1711,6 +1712,7 @@ class LiveImageRetriever:
             self._refresh_generation += 1
             self._catalog_refresh_required = True
             self._scoped_catalog_cache.clear()
+            self._scoped_catalog_prepare_inflight.clear()
             if self._catalog_signature is None:
                 self._prepared_catalog = []
 
@@ -1783,6 +1785,44 @@ class LiveImageRetriever:
             args=(refresh_generation,),
             daemon=True,
             name=f"live-catalog-refresh-{self.strategy_name}",
+        )
+        prepare_thread.start()
+        return True
+
+    def _prepare_scoped_catalog_in_background(self, shop_scope: Tuple[str, ...]) -> None:
+        try:
+            self._ensure_scoped_prepared_catalog(shop_scope)
+        except Exception:
+            logger.exception(
+                "Scoped live retrieval catalog prepare failed: strategy=%s shops=%s",
+                self.strategy_name,
+                list(shop_scope),
+            )
+        finally:
+            with self._lock:
+                self._scoped_catalog_prepare_inflight.discard(shop_scope)
+
+    def _start_scoped_catalog_prepare_in_background(
+        self,
+        user_shops: Optional[Sequence[str]],
+    ) -> bool:
+        shop_scope = self._normalize_shop_scope(user_shops)
+        if not shop_scope:
+            return False
+
+        with self._lock:
+            cached = self._scoped_catalog_cache.get(shop_scope)
+            if cached is not None and cached[3] == self._refresh_generation:
+                return False
+            if shop_scope in self._scoped_catalog_prepare_inflight:
+                return False
+            self._scoped_catalog_prepare_inflight.add(shop_scope)
+
+        prepare_thread = Thread(
+            target=self._prepare_scoped_catalog_in_background,
+            args=(shop_scope,),
+            daemon=True,
+            name=f"live-scoped-catalog-prepare-{self.strategy_name}",
         )
         prepare_thread.start()
         return True
@@ -2282,6 +2322,15 @@ class LiveImageRetriever:
             if self._supports_streaming_search(strategy):
                 scoped_catalog = self._get_cached_scoped_prepared_catalog(user_shops)
                 if scoped_catalog is None:
+                    if self._normalize_shop_scope(user_shops):
+                        started = self._start_scoped_catalog_prepare_in_background(user_shops)
+                        if started:
+                            raise LiveCatalogPreparingError(
+                                f"Scoped live retrieval catalog is preparing: strategy={self.strategy_name}"
+                            )
+                        raise LiveCatalogPreparingError(
+                            f"Scoped live retrieval catalog is already preparing: strategy={self.strategy_name}"
+                        )
                     return self._search_streaming(
                         image_path=image_path,
                         query_text=query_text,

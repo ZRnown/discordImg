@@ -15,3 +15,11 @@ test('startup catalog preparation is disabled by default', () => {
 
   assert.match(source, /LIVE_IMAGE_SEARCH_STARTUP_PREPARE_CATALOG.*False/)
 })
+
+test('scoped catalog cache misses prepare in background instead of streaming through requests', () => {
+  const source = readFileSync(new URL('./live_retrieval.py', import.meta.url), 'utf8')
+
+  assert.match(source, /def _start_scoped_catalog_prepare_in_background/)
+  assert.match(source, /raise LiveCatalogPreparingError\(\s*f"Scoped live retrieval catalog is preparing/)
+  assert.match(source, /raise LiveCatalogPreparingError\(\s*f"Scoped live retrieval catalog is already preparing/)
+})
