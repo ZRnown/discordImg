@@ -248,6 +248,14 @@ const buildScopedSettingsCacheKey = (prefix: string, userId: unknown) => {
   return `${prefix}${normalizedUserId}`
 }
 
+const buildAccountsCacheUrl = (userId: unknown) => {
+  const normalizedUserId = String(userId ?? '').trim()
+  if (!normalizedUserId) {
+    return '/api/accounts'
+  }
+  return `/api/accounts?account_user_cache=${encodeURIComponent(normalizedUserId)}`
+}
+
 const hasOwn = (obj: any, key: string) => Object.prototype.hasOwnProperty.call(obj, key)
 const WEBSITE_REPLY_LANGUAGE_LABELS = Object.fromEntries(
   WEBSITE_REPLY_LANGUAGE_OPTIONS.map(option => [option.value, option.label]),
@@ -372,6 +380,7 @@ export function AccountsView({ isActive = true }: { isActive?: boolean }) {
   const barkCacheHydratedRef = useRef(false)
   const barkAutoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const barkAutoSaveLastPayloadRef = useRef('')
+  const currentUserIdRef = useRef<unknown>(null)
 
   // 新增：当前用户信息状态
   const [currentUser, setCurrentUser] = useState<any>(null)
@@ -1225,6 +1234,8 @@ const formatWebsiteForEdit = (website: any) => ({
     const init = async () => {
       const userRes = await fetch('/api/auth/me', { credentials: 'include' })
       if (!userRes.ok) {
+        currentUserIdRef.current = null
+        setAccounts([])
         barkCacheHydratedRef.current = true
         fetchSettings(false)
         return
@@ -1233,6 +1244,7 @@ const formatWebsiteForEdit = (website: any) => ({
       const userData = await userRes.json()
       const nextUser = userData.user || null
       setCurrentUser(nextUser)
+      currentUserIdRef.current = nextUser?.id ?? null
 
       const cached = readBarkSettingsCache(nextUser?.id)
       if (Object.keys(cached).length > 0) {
@@ -1240,7 +1252,7 @@ const formatWebsiteForEdit = (website: any) => ({
       }
       barkCacheHydratedRef.current = true
 
-      fetchAccounts()
+      fetchAccounts(true, nextUser?.id)
       if (nextUser?.role === 'admin') {
         fetchUsers()
       }
@@ -1522,16 +1534,15 @@ const formatWebsiteForEdit = (website: any) => ({
     }
   }
 
-  const fetchAccounts = async (forceRefresh = false) => {
-          try {
+  const fetchAccounts = async (forceRefresh = false, scopedUserId: unknown = currentUserIdRef.current) => {
+    try {
       console.log('获取账号列表...')
-      const cacheKey = '/api/accounts'
+      const accountsCacheUrl = buildAccountsCacheUrl(scopedUserId)
       if (forceRefresh) {
-        // 强制刷新：清除缓存
-        sessionStorage.removeItem(`cache_${cacheKey}`)
+        invalidateCache(accountsCacheUrl)
       }
-      const data = await cachedFetch('/api/accounts', { credentials: 'include' })
-            setAccounts(data.accounts || [])
+      const data = await cachedFetch(accountsCacheUrl, { credentials: 'include' })
+      setAccounts(data.accounts || [])
     } catch (error) {
       console.error('获取账号列表出错:', error)
       toast.error(getApiErrorMessage(error, '获取账号列表失败'))

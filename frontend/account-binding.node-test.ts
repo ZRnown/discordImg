@@ -57,3 +57,13 @@ test('account list shows detailed Discord account metadata', () => {
   assert.doesNotMatch(source, /角色: \{getAccountRuntimeRoleLabel\(account\.runtime_role\)\}/)
   assert.doesNotMatch(source, /监听\+发送/)
 })
+
+test('account list cache is scoped to the logged-in user', () => {
+  const source = readAccountsViewSource()
+
+  assert.match(source, /buildAccountsCacheUrl/)
+  assert.match(source, /currentUserIdRef/)
+  assert.match(source, /fetchAccounts\(true,\s*nextUser\?\.id\)/)
+  assert.match(source, /invalidateCache\(accountsCacheUrl\)/)
+  assert.doesNotMatch(source, /cachedFetch\('\/api\/accounts'/)
+})
