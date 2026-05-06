@@ -6103,9 +6103,172 @@ class DiscordBotClient(discord.Client):
                 logger.error(f"导入数据库模块失败: {db_import_error}")
                 db = None
 
+            async def _run_keyword_image_search_for_context(website_context):
+                if db is None or not self.user_id:
+                    return False, False
+
+                website_config = website_context['website_config']
+                website_id = website_config.get('id')
+                website_settings = user_website_settings_map.get(website_id) or {}
+                try:
+                    enabled = bool(int(website_settings.get('keyword_image_search_enabled', 0) or 0))
+                except (TypeError, ValueError):
+                    enabled = False
+                if not enabled:
+                    return False, False
+
+                mode = str(website_settings.get('keyword_image_search_mode') or 'manual').strip().lower()
+                if mode not in {'manual', 'auto'}:
+                    mode = 'manual'
+                max_images = _coerce_int(website_settings.get('keyword_image_search_max_images', 3), 3)
+                max_images = max(1, min(max_images, 10))
+
+                try:
+                    try:
+                        from keyword_image_search import keyword_image_search_service
+                    except ImportError:
+                        from .keyword_image_search import keyword_image_search_service
+
+                    def _search_candidates():
+                        return keyword_image_search_service.search_candidates(
+                            query_text=search_query,
+                            website_config=website_config,
+                            user_id=self.user_id,
+                            user_shops=(self.user_shops if self.user_shops else None),
+                            max_images=max_images,
+                            user_settings=user_settings,
+                        )
+
+                    search_result = await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        _search_candidates,
+                    )
+                    candidates = list(search_result.get('candidates') or [])
+                    matched_count = int(search_result.get('matched_result_count') or 0)
+                    status = 'ready' if matched_count > 0 else 'no_match'
+                    error_message = None
+                    provider = search_result.get('provider') or 'searchapi_google_images'
+                    external_count = int(search_result.get('external_result_count') or 0)
+                except Exception as search_error:
+                    logger.error(
+                        f"关键词搜图失败: query={search_query} website={website_id} error={search_error}"
+                    )
+                    candidates = []
+                    matched_count = 0
+                    status = 'failed'
+                    error_message = str(search_error)
+                    provider = getattr(config, 'KEYWORD_IMAGE_SEARCH_PROVIDER', 'searchapi_google_maps')
+                    external_count = 0
+
+                job_id = await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    partial(
+                        db.create_keyword_image_search_job,
+                        user_id=self.user_id,
+                        website_id=website_id,
+                        query_text=search_query,
+                        channel_id=str(getattr(message.channel, 'id', '')),
+                        message_id=str(getattr(message, 'id', '')),
+                        guild_id=str(getattr(getattr(message, 'guild', None), 'id', '') or ''),
+                        author_id=str(getattr(message.author, 'id', '') or ''),
+                        mode=mode,
+                        provider=provider,
+                        status=status,
+                        error_message=error_message,
+                        candidates=candidates,
+                        external_result_count=external_count,
+                        matched_result_count=matched_count,
+                    ),
+                )
+                job_created = bool(job_id)
+                if job_created:
+                    logger.info(
+                        f"关键词搜图任务已创建: job={job_id} mode={mode} query={search_query} "
+                        f"website={website_id} matched={matched_count}/{external_count}"
+                    )
+
+                if mode != 'auto' or status != 'ready':
+                    return job_created, False
+
+                matched_candidates = [
+                    (index, candidate)
+                    for index, candidate in enumerate(candidates)
+                    if candidate.get('match_found') and isinstance(candidate.get('product'), dict)
+                ]
+                if not matched_candidates:
+                    return job_created, False
+
+                selected_index, selected_candidate = max(
+                    matched_candidates,
+                    key=lambda item: _coerce_float(item[1].get('similarity')) or 0.0,
+                )
+                product = selected_candidate.get('product') or {}
+                prepared_product, custom_reply, _, _ = _prepare_effective_product_reply(
+                    product,
+                    website_config=website_config,
+                    fallback_custom_reply=self._get_custom_reply(),
+                )
+                internal_match = selected_candidate.get('search_result') or {}
+                similarity = _coerce_float(selected_candidate.get('similarity')) or 0.0
+                best_match_index = internal_match.get('imageIndex', internal_match.get('image_index'))
+                match_context = {
+                    'type': 'image',
+                    'similarity': similarity,
+                    'base_threshold': _resolve_image_reply_threshold(
+                        {
+                            'type': 'image',
+                            'similarity': similarity,
+                            'base_threshold': user_settings.get(
+                                'discord_similarity_threshold',
+                                config.DISCORD_SIMILARITY_THRESHOLD,
+                            ),
+                        },
+                        website_config,
+                    ),
+                    'best_match_image_base_threshold': user_settings.get(
+                        'keyword_reply_best_match_image_threshold',
+                        0.75,
+                    ),
+                    'best_match_image_index': best_match_index,
+                    'top1_margin': _extract_image_match_top1_margin(internal_match),
+                    'keyword_image_search_job_id': job_id,
+                    'external_image_url': selected_candidate.get('external_image_url'),
+                }
+                sent = await self._enqueue_or_dispatch_keyword_reply(
+                    message,
+                    prepared_product,
+                    custom_reply,
+                    website_config,
+                    match_context=match_context,
+                    skip_review_check=skip_keyword_review_check,
+                )
+                if sent and job_id:
+                    await asyncio.get_event_loop().run_in_executor(
+                        None,
+                        partial(
+                            db.update_keyword_image_search_job,
+                            job_id,
+                            user_id=self.user_id,
+                            status='sent',
+                            selected_candidate_index=selected_index,
+                            sent_product_id=prepared_product.get('id'),
+                            error_message=None,
+                        ),
+                    )
+                return job_created, bool(sent)
+
             for website_context in website_match_contexts:
                 website_config = website_context['website_config']
                 if _website_keyword_limit_exceeded(website_context):
+                    continue
+
+                image_job_created, image_reply_sent = await _run_keyword_image_search_for_context(
+                    website_context
+                )
+                if image_job_created:
+                    keyword_image_job_created = True
+                if image_reply_sent:
+                    any_reply_scheduled = True
                     continue
 
                 matched_products = website_context['matched_products']
@@ -6320,7 +6483,7 @@ class DiscordBotClient(discord.Client):
                     form = aiohttp.FormData()
                     form.add_field('image', image_data, filename='image.jpg', content_type='image/jpeg')
                     form.add_field('threshold', str(api_threshold))
-                    form.add_field('limit', '1')  # Discord只返回最相似的一个结果
+                    form.add_field('limit', '2')  # 保留 top2 计算分差，发送仍只使用 top1
                     if self.user_id:
                         form.add_field('user_id', str(self.user_id))
                     if user_shops:

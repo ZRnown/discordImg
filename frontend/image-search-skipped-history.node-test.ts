@@ -79,12 +79,14 @@ test('accounts view scopes cached settings by current logged-in user', () => {
   assert.equal(source.includes('currentUser?.id'), true)
 })
 
-test('production image search weights emphasize appearance plus color and apply a margin gate', () => {
+test('production image search weights use category and object crop signals with margin gate', () => {
   const source = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
 
-  assert.equal(source.includes('SIGLIP2_RERANK_IMAGE_WEIGHT: "0.82"'), true)
-  assert.equal(source.includes('SIGLIP2_RERANK_COLOR_WEIGHT: "0.18"'), true)
-  assert.equal(source.includes('SIGLIP2_RERANK_QUERY_RAW_WEIGHT: "0.25"'), true)
-  assert.equal(source.includes('SIGLIP2_RERANK_QUERY_CENTER_WEIGHT: "0.75"'), true)
+  assert.equal(source.includes('SIGLIP2_RERANK_IMAGE_WEIGHT: "0.80"'), true)
+  assert.equal(source.includes('SIGLIP2_RERANK_COLOR_WEIGHT: "0.12"'), true)
+  assert.equal(source.includes('SIGLIP2_RERANK_CATEGORY_WEIGHT: "0.12"'), true)
+  assert.equal(source.includes('SIGLIP2_RERANK_QUERY_RAW_WEIGHT: "0.20"'), true)
+  assert.equal(source.includes('SIGLIP2_RERANK_QUERY_CENTER_WEIGHT: "0.55"'), true)
+  assert.equal(source.includes('SIGLIP2_RERANK_QUERY_YOLO_WEIGHT: "0.25"'), true)
   assert.equal(source.includes('DISCORD_IMAGE_REPLY_MIN_TOP1_MARGIN: "0.03"'), true)
 })

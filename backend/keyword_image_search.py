@@ -73,7 +73,7 @@ class KeywordImageSearchService:
         provider = str(
             user_settings.get("keyword_image_search_provider")
             or config.KEYWORD_IMAGE_SEARCH_PROVIDER
-            or "searchapi_google_images"
+            or "searchapi_google_maps"
         ).strip().lower()
         api_key = str(
             user_settings.get("keyword_image_search_api_key")
@@ -103,9 +103,15 @@ class KeywordImageSearchService:
     ) -> Dict[str, Any]:
         normalized_max_images = normalize_keyword_image_search_max_images(max_images)
         credentials = self._resolve_credentials(user_settings)
-        provider = str(credentials.get("provider") or "searchapi_google_images").strip().lower()
+        provider = str(credentials.get("provider") or "searchapi_google_maps").strip().lower()
         if provider == "google_cse":
             external_results = self._search_google_images(
+                query_text,
+                normalized_max_images,
+                credentials=credentials,
+            )
+        elif provider == "searchapi_google_maps":
+            external_results = self._search_searchapi_google_maps(
                 query_text,
                 normalized_max_images,
                 credentials=credentials,
@@ -148,6 +154,7 @@ class KeywordImageSearchService:
             try:
                 internal_result = self._search_internal_by_image(
                     image_url=result.get("image_url"),
+                    query_text=query_text,
                     user_id=user_id,
                     user_shops=user_shops,
                     threshold=threshold,
@@ -241,6 +248,80 @@ class KeywordImageSearchService:
             )
         return results
 
+    def _search_searchapi_google_maps(
+        self,
+        query_text: str,
+        max_images: int,
+        *,
+        credentials: Dict[str, str],
+    ) -> List[Dict[str, Any]]:
+        api_key = str(credentials.get("api_key") or "").strip()
+        if not api_key:
+            raise KeywordImageSearchError("未配置 SearchApi 地图搜图 Key")
+
+        response = self.session.get(
+            SEARCHAPI_GOOGLE_IMAGES_ENDPOINT,
+            params={
+                "api_key": api_key,
+                "engine": "google_maps",
+                "q": query_text,
+            },
+            timeout=float(config.KEYWORD_IMAGE_SEARCH_REQUEST_TIMEOUT_SECONDS),
+        )
+        if not response.ok:
+            try:
+                payload = response.json()
+            except Exception:
+                payload = {}
+            message = (
+                payload.get("error")
+                or payload.get("message")
+                or response.text.strip()
+                or f"HTTP {response.status_code}"
+            )
+            raise KeywordImageSearchError(f"SearchApi 地图搜图请求失败: {message}")
+
+        data = response.json()
+        places = []
+        for key in ("local_results", "ads"):
+            items = data.get(key) or []
+            if isinstance(items, list):
+                places.extend(item for item in items if isinstance(item, dict))
+
+        results: List[Dict[str, Any]] = []
+        seen_urls = set()
+        max_count = normalize_keyword_image_search_max_images(max_images)
+        for place in places:
+            image_urls: List[str] = []
+            raw_images = place.get("images") or []
+            if isinstance(raw_images, list):
+                image_urls.extend(str(url or "").strip() for url in raw_images)
+            thumbnail_url = str(place.get("thumbnail") or "").strip()
+            if thumbnail_url:
+                image_urls.append(thumbnail_url)
+
+            for image_url in image_urls:
+                if not image_url or image_url in seen_urls:
+                    continue
+                seen_urls.add(image_url)
+                results.append(
+                    {
+                        "image_url": image_url,
+                        "title": str(place.get("title") or query_text or "").strip(),
+                        "page_url": str(
+                            place.get("place_link")
+                            or place.get("website")
+                            or place.get("reviews_link")
+                            or ""
+                        ).strip(),
+                        "thumbnail_url": thumbnail_url or image_url,
+                    }
+                )
+                if len(results) >= max_count:
+                    return results
+
+        return results
+
     def _search_google_images(
         self,
         query_text: str,
@@ -305,6 +386,7 @@ class KeywordImageSearchService:
         user_id: Optional[int],
         user_shops: Optional[List[str]],
         threshold: float,
+        query_text: str = "",
     ) -> Optional[Dict[str, Any]]:
         if not image_url:
             return None
@@ -312,8 +394,11 @@ class KeywordImageSearchService:
         payload = {
             "image_url": image_url,
             "threshold": str(threshold),
-            "limit": "1",
+            "limit": "2",
         }
+        query_text = " ".join(str(query_text or "").strip().split())
+        if query_text:
+            payload["query_text"] = query_text
         if user_id is not None:
             payload["user_id"] = str(user_id)
         if user_shops:

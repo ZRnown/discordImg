@@ -1633,8 +1633,8 @@ def search_similar():
         image_url = request.form.get('image_url')
         threshold = float(request.form.get('threshold', 0.6))
         limit = int(request.form.get('limit', 5))
-        query_text_ignored = bool(str(request.form.get('query_text', '') or '').strip())
-        query_text = ""
+        query_text = " ".join(str(request.form.get('query_text', '') or '').strip().split())
+        query_text_ignored = False
         debug_enabled = bool(getattr(config, 'DEBUG', False))
 
         user_id = request.form.get('user_id')
@@ -3419,8 +3419,6 @@ async def _send_keyword_image_search_candidate_async(
 
 @app.route('/api/keyword-image-search/jobs', methods=['GET'])
 def list_keyword_image_search_jobs():
-    return jsonify({'jobs': [], 'disabled': True, 'message': '关键词搜图功能已在当前分支移除'}), 410
-
     if not require_login():
         return jsonify({'error': '需要登录'}), 401
 
@@ -3448,8 +3446,6 @@ def list_keyword_image_search_jobs():
 
 @app.route('/api/keyword-image-search/jobs/<int:job_id>/send', methods=['POST'])
 def send_keyword_image_search_job(job_id):
-    return jsonify({'error': '关键词搜图功能已在当前分支移除'}), 410
-
     if not require_login():
         return jsonify({'error': '需要登录'}), 401
 

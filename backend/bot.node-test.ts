@@ -58,12 +58,12 @@ test('image attachment replies do not bypass channel review', () => {
   assert.doesNotMatch(handleImageSource, /skip_review_check=True/)
 })
 
-test('keyword image search runtime is disabled on main', () => {
+test('keyword image search runtime creates jobs from keyword matches', () => {
   const source = readSource()
 
-  assert.doesNotMatch(source, /keyword_image_search_service/)
-  assert.doesNotMatch(source, /_run_keyword_image_search_for_website/)
-  assert.doesNotMatch(source, /allow_keyword_image_search=not bool/)
+  assert.match(source, /keyword_image_search_service\.search_candidates/)
+  assert.match(source, /db\.create_keyword_image_search_job/)
+  assert.match(source, /keyword_image_job_created = True/)
 })
 
 test('image recognition retrieves the best candidate before applying reply threshold', () => {

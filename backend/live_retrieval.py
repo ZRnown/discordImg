@@ -1242,12 +1242,11 @@ def build_catalog_records(rows: Sequence[Dict[str, Any]]) -> List[LiveCatalogIma
 
 
 def build_query_record(image_path: str, query_text: str = "") -> LiveQueryRecord:
+    normalized_query_text = " ".join(str(query_text or "").strip().split())
     return LiveQueryRecord(
         image_path=image_path,
-        # Live product retrieval is image-only. Ignore message text here so
-        # the main ranking path is not skewed by attachment captions.
-        query="",
-        product_queries=[],
+        query=normalized_query_text,
+        product_queries=([normalized_query_text] if normalized_query_text else []),
     )
 
 

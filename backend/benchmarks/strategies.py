@@ -54,6 +54,13 @@ except ImportError:
         score_ridge_classifier,
         select_query_variant_rankings,
     )
+try:
+    from ..product_category import infer_product_category
+except ImportError:
+    try:
+        from product_category import infer_product_category
+    except ImportError:
+        infer_product_category = None
 
 logger = logging.getLogger(__name__)
 
@@ -870,6 +877,10 @@ class Siglip2RerankStrategy:
             "SIGLIP2_RERANK_TEXT_WEIGHT",
             0.15,
         )
+        self.category_weight = _load_non_negative_env_float(
+            "SIGLIP2_RERANK_CATEGORY_WEIGHT",
+            0.0,
+        )
         self.bonus_score = _load_non_negative_env_float(
             "SIGLIP2_RERANK_BONUS_SCORE",
             0.05,
@@ -1381,6 +1392,15 @@ class Siglip2RerankStrategy:
         return tokens
 
     @staticmethod
+    def _infer_category(*values: str) -> str:
+        if not callable(infer_product_category):
+            return ""
+        try:
+            return str(infer_product_category(*values) or "").strip()
+        except Exception:
+            return ""
+
+    @staticmethod
     def _deserialize_cached_hist(raw_hist) -> Optional[np.ndarray]:
         hist = _coerce_serialized_float_array(raw_hist)
         if hist is None:
@@ -1443,6 +1463,7 @@ class Siglip2RerankStrategy:
             "embedding": cached_embedding if cached_embedding is not None else self._build_catalog_embedding(record.image_path),
             "hist": cached_hist if cached_hist is not None else self._build_color_hist(record.image_path),
             "tokens": cached_tokens if cached_tokens else self._tokenize(record.title, " ".join(record.queries)),
+            "category": self._infer_category(record.title, " ".join(record.queries)),
         }
 
     def _build_query_embedding_payload(self, image_path: str) -> Dict[str, Any]:
@@ -1488,6 +1509,7 @@ class Siglip2RerankStrategy:
             **embedding_payload,
             "hist": self._build_color_hist(record.image_path),
             "tokens": self._tokenize(record.query, " ".join(record.product_queries)),
+            "category": self._infer_category(record.query, " ".join(record.product_queries)),
         }
 
     def set_query_support_records(self, query_records: list[Any]) -> None:
@@ -3988,6 +4010,7 @@ class Siglip2RerankStrategy:
         image_weight = float(getattr(self, "image_weight", 0.74))
         color_weight = float(getattr(self, "color_weight", 0.11))
         text_weight = float(getattr(self, "text_weight", 0.15))
+        category_weight = float(getattr(self, "category_weight", 0.0))
         bonus_score = float(getattr(self, "bonus_score", 0.05))
         bonus_text_gate = float(getattr(self, "bonus_text_gate", 0.5))
         bonus_image_gate = float(getattr(self, "bonus_image_gate", 0.5))
@@ -4006,6 +4029,12 @@ class Siglip2RerankStrategy:
         if query_tokens and catalog_tokens and text_weight > 0:
             text_score = self._text_overlap(query_tokens, catalog_tokens)
             weighted_scores.append((text_weight, text_score))
+
+        query_category = str(query_context.get("category") or "").strip()
+        catalog_category = str(catalog_context.get("category") or "").strip()
+        if query_category and catalog_category and category_weight > 0:
+            category_score = 1.0 if query_category == catalog_category else 0.0
+            weighted_scores.append((category_weight, category_score))
 
         total_weight = sum(weight for weight, _score in weighted_scores)
         if total_weight <= 0:
