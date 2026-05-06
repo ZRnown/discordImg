@@ -7,7 +7,9 @@ import json
 import logging
 import numpy as np
 import os
+import pickle
 import re
+import tempfile
 from statistics import mean
 from threading import Lock, Thread
 from time import perf_counter
@@ -40,6 +42,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 _STREAMING_PROGRESS_LOG_INTERVAL_SECONDS = 5.0
+_SCOPED_CATALOG_DISK_CACHE_VERSION = 1
 
 
 def _is_search_cancelled(cancel_event: Optional[Any]) -> bool:
@@ -1827,14 +1830,154 @@ class LiveImageRetriever:
         except ImportError:
             from benchmarks.strategies import create_strategy
 
+        cached_snapshot = self._load_scoped_prepared_catalog_from_disk(shop_scope)
+        if cached_snapshot is not None:
+            return cached_snapshot
+
         rows = self._load_catalog_rows_for_shops(shop_scope)
         catalog_records = build_catalog_records(rows)
         runtime_signature = _build_runtime_env_signature(self.strategy_name)
-        signature = self._build_signature(rows) + ("shops",) + shop_scope + runtime_signature
+        signature = self._build_scoped_catalog_signature(shop_scope, rows=rows)
+        if signature is None:
+            signature = self._build_signature(rows) + ("shops",) + shop_scope + runtime_signature
 
         strategy = self._get_strategy_instance() or create_strategy(self.strategy_name)
         prepared_catalog = prepare_catalog_entries(strategy, catalog_records)
+        self._save_scoped_prepared_catalog_to_disk(
+            shop_scope,
+            strategy,
+            prepared_catalog,
+            signature,
+        )
         return strategy, prepared_catalog, signature
+
+    def _get_scoped_catalog_cache_dir(self) -> str:
+        raw_dir = str(os.getenv("LIVE_IMAGE_SEARCH_SCOPED_CATALOG_DISK_CACHE_DIR", "") or "").strip()
+        if raw_dir:
+            return raw_dir if os.path.isabs(raw_dir) else os.path.abspath(raw_dir)
+        return os.path.join(os.path.dirname(__file__), "data", "live_retrieval_scoped_catalogs")
+
+    def _build_scoped_catalog_signature(
+        self,
+        shop_scope: Tuple[str, ...],
+        rows: Optional[Sequence[Dict[str, Any]]] = None,
+    ) -> Optional[Tuple[Any, ...]]:
+        runtime_signature = _build_runtime_env_signature(self.strategy_name)
+        signature_loader = getattr(self.db, "get_searchable_product_image_records_signature", None)
+        if callable(signature_loader):
+            summary = signature_loader(
+                strategy_name=self.strategy_name,
+                require_cache=strategy_requires_persisted_catalog_cache(self.strategy_name),
+                shop_names=shop_scope,
+            )
+            return (
+                _SCOPED_CATALOG_DISK_CACHE_VERSION,
+                self.strategy_name,
+                shop_scope,
+                int((summary or {}).get("count") or 0),
+                int((summary or {}).get("max_image_db_id") or 0),
+                int((summary or {}).get("max_product_id") or 0),
+                str((summary or {}).get("max_product_updated_at") or ""),
+                str((summary or {}).get("max_cache_updated_at") or ""),
+                runtime_signature,
+            )
+        if rows is None:
+            return None
+        return (
+            _SCOPED_CATALOG_DISK_CACHE_VERSION,
+            self.strategy_name,
+            shop_scope,
+            self._build_signature(rows),
+            runtime_signature,
+        )
+
+    def _get_scoped_catalog_cache_path(self, shop_scope: Tuple[str, ...], signature: Tuple[Any, ...]) -> str:
+        digest = hashlib.sha1(
+            json.dumps(signature, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+        ).hexdigest()
+        return os.path.join(self._get_scoped_catalog_cache_dir(), f"{digest}.pkl")
+
+    def _load_scoped_prepared_catalog_from_disk(self, shop_scope: Tuple[str, ...]):
+        signature = self._build_scoped_catalog_signature(shop_scope)
+        if signature is None:
+            return None
+        cache_path = self._get_scoped_catalog_cache_path(shop_scope, signature)
+        if not os.path.exists(cache_path):
+            return None
+
+        try:
+            with open(cache_path, "rb") as cache_file:
+                payload = pickle.load(cache_file)
+            if payload.get("signature") != signature:
+                return None
+            prepared_catalog = list(payload.get("prepared_catalog") or [])
+            strategy = self._get_strategy_instance()
+            logger.info(
+                "Loaded scoped live retrieval catalog cache: strategy=%s shops=%s catalog_size=%s path=%s",
+                self.strategy_name,
+                list(shop_scope),
+                len(prepared_catalog),
+                cache_path,
+            )
+            return strategy, prepared_catalog, signature
+        except Exception:
+            logger.exception(
+                "加载店铺实时检索目录磁盘缓存失败: strategy=%s shops=%s path=%s",
+                self.strategy_name,
+                list(shop_scope),
+                cache_path,
+            )
+            try:
+                os.unlink(cache_path)
+            except OSError:
+                pass
+            return None
+
+    def _save_scoped_prepared_catalog_to_disk(
+        self,
+        shop_scope: Tuple[str, ...],
+        strategy,
+        prepared_catalog: List[Dict[str, Any]],
+        signature: Tuple[Any, ...],
+    ) -> None:
+        if _env_bool("LIVE_IMAGE_SEARCH_SCOPED_CATALOG_DISK_CACHE_DISABLED", False):
+            return
+        cache_dir = self._get_scoped_catalog_cache_dir()
+        cache_path = self._get_scoped_catalog_cache_path(shop_scope, signature)
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            payload = {
+                "version": _SCOPED_CATALOG_DISK_CACHE_VERSION,
+                "strategy": self.strategy_name,
+                "signature": signature,
+                "prepared_catalog": prepared_catalog,
+            }
+            fd, tmp_path = tempfile.mkstemp(
+                prefix=".tmp-",
+                suffix=".pkl",
+                dir=cache_dir,
+            )
+            with os.fdopen(fd, "wb") as cache_file:
+                pickle.dump(payload, cache_file, protocol=pickle.HIGHEST_PROTOCOL)
+            os.replace(tmp_path, cache_path)
+            logger.info(
+                "Saved scoped live retrieval catalog cache: strategy=%s shops=%s catalog_size=%s path=%s",
+                self.strategy_name,
+                list(shop_scope),
+                len(prepared_catalog),
+                cache_path,
+            )
+        except Exception:
+            logger.exception(
+                "保存店铺实时检索目录磁盘缓存失败: strategy=%s shops=%s",
+                self.strategy_name,
+                list(shop_scope),
+            )
+            try:
+                if "tmp_path" in locals() and os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+            except OSError:
+                pass
 
     def _ensure_scoped_prepared_catalog(
         self,

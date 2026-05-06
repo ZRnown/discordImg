@@ -1813,6 +1813,88 @@ class Database:
             logger.error(f"统计实时检索商品目录失败: {e}")
             return 0
 
+    def get_searchable_product_image_records_signature(
+        self,
+        strategy_name: Optional[str] = None,
+        require_cache: bool = False,
+        shop_names: Optional[Sequence[str]] = None,
+    ) -> Dict[str, Any]:
+        """获取不包含大向量字段的检索目录签名，用于磁盘缓存失效判断。"""
+        normalized_shop_names = self._normalize_searchable_product_shop_names(shop_names)
+        if shop_names is not None and not normalized_shop_names:
+            return {
+                'count': 0,
+                'max_image_db_id': 0,
+                'max_product_id': 0,
+                'max_product_updated_at': '',
+                'max_cache_updated_at': '',
+            }
+
+        params: List[Any] = []
+        where_clauses = []
+        join_sql = ''
+        select_cache_updated_at = "''"
+        if strategy_name:
+            params.append(strategy_name)
+            if require_cache:
+                join_sql = f'''
+                    JOIN product_image_retrieval_cache rc
+                        ON {self._retrieval_cache_join_sql('pi', 'rc', include_usable_embedding=True)}
+                '''
+            else:
+                join_sql = f'''
+                    LEFT JOIN product_image_retrieval_cache rc
+                        ON {self._retrieval_cache_join_sql('pi', 'rc', include_usable_embedding=False)}
+                '''
+            select_cache_updated_at = "COALESCE(MAX(rc.updated_at), '')"
+
+        if normalized_shop_names:
+            placeholders = ','.join('?' for _ in normalized_shop_names)
+            where_clauses.append(f'p.shop_name IN ({placeholders})')
+            params.extend(normalized_shop_names)
+
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ''
+        query = f'''
+            SELECT
+                COUNT(*) AS row_count,
+                COALESCE(MAX(pi.id), 0) AS max_image_db_id,
+                COALESCE(MAX(p.id), 0) AS max_product_id,
+                COALESCE(MAX(p.updated_at), '') AS max_product_updated_at,
+                {select_cache_updated_at} AS max_cache_updated_at
+            FROM products p
+            JOIN product_images pi ON pi.product_id = p.id
+            {join_sql}
+            {where_sql}
+        '''
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                row = cursor.execute(query, params).fetchone()
+                if not row:
+                    return {
+                        'count': 0,
+                        'max_image_db_id': 0,
+                        'max_product_id': 0,
+                        'max_product_updated_at': '',
+                        'max_cache_updated_at': '',
+                    }
+                return {
+                    'count': int(row[0] or 0),
+                    'max_image_db_id': int(row[1] or 0),
+                    'max_product_id': int(row[2] or 0),
+                    'max_product_updated_at': str(row[3] or ''),
+                    'max_cache_updated_at': str(row[4] or ''),
+                }
+        except Exception as e:
+            logger.error(f"获取实时检索商品目录签名失败: {e}")
+            return {
+                'count': 0,
+                'max_image_db_id': 0,
+                'max_product_id': 0,
+                'max_product_updated_at': '',
+                'max_cache_updated_at': '',
+            }
+
     def get_product_image_search_record(
         self,
         image_db_id: int,
