@@ -2036,6 +2036,16 @@ class LiveImageRetriever:
             if refresh_generation != self._refresh_generation:
                 return False
             self._strategy = strategy
+            fast_context_loader = getattr(strategy, "_get_fast_rank_catalog_contexts", None)
+            if callable(fast_context_loader):
+                try:
+                    fast_context_loader(prepared_catalog)
+                except Exception:
+                    logger.exception(
+                        "预构建店铺实时检索矩阵失败: strategy=%s shops=%s",
+                        self.strategy_name,
+                        list(shop_scope),
+                    )
             self._scoped_catalog_cache[shop_scope] = (
                 strategy,
                 prepared_catalog,
