@@ -1777,6 +1777,14 @@ class Siglip2RerankStrategy:
     ) -> Optional[Dict[str, Any]]:
         entries: list[tuple[Any, Dict[str, Any]]] = []
         embeddings: list[np.ndarray] = []
+        hist_vectors: list[np.ndarray] = []
+        hist_indices: list[int] = []
+        product_ids: list[str] = []
+        titles: list[str] = []
+        image_paths: list[str] = []
+        image_indices: list[int] = []
+        token_sets: list[Any] = []
+        categories: list[str] = []
         for entry in prepared_catalog:
             context = entry.get("context") or {}
             embedding = context.get("embedding")
@@ -1788,17 +1796,124 @@ class Siglip2RerankStrategy:
             record = entry.get("record")
             if record is None:
                 continue
+            entry_index = len(entries)
             entries.append((record, context))
             embeddings.append(vector)
+            product_ids.append(str(getattr(record, "product_id", "") or ""))
+            titles.append(str(getattr(record, "title", "") or ""))
+            image_paths.append(str(getattr(record, "image_path", "") or ""))
+            try:
+                image_indices.append(int(getattr(record, "image_index", 0) or 0))
+            except (TypeError, ValueError):
+                image_indices.append(0)
+            token_sets.append(context.get("tokens") or set())
+            categories.append(str(context.get("category") or ""))
+            raw_hist = context.get("hist")
+            if raw_hist is not None:
+                hist_vector = np.asarray(raw_hist, dtype=np.float32).reshape(-1)
+                if hist_vector.size:
+                    hist_indices.append(entry_index)
+                    hist_vectors.append(hist_vector)
 
         if not entries:
             return None
 
         matrix = np.vstack(embeddings).astype(np.float32, copy=False)
+        hist_matrix = None
+        hist_index_array = np.asarray(hist_indices, dtype=np.int64)
+        if hist_vectors:
+            first_hist_size = int(hist_vectors[0].size)
+            if first_hist_size > 0 and all(int(vector.size) == first_hist_size for vector in hist_vectors):
+                hist_matrix = np.vstack(hist_vectors).astype(np.float32, copy=False)
         return {
             "entries": entries,
             "matrix": matrix,
+            "hist_matrix": hist_matrix,
+            "hist_indices": hist_index_array,
+            "product_ids": product_ids,
+            "titles": titles,
+            "image_paths": image_paths,
+            "image_indices": image_indices,
+            "token_sets": token_sets,
+            "categories": categories,
         }
+
+    @staticmethod
+    def _rank_precomputed_product_scores(
+        final_scores: np.ndarray,
+        catalog_contexts: Dict[str, Any],
+        *,
+        top_k: int,
+    ) -> list[Dict[str, Any]]:
+        product_ids = catalog_contexts.get("product_ids") or []
+        if not product_ids:
+            return []
+
+        product_state: Dict[str, Dict[str, Any]] = {}
+        score_array = np.asarray(final_scores, dtype=np.float32).reshape(-1)
+        titles = catalog_contexts.get("titles") or []
+        image_paths = catalog_contexts.get("image_paths") or []
+        image_indices = catalog_contexts.get("image_indices") or []
+        for index, product_id in enumerate(product_ids):
+            if not product_id or index >= score_array.size:
+                continue
+            score = float(score_array[index])
+            state = product_state.get(product_id)
+            if state is None:
+                state = {
+                    "scores": [],
+                    "best_score": score,
+                    "best_index": index,
+                }
+                product_state[product_id] = state
+            else:
+                if score > float(state["best_score"]):
+                    state["best_score"] = score
+                    state["best_index"] = index
+            state["scores"].append(score)
+
+        ranked_with_signal = []
+        for product_id, state in product_state.items():
+            scores = sorted(state["scores"], reverse=True)[:5]
+            if not scores:
+                continue
+            best_score = float(scores[0])
+            second_best_score = float(scores[1]) if len(scores) > 1 else 0.0
+            top3_mean_score = float(np.mean(scores[:3]))
+            top5_mean_score = float(np.mean(scores[:5]))
+            rank_score = (
+                best_score
+                + _PRODUCT_RANK_SECOND_BEST_WEIGHT * second_best_score
+                + _PRODUCT_RANK_TOP3_MEAN_WEIGHT * top3_mean_score
+                + _PRODUCT_RANK_TOP5_MEAN_WEIGHT * top5_mean_score
+            )
+            best_index = int(state["best_index"])
+            ranked_with_signal.append(
+                (
+                    rank_score,
+                    {
+                        "product_id": product_id,
+                        "score": best_score,
+                        "title": titles[best_index] if best_index < len(titles) else "",
+                        "image_path": image_paths[best_index] if best_index < len(image_paths) else "",
+                        "image_index": image_indices[best_index] if best_index < len(image_indices) else 0,
+                    },
+                )
+            )
+
+        return [
+            item
+            for _rank_score, item in sorted(
+                ranked_with_signal,
+                key=lambda pair: (
+                    -float(pair[0]),
+                    -float(pair[1].get("score", 0.0)),
+                    str(pair[1].get("product_id") or ""),
+                    int(pair[1].get("image_index") or 0),
+                    str(pair[1].get("image_path") or ""),
+                ),
+            )
+        ][: max(int(top_k or 1), 1)]
 
     def _get_fast_rank_catalog_contexts(
         self,
@@ -1841,7 +1956,6 @@ class Siglip2RerankStrategy:
         if query_embedding is None:
             return []
 
-        entries = catalog_contexts["entries"]
         query_vector = np.asarray(query_embedding, dtype=np.float32).reshape(-1)
         matrix = catalog_contexts["matrix"]
         if matrix.ndim != 2 or matrix.shape[1] != query_vector.size:
@@ -1866,21 +1980,15 @@ class Siglip2RerankStrategy:
             else None
         )
         if query_hist_vector is not None and query_hist_vector.size and color_weight > 0:
-            hist_rows: list[Optional[np.ndarray]] = []
-            hist_indices: list[int] = []
-            for index, (_record, context) in enumerate(entries):
-                raw_hist = context.get("hist")
-                if raw_hist is None:
-                    hist_rows.append(None)
-                    continue
-                hist_vector = np.asarray(raw_hist, dtype=np.float32).reshape(-1)
-                if hist_vector.shape != query_hist_vector.shape:
-                    hist_rows.append(None)
-                    continue
-                hist_rows.append(hist_vector)
-                hist_indices.append(index)
-            if hist_indices:
-                hist_matrix = np.vstack([hist_rows[index] for index in hist_indices])
+            hist_matrix = catalog_contexts.get("hist_matrix")
+            hist_indices = catalog_contexts.get("hist_indices")
+            if (
+                hist_matrix is not None
+                and hist_indices is not None
+                and getattr(hist_matrix, "ndim", 0) == 2
+                and hist_matrix.shape[1] == query_hist_vector.size
+                and len(hist_indices) == hist_matrix.shape[0]
+            ):
                 query_centered = query_hist_vector - float(query_hist_vector.mean())
                 hist_centered = hist_matrix - hist_matrix.mean(axis=1, keepdims=True)
                 denom = np.linalg.norm(hist_centered, axis=1) * float(np.linalg.norm(query_centered))
@@ -1901,8 +2009,7 @@ class Siglip2RerankStrategy:
             query_token_set = set(query_tokens)
             query_token_count = float(len(query_token_set))
             if query_token_count > 0:
-                for index, (_record, context) in enumerate(entries):
-                    catalog_tokens = context.get("tokens")
+                for index, catalog_tokens in enumerate(catalog_contexts.get("token_sets") or []):
                     if not catalog_tokens:
                         continue
                     text_score = len(query_token_set & set(catalog_tokens)) / query_token_count
@@ -1912,8 +2019,8 @@ class Siglip2RerankStrategy:
 
         query_category = str(query_context.get("category") or "").strip()
         if query_category and category_weight > 0:
-            for index, (_record, context) in enumerate(entries):
-                catalog_category = str(context.get("category") or "").strip()
+            for index, raw_category in enumerate(catalog_contexts.get("categories") or []):
+                catalog_category = str(raw_category or "").strip()
                 if not catalog_category:
                     continue
                 category_score = 1.0 if query_category == catalog_category else 0.0
@@ -1932,22 +2039,9 @@ class Siglip2RerankStrategy:
             final_scores[bonus_mask] += bonus_score
         final_scores = np.minimum(final_scores, 1.0)
 
-        image_rankings = []
-        for index, (record, _context) in enumerate(entries):
-            if record is None:
-                continue
-            image_rankings.append(
-                {
-                    "product_id": record.product_id,
-                    "title": record.title,
-                    "score": float(final_scores[index]),
-                    "image_path": record.image_path,
-                    "image_index": record.image_index,
-                }
-            )
-
-        return self._rank_vectorized_product_scores(
-            image_rankings,
+        return self._rank_precomputed_product_scores(
+            final_scores,
+            catalog_contexts,
             top_k=max(int(top_k or 1), 1),
         )
 
