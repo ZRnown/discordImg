@@ -1295,6 +1295,7 @@ class Siglip2RerankStrategy:
             4,
         )
         self._fast_rank_cache = OrderedDict()
+        self._fast_rank_cache_catalog_keys = {}
         self._fast_rank_cache_lock = Lock()
         self._stage2_dynamic_cluster_classifier_signature = None
         self._stage2_dynamic_cluster_classifier_cache = {}
@@ -1806,7 +1807,11 @@ class Siglip2RerankStrategy:
         prepared_catalog: list[Dict[str, Any]],
     ) -> Optional[Dict[str, Any]]:
         max_scopes = max(int(getattr(self, "fast_rank_cache_scopes", 0) or 0), 0)
-        cache_key = self._build_fast_rank_cache_key(prepared_catalog)
+        catalog_object_key = id(prepared_catalog)
+        cache_key = self._fast_rank_cache_catalog_keys.get(catalog_object_key)
+        if cache_key is None:
+            cache_key = self._build_fast_rank_cache_key(prepared_catalog)
+            self._fast_rank_cache_catalog_keys[catalog_object_key] = cache_key
         if max_scopes > 0:
             with self._fast_rank_cache_lock:
                 cached = self._fast_rank_cache.get(cache_key)
@@ -1822,7 +1827,10 @@ class Siglip2RerankStrategy:
             self._fast_rank_cache[cache_key] = built
             self._fast_rank_cache.move_to_end(cache_key)
             while len(self._fast_rank_cache) > max_scopes:
-                self._fast_rank_cache.popitem(last=False)
+                removed_key, _removed_value = self._fast_rank_cache.popitem(last=False)
+                for catalog_id, mapped_key in list(self._fast_rank_cache_catalog_keys.items()):
+                    if mapped_key == removed_key:
+                        self._fast_rank_cache_catalog_keys.pop(catalog_id, None)
         return built
 
     def rank_products_fast(

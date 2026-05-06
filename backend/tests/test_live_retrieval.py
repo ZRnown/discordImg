@@ -362,6 +362,7 @@ def test_siglip2_fast_rank_matches_standard_score_path(monkeypatch):
     strategy.query_fusion_enabled = False
     strategy.fast_rank_cache_scopes = 4
     strategy._fast_rank_cache = OrderedDict()
+    strategy._fast_rank_cache_catalog_keys = {}
     strategy._fast_rank_cache_lock = type("NoopLock", (), {
         "__enter__": lambda self: self,
         "__exit__": lambda self, *_args: None,
