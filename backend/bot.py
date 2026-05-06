@@ -6476,7 +6476,7 @@ class DiscordBotClient(discord.Client):
 
                 # 调用后端实时图片检索服务。
                 request_url = f'{config.BACKEND_API_URL.replace("/api", "")}/search_similar'
-                max_attempts = 8
+                max_attempts = 1
                 retry_delay = 1.0
 
                 def _build_form_data():
@@ -6514,7 +6514,7 @@ class DiscordBotClient(discord.Client):
                             )
                             return None
                         # 后端繁忙时短暂退避；预热状态会拖长消息处理，前面已直接结束本次图片识别。
-                        if resp.status in {429, 503} and attempt < max_attempts - 1:
+                        if resp.status in {429} and attempt < max_attempts - 1:
                             await asyncio.sleep(retry_delay)
                             retry_delay = min(retry_delay * 1.8, 6.0)
                             continue

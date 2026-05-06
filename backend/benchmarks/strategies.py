@@ -1686,7 +1686,6 @@ class Siglip2RerankStrategy:
         return not any(
             (
                 bool(getattr(self, "product_support_enabled", False)),
-                bool(getattr(self, "adaptive_raw_center_enabled", False)),
                 bool(getattr(self, "stage2_ridge_enabled", False)),
                 bool(getattr(self, "stage2_hard_negative_enabled", False)),
                 bool(getattr(self, "stage2_query_pair_enabled", False)),
@@ -1696,7 +1695,6 @@ class Siglip2RerankStrategy:
                 bool(getattr(self, "stage2_targeted_cluster_enabled", False)),
                 bool(getattr(self, "stage2_targeted_pair_enabled", False)),
                 bool(getattr(self, "stage2_support_stats_enabled", False)),
-                bool(getattr(self, "query_fusion_enabled", False)),
             )
         )
 
@@ -1833,22 +1831,15 @@ class Siglip2RerankStrategy:
                         self._fast_rank_cache_catalog_keys.pop(catalog_id, None)
         return built
 
-    def rank_products_fast(
+    def _rank_products_fast_for_context(
         self,
         query_context: Dict[str, Any],
-        prepared_catalog: list[Dict[str, Any]],
-        top_k: int = 10,
-    ) -> Optional[Dict[str, Any]]:
-        if not self._can_use_fast_rank_products():
-            return None
-
+        catalog_contexts: Dict[str, Any],
+        top_k: int,
+    ) -> Optional[list[Dict[str, Any]]]:
         query_embedding = query_context.get("embedding")
-        if query_embedding is None or not prepared_catalog:
-            return {"ranked_products": []}
-
-        catalog_contexts = self._get_fast_rank_catalog_contexts(prepared_catalog)
-        if not catalog_contexts:
-            return {"ranked_products": []}
+        if query_embedding is None:
+            return []
 
         entries = catalog_contexts["entries"]
         query_vector = np.asarray(query_embedding, dtype=np.float32).reshape(-1)
@@ -1955,11 +1946,67 @@ class Siglip2RerankStrategy:
                 }
             )
 
+        return self._rank_vectorized_product_scores(
+            image_rankings,
+            top_k=max(int(top_k or 1), 1),
+        )
+
+    def rank_products_fast(
+        self,
+        query_context: Dict[str, Any],
+        prepared_catalog: list[Dict[str, Any]],
+        top_k: int = 10,
+    ) -> Optional[Dict[str, Any]]:
+        if not self._can_use_fast_rank_products():
+            return None
+
+        query_embedding = query_context.get("embedding")
+        if query_embedding is None or not prepared_catalog:
+            return {"ranked_products": []}
+
+        catalog_contexts = self._get_fast_rank_catalog_contexts(prepared_catalog)
+        if not catalog_contexts:
+            return {"ranked_products": []}
+
+        ranked_products = self._rank_products_fast_for_context(
+            query_context,
+            catalog_contexts,
+            top_k=max(int(top_k or 1), 1),
+        )
+        if ranked_products is None:
+            return None
+
+        if self.query_fusion_enabled:
+            raw_embedding = query_context.get("raw_embedding")
+            default_embedding = query_context.get("embedding")
+            if (
+                raw_embedding is not None
+                and default_embedding is not None
+                and self.query_raw_weight > 0
+                and (self.query_center_weight > 0 or self.query_yolo_weight > 0)
+            ):
+                raw_query_context = dict(query_context)
+                raw_query_context["embedding"] = raw_embedding
+                raw_ranked_products = self._rank_products_fast_for_context(
+                    raw_query_context,
+                    catalog_contexts,
+                    top_k=max(int(top_k or 1), 1),
+                )
+                if raw_ranked_products is None:
+                    return None
+                _selected_variant, ranked_products = select_query_variant_rankings(
+                    {
+                        "main": ranked_products,
+                        "raw": raw_ranked_products,
+                    },
+                    default_variant="main",
+                    challenger_variant="raw",
+                    challenger_min_delta=self.adaptive_raw_delta,
+                )
+
         return {
-            "ranked_products": self._rank_vectorized_product_scores(
-                image_rankings,
-                top_k=max(int(top_k or 1), 1),
-            )
+            "ranked_products": ranked_products,
+            "fast_rank": True,
         }
 
     @staticmethod

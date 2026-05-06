@@ -2017,11 +2017,6 @@ def search_similar():
                         release_live_search_slot()
                 except Exception:
                     pass
-                try:
-                    if os.path.exists(image_path):
-                        os.unlink(image_path)
-                except Exception:
-                    pass
                 retrieval_elapsed = time.perf_counter() - retrieval_started_at
                 log_search_similar_no_match(
                     logger,
