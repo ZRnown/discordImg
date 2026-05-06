@@ -5,6 +5,7 @@ from collections import OrderedDict
 import hashlib
 import json
 import logging
+import numpy as np
 import os
 import re
 from statistics import mean
@@ -985,6 +986,30 @@ def _parse_json_list(raw_value: Any) -> Optional[List[Any]]:
     return None
 
 
+def _parse_json_float_array(raw_value: Any) -> Any:
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, np.ndarray):
+        return raw_value.astype(np.float32, copy=False).flatten()
+    if isinstance(raw_value, str):
+        stripped = raw_value.strip()
+        if not stripped:
+            return None
+        if stripped.startswith("[") and stripped.endswith("]"):
+            stripped = stripped[1:-1].strip()
+        if stripped and all(char not in stripped for char in "[]{}"):
+            vector = np.fromstring(stripped, sep=",", dtype=np.float32)
+            if vector.size > 0:
+                return vector
+        return _parse_json_list(raw_value)
+    if isinstance(raw_value, list):
+        try:
+            return np.asarray(raw_value, dtype=np.float32).flatten()
+        except Exception:
+            return raw_value
+    return raw_value
+
+
 def _resolve_product_support_manifest_path(raw_path: str) -> str:
     manifest_path = str(raw_path or "").strip()
     if not manifest_path:
@@ -1121,12 +1146,12 @@ def build_catalog_record(
         cache_embedding=(
             retrieval_embedding
             if preserve_cached_arrays and retrieval_embedding not in (None, "", [])
-            else _parse_json_list(retrieval_embedding)
+            else _parse_json_float_array(retrieval_embedding)
         ),
         cache_color_hist=(
             retrieval_color_hist
             if preserve_cached_arrays and retrieval_color_hist not in (None, "", [])
-            else _parse_json_list(retrieval_color_hist)
+            else _parse_json_float_array(retrieval_color_hist)
         ),
         cache_tokens=_parse_json_list(row.get("retrieval_tokens")) or [],
     )

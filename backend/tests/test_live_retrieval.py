@@ -19,6 +19,7 @@ from backend.live_retrieval import (
     backfill_product_image_retrieval_cache,
     build_external_product_support_queries,
     build_catalog_record,
+    _parse_json_float_array,
     build_query_record,
     build_catalog_records,
     load_runtime_product_support_records,
@@ -463,8 +464,10 @@ def test_build_catalog_records_deserializes_siglip2_cache_fields():
     assert len(records) == 1
     assert records[0].cache_strategy_name == "siglip2_rerank"
     assert records[0].cache_version == "siglip2_rerank_v1"
-    assert records[0].cache_embedding == [0.1, 0.2, 0.3]
-    assert records[0].cache_color_hist == [0.4, 0.5, 0.6, 0.7]
+    assert isinstance(records[0].cache_embedding, np.ndarray)
+    assert np.allclose(records[0].cache_embedding, np.array([0.1, 0.2, 0.3], dtype=np.float32))
+    assert isinstance(records[0].cache_color_hist, np.ndarray)
+    assert np.allclose(records[0].cache_color_hist, np.array([0.4, 0.5, 0.6, 0.7], dtype=np.float32))
     assert records[0].cache_tokens == ["alpha", "runner"]
 
 
@@ -491,6 +494,14 @@ def test_build_catalog_record_preserves_cached_arrays_for_streaming_search():
     assert record.cache_embedding == "[0.1, 0.2, 0.3]"
     assert record.cache_color_hist == "[0.4, 0.5, 0.6, 0.7]"
     assert record.cache_tokens == ["alpha", "runner"]
+
+
+def test_parse_json_float_array_uses_numpy_fast_path():
+    parsed = _parse_json_float_array("[1.0,2.5,3.25]")
+
+    assert isinstance(parsed, np.ndarray)
+    assert parsed.dtype == np.float32
+    assert np.allclose(parsed, np.array([1.0, 2.5, 3.25], dtype=np.float32))
 
 
 def test_siglip2_cache_deserializers_accept_serialized_float_strings():
