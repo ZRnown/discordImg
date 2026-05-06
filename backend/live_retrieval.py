@@ -2011,6 +2011,42 @@ class LiveImageRetriever:
                 self._scoped_catalog_cache.popitem(last=False)
         return strategy, prepared_catalog
 
+    def _get_cached_scoped_prepared_catalog(
+        self,
+        user_shops: Optional[Sequence[str]],
+    ) -> Optional[Tuple[Any, List[Dict[str, Any]]]]:
+        shop_scope = self._normalize_shop_scope(user_shops)
+        if not shop_scope:
+            return None
+
+        refresh_generation = self._refresh_generation
+        with self._lock:
+            cached = self._scoped_catalog_cache.get(shop_scope)
+            if cached is not None and cached[3] == refresh_generation:
+                self._scoped_catalog_cache.move_to_end(shop_scope)
+                return cached[0], cached[1]
+
+        cached_snapshot = self._load_scoped_prepared_catalog_from_disk(shop_scope)
+        if cached_snapshot is None:
+            return None
+
+        strategy, prepared_catalog, signature = cached_snapshot
+        max_scopes = max(_env_int("LIVE_IMAGE_SEARCH_SCOPED_CATALOG_CACHE_SCOPES", 8), 1)
+        with self._lock:
+            if refresh_generation != self._refresh_generation:
+                return strategy, prepared_catalog
+            self._strategy = strategy
+            self._scoped_catalog_cache[shop_scope] = (
+                strategy,
+                prepared_catalog,
+                signature,
+                refresh_generation,
+            )
+            self._scoped_catalog_cache.move_to_end(shop_scope)
+            while len(self._scoped_catalog_cache) > max_scopes:
+                self._scoped_catalog_cache.popitem(last=False)
+        return strategy, prepared_catalog
+
     def load_scoped_prepared_catalog_if_cached(
         self,
         user_shops: Optional[Sequence[str]],
@@ -2235,23 +2271,25 @@ class LiveImageRetriever:
         cancel_event: Optional[Any] = None,
     ) -> Dict[str, Any]:
         strategy = self._get_strategy_instance()
-        if self._supports_streaming_search(strategy):
-            return self._search_streaming(
-                image_path=image_path,
-                query_text=query_text,
-                top_k=top_k,
-                threshold=threshold,
-                user_shops=user_shops,
-                cancel_event=cancel_event,
-            )
-
         with self._lock:
             has_global_catalog = self._has_active_catalog_locked()
         if has_global_catalog:
             strategy, prepared_catalog = self._ensure_prepared_catalog()
             scoped_catalog = None
         else:
-            scoped_catalog = self._ensure_scoped_prepared_catalog(user_shops)
+            if self._supports_streaming_search(strategy):
+                scoped_catalog = self._get_cached_scoped_prepared_catalog(user_shops)
+                if scoped_catalog is None:
+                    return self._search_streaming(
+                        image_path=image_path,
+                        query_text=query_text,
+                        top_k=top_k,
+                        threshold=threshold,
+                        user_shops=user_shops,
+                        cancel_event=cancel_event,
+                    )
+            else:
+                scoped_catalog = self._ensure_scoped_prepared_catalog(user_shops)
             if scoped_catalog is None:
                 strategy, prepared_catalog = self._ensure_prepared_catalog()
             else:
