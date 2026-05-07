@@ -1174,6 +1174,7 @@ def test_live_image_retriever_reuses_scoped_catalog_for_same_shop_scope(monkeypa
     )
 
     retriever = LiveImageRetriever(FakeDB(), "siglip2_rerank")
+    retriever._ensure_scoped_prepared_catalog(["shop-allowed"])
     first = retriever.search(
         "/tmp/query-a.jpg",
         query_text="ignored",
@@ -1256,6 +1257,7 @@ def test_live_image_retriever_loads_scoped_catalog_from_disk_cache(tmp_path, mon
 
     first_db = FakeDB()
     first_retriever = LiveImageRetriever(first_db, "siglip2_rerank")
+    first_retriever._ensure_scoped_prepared_catalog(["shop-allowed"])
     first = first_retriever.search(
         "/tmp/query-a.jpg",
         top_k=1,
@@ -1265,6 +1267,7 @@ def test_live_image_retriever_loads_scoped_catalog_from_disk_cache(tmp_path, mon
 
     second_db = FakeDB()
     second_retriever = LiveImageRetriever(second_db, "siglip2_rerank")
+    assert second_retriever.load_scoped_prepared_catalog_if_cached(["shop-allowed"]) is True
     second = second_retriever.search(
         "/tmp/query-b.jpg",
         top_k=1,
@@ -1358,6 +1361,52 @@ def test_live_image_retriever_prefers_scoped_cache_when_streaming_is_enabled(tmp
     assert second_db.iter_calls == []
 
 
+def test_live_image_retriever_prepares_missing_scoped_catalog_in_background(tmp_path, monkeypatch):
+    class FakeDB:
+        def __init__(self):
+            self.materialized_calls = []
+
+        def get_searchable_product_image_records_signature(self, **kwargs):
+            return {
+                "count": 1,
+                "max_image_db_id": 11,
+                "max_product_id": 2001,
+                "max_product_updated_at": "2026-05-06 00:00:00",
+                "max_cache_updated_at": "2026-05-06 00:00:01",
+            }
+
+        def get_searchable_product_image_records(self, **kwargs):
+            self.materialized_calls.append(kwargs)
+            return []
+
+    class FakeStrategy:
+        def supports_streaming_live_search(self):
+            return False
+
+    monkeypatch.setattr(
+        "backend.live_retrieval.get_retrieval_strategy_instance",
+        lambda *args, **kwargs: FakeStrategy(),
+    )
+    monkeypatch.setenv("LIVE_IMAGE_SEARCH_SCOPED_CATALOG_DISK_CACHE_DIR", str(tmp_path))
+
+    retriever = LiveImageRetriever(FakeDB(), "siglip2_rerank")
+    monkeypatch.setattr(
+        retriever,
+        "_start_scoped_catalog_prepare_in_background",
+        lambda _user_shops: True,
+    )
+
+    with pytest.raises(LiveCatalogPreparingError):
+        retriever.search(
+            "/tmp/query.jpg",
+            top_k=1,
+            threshold=0.0,
+            user_shops=["shop-allowed"],
+        )
+
+    assert retriever.db.materialized_calls == []
+
+
 def test_live_image_retriever_reuses_query_context_for_same_image_bytes(tmp_path, monkeypatch):
     class FakeDB:
         def get_searchable_product_image_records_signature(self, **kwargs):
@@ -1419,6 +1468,7 @@ def test_live_image_retriever_reuses_query_context_for_same_image_bytes(tmp_path
     )
 
     retriever = LiveImageRetriever(FakeDB(), "siglip2_rerank")
+    retriever._ensure_scoped_prepared_catalog(["shop-allowed"])
     retriever.search(
         str(query_a),
         top_k=1,

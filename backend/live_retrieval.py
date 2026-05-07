@@ -2439,18 +2439,31 @@ class LiveImageRetriever:
             strategy, prepared_catalog = self._ensure_prepared_catalog()
             scoped_catalog = None
         else:
-            if self._supports_streaming_search(strategy):
+            shop_scope = self._normalize_shop_scope(user_shops)
+            if shop_scope:
                 scoped_catalog = self._get_cached_scoped_prepared_catalog(user_shops)
                 if scoped_catalog is None:
-                    if self._normalize_shop_scope(user_shops):
-                        started = self._start_scoped_catalog_prepare_in_background(user_shops)
-                        if started:
-                            raise LiveCatalogPreparingError(
-                                f"Scoped live retrieval catalog is preparing: strategy={self.strategy_name}"
-                            )
+                    started = self._start_scoped_catalog_prepare_in_background(user_shops)
+                    if started:
                         raise LiveCatalogPreparingError(
-                            f"Scoped live retrieval catalog is already preparing: strategy={self.strategy_name}"
+                            f"Scoped live retrieval catalog is preparing: strategy={self.strategy_name}"
                         )
+                    raise LiveCatalogPreparingError(
+                        f"Scoped live retrieval catalog is already preparing: strategy={self.strategy_name}"
+                    )
+            elif self._supports_streaming_search(strategy):
+                return self._search_streaming(
+                    image_path=image_path,
+                    query_text=query_text,
+                    top_k=top_k,
+                    threshold=threshold,
+                    user_shops=user_shops,
+                    cancel_event=cancel_event,
+                )
+            else:
+                scoped_catalog = self._ensure_scoped_prepared_catalog(user_shops)
+            if scoped_catalog is None:
+                if self._supports_streaming_search(strategy):
                     return self._search_streaming(
                         image_path=image_path,
                         query_text=query_text,
@@ -2459,9 +2472,6 @@ class LiveImageRetriever:
                         user_shops=user_shops,
                         cancel_event=cancel_event,
                     )
-            else:
-                scoped_catalog = self._ensure_scoped_prepared_catalog(user_shops)
-            if scoped_catalog is None:
                 strategy, prepared_catalog = self._ensure_prepared_catalog()
             else:
                 strategy, prepared_catalog = scoped_catalog
