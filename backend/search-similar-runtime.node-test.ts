@@ -11,9 +11,10 @@ test('search timeout releases the live search slot and propagates cancellation',
   assert.equal(source.includes('release_live_search_slot()'), true)
 })
 
-test('production queue timeout is short so Discord image handlers do not pile up', () => {
+test('production queue timeout lets cached image searches wait without reaching Discord handler timeout', () => {
   const source = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
 
   assert.equal(source.includes('LIVE_IMAGE_SEARCH_MAX_INFLIGHT: "1"'), true)
-  assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_TIMEOUT_SECONDS: "1.0"'), true)
+  assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_TIMEOUT_SECONDS: "20.0"'), true)
+  assert.equal(source.includes('LIVE_IMAGE_SEARCH_EXECUTION_TIMEOUT_SECONDS: "30.0"'), true)
 })
