@@ -361,6 +361,7 @@ def test_siglip2_fast_rank_matches_standard_score_path(monkeypatch):
     strategy.stage2_support_stats_enabled = False
     strategy.query_fusion_enabled = False
     strategy.fast_rank_cache_scopes = 4
+    strategy.fast_rank_candidate_k = 0
     strategy._fast_rank_cache = OrderedDict()
     strategy._fast_rank_cache_catalog_keys = {}
     strategy._fast_rank_cache_lock = type("NoopLock", (), {
@@ -439,6 +440,64 @@ def test_siglip2_fast_rank_matches_standard_score_path(monkeypatch):
         [item["score"] for item in fast_payload["ranked_products"]],
         [item["score"] for item in standard_payload["ranked_products"]],
     )
+
+
+def test_siglip2_fast_rank_prunes_to_image_candidate_set(monkeypatch):
+    monkeypatch.setenv("SIGLIP2_RERANK_PRODUCT_SUPPORT_ENABLED", "0")
+    monkeypatch.setenv("SIGLIP2_RERANK_ADAPTIVE_RAW_CENTER", "0")
+    monkeypatch.setenv("SIGLIP2_RERANK_QUERY_FUSION", "0")
+    strategy = Siglip2RerankStrategy.__new__(Siglip2RerankStrategy)
+    strategy.image_weight = 1.0
+    strategy.color_weight = 0.0
+    strategy.text_weight = 0.0
+    strategy.category_weight = 0.0
+    strategy.bonus_score = 0.0
+    strategy.bonus_text_gate = 0.5
+    strategy.bonus_image_gate = 0.5
+    strategy.product_support_enabled = False
+    strategy.adaptive_raw_center_enabled = False
+    strategy.stage2_ridge_enabled = False
+    strategy.stage2_hard_negative_enabled = False
+    strategy.stage2_query_pair_enabled = False
+    strategy.stage2_dynamic_cluster_enabled = False
+    strategy.stage2_query_cluster_enabled = False
+    strategy.stage2_targeted_support_enabled = False
+    strategy.stage2_targeted_cluster_enabled = False
+    strategy.stage2_targeted_pair_enabled = False
+    strategy.stage2_support_stats_enabled = False
+    strategy.query_fusion_enabled = False
+    strategy.fast_rank_cache_scopes = 4
+    strategy.fast_rank_candidate_k = 2
+    strategy._fast_rank_cache = OrderedDict()
+    strategy._fast_rank_cache_catalog_keys = {}
+    strategy._fast_rank_cache_lock = type("NoopLock", (), {
+        "__enter__": lambda self: self,
+        "__exit__": lambda self, *_args: None,
+    })()
+    prepared = [
+        {
+            "record": LiveCatalogImageRecord(
+                product_id=str(product_id),
+                title=str(product_id),
+                english_title="",
+                description="",
+                shop_name="shop-a",
+                image_path=f"/tmp/{product_id}.jpg",
+                image_index=0,
+            ),
+            "context": {"embedding": np.array([score, 0.0], dtype=np.float32)},
+        }
+        for product_id, score in [("1001", 0.1), ("1002", 0.9), ("1003", 0.8)]
+    ]
+
+    fast_payload = strategy.rank_products_fast(
+        query_context={"embedding": np.array([1.0, 0.0], dtype=np.float32)},
+        prepared_catalog=prepared,
+        top_k=3,
+    )
+
+    assert fast_payload is not None
+    assert [item["product_id"] for item in fast_payload["ranked_products"]] == ["1002", "1003"]
 
 
 def test_build_catalog_records_deserializes_siglip2_cache_fields():

@@ -1294,6 +1294,10 @@ class Siglip2RerankStrategy:
             "SIGLIP2_RERANK_FAST_RANK_CACHE_SCOPES",
             4,
         )
+        self.fast_rank_candidate_k = _load_non_negative_env_int(
+            "SIGLIP2_RERANK_FAST_RANK_CANDIDATE_K",
+            8192,
+        )
         self._fast_rank_cache = OrderedDict()
         self._fast_rank_cache_catalog_keys = {}
         self._fast_rank_cache_lock = Lock()
@@ -1858,6 +1862,8 @@ class Siglip2RerankStrategy:
             if not product_id or index >= score_array.size:
                 continue
             score = float(score_array[index])
+            if not np.isfinite(score):
+                continue
             state = product_state.get(product_id)
             if state is None:
                 state = {
@@ -1970,6 +1976,14 @@ class Siglip2RerankStrategy:
         bonus_image_gate = float(getattr(self, "bonus_image_gate", 0.5))
 
         image_scores = matrix @ query_vector
+        candidate_k = max(int(getattr(self, "fast_rank_candidate_k", 0) or 0), 0)
+        candidate_indices = None
+        if candidate_k > 0 and image_scores.size > candidate_k:
+            candidate_indices = np.argpartition(image_scores, -candidate_k)[-candidate_k:]
+            candidate_indices = np.asarray(candidate_indices, dtype=np.int64)
+            active_image_scores = image_scores[candidate_indices]
+        else:
+            active_image_scores = image_scores
         final_scores = image_scores.astype(np.float32, copy=True) * image_weight
         total_weights = np.full(final_scores.shape, image_weight, dtype=np.float32)
 
@@ -1989,6 +2003,18 @@ class Siglip2RerankStrategy:
                 and hist_matrix.shape[1] == query_hist_vector.size
                 and len(hist_indices) == hist_matrix.shape[0]
             ):
+                if candidate_indices is not None:
+                    candidate_set = set(int(index) for index in candidate_indices.tolist())
+                    hist_mask = np.asarray(
+                        [int(index) in candidate_set for index in hist_indices],
+                        dtype=bool,
+                    )
+                    if not np.any(hist_mask):
+                        hist_matrix = None
+                    else:
+                        hist_indices = hist_indices[hist_mask]
+                        hist_matrix = hist_matrix[hist_mask]
+            if hist_matrix is not None:
                 query_centered = query_hist_vector - float(query_hist_vector.mean())
                 hist_centered = hist_matrix - hist_matrix.mean(axis=1, keepdims=True)
                 denom = np.linalg.norm(hist_centered, axis=1) * float(np.linalg.norm(query_centered))
@@ -2009,7 +2035,16 @@ class Siglip2RerankStrategy:
             query_token_set = set(query_tokens)
             query_token_count = float(len(query_token_set))
             if query_token_count > 0:
-                for index, catalog_tokens in enumerate(catalog_contexts.get("token_sets") or []):
+                token_sets = catalog_contexts.get("token_sets") or []
+                text_iterable = (
+                    candidate_indices.tolist()
+                    if candidate_indices is not None
+                    else range(len(token_sets))
+                )
+                for index in text_iterable:
+                    if index >= len(token_sets):
+                        continue
+                    catalog_tokens = token_sets[index]
                     if not catalog_tokens:
                         continue
                     text_score = len(query_token_set & set(catalog_tokens)) / query_token_count
@@ -2019,7 +2054,16 @@ class Siglip2RerankStrategy:
 
         query_category = str(query_context.get("category") or "").strip()
         if query_category and category_weight > 0:
-            for index, raw_category in enumerate(catalog_contexts.get("categories") or []):
+            categories = catalog_contexts.get("categories") or []
+            category_iterable = (
+                candidate_indices.tolist()
+                if candidate_indices is not None
+                else range(len(categories))
+            )
+            for index in category_iterable:
+                if index >= len(categories):
+                    continue
+                raw_category = categories[index]
                 catalog_category = str(raw_category or "").strip()
                 if not catalog_category:
                     continue
@@ -2038,6 +2082,11 @@ class Siglip2RerankStrategy:
             bonus_mask = (text_scores > bonus_text_gate) & (image_scores > bonus_image_gate)
             final_scores[bonus_mask] += bonus_score
         final_scores = np.minimum(final_scores, 1.0)
+
+        if candidate_indices is not None:
+            pruned_scores = np.full(final_scores.shape, -np.inf, dtype=np.float32)
+            pruned_scores[candidate_indices] = final_scores[candidate_indices]
+            final_scores = pruned_scores
 
         return self._rank_precomputed_product_scores(
             final_scores,

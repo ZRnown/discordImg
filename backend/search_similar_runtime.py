@@ -10,6 +10,12 @@ class SearchExecutionTimeoutError(TimeoutError):
         super().__init__(f"search execution timed out after {self.timeout_seconds:.2f}s")
 
 
+class SearchQueueTimeoutError(TimeoutError):
+    def __init__(self, timeout_seconds: float):
+        self.timeout_seconds = max(float(timeout_seconds or 0.0), 0.0)
+        super().__init__(f"search queue timed out after {self.timeout_seconds:.2f}s")
+
+
 def run_with_timeout(
     func: Callable[[], Any],
     timeout_seconds: float,

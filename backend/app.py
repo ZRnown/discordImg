@@ -151,15 +151,24 @@ except ModuleNotFoundError as e:
     else:
         raise
 try:
-    from live_search_runtime import LiveSearchConcurrencyGate
+    from live_search_runtime import (
+        LiveSearchConcurrencyGate,
+        LiveSearchQueueTimeoutError,
+        LiveSearchTaskRunner,
+    )
 except ModuleNotFoundError as e:
     if e.name == 'live_search_runtime':
-        from .live_search_runtime import LiveSearchConcurrencyGate
+        from .live_search_runtime import (
+            LiveSearchConcurrencyGate,
+            LiveSearchQueueTimeoutError,
+            LiveSearchTaskRunner,
+        )
     else:
         raise
 try:
     from search_similar_runtime import (
         SearchExecutionTimeoutError,
+        SearchQueueTimeoutError,
         log_search_similar_no_match,
         run_with_timeout,
     )
@@ -167,6 +176,7 @@ except ModuleNotFoundError as e:
     if e.name == 'search_similar_runtime':
         from .search_similar_runtime import (
             SearchExecutionTimeoutError,
+            SearchQueueTimeoutError,
             log_search_similar_no_match,
             run_with_timeout,
         )
@@ -272,6 +282,10 @@ AUTO_BACKFILL_THREAD_LOCK = threading.Lock()
 LIVE_SEARCH_REQUEST_GATE = LiveSearchConcurrencyGate(
     getattr(config, 'LIVE_IMAGE_SEARCH_MAX_INFLIGHT', 2)
 )
+LIVE_SEARCH_TASK_RUNNER = LiveSearchTaskRunner(
+    getattr(config, 'LIVE_IMAGE_SEARCH_MAX_INFLIGHT', 2),
+    getattr(config, 'LIVE_IMAGE_SEARCH_QUEUE_MAX_SIZE', 64),
+)
 
 
 def _get_live_search_queue_timeout_seconds() -> float:
@@ -289,6 +303,32 @@ def _get_live_search_execution_timeout_seconds() -> float:
         )
     except (TypeError, ValueError):
         return 30.0
+
+
+def _submit_live_search_task(
+    func,
+    *,
+    queue_timeout_seconds: float,
+    execution_timeout_seconds: float,
+    cancel_event: threading.Event,
+):
+    task = LIVE_SEARCH_TASK_RUNNER.submit(
+        func,
+        cancel_event=cancel_event,
+    )
+    if task is None:
+        raise SearchQueueTimeoutError(0.0)
+    try:
+        return task.wait(
+            queue_timeout_seconds=queue_timeout_seconds,
+            execution_timeout_seconds=execution_timeout_seconds,
+        )
+    except LiveSearchQueueTimeoutError as exc:
+        raise SearchQueueTimeoutError(exc.timeout_seconds) from exc
+    except TimeoutError as exc:
+        if cancel_event is not None:
+            cancel_event.set()
+        raise SearchExecutionTimeoutError(execution_timeout_seconds) from exc
 
 
 def _normalize_message_filter_value(filter_type, filter_value):
@@ -1789,7 +1829,6 @@ def search_similar():
                 logger.debug("No image_url and no uploaded file")
             return jsonify({'error': 'No image provided (url or file)'}), 400
 
-        release_live_search_slot = None
         search_worker_started = False
         try:
             blocked_filter_match = None
@@ -1954,25 +1993,6 @@ def search_similar():
             filter_stage_elapsed = time.perf_counter() - filter_stage_started_at
             retrieval_timeout_seconds = _get_live_search_queue_timeout_seconds()
             search_timeout_seconds = _get_live_search_execution_timeout_seconds()
-            release_live_search_slot = LIVE_SEARCH_REQUEST_GATE.try_acquire(
-                timeout_seconds=retrieval_timeout_seconds
-            )
-            if release_live_search_slot is None:
-                logger.warning(
-                    "search_similar busy: inflight_limit=%s queue_timeout=%.2fs user_id=%s shops=%s",
-                    getattr(LIVE_SEARCH_REQUEST_GATE, 'max_inflight', 0),
-                    retrieval_timeout_seconds,
-                    user_id,
-                    user_shops,
-                )
-                return jsonify(
-                    {
-                        'error': 'search busy',
-                        'retryable': True,
-                        'message': '图搜服务繁忙，请稍后重试',
-                    }
-                ), 503
-
             retrieval_started_at = time.perf_counter()
             search_worker_started = True
             search_cancel_event = threading.Event()
@@ -1987,15 +2007,21 @@ def search_similar():
                             user_shops=user_shops,
                             cancel_event=search_cancel_event,
                         )
-                    finally:
-                        try:
-                            release_live_search_slot()
-                        except Exception:
-                            pass
+                    except TypeError as exc:
+                        if "cancel_event" not in str(exc):
+                            raise
+                        return retriever.search(
+                            image_path=image_path,
+                            query_text=query_text,
+                            top_k=limit,
+                            threshold=threshold,
+                            user_shops=user_shops,
+                        )
 
-                retrieval_result = run_with_timeout(
+                retrieval_result = _submit_live_search_task(
                     _run_live_retrieval,
-                    search_timeout_seconds,
+                    queue_timeout_seconds=retrieval_timeout_seconds,
+                    execution_timeout_seconds=search_timeout_seconds,
                     cancel_event=search_cancel_event,
                 )
             except live_retrieval_module.LiveCatalogPreparingError:
@@ -2011,12 +2037,23 @@ def search_similar():
                         'message': '图搜服务预热中，请稍后重试',
                     }
                 ), 503
+            except SearchQueueTimeoutError:
+                logger.warning(
+                    "search_similar busy: worker_limit=%s queue_limit=%s queue_timeout=%.2fs user_id=%s shops=%s",
+                    getattr(LIVE_SEARCH_TASK_RUNNER, 'max_workers', 0),
+                    getattr(LIVE_SEARCH_TASK_RUNNER, 'max_queue_size', 0),
+                    retrieval_timeout_seconds,
+                    user_id,
+                    user_shops,
+                )
+                return jsonify(
+                    {
+                        'error': 'search busy',
+                        'retryable': True,
+                        'message': '图搜服务繁忙，请稍后重试',
+                    }
+                ), 503
             except SearchExecutionTimeoutError:
-                try:
-                    if release_live_search_slot is not None:
-                        release_live_search_slot()
-                except Exception:
-                    pass
                 retrieval_elapsed = time.perf_counter() - retrieval_started_at
                 log_search_similar_no_match(
                     logger,
@@ -2225,12 +2262,6 @@ def search_similar():
             return jsonify(response_data)
 
         finally:
-            if not search_worker_started:
-                try:
-                    if release_live_search_slot is not None:
-                        release_live_search_slot()
-                except Exception:
-                    pass
             try:
                 if os.path.exists(image_path):
                     os.unlink(image_path)
