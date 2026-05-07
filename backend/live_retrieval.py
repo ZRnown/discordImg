@@ -149,6 +149,17 @@ def _env_int(name: str, default: int) -> int:
     return value if value >= 0 else int(default)
 
 
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None:
+        return float(default)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return float(default)
+    return value if value >= 0 else float(default)
+
+
 def _resolve_auto_support_output_dir(raw_path: str = "") -> str:
     output_dir = str(raw_path or "").strip()
     if output_dir:
@@ -1624,6 +1635,115 @@ class LiveImageRetriever:
         self._catalog_refresh_required = True
         self._prepare_inflight = False
         self._refresh_generation = 0
+        self._query_context_cache: OrderedDict[Tuple[Any, ...], Tuple[float, Dict[str, Any]]] = OrderedDict()
+        self._query_context_cache_lock = Lock()
+
+    @staticmethod
+    def _clone_query_context_value(value: Any) -> Any:
+        if isinstance(value, np.ndarray):
+            return value.copy()
+        if isinstance(value, dict):
+            return {
+                key: LiveImageRetriever._clone_query_context_value(inner_value)
+                for key, inner_value in value.items()
+            }
+        if isinstance(value, list):
+            return [LiveImageRetriever._clone_query_context_value(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(LiveImageRetriever._clone_query_context_value(item) for item in value)
+        if isinstance(value, set):
+            return set(value)
+        return value
+
+    @classmethod
+    def _clone_query_context(cls, query_context: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            key: cls._clone_query_context_value(value)
+            for key, value in (query_context or {}).items()
+        }
+
+    @staticmethod
+    def _build_query_context_cache_key(
+        image_path: str,
+        query_text: str,
+    ) -> Optional[Tuple[Any, ...]]:
+        resolved_path = str(image_path or "").strip()
+        if not resolved_path or not os.path.exists(resolved_path):
+            return None
+        try:
+            stat_result = os.stat(resolved_path)
+            digest = hashlib.sha1()
+            with open(resolved_path, "rb") as image_file:
+                while True:
+                    chunk = image_file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+        except OSError:
+            return None
+        return (
+            "LiveImageRetriever",
+            int(stat_result.st_size),
+            digest.hexdigest(),
+            str(query_text or ""),
+        )
+
+    def _get_cached_query_context(
+        self,
+        image_path: str,
+        query_text: str,
+    ) -> Optional[Dict[str, Any]]:
+        ttl_seconds = _env_float("LIVE_IMAGE_SEARCH_QUERY_CONTEXT_CACHE_TTL_SECONDS", 30.0)
+        max_entries = max(_env_int("LIVE_IMAGE_SEARCH_QUERY_CONTEXT_CACHE_MAX_ENTRIES", 64), 0)
+        if ttl_seconds <= 0 or max_entries <= 0:
+            return None
+
+        cache_key = self._build_query_context_cache_key(image_path, query_text)
+        if cache_key is None:
+            return None
+
+        now = perf_counter()
+        with self._query_context_cache_lock:
+            expired_keys = [
+                key
+                for key, (expires_at, _payload) in self._query_context_cache.items()
+                if expires_at <= now
+            ]
+            for key in expired_keys:
+                self._query_context_cache.pop(key, None)
+
+            cached = self._query_context_cache.get(cache_key)
+            if cached is None:
+                return None
+            expires_at, payload = cached
+            if expires_at <= now:
+                self._query_context_cache.pop(cache_key, None)
+                return None
+            self._query_context_cache.move_to_end(cache_key)
+            return self._clone_query_context(payload)
+
+    def _store_cached_query_context(
+        self,
+        image_path: str,
+        query_text: str,
+        query_context: Dict[str, Any],
+    ) -> None:
+        ttl_seconds = _env_float("LIVE_IMAGE_SEARCH_QUERY_CONTEXT_CACHE_TTL_SECONDS", 30.0)
+        max_entries = max(_env_int("LIVE_IMAGE_SEARCH_QUERY_CONTEXT_CACHE_MAX_ENTRIES", 64), 0)
+        if ttl_seconds <= 0 or max_entries <= 0:
+            return
+
+        cache_key = self._build_query_context_cache_key(image_path, query_text)
+        if cache_key is None:
+            return
+
+        expires_at = perf_counter() + ttl_seconds
+        payload = self._clone_query_context(query_context)
+        with self._query_context_cache_lock:
+            self._query_context_cache[cache_key] = (expires_at, payload)
+            self._query_context_cache.move_to_end(cache_key)
+            while len(self._query_context_cache) > max_entries:
+                self._query_context_cache.popitem(last=False)
 
     def _load_catalog_rows(self) -> List[Dict[str, Any]]:
         return list(
@@ -2348,7 +2468,11 @@ class LiveImageRetriever:
         query_record = build_query_record(image_path=image_path, query_text=query_text)
         started_at = perf_counter()
         query_prepare_started_at = perf_counter()
-        query_context = strategy.prepare_query_image(query_record)
+        query_context = self._get_cached_query_context(image_path, query_text)
+        query_context_cache_hit = query_context is not None
+        if query_context is None:
+            query_context = strategy.prepare_query_image(query_record)
+            self._store_cached_query_context(image_path, query_text, query_context)
         query_prepare_elapsed = perf_counter() - query_prepare_started_at
         rank_started_at = perf_counter()
         ranked_products = rank_query_products(
@@ -2367,7 +2491,7 @@ class LiveImageRetriever:
         total_elapsed = perf_counter() - started_at
         if total_elapsed >= 5.0:
             logger.warning(
-                "Live retrieval cached search slow: strategy=%s total=%.2fs query_prepare=%.2fs rank=%.2fs catalog_size=%s result_count=%s scoped=%s shops=%s",
+                "Live retrieval cached search slow: strategy=%s total=%.2fs query_prepare=%.2fs rank=%.2fs catalog_size=%s result_count=%s scoped=%s query_cache_hit=%s shops=%s",
                 self.strategy_name,
                 total_elapsed,
                 query_prepare_elapsed,
@@ -2375,6 +2499,7 @@ class LiveImageRetriever:
                 len(prepared_catalog),
                 len(ranked_products),
                 scoped_catalog is not None,
+                query_context_cache_hit,
                 list(user_shops or []),
             )
         return {
