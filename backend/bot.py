@@ -5330,9 +5330,8 @@ class DiscordBotClient(discord.Client):
             MESSAGE_FORWARD_TIMEOUT_SECONDS,
         )
 
-        # 处理关键词搜索。图文同发时只走文字关键词路径，避免图片预热阻塞关键词回复。
+        # 处理关键词搜索。图文同发时仍继续处理附件图片，避免错过以图搜图。
         keyword_search_hit = False
-        message_has_text_content = bool((getattr(message, 'content', '') or '').strip())
         if keyword_reply_enabled:
             keyword_search_hit = bool(await self._run_message_stage_with_timeout(
                 message,
@@ -5346,14 +5345,7 @@ class DiscordBotClient(discord.Client):
             ))
 
         # 处理图片
-        if image_reply_enabled and message.attachments and not keyword_search_hit:
-            if message_has_text_content and keyword_reply_enabled:
-                logger.info(
-                    '⏭️ 图文消息已处理文字关键词路径，跳过图片识别: message_id=%s channel_id=%s',
-                    getattr(message, 'id', None),
-                    getattr(getattr(message, 'channel', None), 'id', None),
-                )
-                return
+        if image_reply_enabled and message.attachments:
             if self._should_filter_message(message):
                 return
             for attachment in message.attachments:
