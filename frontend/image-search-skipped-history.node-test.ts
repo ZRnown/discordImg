@@ -79,7 +79,7 @@ test('accounts view scopes cached settings by current logged-in user', () => {
   assert.equal(source.includes('currentUser?.id'), true)
 })
 
-test('production image search weights keep CPU-safe query fusion with margin gate', () => {
+test('production image search weights keep CPU-safe query fusion without margin gate', () => {
   const source = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
 
   assert.equal(source.includes('SIGLIP2_RERANK_IMAGE_WEIGHT: "0.80"'), true)
@@ -88,5 +88,5 @@ test('production image search weights keep CPU-safe query fusion with margin gat
   assert.equal(source.includes('SIGLIP2_RERANK_QUERY_RAW_WEIGHT: "0.30"'), true)
   assert.equal(source.includes('SIGLIP2_RERANK_QUERY_CENTER_WEIGHT: "0.70"'), true)
   assert.equal(source.includes('SIGLIP2_RERANK_QUERY_YOLO_WEIGHT: "0.00"'), true)
-  assert.equal(source.includes('DISCORD_IMAGE_REPLY_MIN_TOP1_MARGIN: "0.03"'), true)
+  assert.equal(source.includes('DISCORD_IMAGE_REPLY_MIN_TOP1_MARGIN: "0.00"'), true)
 })
