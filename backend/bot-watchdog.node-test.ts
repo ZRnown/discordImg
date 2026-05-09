@@ -29,3 +29,19 @@ test('watchdog does not restart a ready client only because its startup future i
   assert.match(collectSource, /task_done/)
   assert.doesNotMatch(collectSource, /if _task_done\(runtime_entry\.get\("task"\)\):\n\s+reason = "task_done"/)
 })
+
+test('watchdog uses a longer retry interval for failed startup tasks', () => {
+  const watchdogSource = readSource()
+  const appCandidates = [
+    path.join(process.cwd(), 'backend/app.py'),
+    path.join(process.cwd(), 'app.py'),
+  ]
+  const appPath = appCandidates.find((candidate) => existsSync(candidate))
+  assert.ok(appPath, `Could not find app.py in: ${appCandidates.join(', ')}`)
+  const appSource = readFileSync(appPath, 'utf8')
+
+  assert.match(watchdogSource, /task_done_restart_interval_seconds/)
+  assert.match(watchdogSource, /reason == "task_done"/)
+  assert.match(appSource, /BOT_WATCHDOG_TASK_DONE_RESTART_INTERVAL_SECONDS/)
+  assert.match(appSource, /task_done_restart_interval_seconds=BOT_WATCHDOG_TASK_DONE_RESTART_INTERVAL_SECONDS/)
+})

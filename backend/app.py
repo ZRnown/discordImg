@@ -686,6 +686,10 @@ BOT_WATCHDOG_RESTART_INTERVAL_SECONDS = max(
     float(getattr(config, 'DISCORD_WATCHDOG_RESTART_INTERVAL_SECONDS', 8.0) or 8.0),
     5.0,
 )
+BOT_WATCHDOG_TASK_DONE_RESTART_INTERVAL_SECONDS = max(
+    float(getattr(config, 'DISCORD_WATCHDOG_TASK_DONE_RESTART_INTERVAL_SECONDS', 300.0) or 300.0),
+    BOT_WATCHDOG_RESTART_INTERVAL_SECONDS,
+)
 BOT_WATCHDOG_DISCONNECTED_GRACE_SECONDS = max(
     float(getattr(config, 'DISCORD_WATCHDOG_DISCONNECTED_GRACE_SECONDS', 8.0) or 8.0),
     5.0,
@@ -767,6 +771,7 @@ def restart_unhealthy_discord_bots():
                 now_monotonic=now_monotonic,
                 restart_attempt_timestamps=bot_watchdog_restart_attempt_timestamps,
                 min_restart_interval_seconds=BOT_WATCHDOG_RESTART_INTERVAL_SECONDS,
+                task_done_restart_interval_seconds=BOT_WATCHDOG_TASK_DONE_RESTART_INTERVAL_SECONDS,
                 disconnected_grace_seconds=BOT_WATCHDOG_DISCONNECTED_GRACE_SECONDS,
             )
             if not candidates:
