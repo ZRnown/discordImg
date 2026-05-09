@@ -122,12 +122,14 @@ def collect_watchdog_restart_candidates(
         if runtime_entry is None:
             reason = "missing_runtime"
         else:
-            if _task_done(runtime_entry.get("task")):
-                reason = "task_done"
-            elif _client_closed(runtime_entry.get("client")):
+            client = runtime_entry.get("client")
+            client_ready = _client_ready(client)
+            if _client_closed(client):
                 reason = "client_closed"
+            elif _task_done(runtime_entry.get("task")) and client_ready is not True:
+                reason = "task_done"
             elif _client_reconnect_stalled(
-                runtime_entry.get("client"),
+                client,
                 now_monotonic=now,
                 disconnected_grace_seconds=disconnected_grace_seconds,
             ):
