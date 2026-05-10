@@ -1498,6 +1498,49 @@ def filter_forum_channel_configs_for_message(
     return filtered_configs
 
 
+def _is_forum_post_starter_message(message):
+    channel = getattr(message, 'channel', None)
+    if _resolve_forum_parent_channel_id(channel) is None:
+        return False
+
+    message_id = _coerce_int(getattr(message, 'id', None), None)
+    if message_id is None:
+        return False
+
+    starter_message = getattr(channel, 'starter_message', None)
+    starter_message_id = _coerce_int(getattr(starter_message, 'id', None), None)
+    if starter_message_id is not None:
+        return starter_message_id == message_id
+
+    starter_message_id = _coerce_int(getattr(channel, 'starter_message_id', None), None)
+    if starter_message_id is not None:
+        return starter_message_id == message_id
+
+    # Forum post channels are created from the starter message; for many selfbot
+    # message objects the post channel id equals the starter message id.
+    channel_id = _coerce_int(getattr(channel, 'id', None), None)
+    return channel_id == message_id
+
+
+def _build_forum_post_search_text(message):
+    parts = []
+    if _is_forum_post_starter_message(message):
+        title = str(getattr(getattr(message, 'channel', None), 'name', '') or '').strip()
+        if title:
+            parts.append(title)
+
+    content = str(
+        getattr(message, 'clean_content', None)
+        or getattr(message, 'content', None)
+        or ''
+    ).strip()
+    if content:
+        parts.append(content)
+
+    search_text = re.sub(r'\s+', ' ', ' '.join(parts)).strip()
+    return search_text
+
+
 def _build_product_keyword_variants(raw_value: str):
     return _shared_build_product_keyword_variants(raw_value)
 
@@ -5614,10 +5657,12 @@ class DiscordBotClient(discord.Client):
 
                 # 传入用户店铺权限，避免 A 店铺命中结果串到 B 店铺
                 scoped_user_shops = self.user_shops if self.user_shops else None
+                image_query_text = _build_forum_post_search_text(message)
                 result = await self.recognize_image(
                     image_data,
                     user_shops=scoped_user_shops,
                     threshold=0.0,
+                    query_text=image_query_text,
                 )
 
                 logger.debug(f"🔓 释放AI并发锁")
@@ -5866,10 +5911,11 @@ class DiscordBotClient(discord.Client):
         """处理关键词商品搜索"""
         keyword_triggered = False
         try:
-            if not message.content:
+            search_query = _build_forum_post_search_text(message)
+            if not search_query:
                 return False
 
-            search_query = message.content.strip()
+            search_query = search_query.strip()
             if not search_query:
                 return False
 
@@ -6486,7 +6532,7 @@ class DiscordBotClient(discord.Client):
             )
             return None
 
-    async def recognize_image(self, image_data, user_shops=None, threshold=None):
+    async def recognize_image(self, image_data, user_shops=None, threshold=None, query_text=None):
         try:
             # 与图片消息阶段超时保持一致，避免内部请求先于外层保护提前中断。
             timeout = aiohttp.ClientTimeout(total=IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS)
@@ -6524,6 +6570,9 @@ class DiscordBotClient(discord.Client):
                         form.add_field('user_id', str(self.user_id))
                     if user_shops:
                         form.add_field('user_shops', json.dumps(user_shops))
+                    normalized_query_text = re.sub(r'\s+', ' ', str(query_text or '')).strip()
+                    if normalized_query_text:
+                        form.add_field('query_text', normalized_query_text[:500])
                     return form
 
                 for attempt in range(max_attempts):

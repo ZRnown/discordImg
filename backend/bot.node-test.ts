@@ -134,6 +134,17 @@ test('text messages with image attachments still run image recognition after key
   assert.doesNotMatch(onMessageTailSource, /图文消息已处理文字关键词路径，跳过图片识别/)
 })
 
+test('forum post starter uses title and content for keyword and image search', () => {
+  const source = readSource()
+
+  assert.match(source, /def _build_forum_post_search_text\(message\):/)
+  assert.match(source, /getattr\(getattr\(message, 'channel', None\), 'name'/)
+  assert.match(source, /search_query = _build_forum_post_search_text\(message\)/)
+  assert.match(source, /image_query_text = _build_forum_post_search_text\(message\)/)
+  assert.match(source, /query_text=image_query_text/)
+  assert.match(source, /form\.add_field\('query_text', normalized_query_text\[:500\]\)/)
+})
+
 test('thread reply mode falls back to the source channel without creating new threads', () => {
   const source = readSource()
 
