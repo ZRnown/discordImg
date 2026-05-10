@@ -6,6 +6,8 @@ import json
 from time import perf_counter
 from typing import List, Dict, Any, Optional, Sequence, Tuple
 from contextlib import contextmanager
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 try:
     from config import config
 except ImportError:
@@ -35,6 +37,22 @@ MAX_USABLE_RETRIEVAL_EMBEDDING_JSON_LENGTH = 200000
 MAX_USABLE_RETRIEVAL_COLOR_HIST_JSON_LENGTH = 20000
 MAX_USABLE_RETRIEVAL_TOKENS_JSON_LENGTH = 20000
 USABLE_RETRIEVAL_CACHE_INDEX_NAME = 'idx_retrieval_cache_usable_image_strategy'
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+
+
+def _format_sqlite_utc_as_shanghai(value: Any) -> str:
+    """SQLite CURRENT_TIMESTAMP is UTC; return an ISO string with +08:00."""
+    if not value:
+        return ''
+    raw = str(value).strip()
+    if not raw:
+        return ''
+    try:
+        normalized = raw.replace('T', ' ')
+        parsed = datetime.strptime(normalized[:19], '%Y-%m-%d %H:%M:%S')
+        return parsed.replace(tzinfo=timezone.utc).astimezone(SHANGHAI_TZ).isoformat()
+    except Exception:
+        return raw
 
 class Database:
     def __init__(self, db_path: Optional[str] = None):
@@ -2537,7 +2555,7 @@ class Database:
                         'discord_author_id': row['discord_author_id'] or '',
                         'discord_author_name': row['discord_author_name'] or '',
                         'message_content': row['message_content'] or '',
-                        'search_time': row['search_time'],
+                        'search_time': _format_sqlite_utc_as_shanghai(row['search_time']),
                         'title': row['title'],
                         'english_title': row['english_title'],
                         'weidian_url': weidian_url,
@@ -2787,7 +2805,7 @@ class Database:
                         'discord_author_id': row[9] or '',
                         'discord_author_name': row[10] or '',
                         'message_content': row[11] or '',
-                        'created_at': row[12],
+                        'created_at': _format_sqlite_utc_as_shanghai(row[12]),
                         'title': row[13] or '',
                         'english_title': row[14] or '',
                         'weidian_url': row[15] or '',
