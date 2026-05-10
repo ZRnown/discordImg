@@ -1601,12 +1601,21 @@ MESSAGE_FORWARD_TIMEOUT_SECONDS = 15.0
 MESSAGE_KEYWORD_SEARCH_TIMEOUT_SECONDS = 45.0
 MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS = 90.0
 MESSAGE_STAGE_SLOW_SECONDS = max(float(getattr(config, 'DISCORD_MESSAGE_STAGE_SLOW_SECONDS', 5.0) or 5.0), 1.0)
+KEYWORD_TEXT_SEARCH_TIMEOUT_SECONDS = max(
+    float(getattr(config, 'KEYWORD_TEXT_SEARCH_TIMEOUT_SECONDS', 8.0) or 8.0),
+    1.0,
+)
 
 # 关键词搜索候选上限（覆盖每页200商品的测试场景）
 KEYWORD_SEARCH_LIMIT = 600
 
 
 def _get_image_recognition_request_timeout_seconds(stage_timeout_seconds) -> float:
+    configured_timeout = _coerce_float(
+        getattr(config, 'DISCORD_IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS', None)
+    )
+    if configured_timeout is not None and configured_timeout > 0:
+        return max(1.0, configured_timeout)
     try:
         stage_timeout = float(stage_timeout_seconds)
     except (TypeError, ValueError):
@@ -6414,9 +6423,10 @@ class DiscordBotClient(discord.Client):
 
     async def search_products_by_keyword(self, keyword):
         """根据关键词搜索商品"""
+        request_started_at = time.perf_counter()
         try:
             # 设置超时时间
-            timeout = aiohttp.ClientTimeout(total=10)  # 10秒超时
+            timeout = aiohttp.ClientTimeout(total=KEYWORD_TEXT_SEARCH_TIMEOUT_SECONDS)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 # 构建搜索请求
                 search_data = {
@@ -6435,11 +6445,45 @@ class DiscordBotClient(discord.Client):
                         result = await resp.json()
                         return result
                     else:
-                        logger.error(f'Keyword search API error: {resp.status}')
+                        response_text = (await resp.text()).strip()
+                        logger.error(
+                            'Keyword search API error: status=%s elapsed=%.2fs user_id=%s query=%r body=%s',
+                            resp.status,
+                            time.perf_counter() - request_started_at,
+                            self.user_id,
+                            str(keyword)[:120],
+                            re.sub(r'\s+', ' ', response_text)[:300] or '<empty>',
+                        )
                         return None
 
+        except asyncio.TimeoutError:
+            logger.warning(
+                'Keyword search timeout: timeout=%.2fs elapsed=%.2fs user_id=%s query=%r limit=%s',
+                KEYWORD_TEXT_SEARCH_TIMEOUT_SECONDS,
+                time.perf_counter() - request_started_at,
+                self.user_id,
+                str(keyword)[:120],
+                KEYWORD_SEARCH_LIMIT,
+            )
+            return None
+        except aiohttp.ClientError as e:
+            logger.error(
+                'Keyword search network error: type=%s elapsed=%.2fs user_id=%s query=%r error=%s',
+                type(e).__name__,
+                time.perf_counter() - request_started_at,
+                self.user_id,
+                str(keyword)[:120],
+                e,
+            )
+            return None
         except Exception as e:
-            logger.error(f'Error searching products by keyword: {e}')
+            logger.exception(
+                'Error searching products by keyword: type=%s elapsed=%.2fs user_id=%s query=%r',
+                type(e).__name__,
+                time.perf_counter() - request_started_at,
+                self.user_id,
+                str(keyword)[:120],
+            )
             return None
 
     async def recognize_image(self, image_data, user_shops=None, threshold=None):
