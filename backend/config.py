@@ -101,6 +101,12 @@ class Config:
 
     # === API 地址 ===
     BACKEND_API_URL = os.getenv('BACKEND_API_URL', 'http://127.0.0.1:5001')
+    PUBLIC_FRONTEND_BASE_URL = (
+        os.getenv('PUBLIC_FRONTEND_BASE_URL')
+        or os.getenv('NEXT_PUBLIC_FRONTEND_BASE_URL')
+        or os.getenv('FRONTEND_URL')
+        or ''
+    ).strip().rstrip('/')
     NEXTJS_API_URL = f'{BACKEND_API_URL}/api'
     KEYWORD_IMAGE_SEARCH_PROVIDER = os.getenv('KEYWORD_IMAGE_SEARCH_PROVIDER', 'searchapi_google_images')
     GOOGLE_IMAGE_SEARCH_API_KEY = os.getenv('GOOGLE_IMAGE_SEARCH_API_KEY', '')

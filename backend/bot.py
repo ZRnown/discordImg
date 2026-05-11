@@ -16,6 +16,11 @@ from types import SimpleNamespace
 from urllib.parse import quote
 
 try:
+    from itsdangerous import URLSafeTimedSerializer
+except Exception:
+    URLSafeTimedSerializer = None
+
+try:
     import discord.state as discord_state
 except Exception:
     discord_state = None
@@ -117,6 +122,9 @@ _apply_discord_presence_compat_patch()
 # 全局变量用于多账号机器人管理
 bot_clients = []
 bot_tasks = []
+
+KEYWORD_REVIEW_ACTION_TOKEN_SALT = "keyword-review-action"
+KEYWORD_REVIEW_ACTION_TOKEN_MAX_AGE_SECONDS = 7 * 24 * 3600
 
 # 全局冷却管理器：(account_id, channel_id) -> timestamp (上次发送时间)
 account_last_sent = {}
@@ -233,6 +241,90 @@ def _should_send_review_queue_bark_interval_notification(
     if current_time.tzinfo is None:
         current_time = current_time.replace(tzinfo=datetime.now().astimezone().tzinfo)
     return current_time >= parsed_last + timedelta(minutes=current_interval)
+
+
+def _create_keyword_review_action_token(user_id, item_id):
+    if URLSafeTimedSerializer is None:
+        return ""
+    try:
+        secret_key = str(getattr(config, "SECRET_KEY", "") or "")
+        if not secret_key:
+            return ""
+        return URLSafeTimedSerializer(secret_key).dumps(
+            {
+                "user_id": int(user_id),
+                "item_id": int(item_id),
+            },
+            salt=KEYWORD_REVIEW_ACTION_TOKEN_SALT,
+        )
+    except Exception as exc:
+        _log_rate_limited_bark_issue("生成审核 Bark 链接失败", _summarize_exception_for_log(exc), level="warning")
+        return ""
+
+
+def _get_public_frontend_base_url():
+    return str(getattr(config, "PUBLIC_FRONTEND_BASE_URL", "") or "").strip().rstrip("/")
+
+
+def _build_keyword_review_action_url(user_id, item_id):
+    base_url = _get_public_frontend_base_url()
+    if not base_url:
+        return ""
+    token = _create_keyword_review_action_token(user_id, item_id)
+    if not token:
+        return ""
+    return f"{base_url}/review-actions/{quote(token, safe='')}"
+
+
+def _truncate_bark_text(value, limit=180):
+    text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+    if len(text) <= limit:
+        return text
+    return f"{text[:max(limit - 3, 0)]}..."
+
+
+def _format_review_item_bark_body(review_item, pending_count=None):
+    payload = review_item.get("payload") or {}
+    message_payload = payload.get("message") or {}
+    website_config = payload.get("website_config") or {}
+    website_name = (
+        website_config.get("display_name")
+        or website_config.get("name")
+        or review_item.get("website_name")
+        or f"网站 {review_item.get('website_id')}"
+    )
+    guild_name = review_item.get("guild_name") or message_payload.get("guild_name") or "服务器"
+    channel_name = review_item.get("channel_name") or message_payload.get("channel_name") or "频道"
+    sender_name = (
+        review_item.get("sender_name")
+        or message_payload.get("author_display_name")
+        or message_payload.get("author_name")
+        or "未记录"
+    )
+    account_names = str(review_item.get("account_names") or "").strip() or "未记录"
+    source_content = _truncate_bark_text(
+        review_item.get("source_content") or message_payload.get("content") or "",
+        220,
+    ) or "[无文本内容]"
+    reply_content = _truncate_bark_text(review_item.get("content") or "", 220) or "[图片/空文本]"
+    image_count = len(payload.get("reply_image_previews") or [])
+    created_at = message_payload.get("created_at") or review_item.get("created_at") or ""
+    lines = [
+        "类型: 单条审核通知",
+        f"网站: {website_name}",
+        f"位置: {guild_name} / #{channel_name}",
+        f"触发用户: {sender_name}",
+        f"发送账号: {account_names}",
+        f"原始消息: {source_content}",
+        f"待发内容: {reply_content}",
+    ]
+    if image_count:
+        lines.append(f"待发图片: {image_count} 张")
+    if pending_count is not None:
+        lines.append(f"当前待审核: {pending_count} 条")
+    if created_at:
+        lines.append(f"消息时间: {created_at}")
+    return "\n".join(lines)
 
 
 async def _send_bark_notification_payload(bark_server_url, bark_device_key, title, body, jump_url=None):
@@ -3345,6 +3437,69 @@ class DiscordBotClient(discord.Client):
         except Exception as e:
             _log_rate_limited_bark_issue("处理审核 Bark 通知失败", _summarize_exception_for_log(e))
 
+    async def _send_keyword_review_item_bark_notification(self, review_item_id):
+        item_id = _coerce_int(review_item_id, None)
+        if item_id is None:
+            return
+
+        try:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+
+            review_item = await asyncio.get_event_loop().run_in_executor(
+                None,
+                db.get_keyword_reply_review_item,
+                item_id,
+                self.user_id,
+            )
+            if not review_item:
+                return
+
+            user_settings = await asyncio.get_event_loop().run_in_executor(
+                None,
+                db.get_user_settings,
+                self.user_id,
+            )
+            if not user_settings:
+                return
+
+            review_bark_enabled = user_settings.get("review_bark_enabled", 0) in (1, True, "1", "true", "True")
+            bark_device_key = (user_settings.get("bark_device_key") or "").strip()
+            if not review_bark_enabled or not bark_device_key:
+                return
+
+            pending_count = await asyncio.get_event_loop().run_in_executor(
+                None,
+                db.count_pending_keyword_reply_review_items,
+                self.user_id,
+            )
+            title = f"待审核: {review_item.get('sender_name') or '新消息'}"
+            body = _format_review_item_bark_body(review_item, pending_count=pending_count)
+            action_url = _build_keyword_review_action_url(self.user_id, item_id)
+            if not action_url:
+                body = f"{body}\n\n未配置 PUBLIC_FRONTEND_BASE_URL，手机通知暂不能直接打开审批页。"
+
+            await self._send_bark_notification(
+                bark_server_url=user_settings.get("bark_server_url"),
+                bark_device_key=bark_device_key,
+                title=title,
+                body=body,
+                jump_url=action_url or None,
+            )
+            await self._sync_review_bark_state(
+                self.user_id,
+                pending_count=pending_count,
+                last_notified_at=datetime.now().astimezone().isoformat(),
+            )
+            logger.info(
+                f"📱 审核 Bark 单条通知已发送: user_id={self.user_id} item_id={item_id} "
+                f"has_action_url={bool(action_url)}"
+            )
+        except Exception as e:
+            _log_rate_limited_bark_issue("发送单条审核 Bark 通知失败", _summarize_exception_for_log(e))
+
     async def _review_bark_monitor_loop(self):
         while True:
             try:
@@ -4466,11 +4621,10 @@ class DiscordBotClient(discord.Client):
                                 )
                                 if queued_review_id:
                                     self._start_keyword_reply_background_task(
-                                        self._maybe_send_review_queue_bark_notification(
-                                            self.user_id,
-                                            trigger="count",
+                                        self._send_keyword_review_item_bark_notification(
+                                            queued_review_id,
                                         ),
-                                        task_name=f"review-bark-count user={self.user_id} item={queued_review_id}",
+                                        task_name=f"review-bark-item user={self.user_id} item={queued_review_id}",
                                     )
                                     logger.info(
                                         f"📝 [进入人工审核] 网站:{website_config.get('name')} "

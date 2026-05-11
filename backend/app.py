@@ -1084,6 +1084,32 @@ def _format_keyword_review_item_summary(item: Dict[str, Any]):
     }
 
 
+def _build_review_action_image_previews(item: Dict[str, Any]):
+    payload = item.get("payload") or {}
+    previews = payload.get("reply_image_previews") or []
+    if not isinstance(previews, list):
+        return []
+
+    base_url = str(getattr(config, "PUBLIC_FRONTEND_BASE_URL", "") or "").strip().rstrip("/")
+    normalized = []
+    for preview in previews[:6]:
+        if not isinstance(preview, dict):
+            continue
+        url = str(preview.get("url") or "").strip()
+        if not url:
+            continue
+        if url.startswith("/") and base_url:
+            url = f"{base_url}{url}"
+        elif url.startswith("/"):
+            # Relative images still work when the action page is opened through the Next.js proxy.
+            url = url
+        normalized.append({
+            "url": html_escape(url),
+            "label": html_escape(str(preview.get("label") or "图片")),
+        })
+    return normalized
+
+
 def _render_keyword_review_action_html(
     *,
     title: str,
@@ -1106,6 +1132,22 @@ def _render_keyword_review_action_html(
     message_time = html_escape(summary.get("message_time") or "")
     status_text = html_escape(summary.get("status") or "")
     token_value = html_escape(token or "")
+    image_previews = _build_review_action_image_previews(item or {})
+    image_preview_html = ""
+    if image_previews:
+        image_preview_html = """
+      <div class="image-grid">
+        %s
+      </div>
+        """ % "\n".join(
+            f"""
+        <figure>
+          <img src="{preview['url']}" alt="{preview['label']}" />
+          <figcaption>{preview['label']}</figcaption>
+        </figure>
+            """
+            for preview in image_previews
+        )
 
     action_forms = ""
     if allow_actions and token_value:
@@ -1183,6 +1225,31 @@ def _render_keyword_review_action_html(
       white-space: pre-wrap;
       word-break: break-word;
     }}
+    .image-grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+      gap: 10px;
+      margin: 12px 0 4px;
+    }}
+    figure {{
+      margin: 0;
+    }}
+    img {{
+      width: 100%;
+      aspect-ratio: 1 / 1;
+      object-fit: cover;
+      border-radius: 12px;
+      border: 1px solid #e5dccf;
+      background: #f8f5ee;
+    }}
+    figcaption {{
+      margin-top: 4px;
+      color: #6b7280;
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }}
     .actions {{
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -1229,8 +1296,9 @@ def _render_keyword_review_action_html(
         <div style="grid-column: 1 / -1;"><span class="label">待发内容</span><span class="value">{content}</span></div>
         <div style="grid-column: 1 / -1;"><span class="label">触发原文</span><span class="value">{source_content}</span></div>
       </div>
+      {image_preview_html}
       {action_forms}
-      <div class="footer">该页面当前已具备审核能力，但默认未接入现有 Bark 通知。</div>
+      <div class="footer">从 Bark 打开后可直接在手机上批准或拒绝。</div>
     </div>
   </div>
 </body>
