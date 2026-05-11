@@ -576,6 +576,19 @@ def test_siglip2_cache_deserializers_accept_serialized_float_strings():
     assert np.allclose(hist, np.array([0.1, 0.2, 0.3, 0.4], dtype=np.float32))
 
 
+def test_siglip2_cache_deserializers_accept_float32_binary_blobs():
+    raw = np.array([3.0, 4.0], dtype=np.float32).tobytes()
+
+    embedding = _coerce_siglip_embedding(raw)
+    hist = Siglip2RerankStrategy._deserialize_cached_hist(raw)
+
+    assert embedding is not None
+    assert np.allclose(embedding, np.array([0.6, 0.8], dtype=np.float32))
+    assert hist is not None
+    assert hist.dtype == np.float32
+    assert np.allclose(hist, np.array([3.0, 4.0], dtype=np.float32))
+
+
 def test_build_query_record_ignores_query_text_for_live_image_search():
     record = build_query_record("/tmp/query.jpg", query_text="Balenciaga hoodie")
 

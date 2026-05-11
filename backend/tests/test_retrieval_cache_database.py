@@ -44,6 +44,63 @@ def test_database_exposes_strategy_cache_in_searchable_records(tmp_path: Path):
     assert rows[0]["retrieval_tokens"] == "[\"alpha\", \"runner\"]"
 
 
+def test_database_can_store_binary_retrieval_cache_when_enabled(tmp_path: Path, monkeypatch):
+    db_path = tmp_path / "metadata.db"
+    test_db = Database(db_path=str(db_path))
+    monkeypatch.setattr(database_module.config, "RETRIEVAL_CACHE_BINARY_STORAGE_ENABLED", True, raising=False)
+
+    product_id = test_db.insert_product(
+        {
+            "product_url": "https://weidian.com/item.html?itemID=1001",
+            "title": "Alpha Runner",
+            "description": "",
+            "english_title": "",
+            "cnfans_url": "",
+            "acbuy_url": "",
+            "shop_name": "shop-a",
+            "ruleEnabled": True,
+            "item_id": "1001",
+        }
+    )
+    image_db_id = test_db.insert_image_record(product_id, "/tmp/a-1.jpg", 0)
+
+    test_db.upsert_product_image_retrieval_cache(
+        image_db_id=image_db_id,
+        strategy_name="siglip2_rerank",
+        cache_version="siglip2_rerank_v1",
+        embedding=[0.1, 0.2, 0.3],
+        color_hist=[0.4, 0.5, 0.6, 0.7],
+        tokens=["alpha", "runner"],
+    )
+
+    rows = test_db.get_searchable_product_image_records(strategy_name="siglip2_rerank", require_cache=True)
+
+    assert len(rows) == 1
+    assert isinstance(rows[0]["retrieval_embedding"], bytes)
+    assert isinstance(rows[0]["retrieval_color_hist"], bytes)
+    assert rows[0]["retrieval_tokens"] == "[\"alpha\", \"runner\"]"
+
+    with test_db.get_connection() as conn:
+        stored = conn.execute(
+            """
+            SELECT embedding_json, color_hist_json, embedding_blob, color_hist_blob,
+                   embedding_dtype, embedding_dim, color_hist_dtype, color_hist_dim
+            FROM product_image_retrieval_cache
+            WHERE image_db_id = ? AND strategy_name = ?
+            """,
+            (image_db_id, "siglip2_rerank"),
+        ).fetchone()
+
+    assert stored["embedding_json"] is None
+    assert stored["color_hist_json"] is None
+    assert stored["embedding_blob"]
+    assert stored["color_hist_blob"]
+    assert stored["embedding_dtype"] == "float32"
+    assert stored["embedding_dim"] == 3
+    assert stored["color_hist_dtype"] == "float32"
+    assert stored["color_hist_dim"] == 4
+
+
 def test_database_counts_missing_retrieval_cache_rows(tmp_path: Path):
     db_path = tmp_path / "metadata.db"
     test_db = Database(db_path=str(db_path))

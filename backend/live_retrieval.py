@@ -1005,6 +1005,11 @@ def _parse_json_float_array(raw_value: Any) -> Any:
         return None
     if isinstance(raw_value, np.ndarray):
         return raw_value.astype(np.float32, copy=False).flatten()
+    if isinstance(raw_value, (bytes, bytearray, memoryview)):
+        raw_bytes = bytes(raw_value)
+        if not raw_bytes or len(raw_bytes) % np.dtype(np.float32).itemsize != 0:
+            return None
+        return np.frombuffer(raw_bytes, dtype=np.float32).copy().flatten()
     if isinstance(raw_value, str):
         stripped = raw_value.strip()
         if not stripped:

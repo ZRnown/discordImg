@@ -123,6 +123,13 @@ def _coerce_serialized_float_array(raw_value) -> Optional[np.ndarray]:
         vector = raw_value.astype(np.float32, copy=False).flatten()
         return vector if vector.size > 0 else None
 
+    if isinstance(raw_value, (bytes, bytearray, memoryview)):
+        raw_bytes = bytes(raw_value)
+        if not raw_bytes or len(raw_bytes) % np.dtype(np.float32).itemsize != 0:
+            return None
+        vector = np.frombuffer(raw_bytes, dtype=np.float32).copy().flatten()
+        return vector if vector.size > 0 else None
+
     if isinstance(raw_value, str):
         stripped = raw_value.strip()
         if not stripped:
@@ -154,7 +161,7 @@ def _coerce_siglip_embedding(features, expected_dim: Optional[int] = None) -> Op
     if hasattr(resolved, "detach"):
         resolved = resolved.detach().cpu().numpy()
 
-    if isinstance(resolved, str):
+    if isinstance(resolved, (str, bytes, bytearray, memoryview)):
         vector = _coerce_serialized_float_array(resolved)
         if vector is None:
             return None

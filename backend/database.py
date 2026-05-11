@@ -71,6 +71,33 @@ class Database:
         return [str(row[1]) for row in cursor.fetchall()]
 
     @staticmethod
+    def _encode_float32_blob(values: Optional[Sequence[float]]) -> tuple[Optional[bytes], Optional[str], int]:
+        if values is None:
+            return None, None, 0
+        try:
+            array = np.asarray(values, dtype=np.float32).reshape(-1)
+        except Exception:
+            return None, None, 0
+        if array.size <= 0:
+            return None, None, 0
+        return array.tobytes(), 'float32', int(array.size)
+
+    @staticmethod
+    def _retrieval_binary_storage_enabled() -> bool:
+        value = getattr(config, 'RETRIEVAL_CACHE_BINARY_STORAGE_ENABLED', False)
+        if isinstance(value, bool):
+            return value
+        normalized = str(value or '').strip().lower()
+        return normalized in {'1', 'true', 'yes', 'on'}
+
+    @staticmethod
+    def _add_column_if_missing(cursor, table_name: str, column_name: str, column_definition: str) -> None:
+        columns = Database._get_table_columns(cursor, table_name)
+        if column_name in columns:
+            return
+        cursor.execute(f'ALTER TABLE {table_name} ADD COLUMN {column_definition}')
+
+    @staticmethod
     def _configure_connection(conn, *, enable_wal: bool = False) -> None:
         conn.execute('PRAGMA foreign_keys=ON;')
         if enable_wal:
@@ -288,6 +315,12 @@ class Database:
                     cache_version TEXT,
                     embedding_json TEXT,
                     color_hist_json TEXT,
+                    embedding_blob BLOB,
+                    color_hist_blob BLOB,
+                    embedding_dtype TEXT,
+                    embedding_dim INTEGER DEFAULT 0,
+                    color_hist_dtype TEXT,
+                    color_hist_dim INTEGER DEFAULT 0,
                     tokens_json TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -295,6 +328,18 @@ class Database:
                     UNIQUE(image_db_id, strategy_name)
                 )
             ''')
+            for column_name, column_definition in (
+                ('embedding_blob', 'embedding_blob BLOB'),
+                ('color_hist_blob', 'color_hist_blob BLOB'),
+                ('embedding_dtype', 'embedding_dtype TEXT'),
+                ('embedding_dim', 'embedding_dim INTEGER DEFAULT 0'),
+                ('color_hist_dtype', 'color_hist_dtype TEXT'),
+                ('color_hist_dim', 'color_hist_dim INTEGER DEFAULT 0'),
+            ):
+                try:
+                    self._add_column_if_missing(cursor, 'product_image_retrieval_cache', column_name, column_definition)
+                except sqlite3.OperationalError:
+                    pass
             try:
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_retrieval_cache_strategy ON product_image_retrieval_cache(strategy_name)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_retrieval_cache_image_db_id ON product_image_retrieval_cache(image_db_id)')
@@ -302,8 +347,13 @@ class Database:
                     f'''
                     CREATE INDEX IF NOT EXISTS {USABLE_RETRIEVAL_CACHE_INDEX_NAME}
                     ON product_image_retrieval_cache(image_db_id, strategy_name)
-                    WHERE embedding_json IS NOT NULL
-                      AND LENGTH(embedding_json) <= {MAX_USABLE_RETRIEVAL_EMBEDDING_JSON_LENGTH}
+                    WHERE (
+                        embedding_blob IS NOT NULL
+                        OR (
+                            embedding_json IS NOT NULL
+                            AND LENGTH(embedding_json) <= {MAX_USABLE_RETRIEVAL_EMBEDDING_JSON_LENGTH}
+                        )
+                    )
                     '''
                 )
             except sqlite3.OperationalError:
@@ -1415,18 +1465,35 @@ class Database:
         tokens: Optional[List[str]] = None,
     ) -> bool:
         try:
+            binary_storage_enabled = self._retrieval_binary_storage_enabled()
+            embedding_blob, embedding_dtype, embedding_dim = self._encode_float32_blob(embedding)
+            color_hist_blob, color_hist_dtype, color_hist_dim = self._encode_float32_blob(color_hist)
+            embedding_json = None if binary_storage_enabled else (json.dumps(embedding) if embedding is not None else None)
+            color_hist_json = None if binary_storage_enabled else (json.dumps(color_hist) if color_hist is not None else None)
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     '''
                     INSERT INTO product_image_retrieval_cache
-                    (image_db_id, strategy_name, cache_version, embedding_json, color_hist_json, tokens_json, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    (
+                        image_db_id, strategy_name, cache_version,
+                        embedding_json, color_hist_json,
+                        embedding_blob, color_hist_blob,
+                        embedding_dtype, embedding_dim, color_hist_dtype, color_hist_dim,
+                        tokens_json, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                     ON CONFLICT(image_db_id, strategy_name)
                     DO UPDATE SET
                         cache_version = excluded.cache_version,
                         embedding_json = excluded.embedding_json,
                         color_hist_json = excluded.color_hist_json,
+                        embedding_blob = excluded.embedding_blob,
+                        color_hist_blob = excluded.color_hist_blob,
+                        embedding_dtype = excluded.embedding_dtype,
+                        embedding_dim = excluded.embedding_dim,
+                        color_hist_dtype = excluded.color_hist_dtype,
+                        color_hist_dim = excluded.color_hist_dim,
                         tokens_json = excluded.tokens_json,
                         updated_at = CURRENT_TIMESTAMP
                     ''',
@@ -1434,8 +1501,14 @@ class Database:
                         image_db_id,
                         strategy_name,
                         cache_version,
-                        json.dumps(embedding) if embedding is not None else None,
-                        json.dumps(color_hist) if color_hist is not None else None,
+                        embedding_json,
+                        color_hist_json,
+                        embedding_blob if binary_storage_enabled else None,
+                        color_hist_blob if binary_storage_enabled else None,
+                        embedding_dtype if binary_storage_enabled else None,
+                        embedding_dim if binary_storage_enabled else 0,
+                        color_hist_dtype if binary_storage_enabled else None,
+                        color_hist_dim if binary_storage_enabled else 0,
                         json.dumps(tokens or []),
                     ),
                 )
@@ -1459,8 +1532,13 @@ class Database:
     def _usable_retrieval_cache_sql(alias: str = 'rc') -> str:
         return (
             f"{alias}.image_db_id IS NOT NULL "
-            f"AND {alias}.embedding_json IS NOT NULL "
+            f"AND ("
+            f"{alias}.embedding_blob IS NOT NULL "
+            f"OR ("
+            f"{alias}.embedding_json IS NOT NULL "
             f"AND LENGTH({alias}.embedding_json) <= {MAX_USABLE_RETRIEVAL_EMBEDDING_JSON_LENGTH}"
+            f")"
+            f")"
         )
 
     @classmethod
@@ -1490,6 +1568,30 @@ class Database:
             f"WHEN {alias}.{field_name} IS NULL THEN NULL "
             f"WHEN LENGTH({alias}.{field_name}) <= {int(max_length)} THEN {alias}.{field_name} "
             f"ELSE NULL END"
+        )
+
+    @staticmethod
+    def _retrieval_embedding_select_sql(alias: str = 'rc') -> str:
+        return (
+            f"COALESCE("
+            f"{alias}.embedding_blob, "
+            f"CASE "
+            f"WHEN {alias}.embedding_json IS NULL THEN NULL "
+            f"WHEN LENGTH({alias}.embedding_json) <= {MAX_USABLE_RETRIEVAL_EMBEDDING_JSON_LENGTH} THEN {alias}.embedding_json "
+            f"ELSE NULL END"
+            f")"
+        )
+
+    @staticmethod
+    def _retrieval_color_hist_select_sql(alias: str = 'rc') -> str:
+        return (
+            f"COALESCE("
+            f"{alias}.color_hist_blob, "
+            f"CASE "
+            f"WHEN {alias}.color_hist_json IS NULL THEN NULL "
+            f"WHEN LENGTH({alias}.color_hist_json) <= {MAX_USABLE_RETRIEVAL_COLOR_HIST_JSON_LENGTH} THEN {alias}.color_hist_json "
+            f"ELSE NULL END"
+            f")"
         )
 
     def get_searchable_product_image_records(
@@ -1576,8 +1678,8 @@ class Database:
                             pi.image_index,
                             rc.strategy_name AS retrieval_cache_strategy,
                             rc.cache_version AS retrieval_cache_version,
-                            rc.embedding_json AS retrieval_embedding,
-                            {self._safe_retrieval_cache_field_sql('rc', 'color_hist_json', MAX_USABLE_RETRIEVAL_COLOR_HIST_JSON_LENGTH)} AS retrieval_color_hist,
+                            {self._retrieval_embedding_select_sql('rc')} AS retrieval_embedding,
+                            {self._retrieval_color_hist_select_sql('rc')} AS retrieval_color_hist,
                             {self._safe_retrieval_cache_field_sql('rc', 'tokens_json', MAX_USABLE_RETRIEVAL_TOKENS_JSON_LENGTH)} AS retrieval_tokens
                         FROM products p
                         JOIN product_images pi ON pi.product_id = p.id
@@ -1612,8 +1714,8 @@ class Database:
                             pi.image_index,
                             rc.strategy_name AS retrieval_cache_strategy,
                             rc.cache_version AS retrieval_cache_version,
-                            rc.embedding_json AS retrieval_embedding,
-                            {self._safe_retrieval_cache_field_sql('rc', 'color_hist_json', MAX_USABLE_RETRIEVAL_COLOR_HIST_JSON_LENGTH)} AS retrieval_color_hist,
+                            {self._retrieval_embedding_select_sql('rc')} AS retrieval_embedding,
+                            {self._retrieval_color_hist_select_sql('rc')} AS retrieval_color_hist,
                             {self._safe_retrieval_cache_field_sql('rc', 'tokens_json', MAX_USABLE_RETRIEVAL_TOKENS_JSON_LENGTH)} AS retrieval_tokens
                         FROM product_image_retrieval_cache rc
                         JOIN product_images pi ON pi.id = rc.image_db_id
@@ -1657,8 +1759,8 @@ class Database:
                         pi.image_index,
                         rc.strategy_name AS retrieval_cache_strategy,
                         rc.cache_version AS retrieval_cache_version,
-                        {self._safe_retrieval_cache_field_sql('rc', 'embedding_json', MAX_USABLE_RETRIEVAL_EMBEDDING_JSON_LENGTH)} AS retrieval_embedding,
-                        {self._safe_retrieval_cache_field_sql('rc', 'color_hist_json', MAX_USABLE_RETRIEVAL_COLOR_HIST_JSON_LENGTH)} AS retrieval_color_hist,
+                        {self._retrieval_embedding_select_sql('rc')} AS retrieval_embedding,
+                        {self._retrieval_color_hist_select_sql('rc')} AS retrieval_color_hist,
                         {self._safe_retrieval_cache_field_sql('rc', 'tokens_json', MAX_USABLE_RETRIEVAL_TOKENS_JSON_LENGTH)} AS retrieval_tokens
                     FROM products p
                     JOIN product_images pi ON pi.product_id = p.id
@@ -1947,8 +2049,8 @@ class Database:
                             pi.image_index,
                             rc.strategy_name AS retrieval_cache_strategy,
                             rc.cache_version AS retrieval_cache_version,
-                            {self._safe_retrieval_cache_field_sql('rc', 'embedding_json', MAX_USABLE_RETRIEVAL_EMBEDDING_JSON_LENGTH)} AS retrieval_embedding,
-                            {self._safe_retrieval_cache_field_sql('rc', 'color_hist_json', MAX_USABLE_RETRIEVAL_COLOR_HIST_JSON_LENGTH)} AS retrieval_color_hist,
+                            {self._retrieval_embedding_select_sql('rc')} AS retrieval_embedding,
+                            {self._retrieval_color_hist_select_sql('rc')} AS retrieval_color_hist,
                             {self._safe_retrieval_cache_field_sql('rc', 'tokens_json', MAX_USABLE_RETRIEVAL_TOKENS_JSON_LENGTH)} AS retrieval_tokens
                         FROM product_images pi
                         JOIN products p ON p.id = pi.product_id
@@ -2000,11 +2102,11 @@ class Database:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    '''
-                    SELECT rc.embedding_json
+                    f'''
+                    SELECT {self._retrieval_embedding_select_sql('rc')} AS embedding_value
                     FROM product_image_retrieval_cache rc
                     JOIN product_images pi ON pi.id = rc.image_db_id
-                    WHERE pi.product_id = ? AND rc.strategy_name = ? AND ''' + self._usable_retrieval_cache_sql('rc') + '''
+                    WHERE pi.product_id = ? AND rc.strategy_name = ? AND {self._usable_retrieval_cache_sql('rc')}
                     ORDER BY pi.image_index ASC
                     ''',
                     (product_id, strategy_name),
@@ -2012,7 +2114,11 @@ class Database:
                 embeddings = []
                 for row in cursor.fetchall():
                     try:
-                        embeddings.append(np.array(json.loads(row['embedding_json']), dtype='float32'))
+                        raw_embedding = row['embedding_value']
+                        if isinstance(raw_embedding, (bytes, bytearray, memoryview)):
+                            embeddings.append(np.frombuffer(bytes(raw_embedding), dtype=np.float32).copy())
+                        else:
+                            embeddings.append(np.array(json.loads(raw_embedding), dtype='float32'))
                     except Exception:
                         continue
                 return embeddings

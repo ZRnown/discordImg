@@ -24,10 +24,13 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Process one retrieval-cache backfill batch")
     parser.add_argument("--strategy", default=getattr(config, "LIVE_IMAGE_SEARCH_STRATEGY", "siglip2_rerank"))
     parser.add_argument("--limit", type=int, default=24)
+    parser.add_argument("--binary-storage", action="store_true", help="Write new cache rows as compact binary blobs")
     args = parser.parse_args()
 
     limit = max(int(args.limit or 1), 1)
     strategy_name = str(args.strategy or getattr(config, "LIVE_IMAGE_SEARCH_STRATEGY", "siglip2_rerank")).strip()
+    if args.binary_storage:
+        setattr(config, "RETRIEVAL_CACHE_BINARY_STORAGE_ENABLED", True)
     logger.info("开始执行商品检索缓存补全批次: strategy=%s limit=%s", strategy_name, limit)
     summary = backfill_product_image_retrieval_cache(db, strategy_name, limit=limit)
     print(
