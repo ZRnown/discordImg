@@ -2459,6 +2459,7 @@ class LiveImageRetriever:
                 scoped_catalog = self._get_cached_scoped_prepared_catalog(user_shops)
                 if scoped_catalog is None:
                     if self._supports_streaming_search(strategy):
+                        self._start_scoped_catalog_prepare_in_background(user_shops)
                         return self._search_streaming(
                             image_path=image_path,
                             query_text=query_text,

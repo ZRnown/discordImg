@@ -1437,6 +1437,12 @@ def test_live_image_retriever_streams_missing_scoped_catalog_when_streaming_is_e
 
     db = FakeDB()
     retriever = LiveImageRetriever(db, "siglip2_rerank")
+    started_scopes = []
+    monkeypatch.setattr(
+        retriever,
+        "_start_scoped_catalog_prepare_in_background",
+        lambda user_shops: started_scopes.append(list(user_shops or [])) or True,
+    )
     result = retriever.search(
         "/tmp/query-b.jpg",
         top_k=1,
@@ -1448,6 +1454,7 @@ def test_live_image_retriever_streams_missing_scoped_catalog_when_streaming_is_e
     assert [item["product_id"] for item in result["ranked_products"]] == ["2001"]
     assert db.materialized_calls == []
     assert db.iter_calls and db.iter_calls[0]["shop_names"] == ["shop-allowed"]
+    assert started_scopes == [["shop-allowed"]]
 
 
 def test_live_image_retriever_prepares_missing_scoped_catalog_in_background(tmp_path, monkeypatch):
