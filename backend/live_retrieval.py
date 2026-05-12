@@ -2440,7 +2440,17 @@ class LiveImageRetriever:
         strategy = self._get_strategy_instance()
         with self._lock:
             has_global_catalog = self._has_active_catalog_locked()
+            catalog_refresh_required = self._catalog_refresh_required
         if has_global_catalog:
+            if catalog_refresh_required and self._supports_streaming_search(strategy):
+                return self._search_streaming(
+                    image_path=image_path,
+                    query_text=query_text,
+                    top_k=top_k,
+                    threshold=threshold,
+                    user_shops=user_shops,
+                    cancel_event=cancel_event,
+                )
             strategy, prepared_catalog = self._ensure_prepared_catalog()
             scoped_catalog = None
         else:
