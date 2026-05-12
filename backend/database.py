@@ -1652,8 +1652,8 @@ class Database:
                 order_sql = "ORDER BY p.id ASC, pi.image_index ASC" if ordered else ""
                 if normalized_shop_names:
                     placeholders = ','.join('?' for _ in normalized_shop_names)
-                    params.extend(normalized_shop_names)
                     params.append(strategy_name)
+                    params.extend(normalized_shop_names)
                     query = f'''
                         SELECT
                             p.id AS product_id,
@@ -1683,9 +1683,9 @@ class Database:
                             {self._safe_retrieval_cache_field_sql('rc', 'tokens_json', MAX_USABLE_RETRIEVAL_TOKENS_JSON_LENGTH)} AS retrieval_tokens
                         FROM products p
                         JOIN product_images pi ON pi.product_id = p.id
-                        CROSS JOIN product_image_retrieval_cache rc INDEXED BY {USABLE_RETRIEVAL_CACHE_INDEX_NAME}
+                        JOIN product_image_retrieval_cache rc
+                            ON {self._retrieval_cache_join_sql('pi', 'rc', include_usable_embedding=True)}
                         WHERE p.shop_name IN ({placeholders})
-                          AND {self._retrieval_cache_join_sql('pi', 'rc', include_usable_embedding=True)}
                         {order_sql}
                     '''
                 else:

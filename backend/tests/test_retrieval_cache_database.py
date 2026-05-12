@@ -186,7 +186,7 @@ def test_streaming_searchable_record_query_can_skip_global_ordering(tmp_path: Pa
     )
 
     assert "ORDER BY p.id ASC, pi.image_index ASC" not in query
-    assert params == ["shop-a", "siglip2_rerank"]
+    assert params == ["siglip2_rerank", "shop-a"]
 
 
 def test_cached_searchable_record_query_prefers_shop_filtered_catalog_path(tmp_path: Path):
@@ -204,9 +204,50 @@ def test_cached_searchable_record_query_prefers_shop_filtered_catalog_path(tmp_p
 
     assert "FROM products p" in query
     assert "JOIN product_images pi ON pi.product_id = p.id" in query
-    assert f"product_image_retrieval_cache rc INDEXED BY {database_module.USABLE_RETRIEVAL_CACHE_INDEX_NAME}" in query
+    assert "JOIN product_image_retrieval_cache rc" in query
+    assert "INDEXED BY" not in query
     assert "rc.image_db_id = pi.id" in query
-    assert params == ["shop-a", "siglip2_rerank"]
+    assert params == ["siglip2_rerank", "shop-a"]
+
+
+def test_cached_shop_filtered_records_execute_with_partial_usable_cache_index(tmp_path: Path):
+    db_path = tmp_path / "metadata.db"
+    test_db = Database(db_path=str(db_path))
+
+    product_id = test_db.insert_product(
+        {
+            "product_url": "https://weidian.com/item.html?itemID=1001",
+            "title": "Alpha Runner",
+            "description": "",
+            "english_title": "",
+            "cnfans_url": "",
+            "acbuy_url": "",
+            "shop_name": "shop-a",
+            "ruleEnabled": True,
+            "item_id": "1001",
+        }
+    )
+    image_db_id = test_db.insert_image_record(product_id, "/tmp/a-1.jpg", 0)
+
+    with test_db.get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO product_image_retrieval_cache (
+                image_db_id, strategy_name, cache_version, embedding_json
+            ) VALUES (?, ?, ?, ?)
+            """,
+            (image_db_id, "siglip2_rerank", "siglip2_rerank_v1", json.dumps([0.1, 0.2, 0.3])),
+        )
+        conn.commit()
+
+    rows = test_db.get_searchable_product_image_records(
+        strategy_name="siglip2_rerank",
+        require_cache=True,
+        shop_names=["shop-a"],
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["image_db_id"] == image_db_id
 
 
 def test_database_treats_oversized_legacy_cache_rows_as_missing(tmp_path: Path):
