@@ -1374,6 +1374,82 @@ def test_live_image_retriever_prefers_scoped_cache_when_streaming_is_enabled(tmp
     assert second_db.iter_calls == []
 
 
+def test_live_image_retriever_streams_missing_scoped_catalog_when_streaming_is_enabled(monkeypatch):
+    class FakeDB:
+        def __init__(self):
+            self.materialized_calls = []
+            self.iter_calls = []
+
+        def get_searchable_product_image_records_signature(self, **kwargs):
+            return {
+                "count": 1,
+                "max_image_db_id": 11,
+                "max_product_id": 2001,
+                "max_product_updated_at": "2026-05-06 00:00:00",
+                "max_cache_updated_at": "2026-05-06 00:00:01",
+            }
+
+        def get_searchable_product_image_records(self, **kwargs):
+            self.materialized_calls.append(kwargs)
+            return []
+
+        def iter_searchable_product_image_records(self, **kwargs):
+            self.iter_calls.append(kwargs)
+            return iter(
+                [
+                    {
+                        "product_id": "2001",
+                        "title": "Allowed Alpha",
+                        "english_title": "Allowed Alpha",
+                        "description": "demo",
+                        "shop_name": "shop-allowed",
+                        "image_path": "/tmp/allowed.jpg",
+                        "image_index": 0,
+                        "product_url": "https://weidian.com/item.html?itemID=2001",
+                        "retrieval_cache_strategy": "siglip2_rerank",
+                        "retrieval_cache_version": "siglip2_rerank_v1",
+                        "retrieval_embedding": "[0.1, 0.2, 0.3]",
+                        "retrieval_color_hist": None,
+                        "retrieval_tokens": "[\"alpha\"]",
+                    }
+                ]
+            )
+
+    class FakeStrategy:
+        def supports_streaming_live_search(self):
+            return True
+
+        def prepare_query_image(self, record):
+            return {"query": record.query}
+
+        def prepare_catalog_image(self, record):
+            return {"score": 0.93}
+
+        def score(self, query_context, catalog_context):
+            return catalog_context["score"]
+
+    monkeypatch.setenv("LIVE_IMAGE_SEARCH_STREAMING_ENABLED", "1")
+    monkeypatch.setenv("LIVE_IMAGE_SEARCH_STREAMING_FORCE", "1")
+    monkeypatch.setattr(
+        "backend.live_retrieval.get_retrieval_strategy_instance",
+        lambda *args, **kwargs: FakeStrategy(),
+    )
+
+    db = FakeDB()
+    retriever = LiveImageRetriever(db, "siglip2_rerank")
+    result = retriever.search(
+        "/tmp/query-b.jpg",
+        top_k=1,
+        threshold=0.0,
+        user_shops=["shop-allowed"],
+    )
+
+    assert result["streaming"] is True
+    assert [item["product_id"] for item in result["ranked_products"]] == ["2001"]
+    assert db.materialized_calls == []
+    assert db.iter_calls and db.iter_calls[0]["shop_names"] == ["shop-allowed"]
+
+
 def test_live_image_retriever_prepares_missing_scoped_catalog_in_background(tmp_path, monkeypatch):
     class FakeDB:
         def __init__(self):
