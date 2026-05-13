@@ -89,6 +89,125 @@ class KeywordModelMatchingTestCase(unittest.TestCase):
         self.assertEqual(reason["canonical_keyword"], "palacehoodie")
         self.assertEqual(reason["source"], "english_title")
 
+    def test_partition_rules_can_match_split_model_tokens_out_of_order(self):
+        query = "I need $30 Dior B30"
+        reason = find_query_keyword_match(
+            build_query_keyword_candidates(query),
+            "",
+            "",
+            query_text=query,
+            partition_match_enabled=True,
+            partition_match_rules=[["B", "30"]],
+        )
+
+        self.assertIsNotNone(reason)
+        self.assertEqual(reason["rule"], "partition_keyword_match")
+        self.assertEqual(reason["source"], "partition_row:0")
+
+    def test_partition_rules_can_match_loose_phrase_tokens(self):
+        query = "A hoodie like Sp5der's"
+        reason = find_query_keyword_match(
+            build_query_keyword_candidates(query),
+            "",
+            "",
+            query_text=query,
+            partition_match_enabled=True,
+            partition_match_rules=[["SP hood"]],
+        )
+
+        self.assertIsNotNone(reason)
+        self.assertEqual(reason["rule"], "partition_keyword_match")
+        self.assertEqual(reason["source"], "partition_row:0")
+
+    def test_partition_mode_disables_english_keyword_fallback(self):
+        query = "Palace hoodie"
+        reason = find_query_keyword_match(
+            build_query_keyword_candidates(query),
+            "Palace hoodie",
+            "",
+            query_text=query,
+            partition_match_enabled=True,
+            partition_match_rules=[["B", "30"]],
+        )
+
+        self.assertIsNone(reason)
+
+    def test_partition_rules_ignore_empty_cells_within_a_row(self):
+        query = "I need Dior B30"
+        reason = find_query_keyword_match(
+            build_query_keyword_candidates(query),
+            "",
+            "",
+            query_text=query,
+            partition_match_enabled=True,
+            partition_match_rules=[["B", "", "30"]],
+        )
+
+        self.assertIsNotNone(reason)
+        self.assertEqual(reason["source"], "partition_row:0")
+
+    def test_partition_rules_allow_multiple_rows_as_or_conditions(self):
+        query = "Can you find an SP hoodie"
+        reason = find_query_keyword_match(
+            build_query_keyword_candidates(query),
+            "",
+            "",
+            query_text=query,
+            partition_match_enabled=True,
+            partition_match_rules=[["B", "30"], ["SP", "", "hood"]],
+        )
+
+        self.assertIsNotNone(reason)
+        self.assertEqual(reason["source"], "partition_row:1")
+
+    def test_partition_rules_do_not_match_by_query_prefix_only(self):
+        query = "best seller for men's bag"
+
+        for rule in (
+            [["Supreme Socks"]],
+            [["stone shirt"]],
+            [["stussy shirt"]],
+            [["sp5der shirt"]],
+        ):
+            with self.subTest(rule=rule):
+                reason = find_query_keyword_match(
+                    build_query_keyword_candidates(query),
+                    "",
+                    "",
+                    query_text=query,
+                    partition_match_enabled=True,
+                    partition_match_rules=rule,
+                )
+
+                self.assertIsNone(reason)
+
+    def test_partition_rules_keep_prefix_model_matching_from_rule_to_query(self):
+        query = "A hoodie like Sp5der's"
+        reason = find_query_keyword_match(
+            build_query_keyword_candidates(query),
+            "",
+            "",
+            query_text=query,
+            partition_match_enabled=True,
+            partition_match_rules=[["SP hood"]],
+        )
+
+        self.assertIsNotNone(reason)
+        self.assertEqual(reason["source"], "partition_row:0")
+
+    def test_partition_rule_normalizer_keeps_matrix_shape_and_drops_empty_rows(self):
+        self.assertEqual(
+            normalize_partition_match_rules([
+                [" B ", " 30 "],
+                ["SP hood", "", None],
+                ["", ""],
+            ]),
+            [
+                ["B", "30"],
+                ["SP hood", "", ""],
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
