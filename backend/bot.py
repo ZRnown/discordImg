@@ -3227,6 +3227,19 @@ class DiscordBotClient(discord.Client):
                 'status': 'pending',
                 'payload': payload,
             }
+            existing_review_item = db.get_active_keyword_reply_review_item_by_message(
+                self.user_id,
+                website_config.get('id'),
+                getattr(message, 'id', None),
+            )
+            if existing_review_item:
+                logger.info(
+                    "同一消息已存在待审项，跳过重复入队: "
+                    f"user={self.user_id} website={website_config.get('id')} "
+                    f"message={getattr(message, 'id', None)} "
+                    f"existing_item={existing_review_item.get('id')}"
+                )
+                return int(existing_review_item.get('id') or 0)
             return db.add_keyword_reply_review_item(review_item)
         except Exception as e:
             logger.error(f"写入关键词人工审核队列失败: {e}")

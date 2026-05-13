@@ -109,6 +109,19 @@ test('keyword replies from messages with attachments still respect keyword revie
   assert.doesNotMatch(source, /skip_keyword_review_check = bool\(getattr\(message, 'attachments', None\)\)/)
 })
 
+test('keyword review queue deduplicates text and image hits from the same message', () => {
+  const source = readSource()
+  const start = source.indexOf('def _queue_keyword_review_item')
+  const end = source.indexOf('    def _should_ignore_mass_or_activity_message', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+
+  const queueSource = source.slice(start, end)
+  assert.match(queueSource, /get_active_keyword_reply_review_item_by_message/)
+  assert.match(queueSource, /同一消息已存在待审项/)
+  assert.match(queueSource, /return int\(existing_review_item\.get\('id'\) or 0\)/)
+})
+
 test('skipped image matches are also saved into search history', () => {
   const source = readSource()
   const start = source.indexOf('async def _record_skipped_image_history')

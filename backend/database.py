@@ -765,6 +765,10 @@ class Database:
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_keyword_reply_review_items_user_status ON keyword_reply_review_items(user_id, status, created_at DESC)')
             except sqlite3.OperationalError:
                 pass
+            try:
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_keyword_reply_review_items_message_active ON keyword_reply_review_items(user_id, website_id, message_id, status, created_at DESC)')
+            except sqlite3.OperationalError:
+                pass
 
             # 创建网站账号绑定表
             cursor.execute('''
@@ -4463,6 +4467,43 @@ class Database:
         except Exception as e:
             logger.error(f"获取关键词审核队列列表失败: {e}")
             return []
+
+    def get_active_keyword_reply_review_item_by_message(
+        self,
+        user_id: int,
+        website_id: int,
+        message_id: Any,
+    ) -> Optional[Dict[str, Any]]:
+        """查找同一条 Discord 消息已经存在的未完成审核项。"""
+        normalized_message_id = str(message_id or '').strip()
+        if not normalized_message_id:
+            return None
+
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    SELECT *
+                    FROM keyword_reply_review_items
+                    WHERE user_id = ?
+                      AND website_id = ?
+                      AND message_id = ?
+                      AND status IN ('pending', 'approved')
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT 1
+                    ''',
+                    (
+                        int(user_id or 0),
+                        int(website_id or 0),
+                        normalized_message_id,
+                    ),
+                )
+                row = cursor.fetchone()
+                return self._parse_keyword_reply_review_item_row(row) if row else None
+        except Exception as e:
+            logger.error(f"查找同消息关键词审核队列记录失败: {e}")
+            return None
 
     def update_keyword_reply_review_item_status(
         self,
