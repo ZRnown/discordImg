@@ -3249,7 +3249,23 @@ class DiscordBotClient(discord.Client):
             getattr(discord.MessageType, "default", None),
             getattr(discord.MessageType, "reply", None),
         }
-        return message_type not in allowed_types
+        if any(message_type == allowed_type for allowed_type in allowed_types):
+            return False
+
+        message_type_name = str(
+            getattr(message_type, "name", None)
+            or getattr(message_type, "value", None)
+            or message_type
+            or ""
+        ).strip().lower()
+        if message_type_name in {
+            "thread_starter_message",
+            "forum_topic_created",
+            "guild_forum_thread_created",
+        }:
+            return False
+
+        return True
 
     async def _is_reply_to_self(self, message):
         """判断当前消息是否在回复当前账号发出的消息。"""

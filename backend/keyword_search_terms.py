@@ -216,7 +216,6 @@ def _partition_token_matches_query(token: str, query_tokens: list[str]) -> bool:
     return any(
         query_token == token
         or query_token.startswith(token)
-        or token.startswith(query_token)
         for query_token in query_tokens
     )
 

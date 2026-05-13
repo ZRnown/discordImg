@@ -246,6 +246,17 @@ class ManagedAccountMessageGuardTestCase(unittest.IsolatedAsyncioTestCase):
         client._is_account_bound_in_channel.assert_awaited_once_with(message.channel, include_sender=True)
         mark_processed.assert_called_once_with(message.id, client.user_id)
 
+    def test_forum_starter_message_is_not_treated_as_activity_message(self):
+        client = DiscordBotClient.__new__(DiscordBotClient)
+        message = SimpleNamespace(
+            mention_everyone=False,
+            clean_content="best seller for men's bag",
+            content="best seller for men's bag",
+            type=SimpleNamespace(name="thread_starter_message"),
+        )
+
+        self.assertFalse(client._should_ignore_mass_or_activity_message(message))
+
 
 if __name__ == "__main__":
     unittest.main()

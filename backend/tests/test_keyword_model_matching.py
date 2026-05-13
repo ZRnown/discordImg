@@ -169,6 +169,41 @@ class KeywordModelMatchingTestCase(unittest.TestCase):
         self.assertIsNotNone(reason)
         self.assertEqual(reason["source"], "partition_row:1")
 
+    def test_partition_rules_do_not_match_by_query_prefix_only(self):
+        query = "best seller for men's bag"
+
+        for rule in (
+            [["Supreme Socks"]],
+            [["stone shirt"]],
+            [["stussy shirt"]],
+            [["sp5der shirt"]],
+        ):
+            with self.subTest(rule=rule):
+                reason = find_query_keyword_match(
+                    build_query_keyword_candidates(query),
+                    "",
+                    "",
+                    query_text=query,
+                    partition_match_enabled=True,
+                    partition_match_rules=rule,
+                )
+
+                self.assertIsNone(reason)
+
+    def test_partition_rules_keep_prefix_model_matching_from_rule_to_query(self):
+        query = "A hoodie like Sp5der's"
+        reason = find_query_keyword_match(
+            build_query_keyword_candidates(query),
+            "",
+            "",
+            query_text=query,
+            partition_match_enabled=True,
+            partition_match_rules=[["SP hood"]],
+        )
+
+        self.assertIsNotNone(reason)
+        self.assertEqual(reason["source"], "partition_row:0")
+
     def test_partition_rule_normalizer_keeps_matrix_shape_and_drops_empty_rows(self):
         self.assertEqual(
             normalize_partition_match_rules([
