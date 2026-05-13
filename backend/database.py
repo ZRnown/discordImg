@@ -4355,9 +4355,33 @@ class Database:
             account_names = item.get('account_names') or []
             payload_json = json.dumps(payload, ensure_ascii=False)
             account_ids_json = json.dumps(account_ids, ensure_ascii=False)
+            user_id = int(item.get('user_id') or 0)
+            website_id = int(item.get('website_id') or 0)
+            message_id = str(item.get('message_id') or '').strip()
+            status = str(item.get('status') or 'pending')
 
             with self.get_connection() as conn:
                 cursor = conn.cursor()
+                cursor.execute('BEGIN IMMEDIATE')
+                if message_id and status in {'pending', 'approved'}:
+                    cursor.execute(
+                        '''
+                        SELECT id
+                        FROM keyword_reply_review_items
+                        WHERE user_id = ?
+                          AND website_id = ?
+                          AND message_id = ?
+                          AND status IN ('pending', 'approved')
+                        ORDER BY created_at DESC, id DESC
+                        LIMIT 1
+                        ''',
+                        (user_id, website_id, message_id),
+                    )
+                    existing = cursor.fetchone()
+                    if existing:
+                        conn.commit()
+                        return int(existing['id'] or 0)
+
                 cursor.execute(
                     '''
                     INSERT INTO keyword_reply_review_items (
@@ -4381,8 +4405,8 @@ class Database:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''',
                     (
-                        int(item.get('user_id') or 0),
-                        int(item.get('website_id') or 0),
+                        user_id,
+                        website_id,
                         str(item.get('channel_id') or ''),
                         str(item.get('guild_id') or ''),
                         str(item.get('guild_name') or ''),
@@ -4393,9 +4417,9 @@ class Database:
                         str(item.get('sender_name') or ''),
                         str(item.get('content') or ''),
                         str(item.get('source_content') or ''),
-                        str(item.get('message_id') or ''),
+                        message_id,
                         str(item.get('reply_mode') or 'keyword'),
-                        str(item.get('status') or 'pending'),
+                        status,
                         payload_json,
                     ),
                 )

@@ -138,6 +138,34 @@ class KeywordReplyQueueTestCase(unittest.TestCase):
         self.assertEqual(manager.get_queue_size(key), 0)
         self.assertEqual(manager.release_due_jobs(key, interval_seconds=300, batch_size=0), [])
 
+    def test_review_items_are_unique_per_active_message(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db = TestDatabase(os.path.join(temp_dir, "metadata.db"))
+            website_id = db.get_website_configs()[0]["id"]
+            base_item = {
+                "user_id": 1,
+                "website_id": website_id,
+                "channel_id": "123456789012345678",
+                "guild_id": "998877665544332211",
+                "message_id": "same-message",
+                "content": "keyword reply",
+                "source_content": "message with text and image",
+                "payload": {"match_context": {"type": "text"}},
+            }
+
+            first_id = db.add_keyword_reply_review_item(base_item)
+            second_id = db.add_keyword_reply_review_item({
+                **base_item,
+                "content": "image reply",
+                "payload": {"match_context": {"type": "image"}},
+            })
+
+            self.assertGreater(first_id, 0)
+            self.assertEqual(second_id, first_id)
+            pending_items = db.get_keyword_reply_review_items(user_id=1)
+            self.assertEqual(len(pending_items), 1)
+            self.assertEqual(pending_items[0]["payload"]["match_context"]["type"], "text")
+
     def test_batch_content_mentions_each_author_with_its_reply(self):
         build_content = self._import_batch_content_builder()
 
