@@ -4124,7 +4124,7 @@ class DiscordBotClient(discord.Client):
             f.write(image_bytes)
         return target_path
 
-    async def _record_skipped_image_history(
+    async def _record_image_search_history(
         self,
         *,
         image_data,
@@ -4133,6 +4133,8 @@ class DiscordBotClient(discord.Client):
         similarity,
         threshold,
         best_match=None,
+        is_skipped=False,
+        add_skipped_image_history=False,
     ):
         try:
             try:
@@ -4151,21 +4153,22 @@ class DiscordBotClient(discord.Client):
             if isinstance(best_match, dict):
                 matched_image_index = best_match.get('imageIndex', best_match.get('image_index'))
 
-            await asyncio.get_event_loop().run_in_executor(
-                None,
-                db.add_skipped_image_history,
-                query_image_path,
-                float(similarity),
-                float(threshold),
-                str(getattr(message, 'id', '') or ''),
-                str(getattr(getattr(message, 'channel', None), 'id', '') or ''),
-                str(getattr(getattr(message, 'channel', None), 'name', '') or ''),
-                str(getattr(getattr(message, 'author', None), 'id', '') or ''),
-                self._get_message_author_name(message),
-                str(getattr(message, 'content', '') or ''),
-                matched_product_id,
-                matched_image_index,
-            )
+            if add_skipped_image_history:
+                await asyncio.get_event_loop().run_in_executor(
+                    None,
+                    db.add_skipped_image_history,
+                    query_image_path,
+                    float(similarity),
+                    float(threshold),
+                    str(getattr(message, 'id', '') or ''),
+                    str(getattr(getattr(message, 'channel', None), 'id', '') or ''),
+                    str(getattr(getattr(message, 'channel', None), 'name', '') or ''),
+                    str(getattr(getattr(message, 'author', None), 'id', '') or ''),
+                    self._get_message_author_name(message),
+                    str(getattr(message, 'content', '') or ''),
+                    matched_product_id,
+                    matched_image_index,
+                )
             await asyncio.to_thread(
                 db.add_search_history,
                 query_image_path=query_image_path,
@@ -4173,7 +4176,7 @@ class DiscordBotClient(discord.Client):
                 matched_image_index=matched_image_index,
                 similarity=float(similarity),
                 threshold=float(threshold),
-                is_skipped=True,
+                is_skipped=bool(is_skipped),
                 discord_message_id=str(getattr(message, 'id', '') or ''),
                 discord_channel_id=str(getattr(getattr(message, 'channel', None), 'id', '') or ''),
                 discord_channel_name=str(getattr(getattr(message, 'channel', None), 'name', '') or ''),
@@ -4182,7 +4185,28 @@ class DiscordBotClient(discord.Client):
                 message_content=str(getattr(message, 'content', '') or ''),
             )
         except Exception as e:
-            logger.error(f"记录略过图片历史失败: {e}")
+            logger.error(f"记录图片搜索历史失败: {e}")
+
+    async def _record_skipped_image_history(
+        self,
+        *,
+        image_data,
+        attachment,
+        message,
+        similarity,
+        threshold,
+        best_match=None,
+    ):
+        await self._record_image_search_history(
+            image_data=image_data,
+            attachment=attachment,
+            message=message,
+            similarity=similarity,
+            threshold=threshold,
+            best_match=best_match,
+            is_skipped=True,
+            add_skipped_image_history=True,
+        )
 
     async def schedule_reply(
         self,
@@ -6008,6 +6032,17 @@ class DiscordBotClient(discord.Client):
                     website_configs_override=website_configs,
                 )
 
+                if reply_sent:
+                    await self._record_image_search_history(
+                        image_data=image_data,
+                        attachment=attachment,
+                        message=message,
+                        similarity=similarity,
+                        threshold=skip_threshold,
+                        best_match=best_match,
+                        is_skipped=False,
+                    )
+
                 logger.debug(f'图片识别完成，相似度: {similarity:.4f}')
                 return bool(reply_sent)
             elif result and result.get('success'):
@@ -6753,6 +6788,7 @@ class DiscordBotClient(discord.Client):
                         form.add_field('user_id', str(self.user_id))
                     if user_shops:
                         form.add_field('user_shops', json.dumps(user_shops))
+                    form.add_field('suppress_search_history', '1')
                     normalized_query_text = re.sub(r'\s+', ' ', str(query_text or '')).strip()
                     if normalized_query_text:
                         form.add_field('query_text', normalized_query_text[:500])

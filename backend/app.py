@@ -1790,6 +1790,9 @@ def search_similar():
         limit = int(request.form.get('limit', 5))
         query_text = " ".join(str(request.form.get('query_text', '') or '').strip().split())
         query_text_ignored = False
+        suppress_search_history = str(
+            request.form.get('suppress_search_history', '') or ''
+        ).strip().lower() in {'1', 'true', 'yes', 'on'}
         debug_enabled = bool(getattr(config, 'DEBUG', False))
 
         user_id = request.form.get('user_id')
@@ -2272,7 +2275,7 @@ def search_similar():
                     processed_results.append(result_data)
 
                 # 保存最佳匹配的搜索历史
-                if processed_results:
+                if processed_results and not suppress_search_history:
                     best_match = processed_results[0]
                     persisted_query_image_path = _persist_search_history_query_image(
                         image_path,

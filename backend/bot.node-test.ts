@@ -18,6 +18,21 @@ const readSource = () => {
   throw new Error(`Could not find bot.py in: ${candidates.join(', ')}`)
 }
 
+const readAppSource = () => {
+  const candidates = [
+    path.join(process.cwd(), 'backend/app.py'),
+    path.join(process.cwd(), 'app.py'),
+  ]
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return readFileSync(candidate, 'utf8')
+    }
+  }
+
+  throw new Error(`Could not find app.py in: ${candidates.join(', ')}`)
+}
+
 test('reaction bark notification ignores missing messages instead of logging them as Bark failures', () => {
   const source = readSource()
 
@@ -77,6 +92,7 @@ test('image recognition retrieves the best candidate before applying reply thres
   assert.match(recognizeCallSource, /threshold=0\.0/)
   assert.doesNotMatch(recognizeCallSource, /threshold=skip_threshold/)
   assert.match(source, /form\.add_field\('threshold', str\(api_threshold\)\)/)
+  assert.match(source, /form\.add_field\('suppress_search_history', '1'\)/)
   assert.doesNotMatch(source, /allow_below_threshold_link_only/)
   assert.doesNotMatch(source, /仅发送链接/)
 })
@@ -124,7 +140,7 @@ test('keyword review queue deduplicates text and image hits from the same messag
 
 test('skipped image matches are also saved into search history', () => {
   const source = readSource()
-  const start = source.indexOf('async def _record_skipped_image_history')
+  const start = source.indexOf('async def _record_image_search_history')
   const end = source.indexOf('    async def schedule_reply', start)
   assert.notEqual(start, -1)
   assert.notEqual(end, -1)
@@ -132,6 +148,27 @@ test('skipped image matches are also saved into search history', () => {
   const skippedSource = source.slice(start, end)
   assert.match(skippedSource, /db\.add_search_history/)
   assert.match(skippedSource, /is_skipped=True/)
+  assert.match(skippedSource, /add_skipped_image_history=True/)
+})
+
+test('successful discord image matches are saved into search history with channel metadata', () => {
+  const source = readSource()
+  const start = source.indexOf('reply_sent = await self.schedule_reply(')
+  const end = source.indexOf("logger.debug(f'图片识别完成", start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+
+  const successSource = source.slice(start, end)
+  assert.match(successSource, /if reply_sent:/)
+  assert.match(successSource, /self\._record_image_search_history/)
+  assert.match(successSource, /threshold=skip_threshold/)
+  assert.match(successSource, /is_skipped=False/)
+})
+
+test('backend suppresses generic search history for internal bot image retrieval', () => {
+  const source = readAppSource()
+  assert.match(source, /suppress_search_history = /)
+  assert.match(source, /if processed_results and not suppress_search_history:/)
 })
 
 test('text messages with image attachments still run image recognition after keyword search', () => {
