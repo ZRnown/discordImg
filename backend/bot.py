@@ -224,6 +224,484 @@ def _build_keyword_direct_send_payload(
     return payload
 
 
+def _strip_review_reply_mentions(reply_content):
+    if not reply_content:
+        return ''
+
+    cleaned_lines = []
+    for raw_line in str(reply_content).splitlines():
+        line = re.sub(r'^<@!?\d+>\s*', '', raw_line.strip())
+        if line:
+            cleaned_lines.append(line)
+
+    return '\n'.join(cleaned_lines).strip()
+
+
+def _prepare_review_dispatch_custom_reply(custom_reply):
+    if not isinstance(custom_reply, dict):
+        return custom_reply
+
+    prepared = dict(custom_reply)
+    content = prepared.get('content')
+    if isinstance(content, str) and content.strip():
+        prepared['content'] = _strip_review_reply_mentions(content)
+
+    return prepared
+
+
+def _build_message_reference(message, reply_target_channel):
+    if message is None or reply_target_channel is None:
+        return None
+
+    message_id = _coerce_int(getattr(message, 'id', None), None)
+    if message_id is None:
+        return None
+
+    get_partial_message = getattr(reply_target_channel, 'get_partial_message', None)
+    if callable(get_partial_message):
+        try:
+            return get_partial_message(message_id)
+        except Exception:
+            pass
+
+    channel_id = _coerce_int(getattr(reply_target_channel, 'id', None), None)
+    if channel_id is None:
+        channel_id = _coerce_int(getattr(getattr(message, 'channel', None), 'id', None), None)
+    guild_id = _coerce_int(getattr(getattr(reply_target_channel, 'guild', None), 'id', None), None)
+    if guild_id is None:
+        guild_id = _coerce_int(getattr(getattr(message, 'guild', None), 'id', None), None)
+
+    try:
+        return discord.MessageReference(
+            message_id=message_id,
+            channel_id=channel_id,
+            guild_id=guild_id,
+            fail_if_not_exists=False,
+        )
+    except Exception:
+        return message
+
+
+def _resolve_image_reply_threshold(match_context, website_config):
+    base_threshold = _coerce_float((match_context or {}).get('base_threshold'))
+    if base_threshold is None:
+        base_threshold = config.DISCORD_SIMILARITY_THRESHOLD
+    website_threshold = _coerce_float((website_config or {}).get('image_similarity_threshold'))
+    return website_threshold if website_threshold is not None else base_threshold
+
+
+def _is_image_match_above_reply_threshold(match_context, website_config):
+    if not isinstance(match_context, dict) or match_context.get('type') != 'image':
+        return True
+
+    similarity = _coerce_float(match_context.get('similarity')) or 0.0
+    threshold_to_use = _resolve_image_reply_threshold(match_context, website_config)
+    return similarity >= threshold_to_use
+
+
+def _resolve_best_match_image_threshold(match_context, website_config):
+    if not isinstance(match_context, dict) or match_context.get('type') != 'image':
+        return None
+
+    reply_threshold = _resolve_image_reply_threshold(match_context, website_config)
+    base_threshold = _coerce_float((match_context or {}).get('best_match_image_base_threshold'))
+    website_threshold = _coerce_float(
+        (website_config or {}).get('best_match_image_similarity_threshold')
+    )
+    threshold_to_use = website_threshold if website_threshold is not None else base_threshold
+    if threshold_to_use is None:
+        threshold_to_use = reply_threshold
+    return max(threshold_to_use, reply_threshold)
+
+
+def _should_send_best_match_reply_image(match_context, website_config):
+    if not isinstance(match_context, dict) or match_context.get('type') != 'image':
+        return False
+
+    similarity = _coerce_float(match_context.get('similarity')) or 0.0
+    if not _is_image_match_above_reply_threshold(match_context, website_config):
+        return False
+
+    threshold_to_use = _resolve_best_match_image_threshold(match_context, website_config)
+    if threshold_to_use is None:
+        return False
+    return similarity >= threshold_to_use
+
+
+def _extract_image_match_top1_margin(payload):
+    if not isinstance(payload, dict):
+        return None
+
+    margin = _coerce_float(payload.get('top1_margin'))
+    if margin is not None:
+        return margin
+
+    score_breakdown = payload.get('scoreBreakdown') or payload.get('score_breakdown') or {}
+    if isinstance(score_breakdown, dict):
+        margin = _coerce_float(
+            score_breakdown.get('top1Margin', score_breakdown.get('top1_margin'))
+        )
+        if margin is not None:
+            return margin
+
+    return None
+
+
+def _should_allow_below_threshold_link_reply(match_context):
+    return bool(
+        isinstance(match_context, dict)
+        and match_context.get('type') == 'image'
+        and match_context.get('allow_below_threshold_link_reply')
+    )
+
+
+def _resolve_image_reply_min_top1_margin():
+    configured = _coerce_float(
+        getattr(config, 'DISCORD_IMAGE_REPLY_MIN_TOP1_MARGIN', 0.0)
+    )
+    return max(configured or 0.0, 0.0)
+
+
+def _get_image_match_reply_block_reason(match_context, website_config):
+    if not isinstance(match_context, dict) or match_context.get('type') != 'image':
+        return None
+
+    similarity = _coerce_float(match_context.get('similarity')) or 0.0
+    threshold_to_use = _resolve_image_reply_threshold(match_context, website_config)
+
+    if similarity < threshold_to_use:
+        return (
+            f"📷 图片相似度 {similarity:.3f} 低于网站阈值 {threshold_to_use:.3f}，跳过回复"
+        )
+
+    margin_threshold = _resolve_image_reply_min_top1_margin()
+    if margin_threshold <= 0:
+        return None
+
+    top1_margin = _extract_image_match_top1_margin(match_context)
+    if top1_margin is None:
+        return None
+
+    if top1_margin < margin_threshold:
+        return (
+            f"📷 图片命中分差过小: top1-top2分差 {top1_margin:.3f} < {margin_threshold:.3f}，跳过回复"
+        )
+
+    return None
+
+
+def _normalize_sender_id_override(sender_ids):
+    normalized_ids = []
+    for sender_id in sender_ids or []:
+        normalized = _coerce_int(sender_id, None)
+        if normalized is None or normalized in normalized_ids:
+            continue
+        normalized_ids.append(normalized)
+    return normalized_ids
+
+
+def _normalize_saved_review_reply_target_payload(payload):
+    if not isinstance(payload, dict):
+        return {}
+
+    channel_id = _coerce_int(payload.get('channel_id'), None)
+    parent_channel_id = _coerce_int(payload.get('parent_channel_id'), None)
+
+    return {
+        'used_thread_reply': bool(payload.get('used_thread_reply') and channel_id is not None),
+        'channel_id': channel_id,
+        'channel_name': str(payload.get('channel_name') or ''),
+        'parent_channel_id': parent_channel_id,
+        'parent_channel_name': str(payload.get('parent_channel_name') or ''),
+    }
+
+
+def _message_has_existing_thread_hint(message):
+    if message is None:
+        return False
+
+    channel = getattr(message, 'channel', None)
+    if _resolve_forum_parent_channel_id(channel) is not None:
+        return True
+
+    thread_obj = getattr(message, 'thread', None)
+    if _coerce_int(getattr(thread_obj, 'id', None), None) is not None:
+        return True
+
+    flags = getattr(message, 'flags', None)
+    return bool(getattr(flags, 'has_thread', False))
+
+
+def _build_keyword_review_message_proxy(review_item):
+    payload = review_item.get('payload') or {}
+    message_payload = payload.get('message') or {}
+    reply_target_payload = _normalize_saved_review_reply_target_payload(
+        payload.get('reply_target_channel') or {}
+    )
+    use_saved_reply_target = bool(reply_target_payload.get('used_thread_reply'))
+
+    def _parse_message_time(value):
+        if isinstance(value, datetime):
+            return value
+        if not value:
+            return datetime.now().astimezone()
+        text = str(value).strip()
+        if not text:
+            return datetime.now().astimezone()
+        normalized = text.replace('Z', '+00:00')
+        try:
+            parsed = datetime.fromisoformat(normalized)
+        except ValueError:
+            return datetime.now().astimezone()
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=datetime.now().astimezone().tzinfo)
+        return parsed
+
+    guild_id = _coerce_int(message_payload.get('guild_id') or review_item.get('guild_id'), None)
+    channel_id = _coerce_int(message_payload.get('channel_id') or review_item.get('channel_id'), None)
+    parent_channel_id = _coerce_int(message_payload.get('parent_channel_id'), None)
+    message_thread_id = _coerce_int(message_payload.get('thread_id'), None)
+    if use_saved_reply_target:
+        channel_id = _coerce_int(reply_target_payload.get('channel_id'), channel_id)
+        parent_channel_id = _coerce_int(
+            reply_target_payload.get('parent_channel_id'),
+            parent_channel_id,
+        )
+        message_thread_id = _coerce_int(
+            reply_target_payload.get('channel_id'),
+            message_thread_id,
+        )
+    author_id = _coerce_int(
+        message_payload.get('author_id')
+        or review_item.get('sender_id')
+        or review_item.get('author_id'),
+        None,
+    )
+
+    guild_name = (
+        message_payload.get('guild_name')
+        or review_item.get('guild_name')
+        or ''
+    )
+    channel_name = (
+        reply_target_payload.get('channel_name') if use_saved_reply_target else None
+    ) or (
+        message_payload.get('channel_name')
+        or review_item.get('channel_name')
+        or ''
+    )
+    parent_channel_name = (
+        reply_target_payload.get('parent_channel_name') if use_saved_reply_target else None
+    ) or (
+        message_payload.get('parent_channel_name')
+        or review_item.get('parent_channel_name')
+        or ''
+    )
+    author_name = (
+        message_payload.get('author_display_name')
+        or message_payload.get('author_name')
+        or review_item.get('sender_name')
+        or ''
+    )
+
+    guild = SimpleNamespace(
+        id=guild_id,
+        name=guild_name,
+    )
+    parent_channel = None
+    if parent_channel_id is not None:
+        parent_channel = SimpleNamespace(
+            id=parent_channel_id,
+            name=parent_channel_name,
+            guild=guild,
+        )
+
+    channel = SimpleNamespace(
+        id=channel_id,
+        name=channel_name,
+        guild=guild,
+        parent_id=parent_channel_id,
+        parent=parent_channel,
+    )
+
+    author = SimpleNamespace(
+        id=author_id,
+        name=message_payload.get('author_name') or author_name,
+        display_name=author_name,
+        bot=False,
+    )
+
+    message_content = (
+        message_payload.get('content')
+        or review_item.get('source_content')
+        or ''
+    )
+    message_has_thread = bool(
+        message_payload.get('has_thread')
+        or message_thread_id is not None
+        or use_saved_reply_target
+    )
+    message = SimpleNamespace(
+        id=_coerce_int(message_payload.get('id') or review_item.get('message_id'), None),
+        content=message_content,
+        clean_content=message_payload.get('clean_content') or message_content,
+        created_at=_parse_message_time(message_payload.get('created_at')),
+        author=author,
+        channel=channel,
+        guild=guild,
+        jump_url=message_payload.get('jump_url') or '',
+        mentions=[],
+        mention_everyone=False,
+        reference=None,
+        type=getattr(discord.MessageType, 'default', None),
+        thread=SimpleNamespace(id=message_thread_id) if message_thread_id is not None else None,
+        flags=SimpleNamespace(has_thread=message_has_thread),
+    )
+    return message
+
+
+def _select_keyword_review_dispatch_client(review_item):
+    user_id = _coerce_int(review_item.get('user_id'), None)
+    if user_id is None:
+        return None
+
+    preferred_account_ids = {
+        _coerce_int(account_id, None)
+        for account_id in (review_item.get('account_ids') or [])
+        if _coerce_int(account_id, None) is not None
+    }
+
+    running_clients = []
+    for client in bot_clients:
+        if getattr(client, 'user_id', None) != user_id:
+            continue
+        if not getattr(client, 'running', False):
+            continue
+        is_closed = getattr(client, 'is_closed', None)
+        if callable(is_closed) and is_closed():
+            continue
+        running_clients.append(client)
+    if not running_clients:
+        return None
+
+    for client in running_clients:
+        if preferred_account_ids and getattr(client, 'account_id', None) in preferred_account_ids:
+            return client
+
+    return running_clients[0]
+
+
+def _resolve_current_review_dispatch_website_config(review_item, message, payload_website_config):
+    website_config = payload_website_config if isinstance(payload_website_config, dict) else {}
+    website_id = _coerce_int(website_config.get('id') or review_item.get('website_id'), None)
+    user_id = _coerce_int(review_item.get('user_id'), None)
+    if website_id is None or user_id is None or message is None:
+        return website_config
+
+    try:
+        try:
+            from database import db
+        except ImportError:
+            from .database import db
+
+        lookup_ids = DiscordBotClient._resolve_channel_lookup_ids(getattr(message, 'channel', None))
+        current_configs = db.get_website_configs_by_channel(lookup_ids, user_id)
+        matched_config = next(
+            (config for config in (current_configs or []) if _coerce_int(config.get('id'), None) == website_id),
+            None,
+        )
+        if matched_config:
+            return matched_config
+    except Exception as exc:
+        logger.warning(
+            f"刷新审核派发网站配置失败: website_id={website_id} user_id={user_id} | {exc}"
+        )
+
+    return website_config
+
+
+async def dispatch_keyword_review_item(review_item):
+    """审批通过后，按当前网站配置和账号状态发送待审关键词回复。"""
+    item_id = _coerce_int(review_item.get('id'), None)
+    try:
+        try:
+            from database import db
+        except ImportError:
+            from .database import db
+
+        client = _select_keyword_review_dispatch_client(review_item)
+        if client is None:
+            raise RuntimeError('没有可用的在线机器人账号来发送审核通过的消息')
+
+        payload = review_item.get('payload') or {}
+        message = _build_keyword_review_message_proxy(review_item)
+        saved_reply_target_payload = payload.get('reply_target_channel') or {}
+        website_config = _resolve_current_review_dispatch_website_config(
+            review_item,
+            message,
+            payload.get('website_config') or {},
+        )
+        if not isinstance(website_config, dict):
+            website_config = {}
+        if not website_config.get('id'):
+            website_config = {
+                'id': review_item.get('website_id'),
+            }
+        product = payload.get('product') or {}
+        custom_reply = _prepare_review_dispatch_custom_reply(payload.get('custom_reply'))
+        match_context = payload.get('match_context')
+
+        block_reason = _get_image_match_reply_block_reason(match_context, website_config)
+        if block_reason:
+            logger.info(f"审批后发送前命中图片阈值拦截: {block_reason}")
+            if item_id:
+                db.update_keyword_reply_review_item_status(
+                    item_id,
+                    'failed',
+                    error_message=block_reason,
+                )
+            return False
+
+        success = await client.schedule_reply(
+            message,
+            product,
+            custom_reply,
+            match_context,
+            website_configs_override=[website_config],
+            skip_filters=True,
+            skip_repeat_checks=True,
+            skip_review_check=True,
+            force_reference_reply=True,
+            disable_thread_creation=False,
+            sender_ids_override=payload.get('selected_sender_ids') or review_item.get('account_ids'),
+            saved_reply_target_payload=saved_reply_target_payload,
+            strict_saved_reply_target=bool(saved_reply_target_payload.get('used_thread_reply')),
+        )
+        if item_id:
+            db.update_keyword_reply_review_item_status(
+                item_id,
+                'sent' if success else 'failed',
+                error_message=None if success else '审批后发送失败',
+            )
+        return success
+    except Exception as e:
+        logger.error(f"审批后发送关键词回复失败: {e}")
+        if item_id:
+            try:
+                from database import db
+            except ImportError:
+                from .database import db
+            try:
+                db.update_keyword_reply_review_item_status(
+                    item_id,
+                    'failed',
+                    error_message=str(e),
+                )
+            except Exception:
+                pass
+        return False
+
+
 def _build_multi_reply_content(author_id, reply_contents, reply_mode):
     cleaned_contents = [
         (content or "").strip()
@@ -410,6 +888,83 @@ async def _resolve_existing_reply_thread_after_create_failure(
     return None
 
 
+async def _resolve_archived_reply_thread(target_client, target_channel, message):
+    message_id = getattr(message, 'id', None)
+    if target_channel is None or message_id is None:
+        return None
+
+    archived_threads = getattr(target_channel, 'archived_threads', None)
+    if not callable(archived_threads):
+        return None
+
+    for private in (False, True):
+        try:
+            iterator = archived_threads(private=private, limit=100)
+            async for thread in iterator:
+                starter_message_id = getattr(getattr(thread, 'starter_message', None), 'id', None)
+                if starter_message_id != message_id:
+                    continue
+                thread_id = getattr(thread, 'id', None)
+                resolved_thread = await _resolve_client_channel(target_client, thread_id)
+                resolved_thread = resolved_thread or thread
+                if thread_id is not None:
+                    _store_cached_auto_reply_thread_id(message, thread_id)
+                return resolved_thread
+        except Exception as exc:
+            logger.warning(
+                f"查找归档子区失败: message={message_id} channel={getattr(target_channel, 'id', None)} private={private} | {exc}"
+            )
+
+    return None
+
+
+async def _create_reply_thread_for_message(target_channel, message):
+    message_id = getattr(message, 'id', None)
+    if target_channel is None or message_id is None:
+        return None
+
+    create_thread = getattr(target_channel, 'create_thread', None)
+    if not callable(create_thread):
+        logger.warning(
+            f"当前频道不支持创建子区: message={message_id} "
+            f"channel={getattr(target_channel, 'id', None)}"
+        )
+        return None
+
+    try:
+        created_thread = await create_thread(
+            name=_build_auto_reply_thread_name(message),
+            message=message,
+        )
+    except TypeError:
+        try:
+            created_thread = await create_thread(
+                name=_build_auto_reply_thread_name(message),
+                message_id=message_id,
+            )
+        except TypeError as exc:
+            logger.warning(
+                f"当前 Discord 库不支持按源消息创建子区: message={message_id} "
+                f"channel={getattr(target_channel, 'id', None)} | {exc}"
+            )
+            return None
+    except Exception as exc:
+        logger.warning(
+            f"创建消息子区失败: message={message_id} "
+            f"channel={getattr(target_channel, 'id', None)} | {exc}"
+        )
+        return None
+
+    thread_id = getattr(created_thread, 'id', None)
+    if thread_id is not None:
+        _store_cached_auto_reply_thread_id(message, thread_id)
+    logger.info(
+        f"已创建消息子区用于回复: message={message_id} "
+        f"thread={thread_id} channel={getattr(target_channel, 'id', None)}"
+    )
+    return created_thread
+
+
 async def resolve_reply_target_channel(
     target_client,
     target_channel,
@@ -453,26 +1008,27 @@ async def resolve_reply_target_channel(
     if not callable(create_thread):
         return target_channel, False
 
-    try:
-        created_thread = await create_thread(
-            name=_build_auto_reply_thread_name(message),
-            message=message,
-        )
-        created_thread_id = getattr(created_thread, 'id', None)
-        if created_thread_id is not None:
-            _store_cached_auto_reply_thread_id(message, created_thread_id)
+    archived_thread = await _resolve_archived_reply_thread(target_client, target_channel, message)
+    if archived_thread is not None:
+        return archived_thread, True
+
+    created_thread = await _create_reply_thread_for_message(target_channel, message)
+    if created_thread is not None:
         return created_thread, True
-    except Exception as exc:
-        if getattr(exc, 'code', None) == 160004:
-            existing_thread = await _resolve_existing_reply_thread_after_create_failure(
-                target_client,
-                target_channel,
-                message,
-            )
-            if existing_thread is not None:
-                return existing_thread, True
-        logger.warning(f"创建子分区失败，回退频道直发: {exc}")
-        return target_channel, False
+
+    existing_thread_after_create = await _resolve_existing_reply_thread_after_create_failure(
+        target_client,
+        target_channel,
+        message,
+    )
+    if existing_thread_after_create is not None:
+        return existing_thread_after_create, True
+
+    logger.warning(
+        f"未找到也未能创建消息子区: message={getattr(message, 'id', None)} "
+        f"channel={getattr(target_channel, 'id', None)}"
+    )
+    return target_channel, False
 
 
 def _build_keyword_window_key(user_id, website_id, guild_id):
@@ -2275,12 +2831,14 @@ class DiscordBotClient(discord.Client):
                                 )
                                 continue
 
-                            explicit_mentions = bool(active_custom_reply and active_custom_reply.get('explicit_mentions'))
-                            send_plain_message = _should_send_plain_keyword_message(
-                                prevalidated_batch=prevalidated_batch,
-                                explicit_mentions=explicit_mentions,
-                                reply_mode=reply_mode,
-                            )
+                            if thread_reply_enabled and not used_thread_reply:
+                                logger.warning(
+                                    f"子区回复失败，当前回复将跳过，避免发到外面: "
+                                    f"message={getattr(message, 'id', None)} "
+                                    f"channel={getattr(target_channel, 'id', None)}"
+                                )
+                                continue
+
                             if (
                                 send_plain_message
                                 and response_content
