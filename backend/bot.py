@@ -1740,6 +1740,11 @@ KEYWORD_TEXT_SEARCH_TIMEOUT_SECONDS = max(
     float(getattr(config, 'KEYWORD_TEXT_SEARCH_TIMEOUT_SECONDS', 8.0) or 8.0),
     1.0,
 )
+KEYWORD_TEXT_SEARCH_MAX_INFLIGHT = max(
+    int(getattr(config, 'KEYWORD_TEXT_SEARCH_MAX_INFLIGHT', 3) or 3),
+    1,
+)
+keyword_text_search_concurrency_limit = asyncio.Semaphore(KEYWORD_TEXT_SEARCH_MAX_INFLIGHT)
 
 # 关键词搜索候选上限（覆盖每页200商品的测试场景）
 KEYWORD_SEARCH_LIMIT = 600
@@ -6691,34 +6696,35 @@ class DiscordBotClient(discord.Client):
         try:
             # 设置超时时间
             timeout = aiohttp.ClientTimeout(total=KEYWORD_TEXT_SEARCH_TIMEOUT_SECONDS)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                # 构建搜索请求
-                search_data = {
-                    'query': keyword,
-                    'limit': KEYWORD_SEARCH_LIMIT
-                }
-                if self.user_id:
-                    search_data['user_id'] = self.user_id
-                if self.user_shops:
-                    search_data['user_shops'] = self.user_shops
+            async with keyword_text_search_concurrency_limit:
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    # 构建搜索请求
+                    search_data = {
+                        'query': keyword,
+                        'limit': KEYWORD_SEARCH_LIMIT
+                    }
+                    if self.user_id:
+                        search_data['user_id'] = self.user_id
+                    if self.user_shops:
+                        search_data['user_shops'] = self.user_shops
 
-                # 调用后端搜索API
-                async with session.post(f'{config.BACKEND_API_URL}/api/search_similar_text',
-                                      json=search_data) as resp:
-                    if resp.status == 200:
-                        result = await resp.json()
-                        return result
-                    else:
-                        response_text = (await resp.text()).strip()
-                        logger.error(
-                            'Keyword search API error: status=%s elapsed=%.2fs user_id=%s query=%r body=%s',
-                            resp.status,
-                            time.perf_counter() - request_started_at,
-                            self.user_id,
-                            str(keyword)[:120],
-                            re.sub(r'\s+', ' ', response_text)[:300] or '<empty>',
-                        )
-                        return None
+                    # 调用后端搜索API。限制并发，避免同一条消息被多账号同时处理时压垮 SQLite。
+                    async with session.post(f'{config.BACKEND_API_URL}/api/search_similar_text',
+                                          json=search_data) as resp:
+                        if resp.status == 200:
+                            result = await resp.json()
+                            return result
+                        else:
+                            response_text = (await resp.text()).strip()
+                            logger.error(
+                                'Keyword search API error: status=%s elapsed=%.2fs user_id=%s query=%r body=%s',
+                                resp.status,
+                                time.perf_counter() - request_started_at,
+                                self.user_id,
+                                str(keyword)[:120],
+                                re.sub(r'\s+', ' ', response_text)[:300] or '<empty>',
+                            )
+                            return None
 
         except asyncio.TimeoutError:
             logger.warning(

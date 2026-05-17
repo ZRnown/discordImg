@@ -184,6 +184,19 @@ test('text messages with image attachments still run image recognition after key
   assert.doesNotMatch(onMessageTailSource, /图文消息已处理文字关键词路径，跳过图片识别/)
 })
 
+test('keyword text search requests are concurrency limited before hitting the backend API', () => {
+  const source = readSource()
+  const start = source.indexOf('async def search_products_by_keyword')
+  const end = source.indexOf('    async def recognize_image', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+
+  const searchSource = source.slice(start, end)
+  assert.match(source, /keyword_text_search_concurrency_limit = asyncio\.Semaphore/)
+  assert.match(source, /KEYWORD_TEXT_SEARCH_MAX_INFLIGHT/)
+  assert.match(searchSource, /async with keyword_text_search_concurrency_limit:/)
+})
+
 test('forum post starter uses title and content for keyword and image search', () => {
   const source = readSource()
 
