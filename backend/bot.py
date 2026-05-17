@@ -1158,7 +1158,7 @@ async def dispatch_keyword_review_item(review_item):
             skip_repeat_checks=True,
             skip_review_check=True,
             force_reference_reply=True,
-            disable_thread_creation=True,
+            disable_thread_creation=False,
             sender_ids_override=payload.get('selected_sender_ids') or review_item.get('account_ids'),
             saved_reply_target_payload=saved_reply_target_payload,
             strict_saved_reply_target=bool(saved_reply_target_payload.get('used_thread_reply')),
@@ -1474,6 +1474,53 @@ async def _resolve_archived_reply_thread(target_client, target_channel, message)
     return None
 
 
+async def _create_reply_thread_for_message(target_channel, message):
+    message_id = getattr(message, 'id', None)
+    if target_channel is None or message_id is None:
+        return None
+
+    create_thread = getattr(target_channel, 'create_thread', None)
+    if not callable(create_thread):
+        logger.warning(
+            f"当前频道不支持创建子区: message={message_id} "
+            f"channel={getattr(target_channel, 'id', None)}"
+        )
+        return None
+
+    try:
+        created_thread = await create_thread(
+            name=_build_auto_reply_thread_name(message),
+            message=message,
+        )
+    except TypeError:
+        try:
+            created_thread = await create_thread(
+                name=_build_auto_reply_thread_name(message),
+                message_id=message_id,
+            )
+        except TypeError as exc:
+            logger.warning(
+                f"当前 Discord 库不支持按源消息创建子区: message={message_id} "
+                f"channel={getattr(target_channel, 'id', None)} | {exc}"
+            )
+            return None
+    except Exception as exc:
+        logger.warning(
+            f"创建消息子区失败: message={message_id} "
+            f"channel={getattr(target_channel, 'id', None)} | {exc}"
+        )
+        return None
+
+    thread_id = getattr(created_thread, 'id', None)
+    if thread_id is not None:
+        _store_cached_auto_reply_thread_id(message, thread_id)
+    logger.info(
+        f"已创建消息子区用于回复: message={message_id} "
+        f"thread={thread_id} channel={getattr(target_channel, 'id', None)}"
+    )
+    return created_thread
+
+
 async def resolve_reply_target_channel(
     target_client,
     target_channel,
@@ -1530,8 +1577,20 @@ async def resolve_reply_target_channel(
     if archived_thread is not None:
         return archived_thread, True
 
-    logger.info(
-        f"未找到消息已有子区: message={getattr(message, 'id', None)} "
+    created_thread = await _create_reply_thread_for_message(target_channel, message)
+    if created_thread is not None:
+        return created_thread, True
+
+    existing_thread_after_create = await _resolve_existing_reply_thread_after_create_failure(
+        target_client,
+        target_channel,
+        message,
+    )
+    if existing_thread_after_create is not None:
+        return existing_thread_after_create, True
+
+    logger.warning(
+        f"未找到也未能创建消息子区: message={getattr(message, 'id', None)} "
         f"channel={getattr(target_channel, 'id', None)}"
     )
     return target_channel, False
@@ -4645,11 +4704,12 @@ class DiscordBotClient(discord.Client):
                                 continue
 
                             if thread_reply_enabled and not used_thread_reply:
-                                logger.info(
-                                    f"↪️ [子区回复回退] 源消息没有可用子区，改回原频道: "
+                                logger.warning(
+                                    f"子区回复失败，当前回复将跳过，避免发到外面: "
                                     f"message={getattr(message, 'id', None)} "
                                     f"channel={getattr(target_channel, 'id', None)}"
                                 )
+                                continue
 
                             if (
                                 website_config

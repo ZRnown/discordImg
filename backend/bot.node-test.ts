@@ -208,18 +208,19 @@ test('forum post starter uses title and content for keyword and image search', (
   assert.match(source, /form\.add_field\('query_text', normalized_query_text\[:500\]\)/)
 })
 
-test('thread reply mode falls back to the source channel without creating new threads', () => {
+test('thread reply mode creates a message thread when no existing thread is available', () => {
   const source = readSource()
 
-  assert.match(source, /disable_thread_creation=True/)
+  assert.match(source, /disable_thread_creation=False/)
   assert.match(source, /thread_reply_enabled=thread_reply_enabled or saved_reply_target_requested,\n\s+\)/)
   assert.match(source, /if thread_reply_enabled and not used_thread_reply:/)
-  assert.match(source, /子区回复回退/)
+  assert.match(source, /_create_reply_thread_for_message/)
   assert.match(source, /_resolve_archived_reply_thread/)
   assert.match(source, /archived_threads\(private=private, limit=100\)/)
+  assert.match(source, /create_thread = getattr\(target_channel, 'create_thread'/)
+  assert.match(source, /await create_thread\(/)
   assert.doesNotMatch(source, /子区回复跳过/)
-  assert.doesNotMatch(source, /create_thread = getattr\(target_channel, 'create_thread'/)
-  assert.doesNotMatch(source, /await create_thread\(/)
+  assert.doesNotMatch(source, /子区回复回退/)
 })
 
 test('messages that already indicate an existing thread do not fall back to the parent channel', () => {

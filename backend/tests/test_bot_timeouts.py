@@ -422,13 +422,14 @@ class ResolveReplyTargetChannelTestCase(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         _auto_reply_thread_ids.clear()
 
-    async def test_does_not_create_thread_when_no_existing_message_thread(self):
+    async def test_creates_thread_when_no_existing_message_thread(self):
+        created_thread = SimpleNamespace(id=888001, parent_id=123001)
         target_channel = SimpleNamespace(
             id=123001,
             parent_id=None,
             fetch_message=AsyncMock(return_value=SimpleNamespace(id=777001, flags=SimpleNamespace(has_thread=False))),
             threads=[],
-            create_thread=AsyncMock(side_effect=AssertionError("should not create a thread")),
+            create_thread=AsyncMock(return_value=created_thread),
         )
         message = _SlottedMessage(
             message_id=777001,
@@ -447,10 +448,56 @@ class ResolveReplyTargetChannelTestCase(unittest.IsolatedAsyncioTestCase):
             thread_reply_enabled=True,
         )
 
-        self.assertIs(reply_target_channel, target_channel)
-        self.assertFalse(used_thread_reply)
-        target_channel.create_thread.assert_not_awaited()
-        self.assertNotIn(777001, _auto_reply_thread_ids)
+        self.assertIs(reply_target_channel, created_thread)
+        self.assertTrue(used_thread_reply)
+        target_channel.create_thread.assert_awaited_once()
+        self.assertEqual(_auto_reply_thread_ids[777001], 888001)
+
+    async def test_reuses_existing_thread_when_thread_create_races(self):
+        existing_thread = SimpleNamespace(id=888002, parent_id=123001)
+        target_channel = SimpleNamespace(
+            id=123001,
+            parent_id=None,
+            fetch_message=AsyncMock(
+                return_value=SimpleNamespace(id=777002, flags=SimpleNamespace(has_thread=False))
+            ),
+            threads=[],
+            create_thread=AsyncMock(side_effect=RuntimeError("thread already exists")),
+        )
+        message = _SlottedMessage(
+            message_id=777002,
+            channel=SimpleNamespace(id=123001, parent_id=None),
+            fetch_thread=AsyncMock(return_value=None),
+        )
+        lookup_count = {"count": 0}
+
+        async def fetch_channel(channel_id):
+            return existing_thread if channel_id == 888002 else None
+
+        async def resolve_after_failure(target_client, target_channel_arg, message_arg):
+            lookup_count["count"] += 1
+            return None if lookup_count["count"] == 1 else existing_thread
+
+        target_client = SimpleNamespace(
+            get_channel=lambda channel_id: None,
+            fetch_channel=AsyncMock(side_effect=fetch_channel),
+        )
+
+        with patch.object(
+            bot_module,
+            "_resolve_existing_reply_thread_after_create_failure",
+            side_effect=resolve_after_failure,
+        ):
+            reply_target_channel, used_thread_reply = await resolve_reply_target_channel(
+                target_client=target_client,
+                target_channel=target_channel,
+                message=message,
+                thread_reply_enabled=True,
+            )
+
+        self.assertIs(reply_target_channel, existing_thread)
+        self.assertTrue(used_thread_reply)
+        target_channel.create_thread.assert_awaited_once()
 
     async def test_reuses_cached_thread_when_same_message_hits_again(self):
         existing_thread = SimpleNamespace(id=555001, parent_id=123001)
