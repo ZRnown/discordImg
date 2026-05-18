@@ -184,6 +184,18 @@ test('text messages with image attachments still run image recognition after key
   assert.doesNotMatch(onMessageTailSource, /图文消息已处理文字关键词路径，跳过图片识别/)
 })
 
+test('image recognition is scheduled in the background so keyword replies are not blocked by live search', () => {
+  const source = readSource()
+  const start = source.indexOf('# 处理图片')
+  const end = source.indexOf('    async def on_raw_reaction_add', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+
+  const imageStageSource = source.slice(start, end)
+  assert.match(imageStageSource, /self\._start_image_reply_background_task\(/)
+  assert.doesNotMatch(imageStageSource, /await self\._run_message_stage_with_timeout\(\s*message,\s*f'image_reply:/)
+})
+
 test('keyword text search requests are concurrency limited before hitting the backend API', () => {
   const source = readSource()
   const start = source.indexOf('async def search_products_by_keyword')

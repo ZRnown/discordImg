@@ -138,6 +138,7 @@ _keyword_reply_window_lock = asyncio.Lock()
 _keyword_reply_flush_tasks = {}
 _keyword_reply_window_configs = {}
 _keyword_reply_background_tasks = set()
+_image_reply_background_tasks = set()
 _auto_reply_thread_ids = {}
 _review_bark_monitor_task = None
 _review_bark_notification_lock = asyncio.Lock()
@@ -2905,6 +2906,39 @@ class DiscordBotClient(discord.Client):
                 logger.info(f"⏭️ [关键词后台任务已取消] {task_name}")
             except Exception as e:
                 logger.error(f"关键词后台任务失败({task_name}): {e}")
+
+        task.add_done_callback(_on_done)
+        return task
+
+    def _start_image_reply_background_task(self, message, attachment, website_configs_to_process):
+        filename = getattr(attachment, 'filename', 'unknown')
+        task_name = (
+            f"image-reply message={getattr(message, 'id', 'unknown')} "
+            f"attachment={filename}"
+        )
+        task = asyncio.create_task(
+            self._run_message_stage_with_timeout(
+                message,
+                f'image_reply:{filename}',
+                self.handle_image(
+                    message,
+                    attachment,
+                    website_configs_override=website_configs_to_process,
+                ),
+                MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS,
+            ),
+            name=task_name,
+        )
+        _image_reply_background_tasks.add(task)
+
+        def _on_done(completed_task):
+            _image_reply_background_tasks.discard(completed_task)
+            try:
+                completed_task.result()
+            except asyncio.CancelledError:
+                logger.info(f"⏭️ [图片后台任务已取消] {task_name}")
+            except Exception as e:
+                logger.error(f"图片后台任务失败({task_name}): {e}")
 
         task.add_done_callback(_on_done)
         return task
@@ -5683,15 +5717,10 @@ class DiscordBotClient(discord.Client):
 
                 if is_image:
                     logger.debug(f"📷 检测到图片，开始处理: {attachment.filename}")
-                    await self._run_message_stage_with_timeout(
+                    self._start_image_reply_background_task(
                         message,
-                        f'image_reply:{attachment.filename}',
-                        self.handle_image(
-                            message,
-                            attachment,
-                            website_configs_override=website_configs_to_process,
-                        ),
-                        MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS,
+                        attachment,
+                        website_configs_to_process,
                     )
 
     async def on_raw_reaction_add(self, payload):
