@@ -16,10 +16,32 @@ test('startup catalog preparation is disabled by default', () => {
   assert.match(source, /LIVE_IMAGE_SEARCH_STARTUP_PREPARE_CATALOG.*False/)
 })
 
+test('production loads existing scoped catalog caches on startup', () => {
+  const source = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
+
+  assert.match(source, /LIVE_IMAGE_SEARCH_STARTUP_LOAD_SCOPED_CATALOGS: "1"/)
+  assert.match(source, /LIVE_IMAGE_SEARCH_SCOPED_CATALOG_CACHE_SCOPES: "24"/)
+  assert.match(source, /SIGLIP2_RERANK_FAST_RANK_CACHE_SCOPES: "24"/)
+})
+
 test('scoped catalog cache misses prepare in background instead of streaming through requests', () => {
   const source = readFileSync(new URL('./live_retrieval.py', import.meta.url), 'utf8')
 
   assert.match(source, /def _start_scoped_catalog_prepare_in_background/)
   assert.match(source, /raise LiveCatalogPreparingError\(\s*f"Scoped live retrieval catalog is preparing/)
   assert.match(source, /raise LiveCatalogPreparingError\(\s*f"Scoped live retrieval catalog is already preparing/)
+})
+
+test('streaming search reuses cached query context for duplicate Discord images', () => {
+  const source = readFileSync(new URL('./live_retrieval.py', import.meta.url), 'utf8')
+  const start = source.indexOf('def _search_streaming')
+  const end = source.indexOf('    def search(', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+
+  const streamingSource = source.slice(start, end)
+  assert.match(streamingSource, /query_context = self\._get_cached_query_context\(image_path, query_text\)/)
+  assert.match(streamingSource, /query_context_cache_hit = query_context is not None/)
+  assert.match(streamingSource, /self\._store_cached_query_context\(image_path, query_text, query_context\)/)
+  assert.match(streamingSource, /query_cache_hit=%s/)
 })

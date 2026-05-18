@@ -2298,7 +2298,11 @@ class LiveImageRetriever:
         strategy = self._get_strategy_instance()
         query_record = build_query_record(image_path=image_path, query_text=query_text)
         query_prepare_started_at = perf_counter()
-        query_context = strategy.prepare_query_image(query_record)
+        query_context = self._get_cached_query_context(image_path, query_text)
+        query_context_cache_hit = query_context is not None
+        if query_context is None:
+            query_context = strategy.prepare_query_image(query_record)
+            self._store_cached_query_context(image_path, query_text, query_context)
         query_prepare_elapsed = perf_counter() - query_prepare_started_at
         if _is_search_cancelled(cancel_event):
             return {
@@ -2374,7 +2378,7 @@ class LiveImageRetriever:
             total_elapsed = perf_counter() - started_at
             if total_elapsed >= next_progress_log_after:
                 logger.warning(
-                    "Live retrieval streaming progress: strategy=%s elapsed=%.2fs query_prepare=%.2fs record_build=%.2fs catalog_prepare=%.2fs score=%.2fs catalog_size=%s shops=%s",
+                    "Live retrieval streaming progress: strategy=%s elapsed=%.2fs query_prepare=%.2fs record_build=%.2fs catalog_prepare=%.2fs score=%.2fs catalog_size=%s query_cache_hit=%s shops=%s",
                     self.strategy_name,
                     total_elapsed,
                     query_prepare_elapsed,
@@ -2382,6 +2386,7 @@ class LiveImageRetriever:
                     catalog_prepare_elapsed,
                     score_elapsed,
                     catalog_size,
+                    query_context_cache_hit,
                     normalized_user_shops,
                 )
                 next_progress_log_after += float(_STREAMING_PROGRESS_LOG_INTERVAL_SECONDS)
@@ -2408,7 +2413,7 @@ class LiveImageRetriever:
         total_elapsed = perf_counter() - started_at
         if total_elapsed >= 5.0:
             logger.warning(
-                "Live retrieval slow search: strategy=%s total=%.2fs query_prepare=%.2fs record_build=%.2fs catalog_prepare=%.2fs score=%.2fs catalog_size=%s result_count=%s shops=%s",
+                "Live retrieval slow search: strategy=%s total=%.2fs query_prepare=%.2fs record_build=%.2fs catalog_prepare=%.2fs score=%.2fs catalog_size=%s result_count=%s query_cache_hit=%s shops=%s",
                 self.strategy_name,
                 total_elapsed,
                 query_prepare_elapsed,
@@ -2417,6 +2422,7 @@ class LiveImageRetriever:
                 score_elapsed,
                 catalog_size,
                 len(filtered_ranked_products),
+                query_context_cache_hit,
                 normalized_user_shops,
             )
         return {
