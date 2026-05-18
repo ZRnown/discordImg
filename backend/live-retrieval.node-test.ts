@@ -24,6 +24,16 @@ test('production loads existing scoped catalog caches on startup', () => {
   assert.match(source, /SIGLIP2_RERANK_FAST_RANK_CACHE_SCOPES: "24"/)
 })
 
+test('startup scoped catalog cache loading runs in the background', () => {
+  const source = readFileSync(new URL('./app.py', import.meta.url), 'utf8')
+
+  assert.match(source, /def _schedule_scoped_live_image_catalog_warmup/)
+  assert.match(source, /threading\.Thread\(/)
+  assert.match(source, /name="live-scoped-catalog-startup-warmup"/)
+  assert.match(source, /已启动店铺检索目录缓存后台加载/)
+  assert.doesNotMatch(source, /正在加载已有店铺检索目录缓存/)
+})
+
 test('scoped catalog cache misses prepare in background instead of streaming through requests', () => {
   const source = readFileSync(new URL('./live_retrieval.py', import.meta.url), 'utf8')
 

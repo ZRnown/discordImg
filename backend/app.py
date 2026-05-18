@@ -286,6 +286,8 @@ LIVE_SEARCH_TASK_RUNNER = LiveSearchTaskRunner(
     getattr(config, 'LIVE_IMAGE_SEARCH_MAX_INFLIGHT', 2),
     getattr(config, 'LIVE_IMAGE_SEARCH_QUEUE_MAX_SIZE', 64),
 )
+SCOPED_CATALOG_WARMUP_THREAD = None
+SCOPED_CATALOG_WARMUP_LOCK = threading.Lock()
 
 
 def _get_live_search_queue_timeout_seconds() -> float:
@@ -329,6 +331,84 @@ def _submit_live_search_task(
         if cancel_event is not None:
             cancel_event.set()
         raise SearchExecutionTimeoutError(execution_timeout_seconds) from exc
+
+
+def _collect_autostart_shop_scopes():
+    startup_shop_scopes = []
+    seen_shop_scopes = set()
+    for account in db.get_discord_accounts_marked_for_autostart():
+        scoped_shops = tuple(sorted(build_user_shop_scope(account.get('user_id'))))
+        if scoped_shops and scoped_shops not in seen_shop_scopes:
+            seen_shop_scopes.add(scoped_shops)
+            startup_shop_scopes.append(scoped_shops)
+    return startup_shop_scopes
+
+
+def _load_scoped_live_image_catalogs_in_background(strategy_name, startup_shop_scopes):
+    try:
+        try:
+            from live_retrieval import warm_live_image_scoped_catalogs
+        except ModuleNotFoundError as import_error:
+            if import_error.name == 'live_retrieval':
+                from .live_retrieval import warm_live_image_scoped_catalogs
+            else:
+                raise
+
+        if not startup_shop_scopes:
+            logger.info("店铺检索目录缓存后台加载跳过: scopes=0")
+            return
+
+        logger.info(
+            "店铺检索目录缓存后台加载开始: strategy=%s scopes=%s",
+            strategy_name,
+            len(startup_shop_scopes),
+        )
+        scoped_summary = warm_live_image_scoped_catalogs(
+            db,
+            strategy_name,
+            startup_shop_scopes,
+        )
+        logger.info(
+            "店铺检索目录缓存后台加载完成: strategy=%s loaded=%s skipped=%s",
+            strategy_name,
+            scoped_summary.get('loaded', 0),
+            scoped_summary.get('skipped', 0),
+        )
+    except Exception as scoped_cache_error:
+        logger.warning("店铺检索目录缓存后台加载失败: %s", scoped_cache_error)
+
+
+def _schedule_scoped_live_image_catalog_warmup(strategy_name):
+    global SCOPED_CATALOG_WARMUP_THREAD
+
+    if not getattr(config, 'LIVE_IMAGE_SEARCH_STARTUP_LOAD_SCOPED_CATALOGS', False):
+        print(f"⏭️ [系统] 已跳过 {strategy_name} 店铺检索目录启动加载")
+        return False
+
+    try:
+        startup_shop_scopes = _collect_autostart_shop_scopes()
+    except Exception as scoped_cache_error:
+        logger.warning("收集店铺检索目录缓存失败: %s", scoped_cache_error)
+        return False
+
+    if not startup_shop_scopes:
+        logger.info("店铺检索目录缓存后台加载跳过: scopes=0")
+        return False
+
+    with SCOPED_CATALOG_WARMUP_LOCK:
+        if SCOPED_CATALOG_WARMUP_THREAD and SCOPED_CATALOG_WARMUP_THREAD.is_alive():
+            logger.info("店铺检索目录缓存后台加载已在运行")
+            return False
+        SCOPED_CATALOG_WARMUP_THREAD = threading.Thread(
+            target=_load_scoped_live_image_catalogs_in_background,
+            args=(strategy_name, startup_shop_scopes),
+            daemon=True,
+            name="live-scoped-catalog-startup-warmup",
+        )
+        SCOPED_CATALOG_WARMUP_THREAD.start()
+
+    print(f"🧠 [系统] 已启动店铺检索目录缓存后台加载: scopes={len(startup_shop_scopes)}")
+    return True
 
 
 def _normalize_message_filter_value(filter_type, filter_value):
@@ -1412,46 +1492,17 @@ def initialize_runtime():
                     )
                 else:
                     try:
-                        from live_retrieval import (
-                            warm_live_image_scoped_catalogs,
-                            warm_live_image_strategy,
-                        )
+                        from live_retrieval import warm_live_image_strategy
                     except ModuleNotFoundError as import_error:
                         if import_error.name == 'live_retrieval':
-                            from .live_retrieval import (
-                                warm_live_image_scoped_catalogs,
-                                warm_live_image_strategy,
-                            )
+                            from .live_retrieval import warm_live_image_strategy
                         else:
                             raise
 
                     print(f"🧠 [系统] 正在预热 {strategy_name} 检索模型...")
                     warm_live_image_strategy(db, strategy_name)
                     print(f"✅ [系统] {strategy_name} 检索模型预热完成")
-                    if getattr(config, 'LIVE_IMAGE_SEARCH_STARTUP_LOAD_SCOPED_CATALOGS', False):
-                        try:
-                            startup_shop_scopes = []
-                            seen_shop_scopes = set()
-                            for account in db.get_discord_accounts_marked_for_autostart():
-                                scoped_shops = tuple(sorted(build_user_shop_scope(account.get('user_id'))))
-                                if scoped_shops and scoped_shops not in seen_shop_scopes:
-                                    seen_shop_scopes.add(scoped_shops)
-                                    startup_shop_scopes.append(scoped_shops)
-                            if startup_shop_scopes:
-                                print(f"🧠 [系统] 正在加载已有店铺检索目录缓存: scopes={len(startup_shop_scopes)}")
-                                scoped_summary = warm_live_image_scoped_catalogs(
-                                    db,
-                                    strategy_name,
-                                    startup_shop_scopes,
-                                )
-                                print(
-                                    f"✅ [系统] 店铺检索目录缓存加载完成: "
-                                    f"loaded={scoped_summary.get('loaded', 0)} skipped={scoped_summary.get('skipped', 0)}"
-                                )
-                        except Exception as scoped_cache_error:
-                            logger.warning("加载店铺检索目录缓存失败: %s", scoped_cache_error)
-                    else:
-                        print(f"⏭️ [系统] 已跳过 {strategy_name} 店铺检索目录启动加载")
+                    _schedule_scoped_live_image_catalog_warmup(strategy_name)
 
                 ai_model_ready = True
                 print("✅ [系统] AI模型预热完成，系统已就绪")
