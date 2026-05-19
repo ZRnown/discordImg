@@ -20,8 +20,8 @@ test('production keeps scoped catalog caches within memory limits', () => {
   const source = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
 
   assert.match(source, /LIVE_IMAGE_SEARCH_STARTUP_LOAD_SCOPED_CATALOGS: "0"/)
-  assert.match(source, /LIVE_IMAGE_SEARCH_SCOPED_CATALOG_CACHE_SCOPES: "4"/)
-  assert.match(source, /SIGLIP2_RERANK_FAST_RANK_CACHE_SCOPES: "4"/)
+  assert.match(source, /LIVE_IMAGE_SEARCH_SCOPED_CATALOG_CACHE_SCOPES: "16"/)
+  assert.match(source, /SIGLIP2_RERANK_FAST_RANK_CACHE_SCOPES: "16"/)
 })
 
 test('startup scoped catalog cache loading runs in the background', () => {
@@ -68,4 +68,14 @@ test('production can use image-only SigLIP2 scoring to avoid rerank overhead', (
   assert.match(ecosystemSource, /SIGLIP2_RERANK_COLOR_WEIGHT: "0\.00"/)
   assert.match(ecosystemSource, /SIGLIP2_RERANK_TEXT_WEIGHT: "0\.00"/)
   assert.match(ecosystemSource, /SIGLIP2_RERANK_CATEGORY_WEIGHT: "0\.00"/)
+})
+
+test('prepared catalog strips duplicated cached vectors from records', () => {
+  const source = readFileSync(new URL('./live_retrieval.py', import.meta.url), 'utf8')
+
+  assert.match(source, /def _strip_catalog_record_cache_payload/)
+  assert.match(source, /cache_embedding=None/)
+  assert.match(source, /cache_color_hist=None/)
+  assert.match(source, /cache_tokens=\[\]/)
+  assert.match(source, /"record": _strip_catalog_record_cache_payload\(record\)/)
 })

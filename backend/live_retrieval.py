@@ -1328,6 +1328,43 @@ def build_catalog_record_for_product_image(
     )[0]
 
 
+def _strip_catalog_record_cache_payload(record: LiveCatalogImageRecord) -> LiveCatalogImageRecord:
+    if (
+        getattr(record, "cache_embedding", None) is None
+        and getattr(record, "cache_color_hist", None) is None
+        and not list(getattr(record, "cache_tokens", []) or [])
+    ):
+        return record
+
+    return LiveCatalogImageRecord(
+        product_id=record.product_id,
+        item_id=record.item_id,
+        title=record.title,
+        english_title=record.english_title,
+        description=record.description,
+        shop_name=record.shop_name,
+        image_path=record.image_path,
+        image_index=record.image_index,
+        product_url=record.product_url,
+        cnfans_url=record.cnfans_url,
+        acbuy_url=record.acbuy_url,
+        rule_enabled=record.rule_enabled,
+        reply_scope=record.reply_scope,
+        image_source=record.image_source,
+        custom_reply_text=record.custom_reply_text,
+        custom_reply_images=record.custom_reply_images,
+        custom_image_urls=record.custom_image_urls,
+        uploaded_reply_images=record.uploaded_reply_images,
+        queries=list(record.queries),
+        image_db_id=record.image_db_id,
+        cache_strategy_name=record.cache_strategy_name,
+        cache_version=record.cache_version,
+        cache_embedding=None,
+        cache_color_hist=None,
+        cache_tokens=[],
+    )
+
+
 def prepare_catalog_entries(
     strategy: Any,
     catalog_records: Sequence[LiveCatalogImageRecord],
@@ -1370,7 +1407,7 @@ def prepare_catalog_entries(
     for record in catalog_records:
         prepared.append(
             {
-                "record": record,
+                "record": _strip_catalog_record_cache_payload(record),
                 "context": strategy.prepare_catalog_image(record),
             }
         )
