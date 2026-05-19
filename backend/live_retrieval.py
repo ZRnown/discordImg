@@ -2551,16 +2551,6 @@ class LiveImageRetriever:
             if shop_scope:
                 scoped_catalog = self._get_cached_scoped_prepared_catalog(user_shops)
                 if scoped_catalog is None:
-                    if self._supports_streaming_search(strategy):
-                        self._start_scoped_catalog_prepare_in_background(user_shops)
-                        return self._search_streaming(
-                            image_path=image_path,
-                            query_text=query_text,
-                            top_k=top_k,
-                            threshold=threshold,
-                            user_shops=user_shops,
-                            cancel_event=cancel_event,
-                        )
                     started = self._start_scoped_catalog_prepare_in_background(user_shops)
                     if started:
                         raise LiveCatalogPreparingError(
@@ -2581,15 +2571,6 @@ class LiveImageRetriever:
             else:
                 scoped_catalog = self._ensure_scoped_prepared_catalog(user_shops)
             if scoped_catalog is None:
-                if self._supports_streaming_search(strategy):
-                    return self._search_streaming(
-                        image_path=image_path,
-                        query_text=query_text,
-                        top_k=top_k,
-                        threshold=threshold,
-                        user_shops=user_shops,
-                        cancel_event=cancel_event,
-                    )
                 strategy, prepared_catalog = self._ensure_prepared_catalog()
             else:
                 strategy, prepared_catalog = scoped_catalog

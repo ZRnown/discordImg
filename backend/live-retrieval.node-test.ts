@@ -45,10 +45,21 @@ test('startup scoped catalog warmup builds missing disk caches', () => {
 
 test('scoped catalog cache misses prepare in background instead of streaming through requests', () => {
   const source = readFileSync(new URL('./live_retrieval.py', import.meta.url), 'utf8')
+  const start = source.indexOf('def search(')
+  const end = source.indexOf('    def warm(', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+  const searchSource = source.slice(start, end)
+  const scopedBranchStart = searchSource.indexOf('            if shop_scope:')
+  const scopedBranchEnd = searchSource.indexOf('            elif self._supports_streaming_search(strategy):', scopedBranchStart)
+  assert.notEqual(scopedBranchStart, -1)
+  assert.notEqual(scopedBranchEnd, -1)
+  const scopedBranchSource = searchSource.slice(scopedBranchStart, scopedBranchEnd)
 
   assert.match(source, /def _start_scoped_catalog_prepare_in_background/)
   assert.match(source, /raise LiveCatalogPreparingError\(\s*f"Scoped live retrieval catalog is preparing/)
   assert.match(source, /raise LiveCatalogPreparingError\(\s*f"Scoped live retrieval catalog is already preparing/)
+  assert.doesNotMatch(scopedBranchSource, /self\._search_streaming\(/)
 })
 
 test('streaming search reuses cached query context for duplicate Discord images', () => {
