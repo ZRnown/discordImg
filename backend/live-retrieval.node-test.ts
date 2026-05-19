@@ -16,12 +16,12 @@ test('startup catalog preparation is disabled by default', () => {
   assert.match(source, /LIVE_IMAGE_SEARCH_STARTUP_PREPARE_CATALOG.*False/)
 })
 
-test('production loads existing scoped catalog caches on startup', () => {
+test('production keeps scoped catalog caches within memory limits', () => {
   const source = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
 
-  assert.match(source, /LIVE_IMAGE_SEARCH_STARTUP_LOAD_SCOPED_CATALOGS: "1"/)
-  assert.match(source, /LIVE_IMAGE_SEARCH_SCOPED_CATALOG_CACHE_SCOPES: "24"/)
-  assert.match(source, /SIGLIP2_RERANK_FAST_RANK_CACHE_SCOPES: "24"/)
+  assert.match(source, /LIVE_IMAGE_SEARCH_STARTUP_LOAD_SCOPED_CATALOGS: "0"/)
+  assert.match(source, /LIVE_IMAGE_SEARCH_SCOPED_CATALOG_CACHE_SCOPES: "4"/)
+  assert.match(source, /SIGLIP2_RERANK_FAST_RANK_CACHE_SCOPES: "4"/)
 })
 
 test('startup scoped catalog cache loading runs in the background', () => {
