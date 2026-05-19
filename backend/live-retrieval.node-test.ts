@@ -21,6 +21,7 @@ test('production keeps scoped catalog caches within memory limits', () => {
 
   assert.match(source, /LIVE_IMAGE_SEARCH_STARTUP_LOAD_SCOPED_CATALOGS: "1"/)
   assert.match(source, /LIVE_IMAGE_SEARCH_SCOPED_CATALOG_CACHE_SCOPES: "16"/)
+  assert.match(source, /LIVE_IMAGE_SEARCH_SCOPED_CATALOG_PREPARE_MAX_WORKERS: "1"/)
   assert.match(source, /SIGLIP2_RERANK_FAST_RANK_CACHE_SCOPES: "16"/)
 })
 
@@ -57,6 +58,8 @@ test('scoped catalog cache misses prepare in background instead of streaming thr
   const scopedBranchSource = searchSource.slice(scopedBranchStart, scopedBranchEnd)
 
   assert.match(source, /def _start_scoped_catalog_prepare_in_background/)
+  assert.match(source, /BoundedSemaphore/)
+  assert.match(source, /LIVE_IMAGE_SEARCH_SCOPED_CATALOG_PREPARE_MAX_WORKERS/)
   assert.match(source, /raise LiveCatalogPreparingError\(\s*f"Scoped live retrieval catalog is preparing/)
   assert.match(source, /raise LiveCatalogPreparingError\(\s*f"Scoped live retrieval catalog is already preparing/)
   assert.doesNotMatch(scopedBranchSource, /self\._search_streaming\(/)

@@ -11,7 +11,7 @@ import pickle
 import re
 import tempfile
 from statistics import mean
-from threading import Lock, Thread
+from threading import BoundedSemaphore, Lock, Thread
 from time import perf_counter
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import quote
@@ -1673,6 +1673,9 @@ class LiveImageRetriever:
         self._prepared_catalog: List[Dict[str, Any]] = []
         self._scoped_catalog_cache: OrderedDict[Tuple[str, ...], Tuple[Any, List[Dict[str, Any]], Tuple[Any, ...], int]] = OrderedDict()
         self._scoped_catalog_prepare_inflight: set[Tuple[str, ...]] = set()
+        self._scoped_catalog_prepare_semaphore = BoundedSemaphore(
+            max(_env_int("LIVE_IMAGE_SEARCH_SCOPED_CATALOG_PREPARE_MAX_WORKERS", 1), 1)
+        )
         self._strategy = None
         self._catalog_refresh_required = True
         self._prepare_inflight = False
@@ -1953,7 +1956,8 @@ class LiveImageRetriever:
 
     def _prepare_scoped_catalog_in_background(self, shop_scope: Tuple[str, ...]) -> None:
         try:
-            self._ensure_scoped_prepared_catalog(shop_scope)
+            with self._scoped_catalog_prepare_semaphore:
+                self._ensure_scoped_prepared_catalog(shop_scope)
         except Exception:
             logger.exception(
                 "Scoped live retrieval catalog prepare failed: strategy=%s shops=%s",
