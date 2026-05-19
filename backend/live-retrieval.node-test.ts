@@ -55,3 +55,17 @@ test('streaming search reuses cached query context for duplicate Discord images'
   assert.match(streamingSource, /self\._store_cached_query_context\(image_path, query_text, query_context\)/)
   assert.match(streamingSource, /query_cache_hit=%s/)
 })
+
+test('production can use image-only SigLIP2 scoring to avoid rerank overhead', () => {
+  const strategySource = readFileSync(new URL('./benchmarks/strategies.py', import.meta.url), 'utf8')
+  const ecosystemSource = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
+
+  assert.match(strategySource, /SIGLIP2_RERANK_IMAGE_ONLY/)
+  assert.match(strategySource, /image_only_enabled/)
+  assert.match(strategySource, /if self\.image_only_enabled:/)
+  assert.match(ecosystemSource, /SIGLIP2_RERANK_IMAGE_ONLY: "1"/)
+  assert.match(ecosystemSource, /SIGLIP2_RERANK_IMAGE_WEIGHT: "1\.00"/)
+  assert.match(ecosystemSource, /SIGLIP2_RERANK_COLOR_WEIGHT: "0\.00"/)
+  assert.match(ecosystemSource, /SIGLIP2_RERANK_TEXT_WEIGHT: "0\.00"/)
+  assert.match(ecosystemSource, /SIGLIP2_RERANK_CATEGORY_WEIGHT: "0\.00"/)
+})

@@ -879,6 +879,10 @@ class Siglip2RerankStrategy:
 
     def __init__(self):
         self.encoder = _Siglip2Encoder()
+        self.image_only_enabled = _load_env_bool(
+            "SIGLIP2_RERANK_IMAGE_ONLY",
+            False,
+        )
         self.image_weight = _load_non_negative_env_float(
             "SIGLIP2_RERANK_IMAGE_WEIGHT",
             0.74,
@@ -1483,9 +1487,20 @@ class Siglip2RerankStrategy:
             else set()
         )
 
+        embedding = (
+            cached_embedding
+            if cached_embedding is not None
+            else self._build_catalog_embedding(record.image_path)
+        )
+        if self.image_only_enabled:
+            return {
+                "image_path": record.image_path,
+                "embedding": embedding,
+            }
+
         return {
             "image_path": record.image_path,
-            "embedding": cached_embedding if cached_embedding is not None else self._build_catalog_embedding(record.image_path),
+            "embedding": embedding,
             "hist": cached_hist if cached_hist is not None else self._build_color_hist(record.image_path),
             "tokens": cached_tokens if cached_tokens else self._tokenize(record.title, " ".join(record.queries)),
             "category": self._infer_category(record.title, " ".join(record.queries)),
@@ -1529,6 +1544,12 @@ class Siglip2RerankStrategy:
 
     def prepare_query_image(self, record) -> Dict[str, Any]:
         embedding_payload = self._build_query_embedding_payload(record.image_path)
+        if self.image_only_enabled:
+            return {
+                "image_path": record.image_path,
+                **embedding_payload,
+            }
+
         return {
             "image_path": record.image_path,
             **embedding_payload,
@@ -1974,6 +1995,14 @@ class Siglip2RerankStrategy:
         if matrix.ndim != 2 or matrix.shape[1] != query_vector.size:
             return None
 
+        image_scores = matrix @ query_vector
+        if self.image_only_enabled:
+            return self._rank_precomputed_product_scores(
+                image_scores,
+                catalog_contexts,
+                top_k=max(int(top_k or 1), 1),
+            )
+
         image_weight = float(getattr(self, "image_weight", 0.74))
         color_weight = float(getattr(self, "color_weight", 0.11))
         text_weight = float(getattr(self, "text_weight", 0.15))
@@ -1982,7 +2011,6 @@ class Siglip2RerankStrategy:
         bonus_text_gate = float(getattr(self, "bonus_text_gate", 0.5))
         bonus_image_gate = float(getattr(self, "bonus_image_gate", 0.5))
 
-        image_scores = matrix @ query_vector
         candidate_k = max(int(getattr(self, "fast_rank_candidate_k", 0) or 0), 0)
         candidate_indices = None
         if candidate_k > 0 and image_scores.size > candidate_k:
@@ -4507,6 +4535,9 @@ class Siglip2RerankStrategy:
         bonus_image_gate = float(getattr(self, "bonus_image_gate", 0.5))
 
         image_score = float(np.dot(query_embedding, catalog_embedding))
+        if self.image_only_enabled:
+            return image_score
+
         weighted_scores = [(image_weight, image_score)]
         query_hist = query_context.get("hist")
         catalog_hist = catalog_context.get("hist")
