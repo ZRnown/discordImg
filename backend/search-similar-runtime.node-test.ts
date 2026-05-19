@@ -28,6 +28,14 @@ test('production image reply does not skip top1 matches only because top1-top2 m
   assert.equal(source.includes('DISCORD_IMAGE_REPLY_MIN_TOP1_MARGIN: "0.00"'), true)
 })
 
+test('production query fusion is disabled on CPU to reduce per-image encoding time', () => {
+  const source = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
+
+  assert.equal(source.includes('SIGLIP2_RERANK_QUERY_FUSION: "0"'), true)
+  assert.equal(source.includes('SIGLIP2_RERANK_QUERY_RAW_WEIGHT: "1.00"'), true)
+  assert.equal(source.includes('SIGLIP2_RERANK_QUERY_CENTER_WEIGHT: "0.00"'), true)
+})
+
 test('production slow message warning threshold matches queued image search latency', () => {
   const ecosystemSource = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
   const configSource = readFileSync(new URL('./config.py', import.meta.url), 'utf8')
