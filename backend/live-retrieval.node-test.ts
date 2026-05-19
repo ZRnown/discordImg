@@ -79,3 +79,11 @@ test('prepared catalog strips duplicated cached vectors from records', () => {
   assert.match(source, /cache_tokens=\[\]/)
   assert.match(source, /"record": _strip_catalog_record_cache_payload\(record\)/)
 })
+
+test('image-only fast rank aggregates only top candidate images', () => {
+  const source = readFileSync(new URL('./benchmarks/strategies.py', import.meta.url), 'utf8')
+
+  assert.match(source, /def _rank_selected_precomputed_product_scores/)
+  assert.match(source, /candidate_indices = np\.argpartition\(image_scores, -candidate_k\)\[-candidate_k:\]/)
+  assert.match(source, /return self\._rank_selected_precomputed_product_scores\(/)
+})

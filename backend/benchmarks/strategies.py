@@ -1949,6 +1949,94 @@ class Siglip2RerankStrategy:
             )
         ][: max(int(top_k or 1), 1)]
 
+    @staticmethod
+    def _rank_selected_precomputed_product_scores(
+        final_scores: np.ndarray,
+        selected_indices: np.ndarray,
+        catalog_contexts: Dict[str, Any],
+        *,
+        top_k: int,
+    ) -> list[Dict[str, Any]]:
+        product_ids = catalog_contexts.get("product_ids") or []
+        if not product_ids:
+            return []
+
+        score_array = np.asarray(final_scores, dtype=np.float32).reshape(-1)
+        selected = np.asarray(selected_indices, dtype=np.int64).reshape(-1)
+        if selected.size == 0:
+            return []
+
+        titles = catalog_contexts.get("titles") or []
+        image_paths = catalog_contexts.get("image_paths") or []
+        image_indices = catalog_contexts.get("image_indices") or []
+        product_state: Dict[str, Dict[str, Any]] = {}
+
+        for raw_index in selected.tolist():
+            index = int(raw_index)
+            if index < 0 or index >= score_array.size or index >= len(product_ids):
+                continue
+            product_id = str(product_ids[index] or "")
+            if not product_id:
+                continue
+            score = float(score_array[index])
+            if not np.isfinite(score):
+                continue
+            state = product_state.get(product_id)
+            if state is None:
+                state = {
+                    "scores": [],
+                    "best_score": score,
+                    "best_index": index,
+                }
+                product_state[product_id] = state
+            elif score > float(state["best_score"]):
+                state["best_score"] = score
+                state["best_index"] = index
+            state["scores"].append(score)
+
+        ranked_with_signal = []
+        for product_id, state in product_state.items():
+            scores = sorted(state["scores"], reverse=True)[:5]
+            if not scores:
+                continue
+            best_score = float(scores[0])
+            second_best_score = float(scores[1]) if len(scores) > 1 else 0.0
+            top3_mean_score = float(np.mean(scores[:3]))
+            top5_mean_score = float(np.mean(scores[:5]))
+            rank_score = (
+                best_score
+                + _PRODUCT_RANK_SECOND_BEST_WEIGHT * second_best_score
+                + _PRODUCT_RANK_TOP3_MEAN_WEIGHT * top3_mean_score
+                + _PRODUCT_RANK_TOP5_MEAN_WEIGHT * top5_mean_score
+            )
+            best_index = int(state["best_index"])
+            ranked_with_signal.append(
+                (
+                    rank_score,
+                    {
+                        "product_id": product_id,
+                        "score": best_score,
+                        "title": titles[best_index] if best_index < len(titles) else "",
+                        "image_path": image_paths[best_index] if best_index < len(image_paths) else "",
+                        "image_index": image_indices[best_index] if best_index < len(image_indices) else 0,
+                    },
+                )
+            )
+
+        return [
+            item
+            for _rank_score, item in sorted(
+                ranked_with_signal,
+                key=lambda pair: (
+                    -float(pair[0]),
+                    -float(pair[1].get("score", 0.0)),
+                    str(pair[1].get("product_id") or ""),
+                    int(pair[1].get("image_index") or 0),
+                    str(pair[1].get("image_path") or ""),
+                ),
+            )
+        ][: max(int(top_k or 1), 1)]
+
     def _get_fast_rank_catalog_contexts(
         self,
         prepared_catalog: list[Dict[str, Any]],
@@ -1997,6 +2085,15 @@ class Siglip2RerankStrategy:
 
         image_scores = matrix @ query_vector
         if self.image_only_enabled:
+            candidate_k = max(int(getattr(self, "fast_rank_candidate_k", 0) or 0), 0)
+            if candidate_k > 0 and image_scores.size > candidate_k:
+                candidate_indices = np.argpartition(image_scores, -candidate_k)[-candidate_k:]
+                return self._rank_selected_precomputed_product_scores(
+                    image_scores,
+                    candidate_indices,
+                    catalog_contexts,
+                    top_k=max(int(top_k or 1), 1),
+                )
             return self._rank_precomputed_product_scores(
                 image_scores,
                 catalog_contexts,
