@@ -2297,6 +2297,56 @@ class LiveImageRetriever:
                 self._scoped_catalog_cache.popitem(last=False)
         return True
 
+    def prepare_scoped_catalog_for_warmup(
+        self,
+        user_shops: Optional[Sequence[str]],
+    ) -> bool:
+        shop_scope = self._normalize_shop_scope(user_shops)
+        if not shop_scope:
+            return False
+
+        refresh_generation = self._refresh_generation
+        with self._lock:
+            cached = self._scoped_catalog_cache.get(shop_scope)
+            if cached is not None and cached[3] == refresh_generation:
+                self._scoped_catalog_cache.move_to_end(shop_scope)
+                return True
+            if shop_scope in self._scoped_catalog_prepare_inflight:
+                return False
+            self._scoped_catalog_prepare_inflight.add(shop_scope)
+
+        try:
+            strategy, prepared_catalog, signature = self._build_prepared_catalog_snapshot_for_shops(shop_scope)
+            fast_context_loader = getattr(strategy, "_get_fast_rank_catalog_contexts", None)
+            if callable(fast_context_loader):
+                try:
+                    fast_context_loader(prepared_catalog)
+                except Exception:
+                    logger.exception(
+                        "预构建店铺实时检索矩阵失败: strategy=%s shops=%s",
+                        self.strategy_name,
+                        list(shop_scope),
+                    )
+
+            max_scopes = max(_env_int("LIVE_IMAGE_SEARCH_SCOPED_CATALOG_CACHE_SCOPES", 8), 1)
+            with self._lock:
+                if refresh_generation != self._refresh_generation:
+                    return False
+                self._strategy = strategy
+                self._scoped_catalog_cache[shop_scope] = (
+                    strategy,
+                    prepared_catalog,
+                    signature,
+                    refresh_generation,
+                )
+                self._scoped_catalog_cache.move_to_end(shop_scope)
+                while len(self._scoped_catalog_cache) > max_scopes:
+                    self._scoped_catalog_cache.popitem(last=False)
+            return True
+        finally:
+            with self._lock:
+                self._scoped_catalog_prepare_inflight.discard(shop_scope)
+
     def _ensure_prepared_catalog(self):
         with self._lock:
             if self._has_active_catalog_locked():
@@ -2644,15 +2694,19 @@ def warm_live_image_scoped_catalogs(
 ) -> Dict[str, Any]:
     retriever = get_live_image_retriever(db_handle, strategy_name)
     loaded = 0
+    prepared = 0
     skipped = 0
     for scope in shop_scopes:
         if retriever.load_scoped_prepared_catalog_if_cached(scope):
             loaded += 1
+        elif retriever.prepare_scoped_catalog_for_warmup(scope):
+            prepared += 1
         else:
             skipped += 1
     return {
         "strategy": strategy_name,
         "loaded": loaded,
+        "prepared": prepared,
         "skipped": skipped,
     }
 

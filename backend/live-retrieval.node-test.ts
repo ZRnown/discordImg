@@ -34,6 +34,15 @@ test('startup scoped catalog cache loading runs in the background', () => {
   assert.doesNotMatch(source, /正在加载已有店铺检索目录缓存/)
 })
 
+test('startup scoped catalog warmup builds missing disk caches', () => {
+  const source = readFileSync(new URL('./live_retrieval.py', import.meta.url), 'utf8')
+
+  assert.match(source, /def prepare_scoped_catalog_for_warmup/)
+  assert.match(source, /self\._build_prepared_catalog_snapshot_for_shops\(shop_scope\)/)
+  assert.match(source, /retriever\.prepare_scoped_catalog_for_warmup\(scope\)/)
+  assert.match(source, /"prepared": prepared/)
+})
+
 test('scoped catalog cache misses prepare in background instead of streaming through requests', () => {
   const source = readFileSync(new URL('./live_retrieval.py', import.meta.url), 'utf8')
 
