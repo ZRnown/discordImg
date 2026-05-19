@@ -196,6 +196,21 @@ test('image recognition is scheduled in the background so keyword replies are no
   assert.doesNotMatch(imageStageSource, /await self\._run_message_stage_with_timeout\(\s*message,\s*f'image_reply:/)
 })
 
+test('image reply limits per-message attachments to avoid flooding live search', () => {
+  const source = readSource()
+  const start = source.indexOf('# 处理图片')
+  const end = source.indexOf('    async def on_raw_reaction_add', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+
+  const imageStageSource = source.slice(start, end)
+  assert.match(source, /MESSAGE_IMAGE_REPLY_MAX_ATTACHMENTS = max\(/)
+  assert.match(imageStageSource, /scheduled_image_replies = 0/)
+  assert.match(imageStageSource, /if scheduled_image_replies >= MESSAGE_IMAGE_REPLY_MAX_ATTACHMENTS:/)
+  assert.match(imageStageSource, /跳过多余图片附件/)
+  assert.match(imageStageSource, /scheduled_image_replies \+= 1/)
+})
+
 test('keyword text search requests are concurrency limited before hitting the backend API', () => {
   const source = readSource()
   const start = source.indexOf('async def search_products_by_keyword')

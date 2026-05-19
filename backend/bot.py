@@ -1795,6 +1795,10 @@ MAX_COOLDOWN_WAIT_SECONDS = 3.0
 MESSAGE_FORWARD_TIMEOUT_SECONDS = 15.0
 MESSAGE_KEYWORD_SEARCH_TIMEOUT_SECONDS = 45.0
 MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS = 130.0
+MESSAGE_IMAGE_REPLY_MAX_ATTACHMENTS = max(
+    int(getattr(config, 'DISCORD_IMAGE_REPLY_MAX_ATTACHMENTS_PER_MESSAGE', 2) or 2),
+    1,
+)
 MESSAGE_STAGE_SLOW_SECONDS = max(float(getattr(config, 'DISCORD_MESSAGE_STAGE_SLOW_SECONDS', 5.0) or 5.0), 1.0)
 KEYWORD_TEXT_SEARCH_TIMEOUT_SECONDS = max(
     float(getattr(config, 'KEYWORD_TEXT_SEARCH_TIMEOUT_SECONDS', 8.0) or 8.0),
@@ -5706,6 +5710,7 @@ class DiscordBotClient(discord.Client):
         if image_reply_enabled and message.attachments:
             if self._should_filter_message(message):
                 return
+            scheduled_image_replies = 0
             for attachment in message.attachments:
                 content_type = (getattr(attachment, 'content_type', '') or '').lower()
                 filename = (getattr(attachment, 'filename', '') or '').lower()
@@ -5716,6 +5721,13 @@ class DiscordBotClient(discord.Client):
                     is_image = True
 
                 if is_image:
+                    if scheduled_image_replies >= MESSAGE_IMAGE_REPLY_MAX_ATTACHMENTS:
+                        logger.info(
+                            f"⏭️ 跳过多余图片附件: message_id={message.id} "
+                            f"limit={MESSAGE_IMAGE_REPLY_MAX_ATTACHMENTS} filename={attachment.filename}"
+                        )
+                        continue
+                    scheduled_image_replies += 1
                     logger.debug(f"📷 检测到图片，开始处理: {attachment.filename}")
                     self._start_image_reply_background_task(
                         message,
