@@ -44,6 +44,15 @@ test('startup scoped catalog warmup builds missing disk caches', () => {
   assert.match(source, /"prepared": prepared/)
 })
 
+test('scoped catalog signatures ignore runtime-only concurrency settings', () => {
+  const source = readFileSync(new URL('./live_retrieval.py', import.meta.url), 'utf8')
+
+  assert.match(source, /_RUNTIME_SIGNATURE_EXCLUDED_ENV_KEYS/)
+  assert.match(source, /LIVE_IMAGE_SEARCH_SCOPED_CATALOG_PREPARE_MAX_WORKERS/)
+  assert.match(source, /LIVE_IMAGE_SEARCH_MAX_INFLIGHT/)
+  assert.match(source, /if key in _RUNTIME_SIGNATURE_EXCLUDED_ENV_KEYS:/)
+})
+
 test('scoped catalog cache misses prepare in background instead of streaming through requests', () => {
   const source = readFileSync(new URL('./live_retrieval.py', import.meta.url), 'utf8')
   const start = source.indexOf('def search(')

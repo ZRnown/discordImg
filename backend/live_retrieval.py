@@ -116,6 +116,20 @@ _RUNTIME_SIGNATURE_ENV_PREFIXES: tuple[str, ...] = (
     "SIGLIP2_RERANK_",
     "RETRIEVAL_PRODUCT_RANK_",
 )
+_RUNTIME_SIGNATURE_EXCLUDED_ENV_KEYS: set[str] = {
+    "LIVE_IMAGE_SEARCH_MAX_INFLIGHT",
+    "LIVE_IMAGE_SEARCH_QUEUE_MAX_SIZE",
+    "LIVE_IMAGE_SEARCH_QUEUE_TIMEOUT_SECONDS",
+    "LIVE_IMAGE_SEARCH_EXECUTION_TIMEOUT_SECONDS",
+    "LIVE_IMAGE_SEARCH_QUERY_CONTEXT_CACHE_TTL_SECONDS",
+    "LIVE_IMAGE_SEARCH_QUERY_CONTEXT_CACHE_MAX_ENTRIES",
+    "LIVE_IMAGE_SEARCH_SCOPED_CATALOG_CACHE_SCOPES",
+    "LIVE_IMAGE_SEARCH_SCOPED_CATALOG_PREPARE_MAX_WORKERS",
+    "LIVE_IMAGE_SEARCH_STARTUP_LOAD_SCOPED_CATALOGS",
+    "LIVE_IMAGE_SEARCH_STARTUP_PREPARE_CATALOG",
+    "LIVE_IMAGE_SEARCH_STREAMING_ENABLED",
+    "LIVE_IMAGE_SEARCH_STREAMING_FORCE",
+}
 _AUTO_SUPPORT_VARIANT_SUFFIXES: tuple[str, ...] = (
     "center",
     "compressed",
@@ -202,6 +216,8 @@ def _get_product_support_mode() -> str:
 def _build_runtime_env_signature(strategy_name: str) -> Tuple[Tuple[str, str], ...]:
     pairs = [("LIVE_IMAGE_SEARCH_STRATEGY_NAME", str(strategy_name or "").strip())]
     for key, value in os.environ.items():
+        if key in _RUNTIME_SIGNATURE_EXCLUDED_ENV_KEYS:
+            continue
         if any(key.startswith(prefix) for prefix in _RUNTIME_SIGNATURE_ENV_PREFIXES):
             pairs.append((str(key), str(value)))
     return tuple(sorted(pairs))
