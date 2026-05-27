@@ -556,6 +556,10 @@ def _product_has_custom_reply_images(product):
     return False
 
 
+def _product_prefers_custom_reply_images(product):
+    return _product_has_custom_reply_images(product)
+
+
 def _prepare_effective_product_reply(product, website_config=None, fallback_custom_reply=None):
     resolved_product = apply_effective_product_reply_settings(product, website_config=website_config)
     resolved_product['ruleEnabled'] = _is_product_rule_enabled(product)
@@ -4173,6 +4177,17 @@ class DiscordBotClient(discord.Client):
     ):
         image_download_timeout = aiohttp.ClientTimeout(total=10)
         async with aiohttp.ClientSession(timeout=image_download_timeout) as session:
+            if _product_prefers_custom_reply_images(product):
+                custom_files = await self._collect_custom_reply_files(
+                    session,
+                    product,
+                    custom_reply,
+                    website_config,
+                    channel_id,
+                )
+                if custom_files:
+                    return custom_files
+
             if (
                 isinstance(match_context, dict)
                 and match_context.get('type') == 'image'
