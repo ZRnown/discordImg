@@ -106,16 +106,18 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
       const res = await fetch(`/api/shops/${shopId}`, {
         method: 'DELETE'
       })
+      const data = await res.json().catch(() => ({}))
 
       if (res.ok) {
-        toast.success("店铺删除成功")
+        const deletedProducts = Number(data.deletedProducts || 0)
+        toast.success(deletedProducts > 0 ? `店铺删除成功，已删除 ${deletedProducts} 个商品` : "店铺删除成功")
         fetchShops()
         // 触发自定义事件通知其他组件刷新店铺列表
         window.dispatchEvent(new CustomEvent('shops-updated'))
         // 移除选中状态
         setSelectedShopIds(prev => prev.filter(id => id !== shopId))
       } else {
-        toast.error("删除店铺失败")
+        toast.error(data.error || "删除店铺失败")
       }
     } catch (e) {
       toast.error("删除店铺失败")
@@ -148,32 +150,24 @@ export function ShopsView({ currentUser }: { currentUser: any }) {
     setShowBatchDeleteConfirm(false)
     setIsBatchDeleting(true)
 
-    let successCount = 0
-    let failCount = 0
-
     try {
-      for (const shopId of selectedShopIds) {
-        try {
-          const res = await fetch(`/api/shops/${shopId}`, {
-            method: 'DELETE'
-          })
-
-          if (res.ok) {
-            successCount++
-          } else {
-            failCount++
-          }
-        } catch (e) {
-          failCount++
-        }
-      }
+      const res = await fetch('/api/shops/batch', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shopIds: selectedShopIds })
+      })
+      const data = await res.json().catch(() => ({}))
+      const successCount = Number(data.count || 0)
+      const failCount = Array.isArray(data.failed) ? data.failed.length : Math.max(selectedShopIds.length - successCount, 0)
 
       if (successCount > 0) {
-        toast.success(`批量删除完成：成功 ${successCount} 个${failCount > 0 ? `，失败 ${failCount} 个` : ''}`)
+        const deletedProducts = Number(data.deletedProducts || 0)
+        toast.success(`批量删除完成：成功 ${successCount} 个${failCount > 0 ? `，失败 ${failCount} 个` : ''}${deletedProducts > 0 ? `，删除商品 ${deletedProducts} 个` : ''}`)
         setSelectedShopIds([])
         fetchShops()
+        window.dispatchEvent(new CustomEvent('shops-updated'))
       } else {
-        toast.error("批量删除失败")
+        toast.error(data.error || "批量删除失败")
       }
     } catch (e) {
       toast.error("批量删除过程中发生错误")

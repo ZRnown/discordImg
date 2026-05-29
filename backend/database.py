@@ -6820,18 +6820,100 @@ class Database:
             logger.error(f"更新店铺商品数量失败: {e}")
             return False
 
-    def delete_shop(self, shop_id: str) -> bool:
-        """删除店铺"""
+    def delete_shop(self, shop_id: str) -> Dict[str, Any]:
+        """删除店铺及其商品、图片、检索缓存和权限数据。"""
         try:
+            image_paths = []
             with self.get_connection() as conn:
                 cursor = conn.cursor()
+                cursor.execute('SELECT name FROM shops WHERE shop_id = ?', (shop_id,))
+                shop_row = cursor.fetchone()
+                if not shop_row:
+                    return {
+                        'success': False,
+                        'error': 'shop_not_found',
+                        'deleted_products': 0,
+                        'deleted_images': 0,
+                        'file_failed_count': 0,
+                    }
+
+                shop_name = str(shop_row['name'] or '').strip()
+                product_ids = []
+                image_ids = []
+                if shop_name:
+                    cursor.execute('SELECT id FROM products WHERE shop_name = ?', (shop_name,))
+                    product_ids = [int(row['id']) for row in cursor.fetchall()]
+
+                def chunked(values, size):
+                    for idx in range(0, len(values), size):
+                        yield values[idx:idx + size]
+
+                if product_ids:
+                    for chunk in chunked(product_ids, 500):
+                        placeholders = ','.join(['?'] * len(chunk))
+                        cursor.execute(
+                            f'SELECT id, image_path FROM product_images WHERE product_id IN ({placeholders})',
+                            chunk,
+                        )
+                        for row in cursor.fetchall():
+                            image_ids.append(int(row['id']))
+                            if row['image_path']:
+                                image_paths.append(str(row['image_path']))
+
+                    for chunk in chunked(image_ids, 500):
+                        placeholders = ','.join(['?'] * len(chunk))
+                        cursor.execute(
+                            f'DELETE FROM product_image_retrieval_cache WHERE image_db_id IN ({placeholders})',
+                            chunk,
+                        )
+
+                    for chunk in chunked(product_ids, 500):
+                        placeholders = ','.join(['?'] * len(chunk))
+                        cursor.execute(
+                            f'UPDATE search_history SET matched_product_id = NULL WHERE matched_product_id IN ({placeholders})',
+                            chunk,
+                        )
+                        cursor.execute(
+                            f'UPDATE skipped_image_history SET matched_product_id = NULL WHERE matched_product_id IN ({placeholders})',
+                            chunk,
+                        )
+                        cursor.execute(
+                            f'DELETE FROM product_images WHERE product_id IN ({placeholders})',
+                            chunk,
+                        )
+                        cursor.execute(
+                            f'DELETE FROM products WHERE id IN ({placeholders})',
+                            chunk,
+                        )
+
                 cursor.execute('DELETE FROM user_shop_permissions WHERE shop_id = ?', (shop_id,))
                 cursor.execute('DELETE FROM shops WHERE shop_id = ?', (shop_id,))
+                deleted_shop_count = max(int(cursor.rowcount or 0), 0)
                 conn.commit()
-                return cursor.rowcount > 0
+
+            file_failed_count = 0
+            for image_path in set(image_paths):
+                try:
+                    if os.path.exists(image_path):
+                        os.remove(image_path)
+                except Exception:
+                    file_failed_count += 1
+
+            return {
+                'success': deleted_shop_count > 0,
+                'deleted_products': len(product_ids),
+                'deleted_images': len(image_ids),
+                'file_failed_count': file_failed_count,
+            }
         except Exception as e:
             logger.error(f"删除店铺失败: {e}")
-            return False
+            return {
+                'success': False,
+                'error': str(e),
+                'deleted_products': 0,
+                'deleted_images': 0,
+                'file_failed_count': 0,
+            }
 
     # ========== 抓取状态管理方法 ==========
 

@@ -7649,7 +7649,8 @@ def delete_shop(shop_id):
 
         impacted_user_ids = db.get_user_ids_by_shop(shop_id)
 
-        if db.delete_shop(shop_id):
+        result = db.delete_shop(shop_id)
+        if result.get('success'):
             for impacted_user_id in impacted_user_ids:
                 updated_clients, scoped_shops = refresh_running_bot_user_shops(impacted_user_id)
                 logger.info(
@@ -7659,12 +7660,95 @@ def delete_shop(shop_id):
                     updated_clients,
                     scoped_shops
                 )
-            return jsonify({'success': True, 'message': '店铺删除成功'})
+            deleted_products = int(result.get('deleted_products') or 0)
+            if deleted_products > 0:
+                invalidate_product_retrieval_runtime(getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank'))
+            return jsonify({
+                'success': True,
+                'message': '店铺删除成功',
+                'deletedProducts': deleted_products,
+                'deletedImages': int(result.get('deleted_images') or 0),
+                'fileFailedCount': int(result.get('file_failed_count') or 0),
+            })
         else:
-            return jsonify({'error': '删除失败'}), 500
+            if result.get('error') == 'shop_not_found':
+                return jsonify({'error': '店铺不存在'}), 404
+            return jsonify({'error': result.get('error') or '删除失败'}), 500
     except Exception as e:
         logger.error(f'删除店铺失败: {e}')
         return jsonify({'error': '删除店铺失败'}), 500
+
+@app.route('/api/shops/batch', methods=['DELETE'])
+def batch_delete_shops():
+    """批量删除店铺及其对应商品数据"""
+    if not can_manage_shops():
+        return jsonify({'error': '需要管理店铺的权限'}), 403
+
+    try:
+        data = request.get_json(silent=True) or {}
+        raw_shop_ids = data.get('shopIds') or data.get('shop_ids') or []
+        shop_ids = []
+        for value in raw_shop_ids:
+            shop_id = str(value or '').strip()
+            if shop_id and shop_id not in shop_ids:
+                shop_ids.append(shop_id)
+
+        if not shop_ids:
+            return jsonify({'error': '请选择要删除的店铺'}), 400
+
+        current_user = get_current_user()
+        success_count = 0
+        failed = []
+        impacted_user_ids = set()
+        deleted_products = 0
+        deleted_images = 0
+        file_failed_count = 0
+
+        for shop_id in shop_ids:
+            shop_info = db.get_shop_by_id(shop_id)
+            if not shop_info:
+                failed.append({'shopId': shop_id, 'error': '店铺不存在'})
+                continue
+            if current_user['role'] != 'admin' and shop_info['shop_id'] not in current_user.get('shops', []):
+                failed.append({'shopId': shop_id, 'error': '无权限删除此店铺'})
+                continue
+
+            for user_id in db.get_user_ids_by_shop(shop_id):
+                impacted_user_ids.add(user_id)
+
+            result = db.delete_shop(shop_id)
+            if result.get('success'):
+                success_count += 1
+                deleted_products += int(result.get('deleted_products') or 0)
+                deleted_images += int(result.get('deleted_images') or 0)
+                file_failed_count += int(result.get('file_failed_count') or 0)
+            else:
+                failed.append({'shopId': shop_id, 'error': result.get('error') or '删除失败'})
+
+        for impacted_user_id in impacted_user_ids:
+            updated_clients, scoped_shops = refresh_running_bot_user_shops(impacted_user_id)
+            logger.info(
+                "批量删除店铺后已刷新用户 %s 的运行中 Bot %s 个，当前作用域: %s",
+                impacted_user_id,
+                updated_clients,
+                scoped_shops
+            )
+
+        if deleted_products > 0:
+            invalidate_product_retrieval_runtime(getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank'))
+
+        return jsonify({
+            'success': success_count > 0,
+            'count': success_count,
+            'total': len(shop_ids),
+            'failed': failed,
+            'deletedProducts': deleted_products,
+            'deletedImages': deleted_images,
+            'fileFailedCount': file_failed_count,
+        }), 200 if success_count > 0 else 500
+    except Exception as e:
+        logger.error(f'批量删除店铺失败: {e}')
+        return jsonify({'error': '批量删除店铺失败'}), 500
 
 def get_shop_info_from_api(shop_id):
     """从API获取店铺信息"""
