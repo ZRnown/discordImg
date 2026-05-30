@@ -138,6 +138,7 @@ class BotTimeoutHelpersTestCase(unittest.TestCase):
 
         self.assertEqual(filtered, parent_configs)
 
+
     def test_image_match_threshold_uses_website_override(self):
         self.assertFalse(
             _is_image_match_above_reply_threshold(
@@ -272,6 +273,32 @@ class BotTimeoutHelpersTestCase(unittest.TestCase):
         self.assertEqual(mock_error.call_count, 2)
         self.assertEqual(mock_warning.call_count, 1)
         self.assertIn("重复 1 次", mock_warning.call_args.args[0])
+
+
+class SenderChannelAccessTestCase(unittest.IsolatedAsyncioTestCase):
+    async def test_filters_online_senders_that_cannot_access_message_channel(self):
+        message_channel = SimpleNamespace(id=123001, parent_id=None)
+        message = SimpleNamespace(channel=message_channel)
+
+        inaccessible_client = SimpleNamespace(
+            account_id=1,
+            get_channel=lambda channel_id: None,
+            fetch_channel=AsyncMock(return_value=None),
+        )
+        accessible_channel = SimpleNamespace(id=123001, parent_id=None)
+        accessible_client = SimpleNamespace(
+            account_id=2,
+            get_channel=lambda channel_id: accessible_channel if channel_id == 123001 else None,
+            fetch_channel=AsyncMock(side_effect=AssertionError("cached channel should be used")),
+        )
+
+        filtered = await bot_module._filter_channel_accessible_sender_ids(
+            [1, 2],
+            [inaccessible_client, accessible_client],
+            message,
+        )
+
+        self.assertEqual(filtered, [2])
 
 
 class RecognizeImageRetryPolicyTestCase(unittest.IsolatedAsyncioTestCase):

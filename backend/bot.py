@@ -1330,6 +1330,36 @@ async def _resolve_message_reply_channel(target_client, message):
     return None
 
 
+async def _filter_channel_accessible_sender_ids(sender_ids, clients, message):
+    ordered_sender_ids = []
+    seen = set()
+    for raw_sender_id in sender_ids or []:
+        sender_id = _coerce_int(raw_sender_id, None)
+        if sender_id is None or sender_id in seen:
+            continue
+        ordered_sender_ids.append(sender_id)
+        seen.add(sender_id)
+
+    if not ordered_sender_ids:
+        return []
+
+    client_by_account_id = {}
+    for client in clients or []:
+        account_id = _coerce_int(getattr(client, "account_id", None), None)
+        if account_id is not None and account_id not in client_by_account_id:
+            client_by_account_id[account_id] = client
+
+    accessible_sender_ids = []
+    for sender_id in ordered_sender_ids:
+        client = client_by_account_id.get(sender_id)
+        if client is None:
+            continue
+        if await _resolve_message_reply_channel(client, message) is not None:
+            accessible_sender_ids.append(sender_id)
+
+    return accessible_sender_ids
+
+
 async def _resolve_message_thread_id(message):
     if message is None:
         return None
@@ -4552,6 +4582,40 @@ class DiscordBotClient(discord.Client):
                 if sender_ids_override and not override_sender_ids:
                     logger.warning(
                         f"❌ [审核发送失败] 审核记录指定的发送账号当前均不在线: {sender_ids_override}"
+                    )
+                    continue
+
+                valid_senders_before_access = list(valid_senders)
+                valid_senders = await _filter_channel_accessible_sender_ids(
+                    valid_senders,
+                    bot_clients,
+                    message,
+                )
+                if valid_senders_before_access and not valid_senders:
+                    logger.warning(
+                        f"❌ [频道权限错误] 网站 '{website_config.get('name')}' 的在线发送账号均无法访问频道 "
+                        f"{message.channel.id}，跳过当前网站配置。在线发送账号: {valid_senders_before_access}"
+                    )
+                    continue
+                if len(valid_senders) < len(valid_senders_before_access):
+                    blocked_senders = [
+                        uid for uid in valid_senders_before_access if uid not in set(valid_senders)
+                    ]
+                    logger.info(
+                        f"⏭️ [跳过无频道权限发送账号] 网站:{website_config.get('name')} "
+                        f"频道:{message.channel.id} 账号:{blocked_senders}"
+                    )
+
+                override_senders_before_access = list(override_sender_ids)
+                override_sender_ids = await _filter_channel_accessible_sender_ids(
+                    override_sender_ids,
+                    bot_clients,
+                    message,
+                )
+                if override_senders_before_access and not override_sender_ids:
+                    logger.warning(
+                        f"❌ [审核发送失败] 审核记录指定的发送账号无法访问频道 {message.channel.id}: "
+                        f"{override_senders_before_access}"
                     )
                     continue
 
