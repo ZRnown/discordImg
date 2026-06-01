@@ -796,6 +796,14 @@ def build_user_shop_scope(user_id):
 
     return list(allowed_shops)
 
+def build_image_search_shop_scope(user):
+    """返回以图搜图使用的店铺范围；管理员无店铺限制时搜索全部店铺。"""
+    if not user or not user.get('id'):
+        return None
+    if user.get('role') == 'admin' and not (user.get('shops') or []):
+        return None
+    return build_user_shop_scope(user['id'])
+
 def refresh_running_bot_user_shops(user_id):
     """更新运行中 Bot 的 user_shops，避免修改绑定后需要重启进程"""
     scoped_shops = build_user_shop_scope(user_id)
@@ -1862,11 +1870,12 @@ def search_similar():
             except:
                 user_shops = None
         if user_shops is None and user_id:
-            user_shops = build_user_shop_scope(user_id)
+            scoped_user = db.get_user_by_id(user_id)
+            user_shops = build_image_search_shop_scope(scoped_user)
         if user_shops is None:
             current_user = get_current_user()
             if current_user and current_user.get('id'):
-                user_shops = build_user_shop_scope(current_user['id'])
+                user_shops = build_image_search_shop_scope(current_user)
 
         if debug_enabled:
             logger.debug(f"Received threshold: {threshold}")
