@@ -30,6 +30,8 @@ export function ImageSearchView() {
   const [historyFilter, setHistoryFilter] = useState<"all" | "normal" | "skipped">("all")
   const [previewImage, setPreviewImage] = useState<{ src: string; title: string } | null>(null)
   const [availableWebsites, setAvailableWebsites] = useState<any[]>([])
+  const [availableShops, setAvailableShops] = useState<any[]>([])
+  const [selectedSearchShopId, setSelectedSearchShopId] = useState("all")
   const historyPageSize = 10
   const historyPageCacheRef = useRef(new Map<string, { history: any[]; total: number; hasMore: boolean }>())
   const historyRequestVersionRef = useRef(0)
@@ -260,6 +262,26 @@ export function ImageSearchView() {
   }, [])
 
   useEffect(() => {
+    const fetchShops = async () => {
+      try {
+        const response = await fetch('/api/shops', { credentials: 'include' })
+        if (response.ok) {
+          const data = await response.json()
+          setAvailableShops(Array.isArray(data.shops) ? data.shops : [])
+        } else {
+          const errorData = await response.json().catch(() => ({}))
+          toast.error(getApiErrorMessage(errorData, '加载店铺列表失败'))
+        }
+      } catch (error) {
+        console.error('Failed to fetch shops:', error)
+        toast.error(getApiErrorMessage(error, '加载店铺列表失败'))
+      }
+    }
+
+    fetchShops()
+  }, [])
+
+  useEffect(() => {
     if (!uploadedFile) {
       setUploadedImage(null)
       return
@@ -416,6 +438,13 @@ export function ImageSearchView() {
 
       formData.append('threshold', (threshold / 100).toString()); // 转换为0-1
       formData.append('limit', maxResults.toString()); // 返回结果数量
+      if (selectedSearchShopId !== 'all') {
+        const selectedShop = availableShops.find((shop: any) => String(shop.shop_id) === selectedSearchShopId)
+        if (selectedShop) {
+          const shopScope = [selectedShop.shop_id, selectedShop.name].filter(Boolean)
+          formData.append('user_shops', JSON.stringify(shopScope))
+        }
+      }
 
       // 发送到后端进行向量搜索
       const searchRes = await fetch('/api/search_similar', {
@@ -557,6 +586,23 @@ export function ImageSearchView() {
 
               {/* 右侧：搜索设置 */}
               <div className="w-80 space-y-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">搜索店铺</label>
+                  <select
+                    value={selectedSearchShopId}
+                    onChange={(e) => setSelectedSearchShopId(e.target.value)}
+                    className="w-full px-3 py-2 border border-input rounded-md bg-background text-sm"
+                  >
+                    <option value="all">全部店铺（较慢）</option>
+                    {availableShops.map((shop: any) => (
+                      <option key={shop.shop_id} value={String(shop.shop_id)}>
+                        {shop.name || shop.shop_id}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground">建议选择具体店铺，全部店铺可能超时</p>
+                </div>
+
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <label className="text-sm font-medium">相似度阈值</label>

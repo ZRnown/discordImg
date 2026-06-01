@@ -56,6 +56,16 @@ test('image search history shows both query and matched images', () => {
   assert.equal(source.includes('/api/search_history/${history.id}/query-image'), true)
 })
 
+test('manual image search can scope admin searches to one shop', () => {
+  const source = readFileSync(new URL('./components/image-search-view.tsx', import.meta.url), 'utf8')
+
+  assert.equal(source.includes('selectedSearchShopId'), true)
+  assert.equal(source.includes("fetch('/api/shops'"), true)
+  assert.equal(source.includes("formData.append('user_shops'"), true)
+  assert.equal(source.includes('全部店铺（较慢）'), true)
+  assert.equal(source.includes('建议选择具体店铺，全部店铺可能超时'), true)
+})
+
 test('search history query image api route proxies the backend image file', () => {
   const routePath = new URL('./app/api/search_history/[id]/query-image/route.ts', import.meta.url)
   const source = existsSync(routePath) ? readFileSync(routePath, 'utf8') : ''
@@ -79,14 +89,16 @@ test('accounts view scopes cached settings by current logged-in user', () => {
   assert.equal(source.includes('currentUser?.id'), true)
 })
 
-test('production image search weights keep CPU-safe query fusion without margin gate', () => {
+test('production image search weights keep CPU-safe image-only retrieval without margin gate', () => {
   const source = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
 
-  assert.equal(source.includes('SIGLIP2_RERANK_IMAGE_WEIGHT: "0.80"'), true)
-  assert.equal(source.includes('SIGLIP2_RERANK_COLOR_WEIGHT: "0.12"'), true)
-  assert.equal(source.includes('SIGLIP2_RERANK_CATEGORY_WEIGHT: "0.12"'), true)
-  assert.equal(source.includes('SIGLIP2_RERANK_QUERY_RAW_WEIGHT: "0.30"'), true)
-  assert.equal(source.includes('SIGLIP2_RERANK_QUERY_CENTER_WEIGHT: "0.70"'), true)
+  assert.equal(source.includes('SIGLIP2_RERANK_IMAGE_ONLY: "1"'), true)
+  assert.equal(source.includes('SIGLIP2_RERANK_IMAGE_WEIGHT: "1.00"'), true)
+  assert.equal(source.includes('SIGLIP2_RERANK_COLOR_WEIGHT: "0.00"'), true)
+  assert.equal(source.includes('SIGLIP2_RERANK_CATEGORY_WEIGHT: "0.00"'), true)
+  assert.equal(source.includes('SIGLIP2_RERANK_QUERY_FUSION: "0"'), true)
+  assert.equal(source.includes('SIGLIP2_RERANK_QUERY_RAW_WEIGHT: "1.00"'), true)
+  assert.equal(source.includes('SIGLIP2_RERANK_QUERY_CENTER_WEIGHT: "0.00"'), true)
   assert.equal(source.includes('SIGLIP2_RERANK_QUERY_YOLO_WEIGHT: "0.00"'), true)
   assert.equal(source.includes('DISCORD_IMAGE_REPLY_MIN_TOP1_MARGIN: "0.00"'), true)
 })
