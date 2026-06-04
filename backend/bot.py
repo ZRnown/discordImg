@@ -1628,7 +1628,7 @@ async def resolve_reply_target_channel(
         f"未找到也未能创建消息子区: message={getattr(message, 'id', None)} "
         f"channel={getattr(target_channel, 'id', None)}"
     )
-    return target_channel, False
+    return None, False
 
 
 def _build_keyword_window_key(user_id, website_id, guild_id):
@@ -4786,7 +4786,15 @@ class DiscordBotClient(discord.Client):
                                     message=message,
                                     thread_reply_enabled=thread_reply_enabled or saved_reply_target_requested,
                                 )
-                                reply_target_channel = reply_target_channel or target_channel
+
+                            if reply_target_channel is None:
+                                logger.warning(
+                                    "子区回复目标为空，当前回复将跳过，避免发到外面: "
+                                    f"message={getattr(message, 'id', None)} "
+                                    f"channel={getattr(target_channel, 'id', None)} "
+                                    f"account_id={getattr(target_client, 'account_id', None)}"
+                                )
+                                continue
 
                             if strict_saved_reply_target:
                                 resolved_reply_target_id = _coerce_int(
