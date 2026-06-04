@@ -541,14 +541,93 @@ def test_database_migrates_legacy_product_images_schema(tmp_path: Path):
         cursor = conn.cursor()
         cursor.execute("PRAGMA table_info(product_images)")
         columns = [row[1] for row in cursor.fetchall()]
-        assert columns == ["id", "product_id", "image_path", "image_index"]
+        assert columns == [
+            "id",
+            "product_id",
+            "image_path",
+            "image_index",
+            "source_type",
+            "source_search_history_id",
+            "created_at",
+        ]
 
-        cursor.execute("SELECT id, product_id, image_path, image_index FROM product_images")
+        cursor.execute(
+            "SELECT id, product_id, image_path, image_index, source_type, source_search_history_id, created_at FROM product_images"
+        )
         rows = cursor.fetchall()
-        assert rows == [(7, 1, "/tmp/a-1.jpg", 0)]
+        assert rows[0][:6] == (7, 1, "/tmp/a-1.jpg", 0, "scraped", None)
+        assert rows[0][6]
 
     product_images = test_db.get_product_images(1)
-    assert product_images == [{"id": 7, "image_path": "/tmp/a-1.jpg", "image_index": 0}]
+    assert product_images == [
+        {
+            "id": 7,
+            "image_path": "/tmp/a-1.jpg",
+            "image_index": 0,
+            "source_type": "scraped",
+            "source_search_history_id": None,
+            "created_at": product_images[0]["created_at"],
+        }
+    ]
+    assert product_images[0]["created_at"]
+
+
+def test_database_adds_created_at_to_product_images_with_existing_source_columns(tmp_path: Path):
+    db_path = tmp_path / "metadata.db"
+
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            '''
+            CREATE TABLE products (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_url TEXT UNIQUE NOT NULL,
+                title TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            '''
+        )
+        cursor.execute(
+            '''
+            CREATE TABLE product_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                product_id INTEGER NOT NULL,
+                image_path TEXT NOT NULL,
+                image_index INTEGER NOT NULL,
+                source_type TEXT DEFAULT 'scraped',
+                source_search_history_id INTEGER,
+                FOREIGN KEY (product_id) REFERENCES products (id) ON DELETE CASCADE,
+                UNIQUE(product_id, image_index)
+            )
+            '''
+        )
+        cursor.execute(
+            "INSERT INTO products (id, product_url, title) VALUES (?, ?, ?)",
+            (1, "https://weidian.com/item.html?itemID=1001", "Alpha Runner"),
+        )
+        cursor.execute(
+            '''
+            INSERT INTO product_images (id, product_id, image_path, image_index, source_type)
+            VALUES (?, ?, ?, ?, ?)
+            ''',
+            (7, 1, "/tmp/a-1.jpg", 0, "scraped"),
+        )
+        conn.commit()
+
+    test_db = Database(db_path=str(db_path))
+
+    with sqlite3.connect(db_path) as conn:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(product_images)")
+        columns = [row[1] for row in cursor.fetchall()]
+        assert "created_at" in columns
+        cursor.execute("SELECT created_at FROM product_images WHERE id = 7")
+        assert cursor.fetchone()[0]
+
+    product_images = test_db.get_product_images(1)
+    assert product_images[0]["id"] == 7
+    assert product_images[0]["source_type"] == "scraped"
+    assert product_images[0]["created_at"]
 
 
 def test_insert_product_persists_item_id_and_updates_existing_row(tmp_path: Path):

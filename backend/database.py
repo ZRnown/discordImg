@@ -98,6 +98,17 @@ class Database:
         cursor.execute(f'ALTER TABLE {table_name} ADD COLUMN {column_definition}')
 
     @staticmethod
+    def _add_timestamp_column_if_missing(cursor, table_name: str, column_name: str) -> None:
+        columns = Database._get_table_columns(cursor, table_name)
+        if column_name in columns:
+            return
+        # SQLite cannot add a column with DEFAULT CURRENT_TIMESTAMP to an existing table.
+        cursor.execute(f'ALTER TABLE {table_name} ADD COLUMN {column_name} TIMESTAMP')
+        cursor.execute(
+            f"UPDATE {table_name} SET {column_name} = CURRENT_TIMESTAMP WHERE {column_name} IS NULL"
+        )
+
+    @staticmethod
     def _configure_connection(conn, *, enable_wal: bool = False) -> None:
         conn.execute('PRAGMA foreign_keys=ON;')
         if enable_wal:
@@ -185,6 +196,11 @@ class Database:
             ''')
 
             # 为现有表添加新字段（如果不存在）
+            try:
+                self._add_timestamp_column_if_missing(cursor, 'products', 'created_at')
+            except sqlite3.OperationalError:
+                pass
+
             try:
                 cursor.execute('ALTER TABLE products ADD COLUMN ruleEnabled BOOLEAN DEFAULT 1')
             except sqlite3.OperationalError:
@@ -310,12 +326,15 @@ class Database:
             for column_name, column_definition in (
                 ('source_type', "source_type TEXT DEFAULT 'scraped'"),
                 ('source_search_history_id', 'source_search_history_id INTEGER'),
-                ('created_at', 'created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP'),
             ):
                 try:
                     self._add_column_if_missing(cursor, 'product_images', column_name, column_definition)
                 except sqlite3.OperationalError:
                     pass
+            try:
+                self._add_timestamp_column_if_missing(cursor, 'product_images', 'created_at')
+            except sqlite3.OperationalError:
+                pass
             try:
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_product_images_product_id ON product_images(product_id)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_product_images_image_index ON product_images(image_index)')
