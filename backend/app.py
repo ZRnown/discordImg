@@ -551,7 +551,14 @@ def check_duplicate_image(new_features, existing_features_list, threshold=0.99):
 
     return False, 0.0
 
-def process_and_save_image_core(product_id, image_url_or_file, index, existing_features=None):
+def process_and_save_image_core(
+    product_id,
+    image_url_or_file,
+    index,
+    existing_features=None,
+    source_type='scraped',
+    source_search_history_id=None,
+):
     """
     核心图片处理单元：保存 -> SigLIP2缓存生成 -> 查重 -> 数据库 -> 检索缓存
 
@@ -577,6 +584,10 @@ def process_and_save_image_core(product_id, image_url_or_file, index, existing_f
         if hasattr(image_url_or_file, 'save'):
             # 是上传的文件对象 (FileStorage)
             image_url_or_file.save(save_path)
+        elif isinstance(image_url_or_file, str) and os.path.exists(image_url_or_file):
+            # 是本地文件路径，例如搜索历史原图。复制后再入商品图库，避免历史清理影响商品图。
+            import shutil
+            shutil.copyfile(image_url_or_file, save_path)
         else:
             # 是 URL 字符串
             import requests
@@ -626,7 +637,13 @@ def process_and_save_image_core(product_id, image_url_or_file, index, existing_f
                 return {'success': True, 'skipped': True}  # 标记为成功但跳过，以免报错
 
         # 5. 入库 (SQLite)
-        img_db_id = db.insert_image_record(product_id, save_path, index)
+        img_db_id = db.insert_image_record(
+            product_id,
+            save_path,
+            index,
+            source_type=source_type,
+            source_search_history_id=source_search_history_id,
+        )
 
         # 6. 写入检索缓存
         cache_saved = db.upsert_product_image_retrieval_cache(
@@ -2263,11 +2280,34 @@ def search_similar():
 
                     # 获取实际的图片URL列表
                     actual_images = []
+                    image_metadata = []
+                    matched_image_source_type = 'scraped'
+                    matched_image_source_search_history_id = None
                     if product_info:
                         with db.get_connection() as conn:
                             cursor = conn.cursor()
-                            cursor.execute("SELECT image_index FROM product_images WHERE product_id = ? ORDER BY image_index", (product_id,))
-                            actual_images = [f"/api/image/{product_id}/{row[0]}" for row in cursor.fetchall()]
+                            cursor.execute("""
+                                SELECT image_index,
+                                       COALESCE(source_type, 'scraped') AS source_type,
+                                       source_search_history_id,
+                                       created_at
+                                FROM product_images
+                                WHERE product_id = ?
+                                ORDER BY image_index
+                            """, (product_id,))
+                            for row in cursor.fetchall():
+                                image_index = row['image_index']
+                                source_type = row['source_type']
+                                actual_images.append(f"/api/image/{product_id}/{image_index}")
+                                image_metadata.append({
+                                    'image_index': image_index,
+                                    'source_type': source_type,
+                                    'source_search_history_id': row['source_search_history_id'],
+                                    'created_at': row['created_at'],
+                                })
+                                if image_index == result['image_index']:
+                                    matched_image_source_type = source_type
+                                    matched_image_source_search_history_id = row['source_search_history_id']
 
                     # 生成所有网站的链接
                     weidian_id = None
@@ -2306,6 +2346,8 @@ def search_similar():
                             'queryTextUsed': bool(query_text),
                         },
                         'imageIndex': result['image_index'],
+                        'matchedImageSourceType': matched_image_source_type,
+                        'matchedImageSourceSearchHistoryId': matched_image_source_search_history_id,
                         'matchedImage': f"/api/image/{product_id}/{result['image_index']}",
                         'product': {
                             'id': product_id,
@@ -2329,6 +2371,7 @@ def search_similar():
                             'selectedImageIndexes': selected_indexes,
                             'customImageUrls': custom_urls,
                             'images': actual_images if actual_images else [f"/api/image/{product_id}/{result['image_index']}"],
+                            'imageMetadata': image_metadata,
                             'websiteUrls': website_urls  # 添加所有网站的链接
                         }
                     }
@@ -2353,6 +2396,9 @@ def search_similar():
                             os.unlink(persisted_query_image_path)
                         except Exception as cleanup_error:
                             logger.warning("清理未入库的搜索原图失败: %s", cleanup_error)
+                    if saved_history:
+                        for processed_result in processed_results:
+                            processed_result['searchHistoryId'] = saved_history
 
                 response_data = {
                     'success': True,
@@ -4924,6 +4970,15 @@ def update_product():
         # 按索引排序并生成URL
         sorted_images = sorted(images_data, key=lambda x: x['image_index'])
         image_urls = [f"/api/image/{pid}/{img['image_index']}" for img in sorted_images]
+        image_metadata = [
+            {
+                'image_index': img['image_index'],
+                'source_type': img.get('source_type', 'scraped'),
+                'source_search_history_id': img.get('source_search_history_id'),
+                'created_at': img.get('created_at'),
+            }
+            for img in sorted_images
+        ]
 
         # 格式化字段以匹配前端需求 (CamelCase)
         weidian_id = ''
@@ -4986,6 +5041,7 @@ def update_product():
                 pid,
             ),
             'images': image_urls, # 包含所有商品图片
+            'imageMetadata': image_metadata,
             'uploadedImages': uploaded_reply_image_urls, # 上传的自定义回复图片URL数组
 
             'weidianId': weidian_id,
@@ -6123,6 +6179,15 @@ def get_product(product_id):
         # 获取商品图片
         images = db.get_product_images(product_id)
         product['images'] = [f"/api/image/{product_id}/{img['image_index']}" for img in images]
+        product['imageMetadata'] = [
+            {
+                'image_index': img['image_index'],
+                'source_type': img.get('source_type', 'scraped'),
+                'source_search_history_id': img.get('source_search_history_id'),
+                'created_at': img.get('created_at'),
+            }
+            for img in images
+        ]
         product['titleTranslations'] = normalize_title_translations(
             product.get('title_translations'),
             title=product.get('title'),
@@ -6196,12 +6261,17 @@ def upload_product_image(product_id):
         product = db._get_product_info_by_id(product_id)
 
         # 获取所有图片
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT image_index FROM product_images WHERE product_id = ? ORDER BY image_index", (product_id,))
-            images = [f"/api/image/{product_id}/{row[0]}" for row in cursor.fetchall()]
-
-        product['images'] = images
+        images = db.get_product_images(product_id)
+        product['images'] = [f"/api/image/{product_id}/{img['image_index']}" for img in images]
+        product['imageMetadata'] = [
+            {
+                'image_index': img['image_index'],
+                'source_type': img.get('source_type', 'scraped'),
+                'source_search_history_id': img.get('source_search_history_id'),
+                'created_at': img.get('created_at'),
+            }
+            for img in images
+        ]
 
         # 格式化以匹配前端
         product['weidianId'] = product.get('product_url', '').split('itemID=')[1] if 'itemID=' in product.get('product_url', '') else ''
@@ -6260,13 +6330,17 @@ def delete_product_image(product_id, image_index):
             return jsonify({'error': '商品不存在'}), 404
 
         # 获取剩余所有图片
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT image_index FROM product_images WHERE product_id = ? ORDER BY image_index", (product_id,))
-            image_indices = [row[0] for row in cursor.fetchall()]
-            images = [f"/api/image/{product_id}/{idx}" for idx in image_indices]
-
-        product['images'] = images
+        images = db.get_product_images(product_id)
+        product['images'] = [f"/api/image/{product_id}/{img['image_index']}" for img in images]
+        product['imageMetadata'] = [
+            {
+                'image_index': img['image_index'],
+                'source_type': img.get('source_type', 'scraped'),
+                'source_search_history_id': img.get('source_search_history_id'),
+                'created_at': img.get('created_at'),
+            }
+            for img in images
+        ]
 
         # 格式化商品信息
         try:
@@ -7051,6 +7125,69 @@ def serve_search_history_query_image(history_id: int):
         return send_file(image_path, mimetype=mimetype)
     except Exception as e:
         logger.error(f"serve_search_history_query_image 失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/search_history/<int:history_id>/attach-query-image', methods=['POST'])
+def attach_search_history_query_image(history_id: int):
+    """把搜索原图加入命中商品图库，并立即生成检索缓存。"""
+    if not require_login():
+        return jsonify({'error': '需要登录'}), 401
+
+    try:
+        data = request.get_json(silent=True) or {}
+        raw_product_id = data.get('product_id')
+        product_id = None
+        if raw_product_id not in (None, ''):
+            try:
+                product_id = int(raw_product_id)
+            except (TypeError, ValueError):
+                return jsonify({'error': 'product_id 格式错误'}), 400
+
+        attach_info = db.attach_search_history_query_image_to_product(history_id, product_id=product_id)
+        if not attach_info:
+            return jsonify({'error': '搜索记录不存在'}), 404
+
+        target_product_id = attach_info.get('product_id')
+        query_image_path = str(attach_info.get('query_image_path') or '').strip()
+        if not target_product_id:
+            return jsonify({'error': '该搜索记录没有命中商品，无法加入图库'}), 400
+        if not query_image_path or not os.path.exists(query_image_path):
+            return jsonify({'error': '搜索图不存在或已被清理'}), 404
+
+        strategy_name = getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank')
+        existing_feats = db.get_product_image_retrieval_embeddings(target_product_id, strategy_name)
+        next_index = int(attach_info.get('next_image_index') or 0)
+        result = process_and_save_image_core(
+            target_product_id,
+            query_image_path,
+            next_index,
+            existing_feats,
+            source_type='search_query',
+            source_search_history_id=history_id,
+        )
+
+        if not result.get('success'):
+            return jsonify({'error': result.get('error') or '加入图库失败'}), 400
+        if result.get('skipped'):
+            return jsonify({
+                'success': True,
+                'skipped': True,
+                'message': '图库里已有高度相似图片，已跳过重复加入',
+                'product_id': target_product_id,
+            })
+
+        return jsonify({
+            'success': True,
+            'message': '搜索图已加入命中商品图库',
+            'product_id': target_product_id,
+            'image_index': result.get('index'),
+            'image_url': f"/api/image/{target_product_id}/{result.get('index')}",
+            'source_type': 'search_query',
+            'source_search_history_id': history_id,
+        })
+    except Exception as e:
+        logger.error(f"搜索图加入商品图库失败: {e}")
         return jsonify({'error': str(e)}), 500
 
 

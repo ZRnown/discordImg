@@ -32,6 +32,7 @@ export function ImageSearchView() {
   const [availableWebsites, setAvailableWebsites] = useState<any[]>([])
   const [availableShops, setAvailableShops] = useState<any[]>([])
   const [selectedSearchShopId, setSelectedSearchShopId] = useState("all")
+  const [attachingHistoryIds, setAttachingHistoryIds] = useState<Record<string, boolean>>({})
   const historyPageSize = 10
   const historyPageCacheRef = useRef(new Map<string, { history: any[]; total: number; hasMore: boolean }>())
   const historyRequestVersionRef = useRef(0)
@@ -171,6 +172,73 @@ export function ImageSearchView() {
 
   const clearHistoryPageCache = () => {
     historyPageCacheRef.current.clear()
+  }
+
+  const isSearchQueryImageSource = (value?: string) => String(value || '').trim() === 'search_query'
+
+  const handleAttachSearchImage = async (historyId: number | string | undefined, productId?: number | string) => {
+    if (!historyId) {
+      toast.error('缺少搜索记录，无法加入图库')
+      return
+    }
+
+    const key = String(historyId)
+    if (attachingHistoryIds[key]) return
+
+    setAttachingHistoryIds(prev => ({ ...prev, [key]: true }))
+    try {
+      const response = await fetch(`/api/search_history/${historyId}/attach-query-image`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(productId ? { product_id: productId } : {}),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || !data.success) {
+        toast.error(getApiErrorMessage(data, '加入图库失败'))
+        return
+      }
+
+      if (data.skipped) {
+        toast.info(data.message || '图库里已有高度相似图片，已跳过')
+      } else {
+        toast.success(data.message || '已加入命中商品图库')
+      }
+
+      if (data.product_id && data.image_url) {
+        setSearchResults(prev => prev.map((result) => {
+          if (String(result.product?.id) !== String(data.product_id)) return result
+          const images = Array.isArray(result.product?.images) ? result.product.images : []
+          const imageMetadata = Array.isArray(result.product?.imageMetadata) ? result.product.imageMetadata : []
+          return {
+            ...result,
+            product: {
+              ...result.product,
+              images: images.includes(data.image_url) ? images : [...images, data.image_url],
+              imageMetadata: [
+                ...imageMetadata,
+                {
+                  image_index: data.image_index,
+                  source_type: data.source_type,
+                  source_search_history_id: data.source_search_history_id,
+                },
+              ],
+            },
+          }
+        }))
+      }
+
+      clearHistoryPageCache()
+      await fetchSearchHistory(currentPage, { forceRefresh: true })
+    } catch (error) {
+      console.error('Attach search image failed:', error)
+      toast.error(getApiErrorMessage(error, '加入图库失败'))
+    } finally {
+      setAttachingHistoryIds(prev => {
+        const next = { ...prev }
+        delete next[key]
+        return next
+      })
+    }
   }
 
   const prefetchSearchHistory = async (page: number) => {
@@ -688,6 +756,9 @@ export function ImageSearchView() {
                   const weidianId = getWeidianIdFromUrl(result.product?.weidianUrl)
                   const displayedLinks = mergeWebsiteLinks(websiteLinks, weidianId).slice(0, 12)
                   const matchedImageTitle = `${result.product.title || '命中商品'} - 命中图`
+                  const resultHistoryId = result.searchHistoryId
+                  const isAttaching = Boolean(attachingHistoryIds[String(resultHistoryId || '')])
+                  const matchedImageIsAdded = isSearchQueryImageSource(result.matchedImageSourceType)
 
                   return (
                     <div key={index} className="flex flex-col lg:flex-row lg:items-center justify-between p-2 hover:bg-muted/20 transition-colors gap-3">
@@ -719,7 +790,14 @@ export function ImageSearchView() {
                         )}
 
                         <div className="space-y-1">
-                          <p className="text-[11px] font-medium text-muted-foreground">命中图</p>
+                          <div className="flex items-center gap-1">
+                            <p className="text-[11px] font-medium text-muted-foreground">命中图</p>
+                            {matchedImageIsAdded && (
+                              <Badge variant="outline" className="h-4 px-1 text-[9px] border-amber-200 bg-amber-50 text-amber-700">
+                                人工加入
+                              </Badge>
+                            )}
+                          </div>
                           <button
                             type="button"
                             className="w-16 h-16 bg-muted rounded-lg overflow-hidden border border-transparent hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -765,6 +843,17 @@ export function ImageSearchView() {
                           <span>排名: #{result.rank}</span>
                           <span>|</span>
                           <span>搜索时间: {new Date().toLocaleString('zh-CN')}</span>
+                        </div>
+                        <div className="pt-1">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 px-2 text-xs"
+                            disabled={!resultHistoryId || isAttaching}
+                            onClick={() => handleAttachSearchImage(resultHistoryId, result.product?.id)}
+                          >
+                            {isAttaching ? '加入中...' : '加入图库'}
+                          </Button>
                         </div>
                       </div>
                     </div>
@@ -878,6 +967,8 @@ export function ImageSearchView() {
                   const matchedImageTitle = history.title
                     ? `${history.title} - 命中图`
                     : '命中图'
+                  const matchedImageIsAdded = isSearchQueryImageSource(history.matched_image_source_type)
+                  const isAttaching = Boolean(attachingHistoryIds[String(history.id)])
                   const historyLinks = (history.websiteUrls && history.websiteUrls.length > 0)
                     ? history.websiteUrls
                     : [
@@ -919,7 +1010,14 @@ export function ImageSearchView() {
 
                           {matchedImageSrc && (
                             <div className="space-y-1">
-                              <p className="text-[11px] font-medium text-muted-foreground">命中图</p>
+                              <div className="flex items-center gap-1">
+                                <p className="text-[11px] font-medium text-muted-foreground">命中图</p>
+                                {matchedImageIsAdded && (
+                                  <Badge variant="outline" className="h-4 px-1 text-[9px] border-amber-200 bg-amber-50 text-amber-700">
+                                    人工加入
+                                  </Badge>
+                                )}
+                              </div>
                               <button
                                 type="button"
                                 className="w-16 h-16 bg-muted rounded-lg overflow-hidden border border-transparent hover:border-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -987,6 +1085,19 @@ export function ImageSearchView() {
                             <span>|</span>
                             <span>搜索时间: {new Date(history.search_time).toLocaleString('zh-CN')}</span>
                           </div>
+                          {queryImageSrc && history.matched_product_id && (
+                            <div className="pt-1">
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 px-2 text-xs"
+                                disabled={isAttaching}
+                                onClick={() => handleAttachSearchImage(history.id, history.matched_product_id)}
+                              >
+                                {isAttaching ? '加入中...' : '加入图库'}
+                              </Button>
+                            </div>
+                          )}
                         </div>
                       </div>
 

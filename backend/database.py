@@ -120,13 +120,16 @@ class Database:
                 product_id INTEGER NOT NULL,
                 image_path TEXT NOT NULL,
                 image_index INTEGER NOT NULL,
+                source_type TEXT DEFAULT 'scraped',
+                source_search_history_id INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (product_id) REFERENCES products (id) ON DELETE CASCADE,
                 UNIQUE(product_id, image_index)
             )
         ''')
         cursor.execute('''
-            INSERT INTO product_images_new (id, product_id, image_path, image_index)
-            SELECT id, product_id, image_path, image_index
+            INSERT INTO product_images_new (id, product_id, image_path, image_index, source_type)
+            SELECT id, product_id, image_path, image_index, 'scraped'
             FROM product_images
         ''')
         cursor.execute('DROP TABLE product_images')
@@ -296,14 +299,27 @@ class Database:
                     product_id INTEGER NOT NULL,
                     image_path TEXT NOT NULL,
                     image_index INTEGER NOT NULL,
+                    source_type TEXT DEFAULT 'scraped',
+                    source_search_history_id INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (product_id) REFERENCES products (id) ON DELETE CASCADE,
                     UNIQUE(product_id, image_index)
                 )
             ''')
             self._migrate_legacy_product_images_schema(conn, cursor)
+            for column_name, column_definition in (
+                ('source_type', "source_type TEXT DEFAULT 'scraped'"),
+                ('source_search_history_id', 'source_search_history_id INTEGER'),
+                ('created_at', 'created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP'),
+            ):
+                try:
+                    self._add_column_if_missing(cursor, 'product_images', column_name, column_definition)
+                except sqlite3.OperationalError:
+                    pass
             try:
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_product_images_product_id ON product_images(product_id)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_product_images_image_index ON product_images(image_index)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_product_images_source_type ON product_images(source_type)')
             except sqlite3.OperationalError:
                 pass
 
@@ -1387,7 +1403,14 @@ class Database:
             conn.commit()
             return product_id
 
-    def insert_image_record(self, product_id: int, image_path: str, image_index: int) -> int:
+    def insert_image_record(
+        self,
+        product_id: int,
+        image_path: str,
+        image_index: int,
+        source_type: str = 'scraped',
+        source_search_history_id: Optional[int] = None,
+    ) -> int:
         """插入图像记录到数据库，返回记录ID供检索缓存关联使用"""
         try:
             with self.get_connection() as conn:
@@ -1395,9 +1418,15 @@ class Database:
 
                 cursor.execute('''
                     INSERT INTO product_images
-                    (product_id, image_path, image_index)
-                    VALUES (?, ?, ?)
-                ''', (product_id, image_path, image_index))
+                    (product_id, image_path, image_index, source_type, source_search_history_id)
+                    VALUES (?, ?, ?, ?, ?)
+                ''', (
+                    product_id,
+                    image_path,
+                    image_index,
+                    source_type or 'scraped',
+                    source_search_history_id,
+                ))
                 conn.commit()
                 record_id = cursor.lastrowid
                 logger.debug(f"图像记录插入成功: product_id={product_id}, image_index={image_index}, record_id={record_id}")
@@ -1448,7 +1477,10 @@ class Database:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
-                    SELECT id, image_path, image_index
+                    SELECT id, image_path, image_index,
+                           COALESCE(source_type, 'scraped') AS source_type,
+                           source_search_history_id,
+                           created_at
                     FROM product_images
                     WHERE product_id = ?
                     ORDER BY image_index
@@ -2546,8 +2578,8 @@ class Database:
         discord_author_id: Optional[str] = None,
         discord_author_name: str = '',
         message_content: str = '',
-    ) -> bool:
-        """添加搜索历史记录"""
+    ) -> Optional[int]:
+        """添加搜索历史记录，返回新记录ID。"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
@@ -2575,10 +2607,10 @@ class Database:
                     message_content or '',
                 ))
                 conn.commit()
-                return True
+                return int(cursor.lastrowid)
         except Exception as e:
             logger.error(f"添加搜索历史失败: {e}")
-            return False
+            return None
 
     def get_search_history(self, limit: int = 50, offset: int = 0, skipped: Optional[bool] = None) -> Dict:
         """获取搜索历史记录（支持分页）"""
@@ -2621,7 +2653,9 @@ class Database:
                         p.cnfans_url,
                         p.acbuy_url,
                         p.ruleEnabled,
-                        pi.image_path as matched_image_path
+                        pi.image_path as matched_image_path,
+                        COALESCE(pi.source_type, 'scraped') as matched_image_source_type,
+                        pi.source_search_history_id as matched_image_source_search_history_id
                     FROM search_history sh
                     LEFT JOIN products p ON sh.matched_product_id = p.id
                     LEFT JOIN product_images pi ON sh.matched_product_id = pi.product_id AND sh.matched_image_index = pi.image_index
@@ -2651,7 +2685,7 @@ class Database:
                         except Exception:
                             website_urls = []
 
-                    history.append({
+                history.append({
                         'id': row['id'],
                         'query_image_path': row['query_image_path'],
                         'matched_product_id': row['matched_product_id'],
@@ -2673,6 +2707,8 @@ class Database:
                         'acbuy_url': row['acbuy_url'],
                         'ruleEnabled': row['ruleEnabled'],
                         'matched_image_path': row['matched_image_path'],
+                        'matched_image_source_type': row['matched_image_source_type'],
+                        'matched_image_source_search_history_id': row['matched_image_source_search_history_id'],
                         'websiteUrls': website_urls
                     })
 
@@ -2686,6 +2722,55 @@ class Database:
         except Exception as e:
             logger.error(f"获取搜索历史失败: {e}")
             return []
+
+    def attach_search_history_query_image_to_product(self, history_id: int, product_id: Optional[int] = None) -> Optional[Dict]:
+        """读取搜索记录与目标商品，用于把搜索原图加入商品图库。"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT
+                        sh.id,
+                        sh.query_image_path,
+                        sh.matched_product_id,
+                        sh.matched_image_index,
+                        p.id AS product_id,
+                        p.title,
+                        p.english_title
+                    FROM search_history sh
+                    LEFT JOIN products p ON p.id = COALESCE(?, sh.matched_product_id)
+                    WHERE sh.id = ?
+                ''', (product_id, history_id))
+                row = cursor.fetchone()
+                if not row:
+                    return None
+
+                target_product_id = product_id or row['matched_product_id']
+                if not target_product_id or not row['product_id']:
+                    return {
+                        'history_id': row['id'],
+                        'query_image_path': row['query_image_path'],
+                        'product_id': None,
+                    }
+
+                cursor.execute(
+                    'SELECT MAX(image_index) FROM product_images WHERE product_id = ?',
+                    (target_product_id,),
+                )
+                index_row = cursor.fetchone()
+                next_index = (int(index_row[0]) + 1) if index_row and index_row[0] is not None else 0
+
+                return {
+                    'history_id': row['id'],
+                    'query_image_path': row['query_image_path'],
+                    'product_id': target_product_id,
+                    'next_image_index': next_index,
+                    'title': row['title'],
+                    'english_title': row['english_title'],
+                }
+        except Exception as e:
+            logger.error(f"读取搜索图加入图库信息失败: {e}")
+            return None
 
     def delete_search_history(self, history_id: int) -> bool:
         """删除搜索历史记录"""
@@ -6119,6 +6204,24 @@ class Database:
                         prod['images'] = [f"/api/image/{prod['id']}/{idx}" for idx in image_indices]
                     else:
                         prod['images'] = []
+                    cursor.execute('''
+                        SELECT image_index,
+                               COALESCE(source_type, 'scraped') AS source_type,
+                               source_search_history_id,
+                               created_at
+                        FROM product_images
+                        WHERE product_id = ?
+                        ORDER BY image_index
+                    ''', (prod['id'],))
+                    prod['imageMetadata'] = [
+                        {
+                            'image_index': img_row['image_index'],
+                            'source_type': img_row['source_type'],
+                            'source_search_history_id': img_row['source_search_history_id'],
+                            'created_at': img_row['created_at'],
+                        }
+                        for img_row in cursor.fetchall()
+                    ]
 
                     prod['weidianUrl'] = prod.get('product_url')
                     prod['englishTitle'] = prod.get('english_title') or ''

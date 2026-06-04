@@ -302,6 +302,7 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
       customReplyImages: product.customReplyImages || product.custom_reply_images || [],
       selectedImageIndexes: product.selectedImageIndexes || [],
       customImageUrls: product.customImageUrls || product.custom_image_urls || [],
+      imageMetadata: product.imageMetadata || product.image_metadata || [],
       imageSource: product.imageSource || product.image_source || (product.custom_image_urls ? 'custom' : 'upload'),
       perWebsiteReplySettings: product.perWebsiteReplySettings || product.per_website_reply_settings || {},
       uploadedImages: [],
@@ -1885,7 +1886,11 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
                       </DialogHeader>
                       <ScrollArea className="max-h-[70vh] mt-4">
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-1">
-                          {product.images?.map((img: string, idx: number) => (
+                          {product.images?.map((img: string, idx: number) => {
+                            const imageIndex = Number(img.split('/').pop())
+                            const imageMeta = (product.imageMetadata || []).find((item: any) => Number(item.image_index) === imageIndex)
+                            const isSearchQueryImage = String(imageMeta?.source_type || '').trim() === 'search_query'
+                            return (
                             <div key={img} className="aspect-square rounded-xl border-2 bg-muted overflow-hidden group relative">
                               <img
                                 src={img}
@@ -1893,6 +1898,11 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
                                 className="object-cover w-full h-full transition-transform group-hover:scale-110 cursor-zoom-in"
                                 onClick={() => openLightbox(product.images || [], idx)}
                               />
+                              {isSearchQueryImage && (
+                                <span className="absolute left-2 top-2 rounded bg-amber-500/95 px-1.5 py-0.5 text-[10px] font-medium text-white shadow">
+                                  人工加入
+                                </span>
+                              )}
                               <button
                                                             onClick={async (e) => {
                                                                 e.preventDefault()
@@ -1936,7 +1946,7 @@ export function ScraperView({ currentUser, isActive = true }: { currentUser: any
                                 <X className="size-3" />
                               </button>
                             </div>
-                          ))}
+                          )})}
                         </div>
                       </ScrollArea>
                     </DialogContent>
