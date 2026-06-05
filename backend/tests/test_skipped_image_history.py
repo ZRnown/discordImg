@@ -99,6 +99,25 @@ class SkippedImageHistoryTestCase(unittest.TestCase):
         self.assertEqual(result["total"], 0)
         self.assertEqual(result["history"], [])
 
+    def test_search_history_returns_all_rows_for_page_limit_in_desc_order(self):
+        for index, similarity in enumerate((0.31, 0.42, 0.53), start=1):
+            self.db.add_search_history(
+                query_image_path=f"/tmp/search-{index}.jpg",
+                matched_product_id=self.product_id,
+                matched_image_index=0,
+                similarity=similarity,
+                threshold=0.6,
+            )
+
+        result = self.db.get_search_history(limit=10, offset=0)
+
+        self.assertEqual(result["total"], 3)
+        self.assertEqual(len(result["history"]), 3)
+        self.assertEqual(
+            [item["query_image_path"] for item in result["history"]],
+            ["/tmp/search-3.jpg", "/tmp/search-2.jpg", "/tmp/search-1.jpg"],
+        )
+
     def test_cleanup_search_query_images_removes_expired_files_and_clears_paths(self):
         expired_search_path = Path(self.temp_dir.name) / "expired-search.jpg"
         expired_search_path.write_bytes(b"expired-search")

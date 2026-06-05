@@ -2704,7 +2704,7 @@ class Database:
                         except Exception:
                             website_urls = []
 
-                history.append({
+                    history.append({
                         'id': row['id'],
                         'query_image_path': row['query_image_path'],
                         'matched_product_id': row['matched_product_id'],
