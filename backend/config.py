@@ -132,6 +132,14 @@ class Config:
         'DISCORD_IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS',
         30.0,
     )
+    DISCORD_THREAD_REPLY_WAIT_TIMEOUT_SECONDS = _env_float(
+        'DISCORD_THREAD_REPLY_WAIT_TIMEOUT_SECONDS',
+        180.0,
+    )
+    DISCORD_THREAD_REPLY_WAIT_POLL_SECONDS = _env_float(
+        'DISCORD_THREAD_REPLY_WAIT_POLL_SECONDS',
+        2.0,
+    )
 
     # === 机器人 ===
     COMMAND_PREFIX = '!'

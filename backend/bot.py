@@ -1556,11 +1556,55 @@ async def _create_reply_thread_for_message(target_channel, message):
     return created_thread
 
 
+async def _wait_for_reply_thread(
+    target_client,
+    target_channel,
+    message,
+    *,
+    timeout_seconds=None,
+    poll_seconds=None,
+):
+    message_id = getattr(message, 'id', None)
+    timeout = THREAD_REPLY_WAIT_TIMEOUT_SECONDS if timeout_seconds is None else float(timeout_seconds or 0.0)
+    poll = THREAD_REPLY_WAIT_POLL_SECONDS if poll_seconds is None else float(poll_seconds or 0.0)
+    timeout = max(timeout, 0.0)
+    poll = max(poll, 0.25)
+    if timeout <= 0:
+        return None
+
+    deadline = time.monotonic() + timeout
+    attempt = 0
+    while True:
+        attempt += 1
+        existing_thread = await _resolve_existing_reply_thread_after_create_failure(
+            target_client,
+            target_channel,
+            message,
+        )
+        if existing_thread is not None:
+            logger.info(
+                f"等待后已找到消息子区: message={message_id} "
+                f"thread={getattr(existing_thread, 'id', None)} attempts={attempt}"
+            )
+            return existing_thread
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            logger.warning(
+                f"等待消息子区超时，当前回复将跳过: message={message_id} "
+                f"channel={getattr(target_channel, 'id', None)} timeout={timeout:.1f}s attempts={attempt}"
+            )
+            return None
+        await asyncio.sleep(min(poll, remaining))
+
+
 async def resolve_reply_target_channel(
     target_client,
     target_channel,
     message,
     thread_reply_enabled=False,
+    thread_wait_timeout_seconds=None,
+    thread_wait_poll_seconds=None,
 ):
     if not thread_reply_enabled or target_channel is None or message is None:
         return target_channel, False
@@ -1623,6 +1667,16 @@ async def resolve_reply_target_channel(
     )
     if existing_thread_after_create is not None:
         return existing_thread_after_create, True
+
+    waited_thread = await _wait_for_reply_thread(
+        target_client,
+        target_channel,
+        message,
+        timeout_seconds=thread_wait_timeout_seconds,
+        poll_seconds=thread_wait_poll_seconds,
+    )
+    if waited_thread is not None:
+        return waited_thread, True
 
     logger.warning(
         f"未找到也未能创建消息子区: message={getattr(message, 'id', None)} "
@@ -1827,7 +1881,15 @@ MAX_COOLDOWN_WAIT_SECONDS = 3.0
 
 # 单条消息各阶段的超时保护，避免某一步卡死拖住后续消息
 MESSAGE_FORWARD_TIMEOUT_SECONDS = 15.0
-MESSAGE_KEYWORD_SEARCH_TIMEOUT_SECONDS = 45.0
+THREAD_REPLY_WAIT_TIMEOUT_SECONDS = max(
+    _coerce_float(getattr(config, 'DISCORD_THREAD_REPLY_WAIT_TIMEOUT_SECONDS', 180.0)) or 180.0,
+    0.0,
+)
+THREAD_REPLY_WAIT_POLL_SECONDS = max(
+    _coerce_float(getattr(config, 'DISCORD_THREAD_REPLY_WAIT_POLL_SECONDS', 2.0)) or 2.0,
+    0.25,
+)
+MESSAGE_KEYWORD_SEARCH_TIMEOUT_SECONDS = max(45.0, THREAD_REPLY_WAIT_TIMEOUT_SECONDS + 30.0)
 MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS = 130.0
 MESSAGE_IMAGE_REPLY_MAX_ATTACHMENTS = max(
     int(getattr(config, 'DISCORD_IMAGE_REPLY_MAX_ATTACHMENTS_PER_MESSAGE', 2) or 2),

@@ -526,6 +526,93 @@ class ResolveReplyTargetChannelTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(used_thread_reply)
         target_channel.create_thread.assert_awaited_once()
 
+    async def test_waits_for_thread_after_create_failure_before_replying(self):
+        existing_thread = SimpleNamespace(id=888003, parent_id=123001)
+        target_channel = SimpleNamespace(
+            id=123001,
+            parent_id=None,
+            fetch_message=AsyncMock(return_value=SimpleNamespace(id=777003, flags=SimpleNamespace(has_thread=False))),
+            threads=[],
+            create_thread=AsyncMock(side_effect=RuntimeError("discord still creating thread")),
+        )
+        message = _SlottedMessage(
+            message_id=777003,
+            channel=SimpleNamespace(id=123001, parent_id=None),
+            fetch_thread=AsyncMock(return_value=None),
+        )
+        lookup_count = {"count": 0}
+
+        async def resolve_after_failure(target_client, target_channel_arg, message_arg):
+            lookup_count["count"] += 1
+            return existing_thread if lookup_count["count"] >= 4 else None
+
+        target_client = SimpleNamespace(
+            get_channel=lambda channel_id: None,
+            fetch_channel=AsyncMock(return_value=None),
+        )
+
+        with patch.object(
+            bot_module,
+            "_resolve_existing_reply_thread_after_create_failure",
+            side_effect=resolve_after_failure,
+        ), patch.object(bot_module.asyncio, "sleep", new=AsyncMock()) as mock_sleep:
+            reply_target_channel, used_thread_reply = await resolve_reply_target_channel(
+                target_client=target_client,
+                target_channel=target_channel,
+                message=message,
+                thread_reply_enabled=True,
+                thread_wait_timeout_seconds=5,
+                thread_wait_poll_seconds=1,
+            )
+
+        self.assertIs(reply_target_channel, existing_thread)
+        self.assertTrue(used_thread_reply)
+        target_channel.create_thread.assert_awaited_once()
+        mock_sleep.assert_awaited()
+
+    async def test_returns_none_when_thread_is_unavailable_until_timeout(self):
+        target_channel = SimpleNamespace(
+            id=123001,
+            parent_id=None,
+            fetch_message=AsyncMock(return_value=SimpleNamespace(id=777004, flags=SimpleNamespace(has_thread=False))),
+            threads=[],
+            create_thread=AsyncMock(return_value=None),
+        )
+        message = _SlottedMessage(
+            message_id=777004,
+            channel=SimpleNamespace(id=123001, parent_id=None),
+            fetch_thread=AsyncMock(return_value=None),
+        )
+        target_client = SimpleNamespace(
+            get_channel=lambda channel_id: None,
+            fetch_channel=AsyncMock(return_value=None),
+        )
+
+        with patch.object(
+            bot_module,
+            "_resolve_existing_reply_thread_after_create_failure",
+            new=AsyncMock(return_value=None),
+        ), patch.object(
+            bot_module,
+            "_resolve_archived_reply_thread",
+            new=AsyncMock(return_value=None),
+        ), patch.object(
+            bot_module.time,
+            "monotonic",
+            side_effect=[0, 10],
+        ), patch.object(bot_module.asyncio, "sleep", new=AsyncMock()):
+            reply_target_channel, used_thread_reply = await resolve_reply_target_channel(
+                target_client=target_client,
+                target_channel=target_channel,
+                message=message,
+                thread_reply_enabled=True,
+                thread_wait_timeout_seconds=5,
+                thread_wait_poll_seconds=1,
+            )
+
+        self.assertIsNone(reply_target_channel)
+        self.assertFalse(used_thread_reply)
+
     async def test_reuses_cached_thread_when_same_message_hits_again(self):
         existing_thread = SimpleNamespace(id=555001, parent_id=123001)
         target_channel = SimpleNamespace(
