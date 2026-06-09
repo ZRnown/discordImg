@@ -1745,6 +1745,8 @@ class LiveImageRetriever:
         self._refresh_generation = 0
         self._query_context_cache: OrderedDict[Tuple[Any, ...], Tuple[float, Dict[str, Any]]] = OrderedDict()
         self._query_context_cache_lock = Lock()
+        self._fast_vector_context_cache: OrderedDict[Tuple[str, ...], Tuple[Tuple[Any, ...], Dict[str, Any]]] = OrderedDict()
+        self._fast_vector_context_cache_lock = Lock()
 
     @staticmethod
     def _clone_query_context_value(value: Any) -> Any:
@@ -1896,6 +1898,112 @@ class LiveImageRetriever:
         if not bool(getattr(strategy, "image_only_enabled", False)):
             return False
         return callable(getattr(self.db, "iter_searchable_product_image_vector_batches", None))
+
+    def _build_fast_vector_context_signature(
+        self,
+        shop_scope: Tuple[str, ...],
+    ) -> Tuple[Any, ...]:
+        signature_loader = getattr(self.db, "get_searchable_product_image_records_signature", None)
+        if callable(signature_loader):
+            summary = signature_loader(
+                strategy_name=self.strategy_name,
+                require_cache=True,
+                shop_names=shop_scope or None,
+            )
+            return (
+                self.strategy_name,
+                shop_scope,
+                int((summary or {}).get("count") or 0),
+                int((summary or {}).get("max_image_db_id") or 0),
+                int((summary or {}).get("max_product_id") or 0),
+                str((summary or {}).get("max_product_updated_at") or ""),
+                str((summary or {}).get("max_cache_updated_at") or ""),
+            )
+        return (self.strategy_name, shop_scope)
+
+    def _get_fast_vector_contexts(
+        self,
+        shop_scope: Tuple[str, ...],
+        *,
+        cancel_event: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        signature = self._build_fast_vector_context_signature(shop_scope)
+        cache_key = shop_scope
+        max_scopes = max(_env_int("LIVE_IMAGE_SEARCH_VECTOR_CONTEXT_CACHE_SCOPES", 8), 0)
+        if max_scopes > 0:
+            with self._fast_vector_context_cache_lock:
+                cached = self._fast_vector_context_cache.get(cache_key)
+                if cached is not None and cached[0] == signature:
+                    self._fast_vector_context_cache.move_to_end(cache_key)
+                    return cached[1]
+
+        build_started_at = perf_counter()
+        vectors: List[np.ndarray] = []
+        product_ids: List[str] = []
+        titles: List[str] = []
+        image_paths: List[str] = []
+        image_indices: List[int] = []
+        batch_size = max(_env_int("LIVE_IMAGE_SEARCH_VECTOR_BATCH_SIZE", 4096), 1)
+        decode_elapsed = 0.0
+
+        for rows in self.db.iter_searchable_product_image_vector_batches(
+            strategy_name=self.strategy_name,
+            shop_names=shop_scope or None,
+            batch_size=batch_size,
+        ):
+            if _is_search_cancelled(cancel_event):
+                break
+            decode_started_at = perf_counter()
+            for row in rows:
+                vector = None
+                raw_embedding = row.get("embedding_blob")
+                if isinstance(raw_embedding, (bytes, bytearray, memoryview)):
+                    vector = np.frombuffer(raw_embedding, dtype=np.float32)
+                else:
+                    raw_json = row.get("embedding_json")
+                    if raw_json not in (None, "", []):
+                        try:
+                            vector = np.asarray(json.loads(raw_json), dtype=np.float32).reshape(-1)
+                        except Exception:
+                            vector = None
+                if vector is None or vector.size <= 0:
+                    continue
+                vectors.append(vector)
+                product_ids.append(str(row.get("product_id") or ""))
+                titles.append(str(row.get("title") or ""))
+                image_paths.append(str(row.get("image_path") or ""))
+                image_indices.append(int(row.get("image_index") or 0))
+            decode_elapsed += perf_counter() - decode_started_at
+
+        if vectors:
+            matrix = np.vstack(vectors).astype(np.float32, copy=False)
+        else:
+            matrix = np.zeros((0, 0), dtype=np.float32)
+        contexts = {
+            "matrix": matrix,
+            "product_ids": product_ids,
+            "titles": titles,
+            "image_paths": image_paths,
+            "image_indices": image_indices,
+        }
+        build_elapsed = perf_counter() - build_started_at
+        if build_elapsed >= 5.0:
+            logger.warning(
+                "Live retrieval built fast vector context: strategy=%s total=%.2fs decode=%.2fs catalog_size=%s shops=%s",
+                self.strategy_name,
+                build_elapsed,
+                decode_elapsed,
+                len(product_ids),
+                list(shop_scope),
+            )
+
+        if max_scopes > 0 and not _is_search_cancelled(cancel_event):
+            with self._fast_vector_context_cache_lock:
+                self._fast_vector_context_cache[cache_key] = (signature, contexts)
+                self._fast_vector_context_cache.move_to_end(cache_key)
+                while len(self._fast_vector_context_cache) > max_scopes:
+                    self._fast_vector_context_cache.popitem(last=False)
+        return contexts
 
     @staticmethod
     def _build_signature(rows: Sequence[Dict[str, Any]]) -> Tuple[int, int, str]:
@@ -2680,6 +2788,60 @@ class LiveImageRetriever:
                     "streaming": True,
                     "fast_cached_vectors": True,
                 }
+
+        shop_scope = tuple(sorted(normalized_user_shops or []))
+        contexts = self._get_fast_vector_contexts(shop_scope, cancel_event=cancel_event)
+        matrix = contexts.get("matrix")
+        ranker = getattr(strategy, "_rank_products_fast_for_context", None)
+        if (
+            callable(ranker)
+            and matrix is not None
+            and getattr(matrix, "ndim", 0) == 2
+            and matrix.shape[0] > 0
+            and matrix.shape[1] == query_vector.size
+            and not _is_search_cancelled(cancel_event)
+        ):
+            score_started_at = perf_counter()
+            ranked_products = ranker(
+                query_context,
+                contexts,
+                max(int(top_k or 1), 1),
+            ) or []
+            score_elapsed = perf_counter() - score_started_at
+            filtered_ranked_products = [
+                item
+                for item in ranked_products
+                if float(item.get("score", 0.0)) >= float(threshold or 0.0)
+            ][: max(int(top_k or 1), 1)]
+            top1_score = float(filtered_ranked_products[0]["score"]) if filtered_ranked_products else 0.0
+            top2_score = (
+                float(filtered_ranked_products[1]["score"])
+                if len(filtered_ranked_products) > 1
+                else 0.0
+            )
+            total_elapsed = perf_counter() - started_at
+            if total_elapsed >= 5.0:
+                logger.warning(
+                    "Live retrieval fast vector-cache slow search: strategy=%s total=%.2fs query_prepare=%.2fs score=%.2fs catalog_size=%s result_count=%s query_cache_hit=%s shops=%s",
+                    self.strategy_name,
+                    total_elapsed,
+                    query_prepare_elapsed,
+                    score_elapsed,
+                    matrix.shape[0],
+                    len(filtered_ranked_products),
+                    query_context_cache_hit,
+                    normalized_user_shops,
+                )
+            return {
+                "strategy": self.strategy_name,
+                "catalog_size": int(matrix.shape[0]),
+                "ranked_products": filtered_ranked_products,
+                "top1_score": top1_score,
+                "top1_margin": top1_score - top2_score,
+                "streaming": True,
+                "fast_cached_vectors": True,
+                "fast_vector_cache": True,
+            }
 
         ranking_state_by_product: Dict[str, Dict[str, Any]] = {}
         catalog_size = 0
