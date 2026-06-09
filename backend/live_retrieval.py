@@ -1745,7 +1745,7 @@ class LiveImageRetriever:
         self._refresh_generation = 0
         self._query_context_cache: OrderedDict[Tuple[Any, ...], Tuple[float, Dict[str, Any]]] = OrderedDict()
         self._query_context_cache_lock = Lock()
-        self._fast_vector_context_cache: OrderedDict[Tuple[str, ...], Tuple[Tuple[Any, ...], Dict[str, Any]]] = OrderedDict()
+        self._fast_vector_context_cache: OrderedDict[Tuple[str, ...], Tuple[Tuple[Any, ...], Dict[str, Any], float]] = OrderedDict()
         self._fast_vector_context_cache_lock = Lock()
 
     @staticmethod
@@ -1927,13 +1927,27 @@ class LiveImageRetriever:
         *,
         cancel_event: Optional[Any] = None,
     ) -> Dict[str, Any]:
-        signature = self._build_fast_vector_context_signature(shop_scope)
         cache_key = shop_scope
         max_scopes = max(_env_int("LIVE_IMAGE_SEARCH_VECTOR_CONTEXT_CACHE_SCOPES", 8), 0)
+        signature_ttl_seconds = _env_float("LIVE_IMAGE_SEARCH_VECTOR_CONTEXT_SIGNATURE_TTL_SECONDS", 60.0)
+        now = perf_counter()
+        if max_scopes > 0:
+            with self._fast_vector_context_cache_lock:
+                cached = self._fast_vector_context_cache.get(cache_key)
+                if (
+                    cached is not None
+                    and signature_ttl_seconds > 0
+                    and now - float(cached[2] or 0.0) <= signature_ttl_seconds
+                ):
+                    self._fast_vector_context_cache.move_to_end(cache_key)
+                    return cached[1]
+
+        signature = self._build_fast_vector_context_signature(shop_scope)
         if max_scopes > 0:
             with self._fast_vector_context_cache_lock:
                 cached = self._fast_vector_context_cache.get(cache_key)
                 if cached is not None and cached[0] == signature:
+                    self._fast_vector_context_cache[cache_key] = (signature, cached[1], now)
                     self._fast_vector_context_cache.move_to_end(cache_key)
                     return cached[1]
 
@@ -1999,7 +2013,7 @@ class LiveImageRetriever:
 
         if max_scopes > 0 and not _is_search_cancelled(cancel_event):
             with self._fast_vector_context_cache_lock:
-                self._fast_vector_context_cache[cache_key] = (signature, contexts)
+                self._fast_vector_context_cache[cache_key] = (signature, contexts, perf_counter())
                 self._fast_vector_context_cache.move_to_end(cache_key)
                 while len(self._fast_vector_context_cache) > max_scopes:
                     self._fast_vector_context_cache.popitem(last=False)

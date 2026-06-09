@@ -146,6 +146,7 @@ test('image-only streaming search scans cached vectors in batches', () => {
   assert.match(retrievalSource, /def _search_cached_vector_streaming/)
   assert.match(retrievalSource, /iter_searchable_product_image_vector_batches/)
   assert.match(retrievalSource, /LIVE_IMAGE_SEARCH_VECTOR_CONTEXT_CACHE_SCOPES/)
+  assert.match(retrievalSource, /LIVE_IMAGE_SEARCH_VECTOR_CONTEXT_SIGNATURE_TTL_SECONDS/)
   assert.match(retrievalSource, /fast_vector_cache/)
   assert.match(retrievalSource, /matrix = np\.vstack\(vectors\)/)
   assert.match(retrievalSource, /fast_cached_vectors/)
