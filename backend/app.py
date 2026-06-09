@@ -8554,6 +8554,65 @@ def fetch_category_items(shop_id, cate_id, cate_name, session, limit=20):
             logger.error(f"抓取分类[{cate_name}]异常: {e}")
             break
 
+def fetch_shop_tab_items(shop_id, session, limit=50):
+    """
+    生成器：抓取店铺“全部”Tab商品。
+    分类树接口有时返回空，但店铺页仍通过 shopDetail.tab.getItemList 展示商品。
+    """
+    import time
+    from urllib.parse import quote
+
+    offset = 0
+
+    while True:
+        try:
+            url = "https://thor.weidian.com/decorate/shopDetail.tab.getItemList/1.0"
+            param = json.dumps({
+                "shopId": str(shop_id),
+                "tabId": 0,
+                "sortOrder": "desc",
+                "offset": offset,
+                "limit": limit,
+                "from": "h5",
+                "showItemTag": True,
+            })
+            full_url = f"{url}?param={quote(param)}&wdtoken=8ea9315c&_={int(time.time()*1000)}"
+            request_headers = build_weidian_shop_api_headers(shop_id)
+
+            response = session.get(full_url, headers=request_headers, timeout=12)
+            try:
+                data = response.json()
+            except ValueError:
+                preview = (response.text or '').strip().replace('\n', ' ')[:240]
+                logger.warning(
+                    f"全部Tab Offset {offset} 返回非JSON(shop_id={shop_id}, "
+                    f"status={response.status_code}, content_type={response.headers.get('content-type', '')}): {preview}"
+                )
+                break
+
+            if data.get('status', {}).get('code') != 0:
+                logger.warning(f"全部Tab Offset {offset} API错误: {data.get('status')}")
+                break
+
+            result = data.get('result', {})
+            items = result.get('itemList', [])
+
+            if not items:
+                break
+
+            for item in items:
+                yield item
+
+            if len(items) < limit:
+                break
+
+            offset += len(items)
+            time.sleep(0.25)
+
+        except Exception as e:
+            logger.error(f"抓取全部Tab异常: {e}")
+            break
+
 def scrape_shop_products(shop_id):
     """抓取店铺所有商品的实现 (分类树方案 - 突破2000条限制)"""
     import requests
@@ -8704,6 +8763,39 @@ def scrape_shop_products(shop_id):
             logger.error(f"分类遍历过程异常: {e}")
 
     logger.info(f"✅ 分类树抓取完成，共收集 {len(unique_product_tasks)} 个商品")
+
+    if not unique_product_tasks and not (scrape_stop_event.is_set() or db.get_scrape_status().get('stop_signal', False)):
+        logger.info("分类树未收集到商品，开始使用店铺全部Tab备用抓取")
+        db.update_scrape_status(message='分类未找到商品，正在使用全部Tab备用抓取...')
+
+        tab_seen_count = 0
+        tab_new_count = 0
+        for item in fetch_shop_tab_items(shop_id, scraper.session):
+            if scrape_stop_event.is_set() or db.get_scrape_status().get('stop_signal', False):
+                db.update_scrape_status(message="正在停止任务...")
+                break
+
+            tab_seen_count += 1
+            item_id = str(item.get('itemId', ''))
+            if not item_id or item_id in unique_product_tasks or item_id in existing_item_ids:
+                continue
+
+            unique_product_tasks[item_id] = {
+                'item_id': item_id,
+                'item_url': item.get('itemUrl', f"https://weidian.com/item.html?itemID={item_id}"),
+                'shop_name': shop_name
+            }
+            tab_new_count += 1
+
+            if tab_new_count == 1 or tab_new_count % 50 == 0:
+                db.update_scrape_status(
+                    total=len(unique_product_tasks),
+                    message=f"正在扫描全部Tab，已发现 {tab_new_count} 个新商品..."
+                )
+
+        logger.info(
+            f"✅ 全部Tab备用抓取完成，扫描 {tab_seen_count} 个商品，新增 {tab_new_count} 个商品"
+        )
 
     # =========================================================================
     # 阶段 2: 并发处理
