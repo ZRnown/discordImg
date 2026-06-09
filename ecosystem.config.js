@@ -49,7 +49,7 @@ module.exports = {
         PYTHONIOENCODING: "utf-8",
         PYTHONUNBUFFERED: "1",
         PUBLIC_FRONTEND_BASE_URL: process.env.PUBLIC_FRONTEND_BASE_URL || process.env.NEXT_PUBLIC_FRONTEND_BASE_URL || process.env.FRONTEND_URL || "",
-        LIVE_IMAGE_SEARCH_STRATEGY: "siglip2_rerank",
+        LIVE_IMAGE_SEARCH_STRATEGY: "current_dino_hybrid",
         LIVE_IMAGE_SEARCH_STREAMING_ENABLED: "1",
         LIVE_IMAGE_SEARCH_STREAMING_FORCE: "1",
         LIVE_IMAGE_SEARCH_MAX_INFLIGHT: "1",

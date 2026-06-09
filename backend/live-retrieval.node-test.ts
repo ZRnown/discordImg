@@ -19,10 +19,21 @@ test('startup catalog preparation is disabled by default', () => {
 test('production avoids startup scoped catalog warmup on lower-load servers', () => {
   const source = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
 
+  assert.match(source, /LIVE_IMAGE_SEARCH_STRATEGY: "current_dino_hybrid"/)
   assert.match(source, /LIVE_IMAGE_SEARCH_STARTUP_LOAD_SCOPED_CATALOGS: "0"/)
   assert.match(source, /LIVE_IMAGE_SEARCH_SCOPED_CATALOG_CACHE_SCOPES: "4"/)
   assert.match(source, /LIVE_IMAGE_SEARCH_SCOPED_CATALOG_PREPARE_MAX_WORKERS: "1"/)
   assert.match(source, /SIGLIP2_RERANK_FAST_RANK_CACHE_SCOPES: "4"/)
+})
+
+test('low cost production strategy does not require persisted SigLIP2 catalog cache', () => {
+  const configSource = readFileSync(new URL('./config.py', import.meta.url), 'utf8')
+  const retrievalSource = readFileSync(new URL('./live_retrieval.py', import.meta.url), 'utf8')
+  const strategySource = readFileSync(new URL('./benchmarks/strategies.py', import.meta.url), 'utf8')
+
+  assert.match(configSource, /LIVE_IMAGE_SEARCH_STRATEGY = os\.getenv\('LIVE_IMAGE_SEARCH_STRATEGY', 'current_dino_hybrid'\)/)
+  assert.match(strategySource, /name = "current_dino_hybrid"/)
+  assert.match(retrievalSource, /return str\(strategy_name or ""\)\.strip\(\) == "siglip2_rerank"/)
 })
 
 test('startup scoped catalog cache loading runs in the background', () => {
