@@ -1916,6 +1916,64 @@ class Database:
                     yielded_rows += 1
                     yield dict(row)
 
+    def iter_searchable_product_image_vector_batches(
+        self,
+        strategy_name: str,
+        shop_names: Optional[Sequence[str]] = None,
+        batch_size: int = 2048,
+    ):
+        """Yield cached image vectors in larger batches for image-only live search."""
+        normalized_shop_names = self._normalize_searchable_product_shop_names(shop_names)
+        if shop_names is not None and not normalized_shop_names:
+            return
+
+        params: List[Any] = [strategy_name]
+        where_sql = ''
+        if normalized_shop_names:
+            placeholders = ','.join('?' for _ in normalized_shop_names)
+            where_sql = f'AND p.shop_name IN ({placeholders})'
+            params.extend(normalized_shop_names)
+
+        query = f'''
+            SELECT
+                p.id AS product_id,
+                p.title,
+                pi.image_path,
+                pi.image_index,
+                rc.embedding_blob,
+                rc.embedding_json
+            FROM product_image_retrieval_cache rc
+            JOIN product_images pi ON pi.id = rc.image_db_id
+            JOIN products p ON p.id = pi.product_id
+            WHERE rc.strategy_name = ?
+              AND {self._usable_retrieval_cache_sql('rc')}
+              {where_sql}
+        '''
+
+        with self.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            fetch_batch_size = max(int(batch_size or 0), 1)
+            yielded_rows = 0
+            while True:
+                fetch_started_at = perf_counter()
+                rows = cursor.fetchmany(fetch_batch_size)
+                fetch_elapsed = perf_counter() - fetch_started_at
+                if fetch_elapsed >= 1.0:
+                    logger.warning(
+                        "Slow searchable vector batch fetch: strategy=%s batch_size=%s rows=%s yielded=%s shops=%s elapsed=%.2fs",
+                        strategy_name,
+                        fetch_batch_size,
+                        len(rows),
+                        yielded_rows,
+                        list(shop_names or []),
+                        fetch_elapsed,
+                    )
+                if not rows:
+                    break
+                yielded_rows += len(rows)
+                yield [dict(row) for row in rows]
+
     def count_searchable_product_image_records(
         self,
         strategy_name: Optional[str] = None,

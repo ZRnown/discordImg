@@ -136,3 +136,15 @@ test('image-only fast rank aggregates only top candidate images', () => {
   assert.match(source, /candidate_indices = np\.argpartition\(image_scores, -candidate_k\)\[-candidate_k:\]/)
   assert.match(source, /return self\._rank_selected_precomputed_product_scores\(/)
 })
+
+test('image-only streaming search scans cached vectors in batches', () => {
+  const retrievalSource = readFileSync(new URL('./live_retrieval.py', import.meta.url), 'utf8')
+  const databaseSource = readFileSync(new URL('./database.py', import.meta.url), 'utf8')
+
+  assert.match(databaseSource, /def iter_searchable_product_image_vector_batches/)
+  assert.match(retrievalSource, /def _supports_fast_cached_vector_streaming/)
+  assert.match(retrievalSource, /def _search_cached_vector_streaming/)
+  assert.match(retrievalSource, /iter_searchable_product_image_vector_batches/)
+  assert.match(retrievalSource, /matrix = np\.vstack\(vectors\)/)
+  assert.match(retrievalSource, /fast_cached_vectors/)
+})

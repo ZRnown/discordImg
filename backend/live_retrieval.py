@@ -1247,6 +1247,49 @@ def _update_streaming_product_ranking_state(
         }
 
 
+def _update_fast_streaming_product_ranking_state(
+    ranking_state_by_product: Dict[str, Dict[str, Any]],
+    *,
+    product_id: str,
+    title: str,
+    image_path: str,
+    image_index: int,
+    score: float,
+) -> None:
+    product_id = str(product_id or "")
+    if not product_id or not np.isfinite(score):
+        return
+
+    state = ranking_state_by_product.setdefault(
+        product_id,
+        {
+            "scores": [],
+            "best_score": float("-inf"),
+            "best_row": {
+                "product_id": product_id,
+                "title": title,
+                "image_path": image_path,
+                "image_index": int(image_index or 0),
+            },
+        },
+    )
+
+    scores = state["scores"]
+    scores.append(float(score))
+    scores.sort(reverse=True)
+    if len(scores) > 5:
+        del scores[5:]
+
+    if float(score) > float(state["best_score"]):
+        state["best_score"] = float(score)
+        state["best_row"] = {
+            "product_id": product_id,
+            "title": title,
+            "image_path": image_path,
+            "image_index": int(image_index or 0),
+        }
+
+
 def _finalize_streaming_product_rankings(
     ranking_state_by_product: Dict[str, Dict[str, Any]],
     top_k: int,
@@ -1847,6 +1890,13 @@ class LiveImageRetriever:
             require_persisted_cache=strategy_requires_persisted_catalog_cache(self.strategy_name),
         )
 
+    def _supports_fast_cached_vector_streaming(self, strategy) -> bool:
+        if self.strategy_name != "siglip2_rerank":
+            return False
+        if not bool(getattr(strategy, "image_only_enabled", False)):
+            return False
+        return callable(getattr(self.db, "iter_searchable_product_image_vector_batches", None))
+
     @staticmethod
     def _build_signature(rows: Sequence[Dict[str, Any]]) -> Tuple[int, int, str]:
         if not rows:
@@ -2395,6 +2445,18 @@ class LiveImageRetriever:
         user_shops: Optional[Sequence[str]] = None,
         cancel_event: Optional[Any] = None,
     ) -> Dict[str, Any]:
+        strategy = self._get_strategy_instance()
+        if self._supports_fast_cached_vector_streaming(strategy):
+            return self._search_cached_vector_streaming(
+                image_path=image_path,
+                query_text=query_text,
+                top_k=top_k,
+                threshold=threshold,
+                user_shops=user_shops,
+                cancel_event=cancel_event,
+                strategy=strategy,
+            )
+
         if _is_search_cancelled(cancel_event):
             return {
                 "strategy": self.strategy_name,
@@ -2406,7 +2468,6 @@ class LiveImageRetriever:
             }
 
         started_at = perf_counter()
-        strategy = self._get_strategy_instance()
         query_record = build_query_record(image_path=image_path, query_text=query_text)
         query_prepare_started_at = perf_counter()
         query_context = self._get_cached_query_context(image_path, query_text)
@@ -2543,6 +2604,190 @@ class LiveImageRetriever:
             "top1_score": top1_score,
             "top1_margin": top1_score - top2_score,
             "streaming": True,
+        }
+
+    def _search_cached_vector_streaming(
+        self,
+        image_path: str,
+        query_text: str = "",
+        top_k: int = 5,
+        threshold: float = 0.0,
+        user_shops: Optional[Sequence[str]] = None,
+        cancel_event: Optional[Any] = None,
+        strategy: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        if _is_search_cancelled(cancel_event):
+            return {
+                "strategy": self.strategy_name,
+                "catalog_size": 0,
+                "ranked_products": [],
+                "top1_score": 0.0,
+                "top1_margin": 0.0,
+                "streaming": True,
+                "fast_cached_vectors": True,
+            }
+
+        started_at = perf_counter()
+        strategy = strategy or self._get_strategy_instance()
+        query_record = build_query_record(image_path=image_path, query_text=query_text)
+        query_prepare_started_at = perf_counter()
+        query_context = self._get_cached_query_context(image_path, query_text)
+        query_context_cache_hit = query_context is not None
+        if query_context is None:
+            query_context = strategy.prepare_query_image(query_record)
+            self._store_cached_query_context(image_path, query_text, query_context)
+        query_prepare_elapsed = perf_counter() - query_prepare_started_at
+
+        query_embedding = query_context.get("embedding")
+        if query_embedding is None:
+            return {
+                "strategy": self.strategy_name,
+                "catalog_size": 0,
+                "ranked_products": [],
+                "top1_score": 0.0,
+                "top1_margin": 0.0,
+                "streaming": True,
+                "fast_cached_vectors": True,
+            }
+
+        query_vector = np.asarray(query_embedding, dtype=np.float32).reshape(-1)
+        if query_vector.size == 0:
+            return {
+                "strategy": self.strategy_name,
+                "catalog_size": 0,
+                "ranked_products": [],
+                "top1_score": 0.0,
+                "top1_margin": 0.0,
+                "streaming": True,
+                "fast_cached_vectors": True,
+            }
+
+        if user_shops is None:
+            normalized_user_shops = None
+        else:
+            normalized_user_shops = [
+                str(shop).strip()
+                for shop in user_shops
+                if str(shop).strip()
+            ]
+            if not normalized_user_shops:
+                return {
+                    "strategy": self.strategy_name,
+                    "catalog_size": 0,
+                    "ranked_products": [],
+                    "top1_score": 0.0,
+                    "top1_margin": 0.0,
+                    "streaming": True,
+                    "fast_cached_vectors": True,
+                }
+
+        ranking_state_by_product: Dict[str, Dict[str, Any]] = {}
+        catalog_size = 0
+        decode_elapsed = 0.0
+        score_elapsed = 0.0
+        next_progress_log_after = float(_STREAMING_PROGRESS_LOG_INTERVAL_SECONDS)
+        batch_size = max(_env_int("LIVE_IMAGE_SEARCH_VECTOR_BATCH_SIZE", 4096), 1)
+
+        for rows in self.db.iter_searchable_product_image_vector_batches(
+            strategy_name=self.strategy_name,
+            shop_names=normalized_user_shops,
+            batch_size=batch_size,
+        ):
+            if _is_search_cancelled(cancel_event):
+                break
+
+            decode_started_at = perf_counter()
+            vectors: List[np.ndarray] = []
+            metadata: List[Dict[str, Any]] = []
+            for row in rows:
+                vector = None
+                raw_embedding = row.get("embedding_blob")
+                if isinstance(raw_embedding, (bytes, bytearray, memoryview)):
+                    vector = np.frombuffer(raw_embedding, dtype=np.float32)
+                else:
+                    raw_json = row.get("embedding_json")
+                    if raw_json not in (None, "", []):
+                        try:
+                            vector = np.asarray(json.loads(raw_json), dtype=np.float32).reshape(-1)
+                        except Exception:
+                            vector = None
+                if vector is None or vector.size != query_vector.size:
+                    continue
+                vectors.append(vector)
+                metadata.append(row)
+            decode_elapsed += perf_counter() - decode_started_at
+            if not vectors:
+                continue
+
+            score_started_at = perf_counter()
+            matrix = np.vstack(vectors).astype(np.float32, copy=False)
+            scores = matrix @ query_vector
+            score_elapsed += perf_counter() - score_started_at
+            catalog_size += len(vectors)
+
+            for index, row in enumerate(metadata):
+                _update_fast_streaming_product_ranking_state(
+                    ranking_state_by_product,
+                    product_id=str(row.get("product_id") or ""),
+                    title=str(row.get("title") or ""),
+                    image_path=str(row.get("image_path") or ""),
+                    image_index=int(row.get("image_index") or 0),
+                    score=float(scores[index]),
+                )
+
+            total_elapsed = perf_counter() - started_at
+            if total_elapsed >= next_progress_log_after:
+                logger.warning(
+                    "Live retrieval fast cached-vector progress: strategy=%s elapsed=%.2fs query_prepare=%.2fs decode=%.2fs score=%.2fs catalog_size=%s query_cache_hit=%s shops=%s",
+                    self.strategy_name,
+                    total_elapsed,
+                    query_prepare_elapsed,
+                    decode_elapsed,
+                    score_elapsed,
+                    catalog_size,
+                    query_context_cache_hit,
+                    normalized_user_shops,
+                )
+                next_progress_log_after += float(_STREAMING_PROGRESS_LOG_INTERVAL_SECONDS)
+
+        ranked_products = _finalize_streaming_product_rankings(
+            ranking_state_by_product,
+            top_k=max(int(top_k or 1), 1),
+        )
+        filtered_ranked_products = [
+            item
+            for item in ranked_products
+            if float(item.get("score", 0.0)) >= float(threshold or 0.0)
+        ][: max(int(top_k or 1), 1)]
+
+        top1_score = float(filtered_ranked_products[0]["score"]) if filtered_ranked_products else 0.0
+        top2_score = (
+            float(filtered_ranked_products[1]["score"])
+            if len(filtered_ranked_products) > 1
+            else 0.0
+        )
+        total_elapsed = perf_counter() - started_at
+        if total_elapsed >= 5.0:
+            logger.warning(
+                "Live retrieval fast cached-vector slow search: strategy=%s total=%.2fs query_prepare=%.2fs decode=%.2fs score=%.2fs catalog_size=%s result_count=%s query_cache_hit=%s shops=%s",
+                self.strategy_name,
+                total_elapsed,
+                query_prepare_elapsed,
+                decode_elapsed,
+                score_elapsed,
+                catalog_size,
+                len(filtered_ranked_products),
+                query_context_cache_hit,
+                normalized_user_shops,
+            )
+        return {
+            "strategy": self.strategy_name,
+            "catalog_size": catalog_size,
+            "ranked_products": filtered_ranked_products,
+            "top1_score": top1_score,
+            "top1_margin": top1_score - top2_score,
+            "streaming": True,
+            "fast_cached_vectors": True,
         }
 
     def search(
