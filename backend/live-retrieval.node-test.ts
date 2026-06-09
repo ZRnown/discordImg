@@ -19,20 +19,21 @@ test('startup catalog preparation is disabled by default', () => {
 test('production avoids startup scoped catalog warmup on lower-load servers', () => {
   const source = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
 
-  assert.match(source, /LIVE_IMAGE_SEARCH_STRATEGY: "current_dino_hybrid"/)
+  assert.match(source, /LIVE_IMAGE_SEARCH_STRATEGY: "siglip2_rerank"/)
   assert.match(source, /LIVE_IMAGE_SEARCH_STARTUP_LOAD_SCOPED_CATALOGS: "0"/)
+  assert.match(source, /LIVE_IMAGE_SEARCH_SCOPED_CATALOG_ENABLED: "0"/)
   assert.match(source, /LIVE_IMAGE_SEARCH_SCOPED_CATALOG_CACHE_SCOPES: "4"/)
   assert.match(source, /LIVE_IMAGE_SEARCH_SCOPED_CATALOG_PREPARE_MAX_WORKERS: "1"/)
   assert.match(source, /SIGLIP2_RERANK_FAST_RANK_CACHE_SCOPES: "4"/)
 })
 
-test('low cost production strategy does not require persisted SigLIP2 catalog cache', () => {
+test('low cost production strategy reuses persisted SigLIP2 cache', () => {
   const configSource = readFileSync(new URL('./config.py', import.meta.url), 'utf8')
   const retrievalSource = readFileSync(new URL('./live_retrieval.py', import.meta.url), 'utf8')
   const strategySource = readFileSync(new URL('./benchmarks/strategies.py', import.meta.url), 'utf8')
 
-  assert.match(configSource, /LIVE_IMAGE_SEARCH_STRATEGY = os\.getenv\('LIVE_IMAGE_SEARCH_STRATEGY', 'current_dino_hybrid'\)/)
-  assert.match(strategySource, /name = "current_dino_hybrid"/)
+  assert.match(configSource, /LIVE_IMAGE_SEARCH_STRATEGY = os\.getenv\('LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank'\)/)
+  assert.match(strategySource, /name = "siglip2_rerank"/)
   assert.match(retrievalSource, /return str\(strategy_name or ""\)\.strip\(\) == "siglip2_rerank"/)
 })
 
@@ -64,25 +65,30 @@ test('scoped catalog signatures ignore runtime-only concurrency settings', () =>
   assert.match(source, /if key in _RUNTIME_SIGNATURE_EXCLUDED_ENV_KEYS:/)
 })
 
-test('scoped catalog cache misses prepare in background instead of streaming through requests', () => {
+test('scoped catalog cache can be disabled so scoped searches stream through cached rows', () => {
   const source = readFileSync(new URL('./live_retrieval.py', import.meta.url), 'utf8')
   const start = source.indexOf('def search(')
   const end = source.indexOf('    def warm(', start)
   assert.notEqual(start, -1)
   assert.notEqual(end, -1)
   const searchSource = source.slice(start, end)
-  const scopedBranchStart = searchSource.indexOf('            if shop_scope:')
+  const streamingScopedBranchStart = searchSource.indexOf('            if shop_scope and self._supports_streaming_search(strategy)')
+  const scopedBranchStart = searchSource.indexOf('            if shop_scope:', streamingScopedBranchStart)
   const scopedBranchEnd = searchSource.indexOf('            elif self._supports_streaming_search(strategy):', scopedBranchStart)
+  assert.notEqual(streamingScopedBranchStart, -1)
   assert.notEqual(scopedBranchStart, -1)
   assert.notEqual(scopedBranchEnd, -1)
+  const streamingScopedBranchSource = searchSource.slice(streamingScopedBranchStart, scopedBranchStart)
   const scopedBranchSource = searchSource.slice(scopedBranchStart, scopedBranchEnd)
 
   assert.match(source, /def _start_scoped_catalog_prepare_in_background/)
+  assert.match(source, /def scoped_catalog_cache_enabled/)
+  assert.match(source, /not scoped_catalog_cache_enabled\(\)/)
+  assert.match(streamingScopedBranchSource, /return self\._search_streaming\(/)
   assert.match(source, /BoundedSemaphore/)
   assert.match(source, /LIVE_IMAGE_SEARCH_SCOPED_CATALOG_PREPARE_MAX_WORKERS/)
   assert.match(source, /raise LiveCatalogPreparingError\(\s*f"Scoped live retrieval catalog is preparing/)
   assert.match(source, /raise LiveCatalogPreparingError\(\s*f"Scoped live retrieval catalog is already preparing/)
-  assert.doesNotMatch(scopedBranchSource, /self\._search_streaming\(/)
 })
 
 test('streaming search reuses cached query context for duplicate Discord images', () => {

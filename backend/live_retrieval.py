@@ -1680,6 +1680,10 @@ def strategy_requires_persisted_catalog_cache(strategy_name: str) -> bool:
     return str(strategy_name or "").strip() == "siglip2_rerank"
 
 
+def scoped_catalog_cache_enabled() -> bool:
+    return _env_bool("LIVE_IMAGE_SEARCH_SCOPED_CATALOG_ENABLED", True)
+
+
 class LiveImageRetriever:
     def __init__(self, db_handle, strategy_name: str):
         self.db = db_handle
@@ -2568,6 +2572,15 @@ class LiveImageRetriever:
             scoped_catalog = None
         else:
             shop_scope = self._normalize_shop_scope(user_shops)
+            if shop_scope and self._supports_streaming_search(strategy) and not scoped_catalog_cache_enabled():
+                return self._search_streaming(
+                    image_path=image_path,
+                    query_text=query_text,
+                    top_k=top_k,
+                    threshold=threshold,
+                    user_shops=user_shops,
+                    cancel_event=cancel_event,
+                )
             if shop_scope:
                 scoped_catalog = self._get_cached_scoped_prepared_catalog(user_shops)
                 if scoped_catalog is None:
