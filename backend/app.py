@@ -7995,10 +7995,16 @@ def scrape_shop():
                 scrape_shop_products(shop_id)
             except Exception as e:
                 logger.error(f'抓取任务异常: {e}')
+                db.update_scrape_status(
+                    is_scraping=False,
+                    completed=True,
+                    message=f'抓取异常结束: {str(e)}'
+                )
             finally:
-                # 确保状态正确重置
-                error_msg = f'抓取异常结束: {str(e)}' if 'e' in locals() else '抓取已完成'
-                db.update_scrape_status(is_scraping=False, message=error_msg)
+                # scrape_shop_products 会写入最终状态；这里只处理异常或遗留运行态，避免覆盖详细结果。
+                final_status = db.get_scrape_status()
+                if final_status.get('is_scraping', False):
+                    db.update_scrape_status(is_scraping=False, completed=True)
 
         # 创建守护线程，确保不会阻塞应用退出
         scrape_thread = threading.Thread(target=run_scrape_task, daemon=True, name=f'scrape-{shop_id}')
@@ -8707,6 +8713,33 @@ def scrape_shop_products(shop_id):
     all_product_tasks = list(unique_product_tasks.values())
     total_products = len(all_product_tasks)
     logger.info(f"✅ 商品收集阶段结束，去重后最终待处理: {total_products} 个商品")
+
+    if total_products <= 0:
+        no_items_message = (
+            f'未从店铺 {shop_id} 获取到可抓取商品；'
+            '可能是店铺无分类、接口未返回商品，或商品均已存在'
+        )
+        db.update_scrape_status(
+            is_scraping=False,
+            completed=True,
+            total=0,
+            processed=0,
+            success=0,
+            failed=0,
+            image_failed=0,
+            index_failed=0,
+            failed_items=[],
+            progress=100,
+            message=no_items_message,
+        )
+        logger.warning(no_items_message)
+        return {
+            "total_products": 0,
+            "success_count": 0,
+            "failed_count": 0,
+            "image_failed_count": 0,
+            "index_failed_count": 0,
+        }
 
     # 更新状态：开始处理
     db.update_scrape_status(
