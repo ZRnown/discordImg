@@ -71,6 +71,11 @@ class Config:
         'LIVE_IMAGE_SEARCH_EXECUTION_TIMEOUT_SECONDS',
         20.0,
     )
+    KEYWORD_TEXT_SEARCH_API_MAX_INFLIGHT = _env_int('KEYWORD_TEXT_SEARCH_API_MAX_INFLIGHT', 1)
+    KEYWORD_TEXT_SEARCH_API_QUEUE_TIMEOUT_SECONDS = _env_float(
+        'KEYWORD_TEXT_SEARCH_API_QUEUE_TIMEOUT_SECONDS',
+        2.0,
+    )
     # 对外部 Discord 服务器依赖实时监听时，保留 guild subscriptions，
     # 但不要默认开启 chunk_guilds_at_startup，否则会和无成员缓存配置冲突。
     DISCORD_CHUNK_GUILDS_AT_STARTUP = _env_bool('DISCORD_CHUNK_GUILDS_AT_STARTUP', False)
