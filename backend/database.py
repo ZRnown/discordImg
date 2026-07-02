@@ -3957,6 +3957,48 @@ class Database:
             logger.error(f"添加网站频道绑定失败: {e}")
             return False
 
+    def add_website_channel_binding_admin(self, website_id: int, channel_id: str) -> bool:
+        """管理员添加频道时，同步到已有该网站设置的用户；没有用户设置时创建全局绑定。"""
+        normalized_channel_id = str(channel_id or '').strip()
+        if not normalized_channel_id:
+            return False
+
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT DISTINCT user_id
+                    FROM user_website_settings
+                    WHERE website_id = ?
+                      AND user_id IS NOT NULL
+                ''', (website_id,))
+                user_ids = [
+                    int(row[0])
+                    for row in cursor.fetchall()
+                    if row[0] is not None
+                ]
+
+                inserted = 0
+                if user_ids:
+                    for target_user_id in user_ids:
+                        cursor.execute('''
+                            INSERT OR IGNORE INTO website_channel_bindings (website_id, channel_id, user_id)
+                            VALUES (?, ?, ?)
+                        ''', (website_id, normalized_channel_id, target_user_id))
+                        inserted += cursor.rowcount
+                else:
+                    cursor.execute('''
+                        INSERT OR IGNORE INTO website_channel_bindings (website_id, channel_id, user_id)
+                        VALUES (?, ?, NULL)
+                    ''', (website_id, normalized_channel_id))
+                    inserted += cursor.rowcount
+
+                conn.commit()
+                return inserted > 0
+        except Exception as e:
+            logger.error(f"管理员添加网站频道绑定失败: {e}")
+            return False
+
     def update_website_channel_binding_review_enabled(
         self,
         website_id: int,

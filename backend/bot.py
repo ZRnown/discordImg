@@ -2002,8 +2002,14 @@ THREAD_REPLY_WAIT_POLL_SECONDS = max(
     _coerce_float(getattr(config, 'DISCORD_THREAD_REPLY_WAIT_POLL_SECONDS', 2.0)) or 2.0,
     0.25,
 )
-MESSAGE_KEYWORD_SEARCH_TIMEOUT_SECONDS = max(45.0, THREAD_REPLY_WAIT_TIMEOUT_SECONDS + 30.0)
-MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS = 130.0
+MESSAGE_KEYWORD_SEARCH_TIMEOUT_SECONDS = max(
+    _coerce_float(getattr(config, 'DISCORD_MESSAGE_KEYWORD_SEARCH_TIMEOUT_SECONDS', 45.0)) or 45.0,
+    THREAD_REPLY_WAIT_TIMEOUT_SECONDS + 30.0,
+)
+MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS = max(
+    _coerce_float(getattr(config, 'DISCORD_MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS', 130.0)) or 130.0,
+    30.0,
+)
 MESSAGE_IMAGE_REPLY_MAX_ATTACHMENTS = max(
     int(getattr(config, 'DISCORD_IMAGE_REPLY_MAX_ATTACHMENTS_PER_MESSAGE', 2) or 2),
     1,
@@ -2391,7 +2397,10 @@ class DiscordBotClient(discord.Client):
     # 【新增】频道白名单缓存（类级别共享，所有Bot实例共用）
     _bound_channels_cache = set()  # 已绑定的频道ID集合
     _last_cache_update = 0  # 上次缓存更新时间戳
-    _cache_ttl = 60  # 缓存有效期（秒）
+    _cache_ttl = max(
+        _coerce_float(getattr(config, 'DISCORD_BOUND_CHANNEL_CACHE_TTL_SECONDS', 60.0)) or 60.0,
+        1.0,
+    )  # 缓存有效期（秒）
 
     def __init__(self, account_id=None, user_id=None, user_shops=None, role='both'):
         # discord.py-self 可能不需要 intents，或者使用不同的语法
@@ -2506,7 +2515,7 @@ class DiscordBotClient(discord.Client):
             )
         return True if result is None else result
 
-    async def _refresh_channel_cache(self):
+    async def _refresh_channel_cache(self, force=False):
         """【新增】刷新频道白名单缓存（60秒TTL）
 
         从数据库获取所有已绑定的频道ID，更新类级别缓存。
@@ -2515,7 +2524,7 @@ class DiscordBotClient(discord.Client):
         current_time = time.time()
 
         # 检查缓存是否过期
-        if current_time - DiscordBotClient._last_cache_update < DiscordBotClient._cache_ttl:
+        if not force and current_time - DiscordBotClient._last_cache_update < DiscordBotClient._cache_ttl:
             return  # 缓存仍然有效，无需刷新
 
         try:

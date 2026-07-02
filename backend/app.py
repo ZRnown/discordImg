@@ -3087,7 +3087,12 @@ def add_website_channel(config_id):
             return jsonify({'error': '无效的频道ID格式'}), 400
 
         current_user = get_current_user()
-        if db.add_website_channel_binding(config_id, channel_id, current_user['id']):
+        if current_user.get('role') == 'admin':
+            success = db.add_website_channel_binding_admin(config_id, channel_id)
+        else:
+            success = db.add_website_channel_binding(config_id, channel_id, current_user['id'])
+
+        if success:
             return jsonify({'success': True, 'message': '频道绑定已添加'})
         else:
             return jsonify({'error': '添加失败'}), 500
