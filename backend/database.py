@@ -3298,6 +3298,22 @@ class Database:
             logger.error(f"获取用户信息失败: {e}")
             return None
 
+    def update_user_role(self, user_id: int, role: str) -> bool:
+        """更新用户角色"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    UPDATE users
+                    SET role = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                ''', (role, user_id))
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"更新用户角色失败: {e}")
+            return False
+
     def increment_user_image_search_count(self, user_id: int) -> bool:
         """增加用户以图搜图次数"""
         try:

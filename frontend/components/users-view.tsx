@@ -157,21 +157,41 @@ export function UsersView() {
       } catch(e) { toast.error("网络错误") }
   }
 
-  const handleUpdateUserShops = async (userId: number, shopIds: string[]) => {
+  const handleSaveUserPermissions = async () => {
+    if (!editingUser) return
+
+    const originalUser = users.find(u => u.id === editingUser.id)
+
     try {
-      const response = await fetch(`/api/users/${userId}/shops`, {
+      if (originalUser?.role !== editingUser.role) {
+        const roleResponse = await fetch(`/api/users/${editingUser.id}/role`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ role: editingUser.role })
+        })
+
+        if (!roleResponse.ok) {
+          const error = await roleResponse.json().catch(() => ({}))
+          toast.error(error.error || "角色更新失败")
+          return
+        }
+      }
+
+      const shopsResponse = await fetch(`/api/users/${editingUser.id}/shops`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ shops: shopIds })
+        body: JSON.stringify({ shops: editingUser.shops })
       })
 
-      if (response.ok) {
-        setUsers(users.map(u => u.id === userId ? { ...u, shops: shopIds } : u))
-        toast.success("权限更新成功")
-        setEditingUser(null)
-      } else {
-        toast.error("权限更新失败")
+      if (!shopsResponse.ok) {
+        const error = await shopsResponse.json().catch(() => ({}))
+        toast.error(error.error || "店铺权限更新失败")
+        return
       }
+
+      setUsers(users.map(u => u.id === editingUser.id ? { ...u, role: editingUser.role, shops: editingUser.shops } : u))
+      toast.success("权限更新成功")
+      setEditingUser(null)
     } catch (error) {
       toast.error("网络错误，请重试")
     }
@@ -386,9 +406,24 @@ export function UsersView() {
           <DialogContent className="max-w-md">
             <DialogHeader>
               <DialogTitle>编辑用户权限 - {editingUser.username}</DialogTitle>
-              <DialogDescription>修改用户管理的店铺权限</DialogDescription>
+              <DialogDescription>修改用户角色和管理的店铺权限</DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label>角色</Label>
+                <Select
+                  value={editingUser.role}
+                  onValueChange={(value) => setEditingUser({ ...editingUser, role: value })}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="user">普通用户</SelectItem>
+                    <SelectItem value="admin">管理员</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
               <div className="space-y-2">
                 <Label>管理的店铺</Label>
                 <div className="max-h-48 overflow-y-auto border rounded p-3 space-y-2">
@@ -415,7 +450,7 @@ export function UsersView() {
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setEditingUser(null)}>取消</Button>
-              <Button onClick={() => handleUpdateUserShops(editingUser.id, editingUser.shops)}>
+              <Button onClick={handleSaveUserPermissions}>
                 <Save className="size-4 mr-1" />
                 保存权限
               </Button>

@@ -2796,6 +2796,38 @@ def reset_user_password(user_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/users/<int:user_id>/role', methods=['PUT'])
+def update_user_role(user_id):
+    """更新用户角色（管理员权限）"""
+    if not require_admin():
+        return jsonify({'error': '需要管理员权限'}), 403
+
+    try:
+        data = request.get_json() or {}
+        role = str(data.get('role', '')).strip()
+        if role not in ('admin', 'user'):
+            return jsonify({'error': '角色只能是 admin 或 user'}), 400
+
+        current_user = get_current_user()
+        if current_user['id'] == user_id and role != 'admin':
+            return jsonify({'error': '不能把自己的账号降级为普通用户'}), 400
+
+        user = db.get_user_by_id(user_id)
+        if not user:
+            return jsonify({'error': '用户不存在'}), 404
+
+        if db.update_user_role(user_id, role):
+            updated_user = db.get_user_by_id(user_id)
+            logger.info(
+                f"管理员 {current_user['username']} 将用户 {user['username']} 的角色改为 {role}"
+            )
+            return jsonify({'user': updated_user, 'message': '角色更新成功'})
+
+        return jsonify({'error': '角色更新失败'}), 500
+    except Exception as e:
+        logger.error(f"更新用户角色失败: {e}")
+        return jsonify({'error': str(e)}), 500
+
 # === 新增：网站配置管理API ===
 @app.route('/api/websites', methods=['GET'])
 def get_website_configs():
