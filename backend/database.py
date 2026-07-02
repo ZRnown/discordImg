@@ -4685,7 +4685,7 @@ class Database:
 
     def get_keyword_reply_review_items(
         self,
-        user_id: int = None,
+        user_id: int,
         website_id: int = None,
         status: str = 'pending',
     ) -> List[Dict[str, Any]]:
@@ -4696,12 +4696,9 @@ class Database:
                 query = '''
                     SELECT *
                     FROM keyword_reply_review_items
-                    WHERE 1 = 1
+                    WHERE user_id = ?
                 '''
-                params: List[Any] = []
-                if user_id is not None:
-                    query += ' AND user_id = ?'
-                    params.append(user_id)
+                params: List[Any] = [user_id]
                 if website_id is not None:
                     query += ' AND website_id = ?'
                     params.append(website_id)

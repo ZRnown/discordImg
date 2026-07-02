@@ -3808,14 +3808,13 @@ def get_keyword_review_items():
 
     try:
         current_user = get_current_user()
-        review_user_id = None if current_user.get('role') == 'admin' else current_user['id']
         website_id = request.args.get('website_id', type=int)
         status = (request.args.get('status') or 'pending').strip().lower()
         if status in {'', 'all'}:
             status = None
 
         items = db.get_keyword_reply_review_items(
-            review_user_id,
+            current_user['id'],
             website_id=website_id,
             status=status,
         )
@@ -3852,7 +3851,6 @@ def bulk_action_keyword_review_items():
 
     try:
         current_user = get_current_user()
-        review_user_id = None if current_user.get('role') == 'admin' else current_user['id']
         data = request.get_json() or {}
         raw_item_ids = data.get('item_ids') or data.get('ids') or []
         action = str(data.get('action') or '').strip().lower()
@@ -3871,7 +3869,6 @@ def bulk_action_keyword_review_items():
             return jsonify({'error': '无效的审核动作'}), 400
 
         results = []
-        affected_user_ids = set()
         for raw_item_id in raw_item_ids:
             try:
                 item_id = int(raw_item_id)
@@ -3883,7 +3880,7 @@ def bulk_action_keyword_review_items():
                 })
                 continue
 
-            item = db.get_keyword_reply_review_item(item_id, review_user_id)
+            item = db.get_keyword_reply_review_item(item_id, current_user['id'])
             if not item:
                 results.append({
                     'item_id': item_id,
@@ -3892,7 +3889,6 @@ def bulk_action_keyword_review_items():
                 })
                 continue
 
-            affected_user_ids.add(int(item.get('user_id') or 0))
             success, message, final_status = _apply_keyword_review_action(
                 item,
                 normalized_action,
@@ -3914,12 +3910,7 @@ def bulk_action_keyword_review_items():
             })
 
         failed_count = sum(1 for item in results if not item.get('success'))
-        if affected_user_ids:
-            for affected_user_id in affected_user_ids:
-                if affected_user_id:
-                    _sync_keyword_review_pending_count(affected_user_id)
-        else:
-            _sync_keyword_review_pending_count(current_user['id'])
+        _sync_keyword_review_pending_count(current_user['id'])
         return jsonify({
             'success': failed_count == 0,
             'message': '审核完成' if failed_count == 0 else '部分消息审核失败',
