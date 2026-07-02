@@ -143,6 +143,24 @@ def test_siglip2_rerank_prepare_catalog_image_compacts_oversized_flattened_cache
     assert np.linalg.norm(context["embedding"]) == pytest.approx(1.0, abs=1e-6)
 
 
+def test_siglip2_rerank_image_only_supports_streaming_with_adaptive_raw_center_enabled():
+    strategy = object.__new__(Siglip2RerankStrategy)
+    strategy.image_only_enabled = True
+    strategy.product_support_enabled = False
+    strategy.adaptive_raw_center_enabled = True
+    strategy.stage2_ridge_enabled = False
+    strategy.stage2_hard_negative_enabled = False
+    strategy.stage2_query_pair_enabled = False
+    strategy.stage2_dynamic_cluster_enabled = False
+    strategy.stage2_query_cluster_enabled = False
+    strategy.stage2_targeted_support_enabled = False
+    strategy.stage2_targeted_cluster_enabled = False
+    strategy.stage2_targeted_pair_enabled = False
+    strategy.stage2_support_stats_enabled = False
+
+    assert strategy.supports_streaming_live_search() is True
+
+
 def test_siglip2_encoder_normalizes_extreme_image_sizes():
     tiny = Image.new("RGB", (1, 1), color=(12, 34, 56))
     normalized_tiny = _Siglip2Encoder._normalize_image_for_inference(tiny)

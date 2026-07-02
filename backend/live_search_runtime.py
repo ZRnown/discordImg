@@ -24,7 +24,11 @@ def should_enable_streaming_live_search(
         return False
 
     normalized_strategy_name = str(strategy_name or "").strip()
-    if normalized_strategy_name == "siglip2_rerank" and not bool(force_streaming):
+    if (
+        normalized_strategy_name == "siglip2_rerank"
+        and not bool(force_streaming)
+        and not bool(getattr(strategy, "image_only_enabled", False))
+    ):
         return False
 
     return True

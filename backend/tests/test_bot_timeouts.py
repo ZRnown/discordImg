@@ -7,11 +7,13 @@ from backend import bot as bot_module
 from backend.bot import (
     MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS,
     _auto_reply_thread_ids,
+    _send_discord_message,
     _get_image_match_reply_block_reason,
     dispatch_keyword_review_item,
     filter_forum_channel_configs_for_message,
     _get_image_recognition_request_timeout_seconds,
     _is_image_match_above_reply_threshold,
+    _is_discord_blocked_content_error,
     _resolve_best_match_image_threshold,
     _resolve_message_reply_channel,
     _resolve_cooldown_channel_id,
@@ -21,6 +23,21 @@ from backend.bot import (
 
 
 class BotTimeoutHelpersTestCase(unittest.TestCase):
+    def test_detects_discord_blocked_content_error_by_code(self):
+        error = SimpleNamespace(code=200000)
+
+        self.assertTrue(_is_discord_blocked_content_error(error))
+
+    def test_detects_discord_blocked_content_error_by_message(self):
+        error = RuntimeError("400 Bad Request (error code: 200000): 无法发布")
+
+        self.assertTrue(_is_discord_blocked_content_error(error))
+
+    def test_ignores_unrelated_discord_error(self):
+        error = RuntimeError("50001 Missing Access")
+
+        self.assertFalse(_is_discord_blocked_content_error(error))
+
     def test_image_recognition_request_timeout_tracks_stage_timeout(self):
         self.assertEqual(
             _get_image_recognition_request_timeout_seconds(
@@ -209,7 +226,7 @@ class BotTimeoutHelpersTestCase(unittest.TestCase):
 
         self.assertIn("低于网站阈值", reason)
 
-    def test_image_match_block_reason_rejects_when_top1_margin_too_small(self):
+    def test_image_match_block_reason_accepts_when_top1_margin_is_small(self):
         with patch.object(
             bot_module.config,
             "DISCORD_IMAGE_REPLY_MIN_TOP1_MARGIN",
@@ -226,7 +243,7 @@ class BotTimeoutHelpersTestCase(unittest.TestCase):
                 {"image_similarity_threshold": None},
             )
 
-        self.assertIn("top1-top2分差", reason)
+        self.assertIsNone(reason)
 
     def test_image_match_block_reason_accepts_when_margin_is_large_enough(self):
         with patch.object(
@@ -253,6 +270,18 @@ class BotTimeoutHelpersTestCase(unittest.TestCase):
         self.assertIn("图片命中未过阈值，记录略过历史并跳过回复", source)
         self.assertNotIn("图片命中未过阈值，记录略过历史并继续发送链接", source)
 
+    def test_image_recognition_requests_only_top1_result(self):
+        source = Path(bot_module.__file__).read_text(encoding="utf-8")
+
+        self.assertTrue(
+            "form.add_field('limit', '1')" in source,
+            "image recognition should only request the best match",
+        )
+        self.assertTrue(
+            "form.add_field('limit', '2')" not in source,
+            "image recognition should not request top2 for margin comparison",
+        )
+
     def test_summarize_exception_for_log_collapses_whitespace_and_truncates(self):
         error = RuntimeError("429 Too Many Requests\n\n" + ("x" * 260))
 
@@ -276,6 +305,9 @@ class BotTimeoutHelpersTestCase(unittest.TestCase):
 
 
 class SenderChannelAccessTestCase(unittest.IsolatedAsyncioTestCase):
+    def tearDown(self):
+        bot_module._sender_channel_access_cache.clear()
+
     async def test_filters_online_senders_that_cannot_access_message_channel(self):
         message_channel = SimpleNamespace(id=123001, parent_id=None)
         message = SimpleNamespace(channel=message_channel)
@@ -299,6 +331,109 @@ class SenderChannelAccessTestCase(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(filtered, [2])
+
+
+class DiscordSendThrottleTestCase(unittest.IsolatedAsyncioTestCase):
+    async def test_send_discord_message_serializes_concurrent_sends(self):
+        active_sends = 0
+        max_active_sends = 0
+        sent_payloads = []
+
+        class Channel:
+            async def send(self, **kwargs):
+                nonlocal active_sends, max_active_sends
+                active_sends += 1
+                max_active_sends = max(max_active_sends, active_sends)
+                await bot_module.asyncio.sleep(0.01)
+                sent_payloads.append(kwargs)
+                active_sends -= 1
+                return kwargs
+
+        with patch.object(bot_module.config, "DISCORD_SEND_MAX_INFLIGHT", 1, create=True), patch.object(
+            bot_module.config, "DISCORD_SEND_INTERVAL_SECONDS", 0.0, create=True
+        ):
+            results = await bot_module.asyncio.gather(
+                _send_discord_message(Channel(), content="one"),
+                _send_discord_message(Channel(), content="two"),
+            )
+
+        self.assertEqual(max_active_sends, 1)
+        self.assertEqual([item["content"] for item in sent_payloads], ["one", "two"])
+        self.assertEqual([item["content"] for item in results], ["one", "two"])
+
+    async def test_thread_message_requires_access_to_thread_not_parent(self):
+        message = SimpleNamespace(channel=SimpleNamespace(id=555001, parent_id=123001))
+        parent_channel = SimpleNamespace(id=123001, parent_id=None)
+
+        async def fetch_channel(channel_id):
+            if channel_id == 555001:
+                raise RuntimeError("50001 Missing Access")
+            if channel_id == 123001:
+                return parent_channel
+            return None
+
+        client = SimpleNamespace(
+            account_id=1,
+            get_channel=lambda channel_id: parent_channel if channel_id == 123001 else None,
+            fetch_channel=AsyncMock(side_effect=fetch_channel),
+        )
+
+        filtered = await bot_module._filter_channel_accessible_sender_ids(
+            [1],
+            [client],
+            message,
+        )
+
+        self.assertEqual(filtered, [])
+
+    async def test_inaccessible_sender_channel_is_cached_briefly(self):
+        message = SimpleNamespace(channel=SimpleNamespace(id=555001, parent_id=123001))
+
+        async def fetch_channel(channel_id):
+            raise RuntimeError("50001 Missing Access")
+
+        client = SimpleNamespace(
+            account_id=1,
+            get_channel=lambda channel_id: None,
+            fetch_channel=AsyncMock(side_effect=fetch_channel),
+        )
+
+        with patch.object(bot_module, "_sender_channel_access_now", return_value=100.0):
+            first = await bot_module._filter_channel_accessible_sender_ids([1], [client], message)
+        with patch.object(bot_module, "_sender_channel_access_now", return_value=101.0):
+            second = await bot_module._filter_channel_accessible_sender_ids([1], [client], message)
+
+        self.assertEqual(first, [])
+        self.assertEqual(second, [])
+        client.fetch_channel.assert_awaited_once_with(555001)
+
+    async def test_inaccessible_sender_channel_cache_expires(self):
+        message = SimpleNamespace(channel=SimpleNamespace(id=555001, parent_id=123001))
+        target_channel = SimpleNamespace(id=555001, parent_id=123001)
+
+        client = SimpleNamespace(
+            account_id=1,
+            get_channel=lambda channel_id: None,
+            fetch_channel=AsyncMock(
+                side_effect=[
+                    RuntimeError("50001 Missing Access"),
+                    target_channel,
+                ]
+            ),
+        )
+
+        with patch.object(bot_module, "_sender_channel_access_now", return_value=100.0):
+            first = await bot_module._filter_channel_accessible_sender_ids([1], [client], message)
+        with patch.object(
+            bot_module,
+            "_sender_channel_access_now",
+            return_value=100.0 + bot_module.SENDER_CHANNEL_ACCESS_CACHE_TTL_SECONDS + 1.0,
+        ):
+            second = await bot_module._filter_channel_accessible_sender_ids([1], [client], message)
+
+        self.assertEqual(first, [])
+        self.assertEqual(second, [1])
+        self.assertEqual(client.fetch_channel.await_count, 2)
 
 
 class RecognizeImageRetryPolicyTestCase(unittest.IsolatedAsyncioTestCase):
@@ -432,6 +567,48 @@ class RecognizeImageRetryPolicyTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
         self.assertEqual(fake_session.post_calls, 1)
         mock_sleep.assert_not_awaited()
+
+
+class KeywordSearchEntryTestCase(unittest.IsolatedAsyncioTestCase):
+    async def test_marketplace_link_message_reaches_keyword_text_search(self):
+        client = object.__new__(bot_module.DiscordBotClient)
+        client.search_products_by_keyword = AsyncMock(
+            return_value={"success": True, "products": []}
+        )
+        message = SimpleNamespace(
+            clean_content=(
+                "https://www.kakobuy.com/item/details?"
+                "url=https%3A%2F%2Fweidian.com%2Fitem.html%3FitemID%3D7704997828"
+            ),
+            content="",
+        )
+
+        result = await bot_module.DiscordBotClient.handle_keyword_search(client, message)
+
+        self.assertFalse(result)
+        client.search_products_by_keyword.assert_awaited_once()
+
+
+class DiscordClientEventSchedulingTestCase(unittest.IsolatedAsyncioTestCase):
+    async def test_schedule_event_drops_event_when_discord_loop_is_unavailable(self):
+        client = object.__new__(bot_module.DiscordBotClient)
+        client.account_id = 221
+        client.user_id = 3
+        client.loop = SimpleNamespace()
+        event_ran = False
+
+        async def event_handler():
+            nonlocal event_ran
+            event_ran = True
+
+        task = bot_module.DiscordBotClient._schedule_event(
+            client,
+            event_handler,
+            "disconnect",
+        )
+
+        self.assertIsNone(task)
+        self.assertFalse(event_ran)
 
 
 class _SlottedMessage:
@@ -718,7 +895,7 @@ class ResolveMessageReplyChannelTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertIs(resolved, fetched_thread)
         target_client.fetch_channel.assert_awaited_once_with(555001)
 
-    async def test_falls_back_to_parent_channel_when_saved_thread_is_unavailable(self):
+    async def test_returns_none_when_thread_channel_is_unavailable(self):
         parent_channel = SimpleNamespace(id=123001, parent_id=None)
         target_client = SimpleNamespace(
             get_channel=lambda channel_id: parent_channel if channel_id == 123001 else None,
@@ -728,7 +905,7 @@ class ResolveMessageReplyChannelTestCase(unittest.IsolatedAsyncioTestCase):
 
         resolved = await _resolve_message_reply_channel(target_client, message)
 
-        self.assertIs(resolved, parent_channel)
+        self.assertIsNone(resolved)
         target_client.fetch_channel.assert_awaited_once_with(555001)
 
 

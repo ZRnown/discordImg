@@ -350,7 +350,7 @@ class CurrentDinoHybridStrategy:
 class _Siglip2Encoder:
     model_id = "google/siglip2-base-patch16-224"
     query_min_side = 32
-    query_max_side = 448
+    query_max_side = int(os.getenv("SIGLIP2_RERANK_QUERY_MAX_SIDE", "336") or 336)
 
     def __init__(self):
         import torch
@@ -1329,6 +1329,8 @@ class Siglip2RerankStrategy:
         self.cache_version = self._build_cache_version()
 
     def supports_streaming_live_search(self) -> bool:
+        if bool(getattr(self, "image_only_enabled", False)):
+            return True
         return not any(
             (
                 bool(getattr(self, "product_support_enabled", False)),

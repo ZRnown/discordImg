@@ -276,6 +276,13 @@ except ModuleNotFoundError as e:
 ai_model_ready = False  # AI模型是否已就绪
 # 全局 AI 并发控制（跨商品），避免 CPU 被同时推理任务打满
 GLOBAL_AI_SEMAPHORE = threading.Semaphore(4)
+TEXT_SEARCH_SEMAPHORE = threading.BoundedSemaphore(
+    max(int(getattr(config, 'KEYWORD_TEXT_SEARCH_API_MAX_INFLIGHT', 1) or 1), 1)
+)
+TEXT_SEARCH_QUEUE_TIMEOUT_SECONDS = max(
+    float(getattr(config, 'KEYWORD_TEXT_SEARCH_API_QUEUE_TIMEOUT_SECONDS', 2.0) or 2.0),
+    0.0,
+)
 MAX_LOG_HISTORY = 5000
 AUTO_BACKFILL_THREAD = None
 AUTO_BACKFILL_THREAD_LOCK = threading.Lock()
@@ -4850,8 +4857,8 @@ def get_accounts():
 
     current_user = get_current_user()
     try:
-        # 所有用户（包括管理员）只能看到自己的账号
-        accounts = db.get_discord_accounts_by_user(current_user['id'])
+        account_owner_id = None if current_user.get('role') == 'admin' else current_user['id']
+        accounts = db.get_discord_accounts_by_user(account_owner_id)
         runtime_details = _build_runtime_account_details()
         enriched_accounts = []
         for account in accounts:
@@ -6788,6 +6795,7 @@ def get_skipped_image_history():
 @app.route('/api/search_similar_text', methods=['POST'])
 def search_similar_text():
     """根据文字关键词搜索相似商品"""
+    acquired_text_search_slot = False
     try:
         import re
         data = request.get_json()
@@ -6931,6 +6939,23 @@ def search_similar_text():
                         'products': products,
                         'total': len(products)
                     })
+
+            acquired_text_search_slot = TEXT_SEARCH_SEMAPHORE.acquire(
+                timeout=TEXT_SEARCH_QUEUE_TIMEOUT_SECONDS
+            )
+            if not acquired_text_search_slot:
+                logger.warning(
+                    '文字搜索繁忙，排队超时后拒绝请求: queue_timeout=%.2fs query=%r user_id=%s',
+                    TEXT_SEARCH_QUEUE_TIMEOUT_SECONDS,
+                    query[:120],
+                    user_id,
+                )
+                return jsonify({
+                    'error': 'text search busy',
+                    'retryable': True,
+                    'products': [],
+                    'total': 0,
+                }), 503
 
             search_plan = build_text_search_plan(query)
             query_normalized = search_plan['query_normalized']
@@ -7084,6 +7109,9 @@ def search_similar_text():
     except Exception as e:
         logger.error(f"文字搜索失败: {e}")
         return jsonify({'error': str(e)}), 500
+    finally:
+        if acquired_text_search_slot:
+            TEXT_SEARCH_SEMAPHORE.release()
 
 @app.route('/api/search_history/<int:history_id>', methods=['DELETE'])
 def delete_search_history(history_id):

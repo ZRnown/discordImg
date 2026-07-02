@@ -44,6 +44,7 @@ try:
     from keyword_search_terms import (
         build_product_keyword_variants as _shared_build_product_keyword_variants,
         build_query_keyword_candidates as _shared_build_query_keyword_candidates,
+        extract_marketplace_item_id_from_text as _shared_extract_marketplace_item_id_from_text,
         find_query_keyword_match as _shared_find_query_keyword_match,
         normalize_keyword_search_text as _shared_normalize_keyword_search_text,
         tokenize_keyword_search_text as _shared_tokenize_keyword_search_text,
@@ -52,6 +53,7 @@ except ImportError:
     from .keyword_search_terms import (
         build_product_keyword_variants as _shared_build_product_keyword_variants,
         build_query_keyword_candidates as _shared_build_query_keyword_candidates,
+        extract_marketplace_item_id_from_text as _shared_extract_marketplace_item_id_from_text,
         find_query_keyword_match as _shared_find_query_keyword_match,
         normalize_keyword_search_text as _shared_normalize_keyword_search_text,
         tokenize_keyword_search_text as _shared_tokenize_keyword_search_text,
@@ -140,8 +142,16 @@ _keyword_reply_window_configs = {}
 _keyword_reply_background_tasks = set()
 _image_reply_background_tasks = set()
 _auto_reply_thread_ids = {}
+SENDER_CHANNEL_ACCESS_CACHE_TTL_SECONDS = max(
+    float(getattr(config, 'SENDER_CHANNEL_ACCESS_CACHE_TTL_SECONDS', 300.0) or 300.0),
+    10.0,
+)
+_sender_channel_access_cache = {}
 _review_bark_monitor_task = None
 _review_bark_notification_lock = asyncio.Lock()
+
+_discord_send_limiter = None
+_discord_send_limiter_signature = None
 _AUTO_REPLY_THREAD_CACHE_LIMIT = 2048
 _BARK_ERROR_LOG_WINDOW_SECONDS = 60.0
 _bark_issue_log_state = {}
@@ -163,6 +173,15 @@ def _summarize_exception_for_log(error, limit=200):
     if summary:
         return summary
     return getattr(error, "__class__", type(error)).__name__
+
+
+def _is_discord_blocked_content_error(error):
+    code = getattr(error, "code", None)
+    if str(code) == "200000":
+        return True
+
+    text = str(error or "")
+    return "error code: 200000" in text or "包含本服务器屏蔽的内容" in text
 
 
 def _log_rate_limited_bark_issue(scene, detail, *, level="error"):
@@ -385,6 +404,55 @@ def _coerce_int(value, default):
         return default
 
 
+def _get_sender_channel_access_cache_key(target_client, channel_id):
+    account_id = _coerce_int(getattr(target_client, 'account_id', None), None)
+    normalized_channel_id = _coerce_int(channel_id, None)
+    if account_id is None or normalized_channel_id is None:
+        return None
+    return account_id, normalized_channel_id
+
+
+def _sender_channel_access_now():
+    return time.monotonic()
+
+
+def _get_cached_sender_channel_inaccessible(target_client, channel_id):
+    cache_key = _get_sender_channel_access_cache_key(target_client, channel_id)
+    if cache_key is None:
+        return False
+
+    cached_until = _sender_channel_access_cache.get(cache_key)
+    if cached_until is None:
+        return False
+
+    now = _sender_channel_access_now()
+    if cached_until > now:
+        return True
+
+    _sender_channel_access_cache.pop(cache_key, None)
+    return False
+
+
+def _store_sender_channel_inaccessible(target_client, channel_id):
+    cache_key = _get_sender_channel_access_cache_key(target_client, channel_id)
+    if cache_key is None:
+        return
+
+    _sender_channel_access_cache[cache_key] = (
+        _sender_channel_access_now() + SENDER_CHANNEL_ACCESS_CACHE_TTL_SECONDS
+    )
+    while len(_sender_channel_access_cache) > 4096:
+        oldest_key = next(iter(_sender_channel_access_cache))
+        _sender_channel_access_cache.pop(oldest_key, None)
+
+
+def _clear_sender_channel_access_cache(target_client, channel_id):
+    cache_key = _get_sender_channel_access_cache_key(target_client, channel_id)
+    if cache_key is None:
+        return
+    _sender_channel_access_cache.pop(cache_key, None)
+
+
 def _get_auto_reply_thread_cache_key(message):
     return _coerce_int(getattr(message, 'id', None), None)
 
@@ -456,6 +524,53 @@ def get_discord_start_delay_seconds(start_index: int) -> float:
     )
     normalized_index = max(int(start_index or 0), 0)
     return max(stagger_seconds, 0.0) * normalized_index
+
+
+class DiscordSendLimiter:
+    def __init__(self, max_inflight=1, interval_seconds=0.75):
+        self.max_inflight = max(int(max_inflight or 1), 1)
+        self.interval_seconds = max(float(interval_seconds or 0.0), 0.0)
+        self._semaphore = asyncio.Semaphore(self.max_inflight)
+        self._lock = asyncio.Lock()
+        self._last_send_at = 0.0
+
+    async def run(self, send_coro_factory):
+        async with self._semaphore:
+            async with self._lock:
+                if self.interval_seconds > 0 and self._last_send_at > 0:
+                    elapsed = time.monotonic() - self._last_send_at
+                    wait_seconds = self.interval_seconds - elapsed
+                    if wait_seconds > 0:
+                        await asyncio.sleep(wait_seconds)
+                result = await send_coro_factory()
+                self._last_send_at = time.monotonic()
+                return result
+
+
+def _get_discord_send_limiter():
+    global _discord_send_limiter, _discord_send_limiter_signature
+
+    max_inflight = max(
+        int(getattr(config, 'DISCORD_SEND_MAX_INFLIGHT', 1) or 1),
+        1,
+    )
+    interval_seconds = max(
+        float(getattr(config, 'DISCORD_SEND_INTERVAL_SECONDS', 0.75) or 0.0),
+        0.0,
+    )
+    signature = (max_inflight, interval_seconds)
+    if _discord_send_limiter is None or _discord_send_limiter_signature != signature:
+        _discord_send_limiter = DiscordSendLimiter(
+            max_inflight=max_inflight,
+            interval_seconds=interval_seconds,
+        )
+        _discord_send_limiter_signature = signature
+    return _discord_send_limiter
+
+
+async def _send_discord_message(channel, *args, **kwargs):
+    limiter = _get_discord_send_limiter()
+    return await limiter.run(lambda: channel.send(*args, **kwargs))
 
 
 async def start_discord_client_with_delay(
@@ -863,19 +978,6 @@ def _get_image_match_reply_block_reason(match_context, website_config):
     if similarity < threshold_to_use:
         return (
             f"📷 图片相似度 {similarity:.3f} 低于网站阈值 {threshold_to_use:.3f}，跳过回复"
-        )
-
-    margin_threshold = _resolve_image_reply_min_top1_margin()
-    if margin_threshold <= 0:
-        return None
-
-    top1_margin = _extract_image_match_top1_margin(match_context)
-    if top1_margin is None:
-        return None
-
-    if top1_margin < margin_threshold:
-        return (
-            f"📷 图片命中分差过小: top1-top2分差 {top1_margin:.3f} < {margin_threshold:.3f}，跳过回复"
         )
 
     return None
@@ -1297,13 +1399,22 @@ async def _resolve_client_channel(target_client, channel_id):
     except Exception:
         channel = None
     if channel is not None:
+        _clear_sender_channel_access_cache(target_client, normalized_channel_id)
         return channel
+
+    if _get_cached_sender_channel_inaccessible(target_client, normalized_channel_id):
+        return None
 
     fetch_channel = getattr(target_client, 'fetch_channel', None)
     if callable(fetch_channel):
         try:
-            return await fetch_channel(normalized_channel_id)
+            channel = await fetch_channel(normalized_channel_id)
+            if channel is not None:
+                _clear_sender_channel_access_cache(target_client, normalized_channel_id)
+                return channel
+            _store_sender_channel_inaccessible(target_client, normalized_channel_id)
         except Exception as exc:
+            _store_sender_channel_inaccessible(target_client, normalized_channel_id)
             logger.warning(f"获取子分区频道失败: {normalized_channel_id} | {exc}")
     return None
 
@@ -1323,10 +1434,10 @@ async def _resolve_message_reply_channel(target_client, message):
         parent_channel_id = getattr(parent_channel, "id", None)
     if parent_channel_id is not None:
         logger.info(
-            f"子区频道不可达，回退到父频道继续查找: "
+            f"子区频道不可达，当前发送账号不能在该子区回复: "
             f"channel={message_channel_id} parent={parent_channel_id}"
         )
-        return await _resolve_client_channel(target_client, parent_channel_id)
+        return None
     return None
 
 
@@ -1349,15 +1460,17 @@ async def _filter_channel_accessible_sender_ids(sender_ids, clients, message):
         if account_id is not None and account_id not in client_by_account_id:
             client_by_account_id[account_id] = client
 
-    accessible_sender_ids = []
-    for sender_id in ordered_sender_ids:
+    async def resolve_sender_access(sender_id):
         client = client_by_account_id.get(sender_id)
         if client is None:
-            continue
-        if await _resolve_message_reply_channel(client, message) is not None:
-            accessible_sender_ids.append(sender_id)
+            return sender_id, False
+        return sender_id, await _resolve_message_reply_channel(client, message) is not None
 
-    return accessible_sender_ids
+    access_results = await asyncio.gather(
+        *(resolve_sender_access(sender_id) for sender_id in ordered_sender_ids)
+    )
+
+    return [sender_id for sender_id, is_accessible in access_results if is_accessible]
 
 
 async def _resolve_message_thread_id(message):
@@ -2308,6 +2421,25 @@ class DiscordBotClient(discord.Client):
         self.last_disconnect_at = 0.0
         # DM 会话提醒去重：避免“会话创建 + 首条DM消息”重复推送
         self._dm_alert_cache = {}
+
+    def _schedule_event(self, coro, event_name, *args, **kwargs):
+        loop = getattr(self, 'loop', None)
+        create_task = getattr(loop, 'create_task', None)
+        if not callable(create_task):
+            logger.warning(
+                'Discord事件已忽略，客户端事件循环不可用: event=%s account_id=%s user_id=%s loop_type=%s',
+                event_name,
+                self.account_id,
+                self.user_id,
+                type(loop).__name__,
+            )
+            try:
+                wrapped = self._run_event(coro, event_name, *args, **kwargs)
+                wrapped.close()
+            except Exception:
+                logger.debug('关闭未调度Discord事件协程失败', exc_info=True)
+            return None
+        return super()._schedule_event(coro, event_name, *args, **kwargs)
 
     def _mark_dm_alert(self, channel_id):
         if channel_id is None:
@@ -5012,7 +5144,7 @@ class DiscordBotClient(discord.Client):
                                             replied_user=False,
                                         )
 
-                                await reply_target_channel.send(**send_kwargs)
+                                await _send_discord_message(reply_target_channel, **send_kwargs)
                                 sent_any = True
     
                                 if prevalidated_batch:
@@ -5067,6 +5199,13 @@ class DiscordBotClient(discord.Client):
                                     logger.error(f"统计更新失败: {stat_error}")
 
                             except Exception as reply_error:
+                                if _is_discord_blocked_content_error(reply_error):
+                                    logger.error(
+                                        "回复被 Discord 内容策略拒绝，跳过直接发送重试，避免触发长时间限流等待: "
+                                        f"{_summarize_exception_for_log(reply_error)}"
+                                    )
+                                    continue
+
                                 logger.warning(f"回复失败，尝试直接发送: {reply_error}")
                                 fallback_sent = False
                                 if response_content:
@@ -5086,7 +5225,7 @@ class DiscordBotClient(discord.Client):
                                                 everyone=False,
                                                 replied_user=False,
                                             )
-                                        await reply_target_channel.send(response_content, **fallback_kwargs)
+                                        await _send_discord_message(reply_target_channel, response_content, **fallback_kwargs)
                                         fallback_sent = True
                                     except Exception as fallback_error:
                                         logger.error(f"文本兜底发送失败: {fallback_error}")
@@ -6367,7 +6506,7 @@ class DiscordBotClient(discord.Client):
 
                     forward_embed.set_footer(text=f"消息ID: {message.id}")
 
-                    await target_channel.send(embed=forward_embed)
+                    await _send_discord_message(target_channel, embed=forward_embed)
                     logger.info(f"转发了包含关键词的消息: {message.content[:100]}...")
                 else:
                     logger.warning(f"找不到目标频道: {config.FORWARD_TARGET_CHANNEL_ID}")
@@ -6401,7 +6540,8 @@ class DiscordBotClient(discord.Client):
                 return False
             search_query = cleaned_query
 
-            if _should_ignore_keyword_search_query(search_query):
+            linked_item_id = _shared_extract_marketplace_item_id_from_text(search_query)
+            if not linked_item_id and _should_ignore_keyword_search_query(search_query):
                 return False
 
             # 调用搜索API
@@ -7039,7 +7179,7 @@ class DiscordBotClient(discord.Client):
                     form = aiohttp.FormData()
                     form.add_field('image', image_data, filename='image.jpg', content_type='image/jpeg')
                     form.add_field('threshold', str(api_threshold))
-                    form.add_field('limit', '2')  # 保留 top2 计算分差，发送仍只使用 top1
+                    form.add_field('limit', '1')
                     if self.user_id:
                         form.add_field('user_id', str(self.user_id))
                     if user_shops:
