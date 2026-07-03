@@ -12,14 +12,15 @@ test('search timeout releases the live search slot and propagates cancellation',
   assert.equal(source.includes('cancel_event.set()'), true)
 })
 
-test('production image search queues under load with two low-memory streaming workers', () => {
+test('production image search fails fast under load with one low-memory streaming worker', () => {
   const source = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
 
-  assert.equal(source.includes('LIVE_IMAGE_SEARCH_MAX_INFLIGHT: "2"'), true)
+  assert.equal(source.includes('LIVE_IMAGE_SEARCH_MAX_INFLIGHT: "1"'), true)
   assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_MAX_SIZE: "128"'), true)
-  assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_TIMEOUT_SECONDS: "180.0"'), true)
-  assert.equal(source.includes('LIVE_IMAGE_SEARCH_EXECUTION_TIMEOUT_SECONDS: "75.0"'), true)
-  assert.equal(source.includes('DISCORD_IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS: "240.0"'), true)
+  assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_TIMEOUT_SECONDS: "10.0"'), true)
+  assert.equal(source.includes('LIVE_IMAGE_SEARCH_EXECUTION_TIMEOUT_SECONDS: "90.0"'), true)
+  assert.equal(source.includes('DISCORD_IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS: "120.0"'), true)
+  assert.equal(source.includes('DISCORD_MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS: "140"'), true)
 })
 
 test('production image reply does not skip top1 matches only because top1-top2 margin is close', () => {
