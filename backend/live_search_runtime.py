@@ -137,7 +137,7 @@ class LiveSearchTaskRunner:
     def __init__(self, max_workers: int, max_queue_size: int):
         self.max_workers = max(int(max_workers or 1), 1)
         self.max_queue_size = max(int(max_queue_size or 0), 0)
-        queue_capacity = max(self.max_queue_size, 1)
+        queue_capacity = 0 if self.max_queue_size <= 0 else self.max_queue_size
         self._queue: queue.Queue[_LiveSearchTask] = queue.Queue(maxsize=queue_capacity)
         self._workers: list[threading.Thread] = []
         for worker_index in range(self.max_workers):

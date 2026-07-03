@@ -17,11 +17,18 @@ test('production image search queues all work instead of failing at a five-secon
   const source = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
 
   assert.equal(source.includes('LIVE_IMAGE_SEARCH_MAX_INFLIGHT: "4"'), true)
-  assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_MAX_SIZE: "2048"'), true)
+  assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_MAX_SIZE: "0"'), true)
   assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_TIMEOUT_SECONDS: "0"'), true)
   assert.equal(source.includes('LIVE_IMAGE_SEARCH_EXECUTION_TIMEOUT_SECONDS: "0"'), true)
   assert.equal(source.includes('DISCORD_IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS: "900.0"'), true)
   assert.equal(source.includes('DISCORD_MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS: "900"'), true)
+})
+
+test('live search runtime treats zero queue size as unbounded', () => {
+  const source = readFileSync(new URL('./live_search_runtime.py', import.meta.url), 'utf8')
+
+  assert.match(source, /queue_capacity = 0 if self\.max_queue_size <= 0 else self\.max_queue_size/)
+  assert.match(source, /queue\.Queue\(maxsize=queue_capacity\)/)
 })
 
 test('production image reply does not skip top1 matches only because top1-top2 margin is close', () => {
