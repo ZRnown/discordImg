@@ -15,7 +15,7 @@ test('search timeout releases the live search slot and propagates cancellation',
 test('production image search uses a five-second backend latency budget', () => {
   const source = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
 
-  assert.equal(source.includes('LIVE_IMAGE_SEARCH_MAX_INFLIGHT: "1"'), true)
+  assert.equal(source.includes('LIVE_IMAGE_SEARCH_MAX_INFLIGHT: "2"'), true)
   assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_MAX_SIZE: "128"'), true)
   assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_TIMEOUT_SECONDS: "0.75"'), true)
   assert.equal(source.includes('LIVE_IMAGE_SEARCH_EXECUTION_TIMEOUT_SECONDS: "4.0"'), true)

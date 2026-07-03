@@ -3007,6 +3007,23 @@ class LiveImageRetriever:
         shop_scope = tuple(sorted(normalized_user_shops or []))
         contexts = self._get_fast_vector_contexts(shop_scope, cancel_event=cancel_event)
         matrix = contexts.get("matrix")
+        if (
+            matrix is not None
+            and getattr(matrix, "ndim", 0) == 2
+            and matrix.shape[0] == 0
+            and not _is_search_cancelled(cancel_event)
+        ):
+            return {
+                "strategy": self.strategy_name,
+                "catalog_size": 0,
+                "ranked_products": [],
+                "top1_score": 0.0,
+                "top1_margin": 0.0,
+                "streaming": True,
+                "fast_cached_vectors": True,
+                "fast_vector_cache": True,
+                "empty_fast_vector_scope": True,
+            }
         ranker = getattr(strategy, "_rank_products_fast_for_context", None)
         if (
             callable(ranker)

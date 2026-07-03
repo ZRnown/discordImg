@@ -152,6 +152,13 @@ test('image-only streaming search scans cached vectors in batches', () => {
   assert.match(retrievalSource, /fast_cached_vectors/)
 })
 
+test('image-only streaming returns immediately for cached empty shop scopes', () => {
+  const retrievalSource = readFileSync(new URL('./live_retrieval.py', import.meta.url), 'utf8')
+
+  assert.match(retrievalSource, /matrix\.shape\[0\] == 0/)
+  assert.match(retrievalSource, /"empty_fast_vector_scope": True/)
+})
+
 test('image-only fast vector context persists to disk for large shops', () => {
   const retrievalSource = readFileSync(new URL('./live_retrieval.py', import.meta.url), 'utf8')
   const ecosystemSource = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
