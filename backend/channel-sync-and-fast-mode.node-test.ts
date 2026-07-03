@@ -24,6 +24,8 @@ test('Discord worker fast mode and image timeout are environment driven', () => 
   assert.match(configSource, /DISCORD_IMAGE_REPLY_MAX_ATTACHMENTS_PER_MESSAGE = _env_int/)
   assert.match(configSource, /KEYWORD_TEXT_SEARCH_API_MAX_INFLIGHT = _env_int/)
   assert.match(configSource, /KEYWORD_TEXT_SEARCH_API_QUEUE_TIMEOUT_SECONDS = _env_float/)
+  assert.match(appSource, /raw_text_search_queue_timeout = getattr\([\s\S]*?config, 'KEYWORD_TEXT_SEARCH_API_QUEUE_TIMEOUT_SECONDS', 2\.0[\s\S]*?\)/)
+  assert.doesNotMatch(appSource, /KEYWORD_TEXT_SEARCH_API_QUEUE_TIMEOUT_SECONDS = max\([\s\S]*?or 2\.0/)
   assert.match(botSource, /DISCORD_BOUND_CHANNEL_CACHE_TTL_SECONDS/)
   assert.match(botSource, /DISCORD_MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS/)
   assert.match(ecosystemSource, /DISCORD_SEND_INTERVAL_SECONDS: "0\.35"/)

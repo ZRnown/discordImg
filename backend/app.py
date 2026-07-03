@@ -279,10 +279,18 @@ GLOBAL_AI_SEMAPHORE = threading.Semaphore(4)
 TEXT_SEARCH_SEMAPHORE = threading.BoundedSemaphore(
     max(int(getattr(config, 'KEYWORD_TEXT_SEARCH_API_MAX_INFLIGHT', 1) or 1), 1)
 )
-TEXT_SEARCH_QUEUE_TIMEOUT_SECONDS = max(
-    float(getattr(config, 'KEYWORD_TEXT_SEARCH_API_QUEUE_TIMEOUT_SECONDS', 2.0) or 2.0),
-    0.0,
+raw_text_search_queue_timeout = getattr(
+    config, 'KEYWORD_TEXT_SEARCH_API_QUEUE_TIMEOUT_SECONDS', 2.0
 )
+if raw_text_search_queue_timeout is None:
+    raw_text_search_queue_timeout = 2.0
+try:
+    TEXT_SEARCH_QUEUE_TIMEOUT_SECONDS = max(
+        float(raw_text_search_queue_timeout),
+        0.0,
+    )
+except (TypeError, ValueError):
+    TEXT_SEARCH_QUEUE_TIMEOUT_SECONDS = 2.0
 MAX_LOG_HISTORY = 5000
 AUTO_BACKFILL_THREAD = None
 AUTO_BACKFILL_THREAD_LOCK = threading.Lock()
