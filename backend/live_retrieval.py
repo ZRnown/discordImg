@@ -9,6 +9,7 @@ import numpy as np
 import os
 import pickle
 import re
+import shutil
 import tempfile
 from statistics import mean
 from threading import BoundedSemaphore, Lock, Thread
@@ -43,6 +44,7 @@ logger = logging.getLogger(__name__)
 
 _STREAMING_PROGRESS_LOG_INTERVAL_SECONDS = 5.0
 _SCOPED_CATALOG_DISK_CACHE_VERSION = 1
+_FAST_VECTOR_CONTEXT_DISK_CACHE_VERSION = 1
 
 
 def _is_search_cancelled(cancel_event: Optional[Any]) -> bool:
@@ -1921,6 +1923,155 @@ class LiveImageRetriever:
             )
         return (self.strategy_name, shop_scope)
 
+    def _get_fast_vector_context_disk_cache_dir(self) -> str:
+        raw_dir = str(os.getenv("LIVE_IMAGE_SEARCH_VECTOR_CONTEXT_DISK_CACHE_DIR", "") or "").strip()
+        if raw_dir:
+            return raw_dir if os.path.isabs(raw_dir) else os.path.abspath(raw_dir)
+        return os.path.join(os.path.dirname(__file__), "data", "live_retrieval_vector_contexts")
+
+    @staticmethod
+    def _serialize_fast_vector_context_signature(signature: Tuple[Any, ...]) -> str:
+        return json.dumps(signature, ensure_ascii=False, sort_keys=True, default=str)
+
+    def _get_fast_vector_context_disk_cache_path(self, signature: Tuple[Any, ...]) -> str:
+        digest = hashlib.sha1(
+            self._serialize_fast_vector_context_signature(signature).encode("utf-8")
+        ).hexdigest()
+        return os.path.join(self._get_fast_vector_context_disk_cache_dir(), digest)
+
+    def _load_fast_vector_contexts_from_disk(
+        self,
+        shop_scope: Tuple[str, ...],
+        signature: Tuple[Any, ...],
+    ) -> Optional[Dict[str, Any]]:
+        cache_dir = self._get_fast_vector_context_disk_cache_path(signature)
+        matrix_path = os.path.join(cache_dir, "matrix.npy")
+        metadata_path = os.path.join(cache_dir, "metadata.json")
+        signature_path = os.path.join(cache_dir, "signature.json")
+        if not (
+            os.path.exists(matrix_path)
+            and os.path.exists(metadata_path)
+            and os.path.exists(signature_path)
+        ):
+            return None
+
+        expected_signature = self._serialize_fast_vector_context_signature(signature)
+        try:
+            with open(signature_path, "r", encoding="utf-8") as signature_file:
+                signature_payload = json.load(signature_file)
+            if int(signature_payload.get("version") or 0) != _FAST_VECTOR_CONTEXT_DISK_CACHE_VERSION:
+                return None
+            if signature_payload.get("signature") != expected_signature:
+                return None
+
+            mmap_mode = None
+            if _env_bool("LIVE_IMAGE_SEARCH_VECTOR_CONTEXT_DISK_MMAP", True):
+                mmap_mode = "r"
+            matrix = np.load(matrix_path, mmap_mode=mmap_mode)
+            with open(metadata_path, "r", encoding="utf-8") as metadata_file:
+                metadata = json.load(metadata_file)
+            if int(metadata.get("version") or 0) != _FAST_VECTOR_CONTEXT_DISK_CACHE_VERSION:
+                return None
+
+            product_ids = list(metadata.get("product_ids") or [])
+            image_indices = [
+                int(value or 0)
+                for value in list(metadata.get("image_indices") or [])
+            ]
+            contexts = {
+                "matrix": matrix,
+                "product_ids": product_ids,
+                "titles": list(metadata.get("titles") or []),
+                "image_paths": list(metadata.get("image_paths") or []),
+                "image_indices": image_indices,
+            }
+            logger.info(
+                "Loaded fast vector context disk cache: strategy=%s shops=%s catalog_size=%s path=%s",
+                self.strategy_name,
+                list(shop_scope),
+                len(product_ids),
+                cache_dir,
+            )
+            return contexts
+        except Exception:
+            logger.exception(
+                "加载实时图搜向量磁盘缓存失败: strategy=%s shops=%s path=%s",
+                self.strategy_name,
+                list(shop_scope),
+                cache_dir,
+            )
+            try:
+                shutil.rmtree(cache_dir)
+            except OSError:
+                pass
+            return None
+
+    def _save_fast_vector_contexts_to_disk(
+        self,
+        shop_scope: Tuple[str, ...],
+        signature: Tuple[Any, ...],
+        contexts: Dict[str, Any],
+    ) -> None:
+        if _env_bool("LIVE_IMAGE_SEARCH_VECTOR_CONTEXT_DISK_CACHE_DISABLED", False):
+            return
+
+        matrix = contexts.get("matrix")
+        if matrix is None or getattr(matrix, "ndim", 0) != 2 or int(matrix.shape[0] or 0) <= 0:
+            return
+
+        cache_root = self._get_fast_vector_context_disk_cache_dir()
+        cache_dir = self._get_fast_vector_context_disk_cache_path(signature)
+        tmp_dir = ""
+        expected_signature = self._serialize_fast_vector_context_signature(signature)
+        try:
+            os.makedirs(cache_root, exist_ok=True)
+            tmp_dir = tempfile.mkdtemp(prefix=".tmp-vector-context-", dir=cache_root)
+            np.save(os.path.join(tmp_dir, "matrix.npy"), np.asarray(matrix, dtype=np.float32))
+            metadata = {
+                "version": _FAST_VECTOR_CONTEXT_DISK_CACHE_VERSION,
+                "strategy": self.strategy_name,
+                "shops": list(shop_scope),
+                "product_ids": list(contexts.get("product_ids") or []),
+                "titles": list(contexts.get("titles") or []),
+                "image_paths": list(contexts.get("image_paths") or []),
+                "image_indices": [
+                    int(value or 0)
+                    for value in list(contexts.get("image_indices") or [])
+                ],
+            }
+            with open(os.path.join(tmp_dir, "metadata.json"), "w", encoding="utf-8") as metadata_file:
+                json.dump(metadata, metadata_file, ensure_ascii=False)
+            with open(os.path.join(tmp_dir, "signature.json"), "w", encoding="utf-8") as signature_file:
+                json.dump(
+                    {
+                        "version": _FAST_VECTOR_CONTEXT_DISK_CACHE_VERSION,
+                        "signature": expected_signature,
+                    },
+                    signature_file,
+                    ensure_ascii=False,
+                )
+            if os.path.exists(cache_dir):
+                shutil.rmtree(cache_dir)
+            os.replace(tmp_dir, cache_dir)
+            logger.info(
+                "Saved fast vector context disk cache: strategy=%s shops=%s catalog_size=%s path=%s",
+                self.strategy_name,
+                list(shop_scope),
+                len(metadata["product_ids"]),
+                cache_dir,
+            )
+        except Exception:
+            logger.exception(
+                "保存实时图搜向量磁盘缓存失败: strategy=%s shops=%s",
+                self.strategy_name,
+                list(shop_scope),
+            )
+            try:
+                if tmp_dir and os.path.exists(tmp_dir):
+                    shutil.rmtree(tmp_dir)
+            except OSError:
+                pass
+
     def _get_fast_vector_contexts(
         self,
         shop_scope: Tuple[str, ...],
@@ -1950,6 +2101,21 @@ class LiveImageRetriever:
                     self._fast_vector_context_cache[cache_key] = (signature, cached[1], now)
                     self._fast_vector_context_cache.move_to_end(cache_key)
                     return cached[1]
+
+        if not _env_bool("LIVE_IMAGE_SEARCH_VECTOR_CONTEXT_DISK_CACHE_DISABLED", False):
+            disk_contexts = self._load_fast_vector_contexts_from_disk(shop_scope, signature)
+            if disk_contexts is not None:
+                if max_scopes > 0:
+                    with self._fast_vector_context_cache_lock:
+                        self._fast_vector_context_cache[cache_key] = (
+                            signature,
+                            disk_contexts,
+                            perf_counter(),
+                        )
+                        self._fast_vector_context_cache.move_to_end(cache_key)
+                        while len(self._fast_vector_context_cache) > max_scopes:
+                            self._fast_vector_context_cache.popitem(last=False)
+                return disk_contexts
 
         build_started_at = perf_counter()
         vectors: List[np.ndarray] = []
@@ -2011,6 +2177,9 @@ class LiveImageRetriever:
                 list(shop_scope),
             )
 
+        if not _is_search_cancelled(cancel_event):
+            self._save_fast_vector_contexts_to_disk(shop_scope, signature, contexts)
+
         if max_scopes > 0 and not _is_search_cancelled(cancel_event):
             with self._fast_vector_context_cache_lock:
                 self._fast_vector_context_cache[cache_key] = (signature, contexts, perf_counter())
@@ -2018,6 +2187,17 @@ class LiveImageRetriever:
                 while len(self._fast_vector_context_cache) > max_scopes:
                     self._fast_vector_context_cache.popitem(last=False)
         return contexts
+
+    def prepare_fast_vector_context_for_warmup(
+        self,
+        user_shops: Optional[Sequence[str]],
+    ) -> bool:
+        shop_scope = self._normalize_shop_scope(user_shops)
+        if not shop_scope:
+            return False
+        contexts = self._get_fast_vector_contexts(shop_scope, cancel_event=None)
+        matrix = contexts.get("matrix")
+        return bool(matrix is not None and getattr(matrix, "ndim", 0) == 2 and matrix.shape[0] > 0)
 
     @staticmethod
     def _build_signature(rows: Sequence[Dict[str, Any]]) -> Tuple[int, int, str]:
