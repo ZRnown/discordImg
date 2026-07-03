@@ -163,6 +163,7 @@ test('image-only fast vector context persists to disk for large shops', () => {
   assert.match(retrievalSource, /np\.load\(matrix_path, mmap_mode=/)
   assert.match(retrievalSource, /LIVE_IMAGE_SEARCH_VECTOR_CONTEXT_DISK_CACHE_DIR/)
   assert.match(ecosystemSource, /LIVE_IMAGE_SEARCH_VECTOR_CONTEXT_CACHE_SCOPES: "16"/)
+  assert.match(ecosystemSource, /LIVE_IMAGE_SEARCH_VECTOR_CONTEXT_SIGNATURE_TTL_SECONDS: "3600\.0"/)
 })
 
 test('fast vector context cache can be built offline before traffic', () => {
