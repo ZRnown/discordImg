@@ -14,6 +14,7 @@ test('admin channel add uses the same global scope as admin channel delete', () 
 })
 
 test('Discord worker fast mode and image timeout are environment driven', () => {
+  const appSource = readSource('backend/app.py')
   const botSource = readSource('backend/bot.py')
   const configSource = readSource('backend/config.py')
   const ecosystemSource = readSource('ecosystem.config.js')
@@ -30,5 +31,6 @@ test('Discord worker fast mode and image timeout are environment driven', () => 
   assert.match(ecosystemSource, /DISCORD_MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS: "900"/)
   assert.match(ecosystemSource, /DISCORD_IMAGE_REPLY_MAX_ATTACHMENTS_PER_MESSAGE: "8"/)
   assert.match(ecosystemSource, /LIVE_IMAGE_SEARCH_QUEUE_MAX_SIZE: "0"/)
-  assert.match(ecosystemSource, /KEYWORD_TEXT_SEARCH_API_QUEUE_TIMEOUT_SECONDS: "30\.0"/)
+  assert.match(ecosystemSource, /KEYWORD_TEXT_SEARCH_API_QUEUE_TIMEOUT_SECONDS: "0"/)
+  assert.match(appSource, /if TEXT_SEARCH_QUEUE_TIMEOUT_SECONDS > 0:[\s\S]*?TEXT_SEARCH_SEMAPHORE\.acquire\([\s\S]*?timeout=TEXT_SEARCH_QUEUE_TIMEOUT_SECONDS[\s\S]*?else:[\s\S]*?TEXT_SEARCH_SEMAPHORE\.acquire\(\)/)
 })

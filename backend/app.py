@@ -7041,9 +7041,13 @@ def search_similar_text():
                         'total': len(products)
                     })
 
-            acquired_text_search_slot = TEXT_SEARCH_SEMAPHORE.acquire(
-                timeout=TEXT_SEARCH_QUEUE_TIMEOUT_SECONDS
-            )
+            if TEXT_SEARCH_QUEUE_TIMEOUT_SECONDS > 0:
+                acquired_text_search_slot = TEXT_SEARCH_SEMAPHORE.acquire(
+                    timeout=TEXT_SEARCH_QUEUE_TIMEOUT_SECONDS
+                )
+            else:
+                TEXT_SEARCH_SEMAPHORE.acquire()
+                acquired_text_search_slot = True
             if not acquired_text_search_slot:
                 logger.warning(
                     '文字搜索繁忙，排队超时后拒绝请求: queue_timeout=%.2fs query=%r user_id=%s',
