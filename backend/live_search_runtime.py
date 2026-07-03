@@ -109,12 +109,22 @@ class _LiveSearchTask:
         execution_timeout_seconds: float,
     ) -> Any:
         queue_timeout = max(float(queue_timeout_seconds or 0.0), 0.0)
-        if not self.started.wait(queue_timeout):
+        if queue_timeout > 0:
+            started = self.started.wait(queue_timeout)
+        else:
+            self.started.wait()
+            started = True
+        if not started:
             self.cancel()
             raise LiveSearchQueueTimeoutError(queue_timeout)
 
         execution_timeout = max(float(execution_timeout_seconds or 0.0), 0.0)
-        if not self.finished.wait(execution_timeout):
+        if execution_timeout > 0:
+            finished = self.finished.wait(execution_timeout)
+        else:
+            self.finished.wait()
+            finished = True
+        if not finished:
             self.cancel()
             raise TimeoutError(f"live search execution timed out after {execution_timeout:.2f}s")
 

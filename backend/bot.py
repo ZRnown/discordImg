@@ -1986,8 +1986,12 @@ async def _record_repeat(user_id: str, product_id: str, channel_id: str):
     async with _repeat_cache_lock:
         _repeat_reply_cache[key] = time.time()
 
-# 【新增】AI并发限制：最多同时2个AI推理任务，防止CPU饱和导致Flask阻塞
-ai_concurrency_limit = asyncio.Semaphore(2)
+IMAGE_RECOGNITION_MAX_INFLIGHT = max(
+    int(getattr(config, 'DISCORD_IMAGE_RECOGNITION_MAX_INFLIGHT', 2) or 2),
+    1,
+)
+# 图片识别已经由后端队列控制；这里限制同账号并发，避免单个 worker 瞬时压满后端。
+ai_concurrency_limit = asyncio.Semaphore(IMAGE_RECOGNITION_MAX_INFLIGHT)
 
 # 冷却等待保护：避免在高并发下长时间占用消息处理链路
 MAX_COOLDOWN_WAIT_SECONDS = 3.0

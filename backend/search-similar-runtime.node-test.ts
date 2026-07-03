@@ -2,25 +2,26 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 
-test('search timeout releases the live search slot and propagates cancellation', () => {
-  const source = readFileSync(new URL('./app.py', import.meta.url), 'utf8')
+test('live search runtime can wait without dropping queued image searches', () => {
+  const appSource = readFileSync(new URL('./app.py', import.meta.url), 'utf8')
+  const runtimeSource = readFileSync(new URL('./live_search_runtime.py', import.meta.url), 'utf8')
 
-  assert.equal(source.includes('search_cancel_event = threading.Event()'), true)
-  assert.equal(source.includes('cancel_event=search_cancel_event'), true)
-  assert.equal(source.includes('_submit_live_search_task('), true)
-  assert.equal(source.includes('except SearchExecutionTimeoutError:'), true)
-  assert.equal(source.includes('cancel_event.set()'), true)
+  assert.equal(appSource.includes('search_cancel_event = threading.Event()'), true)
+  assert.equal(appSource.includes('cancel_event=search_cancel_event'), true)
+  assert.equal(appSource.includes('_submit_live_search_task('), true)
+  assert.match(runtimeSource, /if queue_timeout > 0:[\s\S]+?else:\s+self\.started\.wait\(\)/)
+  assert.match(runtimeSource, /if execution_timeout > 0:[\s\S]+?else:\s+self\.finished\.wait\(\)/)
 })
 
-test('production image search uses a five-second backend latency budget', () => {
+test('production image search queues all work instead of failing at a five-second cap', () => {
   const source = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
 
   assert.equal(source.includes('LIVE_IMAGE_SEARCH_MAX_INFLIGHT: "4"'), true)
-  assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_MAX_SIZE: "128"'), true)
-  assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_TIMEOUT_SECONDS: "0.75"'), true)
-  assert.equal(source.includes('LIVE_IMAGE_SEARCH_EXECUTION_TIMEOUT_SECONDS: "4.0"'), true)
-  assert.equal(source.includes('DISCORD_IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS: "6.0"'), true)
-  assert.equal(source.includes('DISCORD_MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS: "140"'), true)
+  assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_MAX_SIZE: "2048"'), true)
+  assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_TIMEOUT_SECONDS: "0"'), true)
+  assert.equal(source.includes('LIVE_IMAGE_SEARCH_EXECUTION_TIMEOUT_SECONDS: "0"'), true)
+  assert.equal(source.includes('DISCORD_IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS: "900.0"'), true)
+  assert.equal(source.includes('DISCORD_MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS: "900"'), true)
 })
 
 test('production image reply does not skip top1 matches only because top1-top2 margin is close', () => {
@@ -75,15 +76,18 @@ test('startup warmup prepares fast vector contexts for autostart shop scopes', (
   assert.match(retrievalSource, /fast_vector_prepared/)
 })
 
-test('bot retries retryable image-search backend pressure without one-shot skipping', () => {
+test('bot keeps image recognition queued long enough for backend completion', () => {
   const ecosystemSource = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
   const configSource = readFileSync(new URL('./config.py', import.meta.url), 'utf8')
   const botSource = readFileSync(new URL('./bot.py', import.meta.url), 'utf8')
 
+  assert.equal(ecosystemSource.includes('DISCORD_IMAGE_RECOGNITION_MAX_INFLIGHT: "4"'), true)
   assert.equal(ecosystemSource.includes('DISCORD_IMAGE_RECOGNITION_MAX_ATTEMPTS: "3"'), true)
-  assert.equal(ecosystemSource.includes('DISCORD_IMAGE_RECOGNITION_RETRY_DELAY_SECONDS: "0.8"'), true)
+  assert.equal(ecosystemSource.includes('DISCORD_IMAGE_RECOGNITION_RETRY_DELAY_SECONDS: "3.0"'), true)
+  assert.match(configSource, /DISCORD_IMAGE_RECOGNITION_MAX_INFLIGHT = _env_int/)
   assert.match(configSource, /DISCORD_IMAGE_RECOGNITION_MAX_ATTEMPTS = _env_int/)
   assert.match(configSource, /DISCORD_IMAGE_RECOGNITION_RETRY_DELAY_SECONDS = _env_float/)
+  assert.match(botSource, /IMAGE_RECOGNITION_MAX_INFLIGHT/)
   assert.match(botSource, /IMAGE_RECOGNITION_MAX_ATTEMPTS/)
   assert.match(botSource, /resp\.status in \{429, 503\}/)
 })

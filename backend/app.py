@@ -299,17 +299,20 @@ SCOPED_CATALOG_WARMUP_LOCK = threading.Lock()
 
 def _get_live_search_queue_timeout_seconds() -> float:
     try:
-        return max(float(getattr(config, 'LIVE_IMAGE_SEARCH_QUEUE_TIMEOUT_SECONDS', 2.5) or 2.5), 0.0)
+        raw_value = getattr(config, 'LIVE_IMAGE_SEARCH_QUEUE_TIMEOUT_SECONDS', 2.5)
+        if raw_value is None:
+            raw_value = 2.5
+        return max(float(raw_value), 0.0)
     except (TypeError, ValueError):
         return 2.5
 
 
 def _get_live_search_execution_timeout_seconds() -> float:
     try:
-        return max(
-            float(getattr(config, 'LIVE_IMAGE_SEARCH_EXECUTION_TIMEOUT_SECONDS', 30.0) or 30.0),
-            0.0,
-        )
+        raw_value = getattr(config, 'LIVE_IMAGE_SEARCH_EXECUTION_TIMEOUT_SECONDS', 30.0)
+        if raw_value is None:
+            raw_value = 30.0
+        return max(float(raw_value), 0.0)
     except (TypeError, ValueError):
         return 30.0
 
