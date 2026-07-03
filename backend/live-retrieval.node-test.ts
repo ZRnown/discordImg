@@ -152,6 +152,14 @@ test('image-only streaming search scans cached vectors in batches', () => {
   assert.match(retrievalSource, /fast_cached_vectors/)
 })
 
+test('shop-scoped searchable signatures start from the shop index', () => {
+  const databaseSource = readFileSync(new URL('./database.py', import.meta.url), 'utf8')
+
+  assert.match(databaseSource, /FROM products p INDEXED BY idx_products_shop_name/)
+  assert.match(databaseSource, /JOIN product_images pi INDEXED BY idx_product_images_product_id/)
+  assert.match(databaseSource, /JOIN product_image_retrieval_cache rc INDEXED BY sqlite_autoindex_product_image_retrieval_cache_1/)
+})
+
 test('image-only streaming returns immediately for cached empty shop scopes', () => {
   const retrievalSource = readFileSync(new URL('./live_retrieval.py', import.meta.url), 'utf8')
 

@@ -2063,6 +2063,52 @@ class Database:
                 'max_cache_updated_at': '',
             }
 
+        if strategy_name and require_cache and normalized_shop_names:
+            placeholders = ','.join('?' for _ in normalized_shop_names)
+            query = f'''
+                SELECT
+                    COUNT(*) AS row_count,
+                    COALESCE(MAX(pi.id), 0) AS max_image_db_id,
+                    COALESCE(MAX(p.id), 0) AS max_product_id,
+                    COALESCE(MAX(p.updated_at), '') AS max_product_updated_at,
+                    COALESCE(MAX(rc.updated_at), '') AS max_cache_updated_at
+                FROM products p INDEXED BY idx_products_shop_name
+                JOIN product_images pi INDEXED BY idx_product_images_product_id
+                    ON pi.product_id = p.id
+                JOIN product_image_retrieval_cache rc INDEXED BY sqlite_autoindex_product_image_retrieval_cache_1
+                    ON {self._retrieval_cache_join_sql('pi', 'rc', include_usable_embedding=True)}
+                WHERE p.shop_name IN ({placeholders})
+            '''
+            params = [strategy_name, *normalized_shop_names]
+            try:
+                with self.get_connection() as conn:
+                    cursor = conn.cursor()
+                    row = cursor.execute(query, params).fetchone()
+                    if not row:
+                        return {
+                            'count': 0,
+                            'max_image_db_id': 0,
+                            'max_product_id': 0,
+                            'max_product_updated_at': '',
+                            'max_cache_updated_at': '',
+                        }
+                    return {
+                        'count': int(row[0] or 0),
+                        'max_image_db_id': int(row[1] or 0),
+                        'max_product_id': int(row[2] or 0),
+                        'max_product_updated_at': str(row[3] or ''),
+                        'max_cache_updated_at': str(row[4] or ''),
+                    }
+            except Exception as e:
+                logger.error(f"获取实时检索商品目录签名失败: {e}")
+                return {
+                    'count': 0,
+                    'max_image_db_id': 0,
+                    'max_product_id': 0,
+                    'max_product_updated_at': '',
+                    'max_cache_updated_at': '',
+                }
+
         params: List[Any] = []
         where_clauses = []
         join_sql = ''
