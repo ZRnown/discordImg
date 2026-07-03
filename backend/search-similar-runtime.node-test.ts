@@ -12,14 +12,14 @@ test('search timeout releases the live search slot and propagates cancellation',
   assert.equal(source.includes('cancel_event.set()'), true)
 })
 
-test('production image search fails fast under load with one low-memory streaming worker', () => {
+test('production image search uses a five-second backend latency budget', () => {
   const source = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
 
   assert.equal(source.includes('LIVE_IMAGE_SEARCH_MAX_INFLIGHT: "1"'), true)
   assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_MAX_SIZE: "128"'), true)
-  assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_TIMEOUT_SECONDS: "10.0"'), true)
-  assert.equal(source.includes('LIVE_IMAGE_SEARCH_EXECUTION_TIMEOUT_SECONDS: "90.0"'), true)
-  assert.equal(source.includes('DISCORD_IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS: "120.0"'), true)
+  assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_TIMEOUT_SECONDS: "0.75"'), true)
+  assert.equal(source.includes('LIVE_IMAGE_SEARCH_EXECUTION_TIMEOUT_SECONDS: "4.0"'), true)
+  assert.equal(source.includes('DISCORD_IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS: "6.0"'), true)
   assert.equal(source.includes('DISCORD_MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS: "140"'), true)
 })
 
@@ -63,4 +63,27 @@ test('slow image search logs include image preparation and retrieval queue timin
   assert.equal(source.includes("'queue_wait_elapsed'"), true)
   assert.equal(source.includes("'execution_elapsed'"), true)
   assert.match(source, /"search_similar slow request: total=%\.2fs image_stage=%\.2fs filter_stage=%\.2fs retrieval=%\.2fs queue_wait=%\.2fs execution=%\.2fs/)
+})
+
+test('startup warmup prepares fast vector contexts for autostart shop scopes', () => {
+  const ecosystemSource = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
+  const retrievalSource = readFileSync(new URL('./live_retrieval.py', import.meta.url), 'utf8')
+
+  assert.equal(ecosystemSource.includes('LIVE_IMAGE_SEARCH_STARTUP_LOAD_SCOPED_CATALOGS: "1"'), true)
+  assert.equal(ecosystemSource.includes('LIVE_IMAGE_SEARCH_VECTOR_CONTEXT_CACHE_SCOPES: "64"'), true)
+  assert.match(retrievalSource, /prepare_fast_vector_context_for_warmup\(scope\)/)
+  assert.match(retrievalSource, /fast_vector_prepared/)
+})
+
+test('bot retries retryable image-search backend pressure without one-shot skipping', () => {
+  const ecosystemSource = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
+  const configSource = readFileSync(new URL('./config.py', import.meta.url), 'utf8')
+  const botSource = readFileSync(new URL('./bot.py', import.meta.url), 'utf8')
+
+  assert.equal(ecosystemSource.includes('DISCORD_IMAGE_RECOGNITION_MAX_ATTEMPTS: "3"'), true)
+  assert.equal(ecosystemSource.includes('DISCORD_IMAGE_RECOGNITION_RETRY_DELAY_SECONDS: "0.8"'), true)
+  assert.match(configSource, /DISCORD_IMAGE_RECOGNITION_MAX_ATTEMPTS = _env_int/)
+  assert.match(configSource, /DISCORD_IMAGE_RECOGNITION_RETRY_DELAY_SECONDS = _env_float/)
+  assert.match(botSource, /IMAGE_RECOGNITION_MAX_ATTEMPTS/)
+  assert.match(botSource, /resp\.status in \{429, 503\}/)
 })

@@ -2093,7 +2093,9 @@ class LiveImageRetriever:
                     self._fast_vector_context_cache.move_to_end(cache_key)
                     return cached[1]
 
+        signature_started_at = perf_counter()
         signature = self._build_fast_vector_context_signature(shop_scope)
+        signature_elapsed = perf_counter() - signature_started_at
         if max_scopes > 0:
             with self._fast_vector_context_cache_lock:
                 cached = self._fast_vector_context_cache.get(cache_key)
@@ -2103,8 +2105,26 @@ class LiveImageRetriever:
                     return cached[1]
 
         if not _env_bool("LIVE_IMAGE_SEARCH_VECTOR_CONTEXT_DISK_CACHE_DISABLED", False):
+            disk_started_at = perf_counter()
             disk_contexts = self._load_fast_vector_contexts_from_disk(shop_scope, signature)
+            disk_elapsed = perf_counter() - disk_started_at
             if disk_contexts is not None:
+                matrix = disk_contexts.get("matrix")
+                catalog_size = (
+                    int(matrix.shape[0])
+                    if matrix is not None and getattr(matrix, "ndim", 0) == 2
+                    else len(disk_contexts.get("product_ids") or [])
+                )
+                if signature_elapsed + disk_elapsed >= 5.0:
+                    logger.warning(
+                        "Live retrieval loaded fast vector context slowly: strategy=%s total=%.2fs signature=%.2fs disk=%.2fs catalog_size=%s shops=%s",
+                        self.strategy_name,
+                        signature_elapsed + disk_elapsed,
+                        signature_elapsed,
+                        disk_elapsed,
+                        catalog_size,
+                        list(shop_scope),
+                    )
                 if max_scopes > 0:
                     with self._fast_vector_context_cache_lock:
                         self._fast_vector_context_cache[cache_key] = (
@@ -2169,9 +2189,10 @@ class LiveImageRetriever:
         build_elapsed = perf_counter() - build_started_at
         if build_elapsed >= 5.0:
             logger.warning(
-                "Live retrieval built fast vector context: strategy=%s total=%.2fs decode=%.2fs catalog_size=%s shops=%s",
+                "Live retrieval built fast vector context: strategy=%s total=%.2fs signature=%.2fs decode=%.2fs catalog_size=%s shops=%s",
                 self.strategy_name,
                 build_elapsed,
+                signature_elapsed,
                 decode_elapsed,
                 len(product_ids),
                 list(shop_scope),
@@ -3308,11 +3329,22 @@ def warm_live_image_scoped_catalogs(
     shop_scopes: Sequence[Sequence[str]],
 ) -> Dict[str, Any]:
     retriever = get_live_image_retriever(db_handle, strategy_name)
+    strategy = retriever._get_strategy_instance()
+    use_fast_vector_contexts = (
+        retriever._supports_fast_cached_vector_streaming(strategy)
+        and not scoped_catalog_cache_enabled()
+    )
     loaded = 0
     prepared = 0
+    fast_vector_prepared = 0
     skipped = 0
     for scope in shop_scopes:
-        if retriever.load_scoped_prepared_catalog_if_cached(scope):
+        if use_fast_vector_contexts:
+            if retriever.prepare_fast_vector_context_for_warmup(scope):
+                fast_vector_prepared += 1
+            else:
+                skipped += 1
+        elif retriever.load_scoped_prepared_catalog_if_cached(scope):
             loaded += 1
         elif retriever.prepare_scoped_catalog_for_warmup(scope):
             prepared += 1
@@ -3322,6 +3354,7 @@ def warm_live_image_scoped_catalogs(
         "strategy": strategy_name,
         "loaded": loaded,
         "prepared": prepared,
+        "fast_vector_prepared": fast_vector_prepared,
         "skipped": skipped,
     }
 

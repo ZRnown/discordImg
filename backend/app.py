@@ -384,9 +384,11 @@ def _load_scoped_live_image_catalogs_in_background(strategy_name, startup_shop_s
             startup_shop_scopes,
         )
         logger.info(
-            "店铺检索目录缓存后台加载完成: strategy=%s loaded=%s skipped=%s",
+            "店铺检索目录缓存后台加载完成: strategy=%s loaded=%s prepared=%s fast_vector_prepared=%s skipped=%s",
             strategy_name,
             scoped_summary.get('loaded', 0),
+            scoped_summary.get('prepared', 0),
+            scoped_summary.get('fast_vector_prepared', 0),
             scoped_summary.get('skipped', 0),
         )
     except Exception as scoped_cache_error:

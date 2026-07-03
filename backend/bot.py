@@ -2047,6 +2047,14 @@ def _get_image_recognition_request_timeout_seconds(stage_timeout_seconds) -> flo
 IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS = _get_image_recognition_request_timeout_seconds(
     MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS
 )
+IMAGE_RECOGNITION_MAX_ATTEMPTS = max(
+    int(getattr(config, 'DISCORD_IMAGE_RECOGNITION_MAX_ATTEMPTS', 1) or 1),
+    1,
+)
+IMAGE_RECOGNITION_RETRY_DELAY_SECONDS = max(
+    float(getattr(config, 'DISCORD_IMAGE_RECOGNITION_RETRY_DELAY_SECONDS', 1.0) or 1.0),
+    0.0,
+)
 
 
 def get_all_cooldowns():
@@ -7181,8 +7189,8 @@ class DiscordBotClient(discord.Client):
 
                 # 调用后端实时图片检索服务。
                 request_url = f'{config.BACKEND_API_URL.replace("/api", "")}/search_similar'
-                max_attempts = 1
-                retry_delay = 1.0
+                max_attempts = IMAGE_RECOGNITION_MAX_ATTEMPTS
+                retry_delay = IMAGE_RECOGNITION_RETRY_DELAY_SECONDS
 
                 def _build_form_data():
                     form = aiohttp.FormData()
@@ -7213,17 +7221,17 @@ class DiscordBotClient(discord.Client):
                             attempt + 1,
                             compact_response_text or '<empty>',
                         )
-                        if resp.status == 503 and (
+                        if resp.status == 503 and attempt >= max_attempts - 1 and (
                             'search warming up' in compact_response_text
                             or '图搜服务预热中' in compact_response_text
                             or '预热中' in compact_response_text
                         ):
                             logger.warning(
-                                'recognize_image search service warming up; skip image reply for this message'
+                                'recognize_image search service still warming up after retries; skip image reply for this message'
                             )
                             return None
-                        # 后端繁忙时短暂退避；预热状态会拖长消息处理，前面已直接结束本次图片识别。
-                        if resp.status in {429} and attempt < max_attempts - 1:
+                        # 后端繁忙/预热时短暂退避，避免一次队列抖动就放弃这张图。
+                        if resp.status in {429, 503} and attempt < max_attempts - 1:
                             await asyncio.sleep(retry_delay)
                             retry_delay = min(retry_delay * 1.8, 6.0)
                             continue

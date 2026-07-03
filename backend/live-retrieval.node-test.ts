@@ -16,11 +16,11 @@ test('startup catalog preparation is disabled by default', () => {
   assert.match(source, /LIVE_IMAGE_SEARCH_STARTUP_PREPARE_CATALOG.*False/)
 })
 
-test('production avoids startup scoped catalog warmup on lower-load servers', () => {
+test('production warms fast vector contexts while scoped catalog cache stays disabled', () => {
   const source = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
 
   assert.match(source, /LIVE_IMAGE_SEARCH_STRATEGY: "siglip2_rerank"/)
-  assert.match(source, /LIVE_IMAGE_SEARCH_STARTUP_LOAD_SCOPED_CATALOGS: "0"/)
+  assert.match(source, /LIVE_IMAGE_SEARCH_STARTUP_LOAD_SCOPED_CATALOGS: "1"/)
   assert.match(source, /LIVE_IMAGE_SEARCH_SCOPED_CATALOG_ENABLED: "0"/)
   assert.match(source, /LIVE_IMAGE_SEARCH_SCOPED_CATALOG_CACHE_SCOPES: "4"/)
   assert.match(source, /LIVE_IMAGE_SEARCH_SCOPED_CATALOG_PREPARE_MAX_WORKERS: "1"/)
@@ -162,7 +162,7 @@ test('image-only fast vector context persists to disk for large shops', () => {
   assert.match(retrievalSource, /def _save_fast_vector_contexts_to_disk/)
   assert.match(retrievalSource, /np\.load\(matrix_path, mmap_mode=/)
   assert.match(retrievalSource, /LIVE_IMAGE_SEARCH_VECTOR_CONTEXT_DISK_CACHE_DIR/)
-  assert.match(ecosystemSource, /LIVE_IMAGE_SEARCH_VECTOR_CONTEXT_CACHE_SCOPES: "16"/)
+  assert.match(ecosystemSource, /LIVE_IMAGE_SEARCH_VECTOR_CONTEXT_CACHE_SCOPES: "64"/)
   assert.match(ecosystemSource, /LIVE_IMAGE_SEARCH_VECTOR_CONTEXT_SIGNATURE_TTL_SECONDS: "3600\.0"/)
 })
 
