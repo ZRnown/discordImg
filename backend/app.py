@@ -328,10 +328,18 @@ def _submit_live_search_task(
     if task is None:
         raise SearchQueueTimeoutError(0.0)
     try:
-        return task.wait(
+        result = task.wait(
             queue_timeout_seconds=queue_timeout_seconds,
             execution_timeout_seconds=execution_timeout_seconds,
         )
+        now = time.perf_counter()
+        started_at = task.started_at or now
+        finished_at = task.finished_at or now
+        timings = {
+            'queue_wait_elapsed': max(started_at - task.enqueued_at, 0.0),
+            'execution_elapsed': max(finished_at - started_at, 0.0),
+        }
+        return result, timings
     except LiveSearchQueueTimeoutError as exc:
         raise SearchQueueTimeoutError(exc.timeout_seconds) from exc
     except TimeoutError as exc:
@@ -1900,6 +1908,16 @@ def search_similar():
             current_user = get_current_user()
             if current_user and current_user.get('id'):
                 user_shops = build_image_search_shop_scope(current_user)
+        if user_shops is not None:
+            if isinstance(user_shops, (list, tuple, set)):
+                user_shops = [
+                    str(shop).strip()
+                    for shop in user_shops
+                    if str(shop).strip()
+                ]
+            else:
+                user_shops = []
+        empty_shop_scope = user_shops is not None and not user_shops
 
         if debug_enabled:
             logger.debug(f"Received threshold: {threshold}")
@@ -1913,6 +1931,7 @@ def search_similar():
         # 处理图片来源
         import uuid
         import os
+        image_stage_started_at = time.perf_counter()
         image_file = None  # 初始化变量，避免作用域问题
         history_source_filename = ''
 
@@ -1991,6 +2010,7 @@ def search_similar():
             if debug_enabled:
                 logger.debug("No image_url and no uploaded file")
             return jsonify({'error': 'No image provided (url or file)'}), 400
+        image_stage_elapsed = time.perf_counter() - image_stage_started_at
 
         search_worker_started = False
         try:
@@ -2139,6 +2159,38 @@ def search_similar():
             except Exception as e:
                 logger.error(f"记录用户搜索次数失败: {e}")
 
+            if empty_shop_scope:
+                filter_stage_elapsed = time.perf_counter() - filter_stage_started_at
+                response_data = {
+                    'success': True,
+                    'results': [],
+                    'totalResults': 0,
+                    'message': '当前用户没有可搜索店铺',
+                    'searchTime': datetime.now().isoformat(),
+                    'blocked_filter_match': blocked_filter_match,
+                    'blocked_website_filter_matches': blocked_website_filter_matches,
+                    'debugInfo': {
+                        'totalIndexedImages': 0,
+                        'threshold': threshold,
+                        'strategy': getattr(config, 'LIVE_IMAGE_SEARCH_STRATEGY', 'siglip2_rerank'),
+                        'queryTextUsed': bool(query_text),
+                        'top1Margin': 0.0,
+                        'searchedVectors': 0,
+                        'emptyShopScope': True,
+                    }
+                }
+                total_elapsed = time.perf_counter() - request_started_at
+                if total_elapsed >= 5.0:
+                    logger.warning(
+                        "search_similar slow empty-scope request: total=%.2fs image_stage=%.2fs filter_stage=%.2fs user_id=%s shops=%s",
+                        total_elapsed,
+                        image_stage_elapsed,
+                        filter_stage_elapsed,
+                        user_id,
+                        user_shops,
+                    )
+                return jsonify(response_data)
+
             # 实时图片检索改走 benchmark 验证过的策略，实现图片到商品的直接匹配。
             try:
                 import live_retrieval as live_retrieval_module
@@ -2157,6 +2209,10 @@ def search_similar():
             retrieval_timeout_seconds = _get_live_search_queue_timeout_seconds()
             search_timeout_seconds = _get_live_search_execution_timeout_seconds()
             retrieval_started_at = time.perf_counter()
+            retrieval_timings = {
+                'queue_wait_elapsed': 0.0,
+                'execution_elapsed': 0.0,
+            }
             search_worker_started = True
             search_cancel_event = threading.Event()
             try:
@@ -2181,7 +2237,7 @@ def search_similar():
                             user_shops=user_shops,
                         )
 
-                retrieval_result = _submit_live_search_task(
+                retrieval_result, retrieval_timings = _submit_live_search_task(
                     _run_live_retrieval,
                     queue_timeout_seconds=retrieval_timeout_seconds,
                     execution_timeout_seconds=search_timeout_seconds,
@@ -2428,10 +2484,13 @@ def search_similar():
             total_elapsed = time.perf_counter() - request_started_at
             if total_elapsed >= 5.0:
                 logger.warning(
-                    "search_similar slow request: total=%.2fs filter_stage=%.2fs retrieval=%.2fs has_global_filter_images=%s has_user_website_filter_images=%s result_count=%s user_id=%s shops=%s",
+                    "search_similar slow request: total=%.2fs image_stage=%.2fs filter_stage=%.2fs retrieval=%.2fs queue_wait=%.2fs execution=%.2fs has_global_filter_images=%s has_user_website_filter_images=%s result_count=%s user_id=%s shops=%s",
                     total_elapsed,
+                    image_stage_elapsed,
                     filter_stage_elapsed,
                     retrieval_elapsed,
+                    retrieval_timings.get('queue_wait_elapsed', 0.0),
+                    retrieval_timings.get('execution_elapsed', 0.0),
                     has_global_filter_images,
                     has_user_website_filter_images,
                     len(results),

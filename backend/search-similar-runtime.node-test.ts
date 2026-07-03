@@ -46,3 +46,21 @@ test('production slow message warning threshold matches queued image search late
   assert.equal(configSource.includes("DISCORD_MESSAGE_STAGE_SLOW_SECONDS = _env_float('DISCORD_MESSAGE_STAGE_SLOW_SECONDS', 5.0)"), true)
   assert.equal(botSource.includes("MESSAGE_STAGE_SLOW_SECONDS = max(float(getattr(config, 'DISCORD_MESSAGE_STAGE_SLOW_SECONDS', 5.0) or 5.0), 1.0)"), true)
 })
+
+test('image search skips product retrieval when the resolved shop scope is empty', () => {
+  const source = readFileSync(new URL('./app.py', import.meta.url), 'utf8')
+
+  assert.equal(source.includes('empty_shop_scope = user_shops is not None and not user_shops'), true)
+  assert.match(source, /if empty_shop_scope:[\s\S]+?return jsonify\(response_data\)/)
+  assert.equal(source.indexOf('if empty_shop_scope:'), source.lastIndexOf('if empty_shop_scope:'))
+  assert.equal(source.indexOf('if empty_shop_scope:' ) < source.indexOf('retriever = live_retrieval_module.get_live_image_retriever'), true)
+})
+
+test('slow image search logs include image preparation and retrieval queue timing', () => {
+  const source = readFileSync(new URL('./app.py', import.meta.url), 'utf8')
+
+  assert.equal(source.includes('image_stage_elapsed'), true)
+  assert.equal(source.includes("'queue_wait_elapsed'"), true)
+  assert.equal(source.includes("'execution_elapsed'"), true)
+  assert.match(source, /"search_similar slow request: total=%\.2fs image_stage=%\.2fs filter_stage=%\.2fs retrieval=%\.2fs queue_wait=%\.2fs execution=%\.2fs/)
+})
