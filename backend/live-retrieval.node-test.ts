@@ -154,6 +154,7 @@ test('image-only streaming search scans cached vectors in batches', () => {
 
 test('image-only fast vector context persists to disk for large shops', () => {
   const retrievalSource = readFileSync(new URL('./live_retrieval.py', import.meta.url), 'utf8')
+  const ecosystemSource = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
 
   assert.match(retrievalSource, /_FAST_VECTOR_CONTEXT_DISK_CACHE_VERSION/)
   assert.match(retrievalSource, /def _get_fast_vector_context_disk_cache_dir/)
@@ -161,6 +162,7 @@ test('image-only fast vector context persists to disk for large shops', () => {
   assert.match(retrievalSource, /def _save_fast_vector_contexts_to_disk/)
   assert.match(retrievalSource, /np\.load\(matrix_path, mmap_mode=/)
   assert.match(retrievalSource, /LIVE_IMAGE_SEARCH_VECTOR_CONTEXT_DISK_CACHE_DIR/)
+  assert.match(ecosystemSource, /LIVE_IMAGE_SEARCH_VECTOR_CONTEXT_CACHE_SCOPES: "16"/)
 })
 
 test('fast vector context cache can be built offline before traffic', () => {
