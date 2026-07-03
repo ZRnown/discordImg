@@ -182,3 +182,13 @@ test('fast vector context cache can be built offline before traffic', () => {
   assert.match(scriptSource, /prepare_fast_vector_context_for_warmup/)
   assert.match(scriptSource, /--autostart-scopes/)
 })
+
+test('fast vector context loads are coalesced per shop scope', () => {
+  const retrievalSource = readFileSync(new URL('./live_retrieval.py', import.meta.url), 'utf8')
+
+  assert.match(retrievalSource, /class _FastVectorContextBuildState:/)
+  assert.match(retrievalSource, /self\._fast_vector_context_inflight/)
+  assert.match(retrievalSource, /existing_build = self\._fast_vector_context_inflight\.get\(cache_key\)/)
+  assert.match(retrievalSource, /build_state\.finished\.wait/)
+  assert.match(retrievalSource, /self\._fast_vector_context_inflight\.pop\(cache_key, None\)/)
+})

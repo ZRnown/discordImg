@@ -12,7 +12,7 @@ import re
 import shutil
 import tempfile
 from statistics import mean
-from threading import BoundedSemaphore, Lock, Thread
+from threading import BoundedSemaphore, Event, Lock, Thread
 from time import perf_counter
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import quote
@@ -63,6 +63,13 @@ def _is_search_cancelled(cancel_event: Optional[Any]) -> bool:
 
 class LiveCatalogPreparingError(RuntimeError):
     """Raised when the live-search catalog is still warming in the background."""
+
+
+class _FastVectorContextBuildState:
+    def __init__(self) -> None:
+        self.finished = Event()
+        self.result: Optional[Dict[str, Any]] = None
+        self.error: Optional[BaseException] = None
 
 
 @dataclass(frozen=True)
@@ -1748,6 +1755,7 @@ class LiveImageRetriever:
         self._query_context_cache: OrderedDict[Tuple[Any, ...], Tuple[float, Dict[str, Any]]] = OrderedDict()
         self._query_context_cache_lock = Lock()
         self._fast_vector_context_cache: OrderedDict[Tuple[str, ...], Tuple[Tuple[Any, ...], Dict[str, Any], float]] = OrderedDict()
+        self._fast_vector_context_inflight: Dict[Tuple[str, ...], _FastVectorContextBuildState] = {}
         self._fast_vector_context_cache_lock = Lock()
 
     @staticmethod
@@ -2073,6 +2081,50 @@ class LiveImageRetriever:
                 pass
 
     def _get_fast_vector_contexts(
+        self,
+        shop_scope: Tuple[str, ...],
+        *,
+        cancel_event: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        cache_key = shop_scope
+        build_state: Optional[_FastVectorContextBuildState] = None
+        should_build = False
+
+        with self._fast_vector_context_cache_lock:
+            existing_build = self._fast_vector_context_inflight.get(cache_key)
+            if existing_build is None:
+                build_state = _FastVectorContextBuildState()
+                self._fast_vector_context_inflight[cache_key] = build_state
+                should_build = True
+            else:
+                build_state = existing_build
+
+        if not should_build:
+            while not build_state.finished.wait(0.25):
+                if _is_search_cancelled(cancel_event):
+                    raise TimeoutError("live search was cancelled while waiting for vector context")
+            if build_state.error is not None:
+                raise build_state.error
+            if build_state.result is not None:
+                return build_state.result
+            raise RuntimeError("fast vector context build finished without a result")
+
+        try:
+            contexts = self._load_or_build_fast_vector_contexts(
+                shop_scope,
+                cancel_event=cancel_event,
+            )
+            build_state.result = contexts
+            return contexts
+        except BaseException as exc:  # noqa: BLE001
+            build_state.error = exc
+            raise
+        finally:
+            with self._fast_vector_context_cache_lock:
+                self._fast_vector_context_inflight.pop(cache_key, None)
+            build_state.finished.set()
+
+    def _load_or_build_fast_vector_contexts(
         self,
         shop_scope: Tuple[str, ...],
         *,
