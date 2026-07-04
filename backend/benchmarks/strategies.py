@@ -1347,6 +1347,16 @@ class Siglip2RerankStrategy:
             )
         )
 
+    def warm_query_encoder(self) -> bool:
+        side = max(int(getattr(self.encoder, "query_max_side", 192) or 192), 32)
+        image = Image.new("RGB", (side, side), (127, 127, 127))
+        embedding = self.encoder.encode_image(
+            "__siglip_query_warmup__",
+            crop_mode="raw",
+            image=image,
+        )
+        return embedding is not None
+
     @staticmethod
     def _format_weight_token(value: float) -> str:
         return f"{float(value):.2f}".replace(".", "p")

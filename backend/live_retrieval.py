@@ -3403,10 +3403,15 @@ def warm_live_image_retriever(db_handle, strategy_name: str) -> Dict[str, Any]:
 
 def warm_live_image_strategy(db_handle, strategy_name: str) -> Dict[str, Any]:
     retriever = get_live_image_retriever(db_handle, strategy_name)
-    retriever._get_strategy_instance()
+    strategy = retriever._get_strategy_instance()
+    query_encoder_ready = None
+    warm_query_encoder = getattr(strategy, "warm_query_encoder", None)
+    if callable(warm_query_encoder):
+        query_encoder_ready = bool(warm_query_encoder())
     return {
         "strategy": strategy_name,
         "strategy_ready": True,
+        "query_encoder_ready": query_encoder_ready,
     }
 
 

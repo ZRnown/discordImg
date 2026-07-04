@@ -128,6 +128,16 @@ test('production uses smaller SigLIP2 query images to reduce CPU encoding time',
   assert.match(ecosystemSource, /SIGLIP2_RERANK_QUERY_MAX_SIDE: "192"/)
 })
 
+test('startup strategy warmup runs a query encoder forward pass', () => {
+  const retrievalSource = readFileSync(new URL('./live_retrieval.py', import.meta.url), 'utf8')
+  const strategySource = readFileSync(new URL('./benchmarks/strategies.py', import.meta.url), 'utf8')
+
+  assert.match(strategySource, /def warm_query_encoder\(self\) -> bool:/)
+  assert.match(strategySource, /__siglip_query_warmup__/)
+  assert.match(retrievalSource, /warm_query_encoder = getattr\(strategy, "warm_query_encoder", None\)/)
+  assert.match(retrievalSource, /"query_encoder_ready": query_encoder_ready/)
+})
+
 test('prepared catalog strips duplicated cached vectors from records', () => {
   const source = readFileSync(new URL('./live_retrieval.py', import.meta.url), 'utf8')
 
