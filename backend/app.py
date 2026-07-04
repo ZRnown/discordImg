@@ -959,6 +959,24 @@ def schedule_discord_bot_watchdog():
     )
     bot_watchdog_thread.start()
 
+
+def _env_flag_enabled(value, default=False):
+    if value is None:
+        return default
+    normalized = str(value).strip().lower()
+    if normalized in {'1', 'true', 'yes', 'on'}:
+        return True
+    if normalized in {'0', 'false', 'no', 'off'}:
+        return False
+    return default
+
+
+def is_embedded_discord_runtime_enabled():
+    if _env_flag_enabled(os.getenv('BOT_DISABLE_EMBEDDED'), False):
+        return False
+    return _env_flag_enabled(os.getenv('DISCORD_BOT_EMBEDDED_ENABLED'), True)
+
+
 # 全局特征提取器实例（在应用启动时创建）
 feature_extractor_instance = None
 feature_extractor_lock = threading.Lock()
@@ -7463,6 +7481,10 @@ def start_discord_bot(user_id=None, accounts=None):
     global bot_running, bot_loop, bot_thread
 
     try:
+        if not is_embedded_discord_runtime_enabled():
+            logger.info("Discord embedded bot runtime disabled; external workers manage accounts")
+            return 0
+
         import asyncio
         try:
             from bot import (
@@ -9909,8 +9931,11 @@ if __name__ == '__main__':
     atexit.register(stop_discord_bot)
 
     # 恢复上次保持运行的 Discord 账号
-    schedule_discord_bot_restore()
-    schedule_discord_bot_watchdog()
+    if is_embedded_discord_runtime_enabled():
+        schedule_discord_bot_restore()
+        schedule_discord_bot_watchdog()
+    else:
+        logger.info("Discord embedded bot runtime disabled; skipping API bot restore/watchdog")
 
     # 启动 Flask 服务
     print("🚀 服务启动中...")
