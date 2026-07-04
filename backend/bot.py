@@ -184,6 +184,21 @@ def _is_discord_blocked_content_error(error):
     return "error code: 200000" in text or "包含本服务器屏蔽的内容" in text
 
 
+def _is_discord_missing_access_error(error):
+    code = getattr(error, "code", None)
+    if str(code) in {"50001", "50013"}:
+        return True
+
+    text = str(error or "")
+    return (
+        "error code: 50001" in text
+        or "error code: 50013" in text
+        or "Missing Access" in text
+        or "Missing Permissions" in text
+        or "缺少权限" in text
+    )
+
+
 def _log_rate_limited_bark_issue(scene, detail, *, level="error"):
     summary = _summarize_text_for_log(detail, limit=200) or "unknown error"
     now = time.monotonic()
@@ -5235,6 +5250,18 @@ class DiscordBotClient(discord.Client):
                                 if _is_discord_blocked_content_error(reply_error):
                                     logger.error(
                                         "回复被 Discord 内容策略拒绝，跳过直接发送重试，避免触发长时间限流等待: "
+                                        f"{_summarize_exception_for_log(reply_error)}"
+                                    )
+                                    continue
+                                if _is_discord_missing_access_error(reply_error):
+                                    _store_sender_channel_inaccessible(
+                                        target_client,
+                                        getattr(reply_target_channel, 'id', None),
+                                    )
+                                    logger.warning(
+                                        "回复频道权限不足，跳过直接发送重试: "
+                                        f"account_id={getattr(target_client, 'account_id', None)} "
+                                        f"channel={getattr(reply_target_channel, 'id', None)} "
                                         f"{_summarize_exception_for_log(reply_error)}"
                                     )
                                     continue

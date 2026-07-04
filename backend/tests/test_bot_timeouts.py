@@ -12,6 +12,7 @@ from backend.bot import (
     dispatch_keyword_review_item,
     filter_forum_channel_configs_for_message,
     _get_image_recognition_request_timeout_seconds,
+    _is_discord_missing_access_error,
     _is_image_match_above_reply_threshold,
     _is_discord_blocked_content_error,
     _resolve_best_match_image_threshold,
@@ -37,6 +38,21 @@ class BotTimeoutHelpersTestCase(unittest.TestCase):
         error = RuntimeError("50001 Missing Access")
 
         self.assertFalse(_is_discord_blocked_content_error(error))
+
+    def test_detects_discord_missing_access_error_by_code(self):
+        error = SimpleNamespace(code=50001)
+
+        self.assertTrue(_is_discord_missing_access_error(error))
+
+    def test_detects_discord_missing_access_error_by_message(self):
+        error = RuntimeError("403 Forbidden (error code: 50001): 缺少权限")
+
+        self.assertTrue(_is_discord_missing_access_error(error))
+
+    def test_detects_discord_missing_permissions_error(self):
+        error = RuntimeError("403 Forbidden (error code: 50013): Missing Permissions")
+
+        self.assertTrue(_is_discord_missing_access_error(error))
 
     def test_image_recognition_request_timeout_tracks_stage_timeout(self):
         self.assertEqual(
