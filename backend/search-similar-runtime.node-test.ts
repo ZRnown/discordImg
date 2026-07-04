@@ -16,12 +16,22 @@ test('live search runtime can wait without dropping queued image searches', () =
 test('production image search queues all work instead of failing at a five-second cap', () => {
   const source = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
 
-  assert.equal(source.includes('LIVE_IMAGE_SEARCH_MAX_INFLIGHT: "4"'), true)
+  assert.equal(source.includes('LIVE_IMAGE_SEARCH_MAX_INFLIGHT: "2"'), true)
   assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_MAX_SIZE: "0"'), true)
   assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_TIMEOUT_SECONDS: "0"'), true)
   assert.equal(source.includes('LIVE_IMAGE_SEARCH_EXECUTION_TIMEOUT_SECONDS: "0"'), true)
   assert.equal(source.includes('DISCORD_IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS: "900.0"'), true)
   assert.equal(source.includes('DISCORD_MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS: "900"'), true)
+})
+
+test('production image encoding uses multiple CPU threads per cold query', () => {
+  const source = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
+  const pythonApiStart = source.indexOf('name: "python-api"')
+  assert.notEqual(pythonApiStart, -1)
+  const pythonApiSource = source.slice(pythonApiStart)
+
+  assert.match(pythonApiSource, /AI_INTRA_THREADS: "4"/)
+  assert.match(pythonApiSource, /LIVE_IMAGE_SEARCH_MAX_INFLIGHT: "2"/)
 })
 
 test('live search runtime treats zero queue size as unbounded', () => {
