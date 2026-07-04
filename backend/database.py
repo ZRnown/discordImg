@@ -435,11 +435,36 @@ class Database:
                     auto_start_enabled BOOLEAN DEFAULT 0,
                     status TEXT DEFAULT 'offline',
                     last_active TIMESTAMP,
+                    discord_user_id TEXT,
+                    discord_username TEXT,
+                    discord_handle TEXT,
+                    discord_global_name TEXT,
+                    discord_display_name TEXT,
+                    discord_avatar_url TEXT,
+                    runtime_guild_count INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE SET NULL
                 )
             ''')
+            for column_name, column_definition in (
+                ('discord_user_id', 'discord_user_id TEXT'),
+                ('discord_username', 'discord_username TEXT'),
+                ('discord_handle', 'discord_handle TEXT'),
+                ('discord_global_name', 'discord_global_name TEXT'),
+                ('discord_display_name', 'discord_display_name TEXT'),
+                ('discord_avatar_url', 'discord_avatar_url TEXT'),
+                ('runtime_guild_count', 'runtime_guild_count INTEGER DEFAULT 0'),
+            ):
+                try:
+                    self._add_column_if_missing(
+                        cursor,
+                        'discord_accounts',
+                        column_name,
+                        column_definition,
+                    )
+                except sqlite3.OperationalError:
+                    pass
 
             try:
                 cursor.execute('ALTER TABLE discord_accounts ADD COLUMN auto_start_enabled BOOLEAN DEFAULT 0')
@@ -3395,20 +3420,26 @@ class Database:
 
     def get_discord_accounts_by_user(self, user_id: Optional[int]) -> List[Dict]:
         """获取用户关联的Discord账号"""
+        account_fields = '''
+            id, username, token, status, last_active, created_at, user_id,
+            auto_start_enabled, discord_user_id, discord_username, discord_handle,
+            discord_global_name, discord_display_name, discord_avatar_url,
+            runtime_guild_count
+        '''
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
                 if user_id is None:
                     # 管理员查询所有账号
-                    cursor.execute('''
-                        SELECT id, username, token, status, last_active, created_at, user_id, auto_start_enabled
-                    FROM discord_accounts
-                    ORDER BY created_at DESC
+                    cursor.execute(f'''
+                        SELECT {account_fields}
+                        FROM discord_accounts
+                        ORDER BY created_at DESC
                     ''')
                 else:
                     # 普通用户查询自己的账号
-                    cursor.execute('''
-                        SELECT id, username, token, status, last_active, created_at, user_id, auto_start_enabled
+                    cursor.execute(f'''
+                        SELECT {account_fields}
                         FROM discord_accounts
                         WHERE user_id = ?
                         ORDER BY created_at DESC
@@ -3417,6 +3448,52 @@ class Database:
         except Exception as e:
             logger.error(f"获取用户Discord账号失败: {e}")
             return []
+
+    def update_discord_account_profile(
+        self,
+        account_id: int,
+        *,
+        discord_user_id: Any = None,
+        discord_username: str = '',
+        discord_handle: str = '',
+        discord_global_name: str = '',
+        discord_display_name: str = '',
+        discord_avatar_url: str = '',
+        runtime_guild_count: int = 0,
+    ) -> bool:
+        """保存 worker 登录后拿到的 Discord 账号资料，供 API 进程展示。"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    UPDATE discord_accounts
+                    SET discord_user_id = ?,
+                        discord_username = ?,
+                        discord_handle = ?,
+                        discord_global_name = ?,
+                        discord_display_name = ?,
+                        discord_avatar_url = ?,
+                        runtime_guild_count = ?,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    ''',
+                    (
+                        str(discord_user_id or ''),
+                        str(discord_username or ''),
+                        str(discord_handle or ''),
+                        str(discord_global_name or ''),
+                        str(discord_display_name or ''),
+                        str(discord_avatar_url or ''),
+                        max(int(runtime_guild_count or 0), 0),
+                        account_id,
+                    ),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"更新Discord账号资料失败: {e}")
+            return False
 
     def get_discord_accounts_marked_for_autostart(self) -> List[Dict]:
         """获取服务重启后需要自动恢复的 Discord 账号"""

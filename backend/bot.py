@@ -175,6 +175,50 @@ def _summarize_exception_for_log(error, limit=200):
     return getattr(error, "__class__", type(error)).__name__
 
 
+def _safe_discord_attr(obj, *names):
+    for name in names:
+        try:
+            value = getattr(obj, name, None)
+        except Exception:
+            value = None
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ''
+
+
+def _build_discord_account_profile(client):
+    user_obj = getattr(client, 'user', None)
+    username = _safe_discord_attr(user_obj, 'name')
+    discriminator = _safe_discord_attr(user_obj, 'discriminator')
+    discord_username = username
+    if discriminator and discriminator != '0':
+        discord_username = f'{username}#{discriminator}'
+
+    avatar_url = ''
+    if user_obj is not None:
+        for avatar_attr in ('display_avatar', 'avatar'):
+            avatar = getattr(user_obj, avatar_attr, None)
+            if avatar is not None:
+                avatar_url = _safe_discord_attr(avatar, 'url')
+                if avatar_url:
+                    break
+
+    try:
+        guild_count = len(getattr(client, 'guilds', []) or [])
+    except Exception:
+        guild_count = 0
+
+    return {
+        'discord_user_id': _safe_discord_attr(user_obj, 'id'),
+        'discord_username': discord_username,
+        'discord_handle': username,
+        'discord_global_name': _safe_discord_attr(user_obj, 'global_name'),
+        'discord_display_name': _safe_discord_attr(user_obj, 'display_name', 'global_name', 'name'),
+        'discord_avatar_url': avatar_url,
+        'runtime_guild_count': guild_count,
+    }
+
+
 def _is_discord_blocked_content_error(error):
     code = getattr(error, "code", None)
     if str(code) == "200000":
@@ -5858,6 +5902,10 @@ class DiscordBotClient(discord.Client):
                     'online',
                     min_update_interval_seconds=60,
                 )
+                db.update_discord_account_profile(
+                    self.account_id,
+                    **_build_discord_account_profile(self),
+                )
                 if updated:
                     logger.info(f'账号 {self.account_id} 状态已更新为在线')
         except Exception as e:
@@ -5896,6 +5944,10 @@ class DiscordBotClient(discord.Client):
                 from .database import db
             if hasattr(self, 'account_id') and self.account_id:
                 db.update_account_status(self.account_id, 'online')
+                db.update_discord_account_profile(
+                    self.account_id,
+                    **_build_discord_account_profile(self),
+                )
         except Exception as e:
             logger.error(f'更新账号恢复在线状态失败: {e}')
 

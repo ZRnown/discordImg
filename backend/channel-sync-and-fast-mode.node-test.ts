@@ -59,3 +59,17 @@ test('Discord worker disables autostart for invalid account tokens', () => {
   assert.match(workerSource, /LoginFailure/)
   assert.match(workerSource, /disable_discord_account_autostart\(account_id\)/)
 })
+
+test('Discord worker persists runtime account profile for API account list', () => {
+  const appSource = readSource('backend/app.py')
+  const botSource = readSource('backend/bot.py')
+  const databaseSource = readSource('backend/database.py')
+
+  assert.match(databaseSource, /discord_user_id TEXT/)
+  assert.match(databaseSource, /runtime_guild_count INTEGER DEFAULT 0/)
+  assert.match(databaseSource, /def update_discord_account_profile\(/)
+  assert.match(databaseSource, /discord_user_id, discord_username, discord_handle/)
+  assert.match(botSource, /update_discord_account_profile\(/)
+  assert.match(appSource, /runtime_details = _build_runtime_account_details\(\)/)
+  assert.match(appSource, /if runtime:[\s\S]*?item\.update\(runtime\)/)
+})
