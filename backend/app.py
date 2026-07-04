@@ -4984,7 +4984,7 @@ def get_accounts():
 
     current_user = get_current_user()
     try:
-        account_owner_id = None if current_user.get('role') == 'admin' else current_user['id']
+        account_owner_id = current_user['id']
         accounts = db.get_discord_accounts_by_user(account_owner_id)
         runtime_details = _build_runtime_account_details()
         enriched_accounts = []

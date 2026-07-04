@@ -13,6 +13,13 @@ test('admin channel add uses the same global scope as admin channel delete', () 
   assert.match(databaseSource, /SELECT DISTINCT user_id[\s\S]*FROM user_website_settings/)
 })
 
+test('accounts list stays scoped to the logged in user by default', () => {
+  const appSource = readSource('backend/app.py')
+
+  assert.match(appSource, /account_owner_id = current_user\['id'\]/)
+  assert.doesNotMatch(appSource, /account_owner_id = None if current_user\.get\('role'\) == 'admin'/)
+})
+
 test('Discord worker fast mode and image timeout are environment driven', () => {
   const appSource = readSource('backend/app.py')
   const botSource = readSource('backend/bot.py')
