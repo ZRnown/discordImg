@@ -3408,10 +3408,33 @@ def warm_live_image_strategy(db_handle, strategy_name: str) -> Dict[str, Any]:
     warm_query_encoder = getattr(strategy, "warm_query_encoder", None)
     if callable(warm_query_encoder):
         query_encoder_ready = bool(warm_query_encoder())
+    sample_query_ready = None
+    prepare_query_image = getattr(strategy, "prepare_query_image", None)
+    if callable(prepare_query_image):
+        try:
+            sample_row = next(
+                db_handle.iter_searchable_product_image_records(
+                    strategy_name=strategy_name,
+                    require_cache=True,
+                    only_missing_cache=False,
+                    limit=1,
+                    ordered=False,
+                ),
+                None,
+            )
+            sample_path = str((sample_row or {}).get("image_path") or "").strip()
+            if sample_path and os.path.exists(sample_path):
+                sample_context = prepare_query_image(
+                    build_query_record(image_path=sample_path, query_text="")
+                )
+                sample_query_ready = sample_context.get("embedding") is not None
+        except Exception as exc:
+            logger.warning("Live retrieval sample query warmup failed: strategy=%s error=%s", strategy_name, exc)
     return {
         "strategy": strategy_name,
         "strategy_ready": True,
         "query_encoder_ready": query_encoder_ready,
+        "sample_query_ready": sample_query_ready,
     }
 
 

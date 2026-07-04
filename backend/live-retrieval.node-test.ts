@@ -136,6 +136,8 @@ test('startup strategy warmup runs a query encoder forward pass', () => {
   assert.match(strategySource, /__siglip_query_warmup__/)
   assert.match(retrievalSource, /warm_query_encoder = getattr\(strategy, "warm_query_encoder", None\)/)
   assert.match(retrievalSource, /"query_encoder_ready": query_encoder_ready/)
+  assert.match(retrievalSource, /limit=1,/)
+  assert.match(retrievalSource, /"sample_query_ready": sample_query_ready/)
 })
 
 test('prepared catalog strips duplicated cached vectors from records', () => {
