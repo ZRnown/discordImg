@@ -1,7 +1,11 @@
 import json
 import logging
+import copy
 import re
-from typing import Any, Dict, List, Optional
+import threading
+import time
+from collections import OrderedDict
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import requests
 
@@ -66,6 +70,92 @@ class KeywordImageSearchError(RuntimeError):
 class KeywordImageSearchService:
     def __init__(self):
         self.session = requests.Session()
+        self._cache_lock = threading.RLock()
+        self._external_cache: OrderedDict[Tuple[Any, ...], Tuple[float, Any]] = OrderedDict()
+        self._internal_cache: OrderedDict[Tuple[Any, ...], Tuple[float, Any]] = OrderedDict()
+        self._inflight: Dict[Tuple[str, Tuple[Any, ...]], threading.Event] = {}
+
+    @staticmethod
+    def _cache_ttl_seconds() -> float:
+        try:
+            return max(float(getattr(config, "KEYWORD_IMAGE_SEARCH_CACHE_TTL_SECONDS", 300) or 0), 0.0)
+        except (TypeError, ValueError):
+            return 300.0
+
+    @staticmethod
+    def _cache_max_entries() -> int:
+        try:
+            return max(int(getattr(config, "KEYWORD_IMAGE_SEARCH_CACHE_MAX_ENTRIES", 512) or 0), 0)
+        except (TypeError, ValueError):
+            return 512
+
+    @staticmethod
+    def _normalize_cache_text(value: Any) -> str:
+        return re.sub(r"\s+", " ", str(value or "").strip()).lower()
+
+    @staticmethod
+    def _normalize_cache_shops(user_shops: Optional[List[str]]) -> Tuple[str, ...]:
+        return tuple(
+            sorted(
+                re.sub(r"\s+", " ", str(shop or "").strip()).lower()
+                for shop in (user_shops or [])
+                if str(shop or "").strip()
+            )
+        )
+
+    def _get_or_compute_cached(
+        self,
+        namespace: str,
+        cache: OrderedDict,
+        key: Tuple[Any, ...],
+        compute: Callable[[], Any],
+    ) -> Any:
+        ttl_seconds = self._cache_ttl_seconds()
+        max_entries = self._cache_max_entries()
+        if ttl_seconds <= 0 or max_entries <= 0:
+            return compute()
+
+        inflight_key = (namespace, key)
+        owner = False
+        with self._cache_lock:
+            now = time.monotonic()
+            cached = cache.get(key)
+            if cached is not None:
+                expires_at, value = cached
+                if expires_at > now:
+                    cache.move_to_end(key)
+                    return copy.deepcopy(value)
+                cache.pop(key, None)
+
+            event = self._inflight.get(inflight_key)
+            if event is None:
+                event = threading.Event()
+                self._inflight[inflight_key] = event
+                owner = True
+
+        if not owner:
+            event.wait()
+            with self._cache_lock:
+                cached = cache.get(key)
+                if cached is not None:
+                    expires_at, value = cached
+                    if expires_at > time.monotonic():
+                        cache.move_to_end(key)
+                        return copy.deepcopy(value)
+            return compute()
+
+        try:
+            value = compute()
+            with self._cache_lock:
+                cache[key] = (time.monotonic() + ttl_seconds, copy.deepcopy(value))
+                cache.move_to_end(key)
+                while len(cache) > max_entries:
+                    cache.popitem(last=False)
+            return value
+        finally:
+            with self._cache_lock:
+                self._inflight.pop(inflight_key, None)
+                event.set()
 
     @staticmethod
     def _resolve_credentials(user_settings: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
@@ -104,24 +194,53 @@ class KeywordImageSearchService:
         normalized_max_images = normalize_keyword_image_search_max_images(max_images)
         credentials = self._resolve_credentials(user_settings)
         provider = str(credentials.get("provider") or "searchapi_google_maps").strip().lower()
+        external_cache_key = (
+            provider,
+            self._normalize_cache_text(query_text),
+            normalized_max_images,
+            credentials.get("api_key") or "",
+            credentials.get("cx") or "",
+        )
         if provider == "google_cse":
-            external_results = self._search_google_images(
-                query_text,
-                normalized_max_images,
-                credentials=credentials,
+            external_results = self._get_or_compute_cached(
+                "external",
+                self._external_cache,
+                external_cache_key,
+                lambda: self._search_google_images(
+                    query_text,
+                    normalized_max_images,
+                    credentials=credentials,
+                ),
             )
         elif provider == "searchapi_google_maps":
-            external_results = self._search_searchapi_google_maps(
-                query_text,
-                normalized_max_images,
-                credentials=credentials,
+            external_results = self._get_or_compute_cached(
+                "external",
+                self._external_cache,
+                external_cache_key,
+                lambda: self._search_searchapi_google_maps(
+                    query_text,
+                    normalized_max_images,
+                    credentials=credentials,
+                ),
             )
         else:
             provider = "searchapi_google_images"
-            external_results = self._search_searchapi_google_images(
-                query_text,
+            external_cache_key = (
+                provider,
+                self._normalize_cache_text(query_text),
                 normalized_max_images,
-                credentials=credentials,
+                credentials.get("api_key") or "",
+                credentials.get("cx") or "",
+            )
+            external_results = self._get_or_compute_cached(
+                "external",
+                self._external_cache,
+                external_cache_key,
+                lambda: self._search_searchapi_google_images(
+                    query_text,
+                    normalized_max_images,
+                    credentials=credentials,
+                ),
             )
 
         website_threshold = website_config.get("image_similarity_threshold")
@@ -152,12 +271,24 @@ class KeywordImageSearchService:
             }
 
             try:
-                internal_result = self._search_internal_by_image(
-                    image_url=result.get("image_url"),
-                    query_text=query_text,
-                    user_id=user_id,
-                    user_shops=user_shops,
-                    threshold=threshold,
+                internal_cache_key = (
+                    str(result.get("image_url") or "").strip(),
+                    self._normalize_cache_text(query_text),
+                    int(user_id) if user_id is not None else None,
+                    self._normalize_cache_shops(user_shops),
+                    round(float(threshold), 4),
+                )
+                internal_result = self._get_or_compute_cached(
+                    "internal",
+                    self._internal_cache,
+                    internal_cache_key,
+                    lambda image_url=result.get("image_url"): self._search_internal_by_image(
+                        image_url=image_url,
+                        query_text=query_text,
+                        user_id=user_id,
+                        user_shops=user_shops,
+                        threshold=threshold,
+                    ),
                 )
             except Exception as exc:
                 candidate["error"] = str(exc)
