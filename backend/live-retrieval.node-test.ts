@@ -119,13 +119,13 @@ test('production can use image-only SigLIP2 scoring to avoid rerank overhead', (
   assert.match(ecosystemSource, /SIGLIP2_RERANK_CATEGORY_WEIGHT: "0\.00"/)
 })
 
-test('production uses native-size SigLIP2 query images to reduce CPU encoding time', () => {
+test('production uses smaller SigLIP2 query images to reduce CPU encoding time', () => {
   const strategySource = readFileSync(new URL('./benchmarks/strategies.py', import.meta.url), 'utf8')
   const ecosystemSource = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
 
   assert.match(strategySource, /model_id = "google\/siglip2-base-patch16-224"/)
-  assert.match(strategySource, /query_max_side = int\(os\.getenv\("SIGLIP2_RERANK_QUERY_MAX_SIDE", "224"\) or 224\)/)
-  assert.match(ecosystemSource, /SIGLIP2_RERANK_QUERY_MAX_SIDE: "224"/)
+  assert.match(strategySource, /query_max_side = int\(os\.getenv\("SIGLIP2_RERANK_QUERY_MAX_SIDE", "192"\) or 192\)/)
+  assert.match(ecosystemSource, /SIGLIP2_RERANK_QUERY_MAX_SIDE: "192"/)
 })
 
 test('prepared catalog strips duplicated cached vectors from records', () => {

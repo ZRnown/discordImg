@@ -36,6 +36,12 @@ import torch
 
 # === 添加这段代码 ===
 try:
+    torch.set_num_threads(_intra_threads)
+    torch.set_num_interop_threads(1)
+except Exception:
+    pass
+
+try:
     # 显式禁用 NNPACK
     torch.backends.nnpack.enabled = False
 except Exception:

@@ -350,7 +350,7 @@ class CurrentDinoHybridStrategy:
 class _Siglip2Encoder:
     model_id = "google/siglip2-base-patch16-224"
     query_min_side = 32
-    query_max_side = int(os.getenv("SIGLIP2_RERANK_QUERY_MAX_SIDE", "224") or 224)
+    query_max_side = int(os.getenv("SIGLIP2_RERANK_QUERY_MAX_SIDE", "192") or 192)
 
     def __init__(self):
         import torch
