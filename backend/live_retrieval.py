@@ -2148,6 +2148,7 @@ class LiveImageRetriever:
         signature_started_at = perf_counter()
         signature = self._build_fast_vector_context_signature(shop_scope)
         signature_elapsed = perf_counter() - signature_started_at
+        signature_count = int((signature[2] if len(signature) > 2 else 0) or 0)
         if max_scopes > 0:
             with self._fast_vector_context_cache_lock:
                 cached = self._fast_vector_context_cache.get(cache_key)
@@ -2155,6 +2156,23 @@ class LiveImageRetriever:
                     self._fast_vector_context_cache[cache_key] = (signature, cached[1], now)
                     self._fast_vector_context_cache.move_to_end(cache_key)
                     return cached[1]
+
+        if shop_scope and signature_count <= 0:
+            contexts = {
+                "matrix": np.zeros((0, 0), dtype=np.float32),
+                "product_ids": [],
+                "titles": [],
+                "image_paths": [],
+                "image_indices": [],
+                "empty_fast_vector_scope": True,
+            }
+            if max_scopes > 0:
+                with self._fast_vector_context_cache_lock:
+                    self._fast_vector_context_cache[cache_key] = (signature, contexts, perf_counter())
+                    self._fast_vector_context_cache.move_to_end(cache_key)
+                    while len(self._fast_vector_context_cache) > max_scopes:
+                        self._fast_vector_context_cache.popitem(last=False)
+            return contexts
 
         if not _env_bool("LIVE_IMAGE_SEARCH_VECTOR_CONTEXT_DISK_CACHE_DISABLED", False):
             disk_started_at = perf_counter()

@@ -169,6 +169,36 @@ test('shop-scoped searchable signatures start from the shop index', () => {
   assert.match(databaseSource, /JOIN product_image_retrieval_cache rc INDEXED BY sqlite_autoindex_product_image_retrieval_cache_1/)
 })
 
+test('shop-scoped vector batches start from the shop index', () => {
+  const databaseSource = readFileSync(new URL('./database.py', import.meta.url), 'utf8')
+  const start = databaseSource.indexOf('def iter_searchable_product_image_vector_batches')
+  const end = databaseSource.indexOf('    def count_searchable_product_image_records', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+  const body = databaseSource.slice(start, end)
+
+  assert.match(body, /if normalized_shop_names:[\s\S]+FROM products p INDEXED BY idx_products_shop_name/)
+  assert.match(body, /JOIN product_images pi INDEXED BY idx_product_images_product_id/)
+  assert.match(body, /JOIN product_image_retrieval_cache rc INDEXED BY sqlite_autoindex_product_image_retrieval_cache_1/)
+})
+
+test('empty fast vector signatures do not scan vector batches', () => {
+  const retrievalSource = readFileSync(new URL('./live_retrieval.py', import.meta.url), 'utf8')
+  const start = retrievalSource.indexOf('def _load_or_build_fast_vector_contexts')
+  const end = retrievalSource.indexOf('    def prepare_fast_vector_context_for_warmup', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+  const body = retrievalSource.slice(start, end)
+
+  assert.match(body, /signature_count = int\(\(signature\[2\] if len\(signature\) > 2 else 0\) or 0\)/)
+  assert.match(body, /if shop_scope and signature_count <= 0:/)
+  assert.match(body, /"empty_fast_vector_scope": True/)
+  assert.equal(
+    body.indexOf('if shop_scope and signature_count <= 0:') < body.indexOf('for rows in self.db.iter_searchable_product_image_vector_batches'),
+    true,
+  )
+})
+
 test('image-only streaming returns immediately for cached empty shop scopes', () => {
   const retrievalSource = readFileSync(new URL('./live_retrieval.py', import.meta.url), 'utf8')
 

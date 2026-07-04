@@ -1952,28 +1952,40 @@ class Database:
         if shop_names is not None and not normalized_shop_names:
             return
 
-        params: List[Any] = [strategy_name]
-        where_sql = ''
         if normalized_shop_names:
             placeholders = ','.join('?' for _ in normalized_shop_names)
-            where_sql = f'AND p.shop_name IN ({placeholders})'
-            params.extend(normalized_shop_names)
-
-        query = f'''
-            SELECT
-                p.id AS product_id,
-                p.title,
-                pi.image_path,
-                pi.image_index,
-                rc.embedding_blob,
-                rc.embedding_json
-            FROM product_image_retrieval_cache rc
-            JOIN product_images pi ON pi.id = rc.image_db_id
-            JOIN products p ON p.id = pi.product_id
-            WHERE rc.strategy_name = ?
-              AND {self._usable_retrieval_cache_sql('rc')}
-              {where_sql}
-        '''
+            params: List[Any] = [*normalized_shop_names, strategy_name]
+            query = f'''
+                SELECT
+                    p.id AS product_id,
+                    p.title,
+                    pi.image_path,
+                    pi.image_index,
+                    rc.embedding_blob,
+                    rc.embedding_json
+                FROM products p INDEXED BY idx_products_shop_name
+                JOIN product_images pi INDEXED BY idx_product_images_product_id
+                    ON pi.product_id = p.id
+                JOIN product_image_retrieval_cache rc INDEXED BY sqlite_autoindex_product_image_retrieval_cache_1
+                    ON {self._retrieval_cache_join_sql('pi', 'rc', include_usable_embedding=True)}
+                WHERE p.shop_name IN ({placeholders})
+            '''
+        else:
+            params = [strategy_name]
+            query = f'''
+                SELECT
+                    p.id AS product_id,
+                    p.title,
+                    pi.image_path,
+                    pi.image_index,
+                    rc.embedding_blob,
+                    rc.embedding_json
+                FROM product_image_retrieval_cache rc
+                JOIN product_images pi ON pi.id = rc.image_db_id
+                JOIN products p ON p.id = pi.product_id
+                WHERE rc.strategy_name = ?
+                  AND {self._usable_retrieval_cache_sql('rc')}
+            '''
 
         with self.get_connection() as conn:
             cursor = conn.cursor()
