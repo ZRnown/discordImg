@@ -573,6 +573,15 @@ async def _send_discord_message(channel, *args, **kwargs):
     return await limiter.run(lambda: channel.send(*args, **kwargs))
 
 
+async def _wait_before_discord_reply(channel, min_delay, max_delay):
+    delay_seconds = random.uniform(min_delay, max_delay)
+    if _coerce_bool(getattr(config, 'DISCORD_SEND_TYPING_ENABLED', False), False):
+        async with channel.typing():
+            await asyncio.sleep(delay_seconds)
+        return
+    await asyncio.sleep(delay_seconds)
+
+
 async def start_discord_client_with_delay(
     client,
     token,
@@ -5093,8 +5102,11 @@ class DiscordBotClient(discord.Client):
 
                             should_apply_delay = not (broadcast_mode and target_index > 0)
                             if should_apply_delay:
-                                async with reply_target_channel.typing():
-                                    await asyncio.sleep(random.uniform(min_delay, max_delay))
+                                await _wait_before_discord_reply(
+                                    reply_target_channel,
+                                    min_delay,
+                                    max_delay,
+                                )
 
                             # 【关键修复】
                             # 不要使用 message.reply()，因为 message 绑定的是监听者(Listener)客户端

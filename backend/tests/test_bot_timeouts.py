@@ -334,6 +334,52 @@ class SenderChannelAccessTestCase(unittest.IsolatedAsyncioTestCase):
 
 
 class DiscordSendThrottleTestCase(unittest.IsolatedAsyncioTestCase):
+    async def test_reply_delay_skips_typing_when_disabled(self):
+        typing_calls = 0
+
+        class TypingContext:
+            async def __aenter__(self):
+                nonlocal typing_calls
+                typing_calls += 1
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class Channel:
+            def typing(self):
+                return TypingContext()
+
+        with patch.object(bot_module.config, "DISCORD_SEND_TYPING_ENABLED", False, create=True), patch.object(
+            bot_module.random, "uniform", return_value=0.01
+        ), patch.object(bot_module.asyncio, "sleep", new=AsyncMock()) as sleep_mock:
+            await bot_module._wait_before_discord_reply(Channel(), 0.1, 0.2)
+
+        self.assertEqual(typing_calls, 0)
+        sleep_mock.assert_awaited_once_with(0.01)
+
+    async def test_reply_delay_uses_typing_when_enabled(self):
+        typing_calls = 0
+
+        class TypingContext:
+            async def __aenter__(self):
+                nonlocal typing_calls
+                typing_calls += 1
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class Channel:
+            def typing(self):
+                return TypingContext()
+
+        with patch.object(bot_module.config, "DISCORD_SEND_TYPING_ENABLED", True, create=True), patch.object(
+            bot_module.random, "uniform", return_value=0.01
+        ), patch.object(bot_module.asyncio, "sleep", new=AsyncMock()) as sleep_mock:
+            await bot_module._wait_before_discord_reply(Channel(), 0.1, 0.2)
+
+        self.assertEqual(typing_calls, 1)
+        sleep_mock.assert_awaited_once_with(0.01)
+
     async def test_send_discord_message_serializes_concurrent_sends(self):
         active_sends = 0
         max_active_sends = 0
