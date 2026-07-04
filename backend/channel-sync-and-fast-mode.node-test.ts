@@ -73,3 +73,14 @@ test('Discord worker persists runtime account profile for API account list', () 
   assert.match(appSource, /runtime_details = _build_runtime_account_details\(\)/)
   assert.match(appSource, /if runtime:[\s\S]*?item\.update\(runtime\)/)
 })
+
+test('Discord workers spread gateway sessions across more shards with startup offsets', () => {
+  const workerSource = readSource('backend/bot_worker.py')
+  const ecosystemSource = readSource('ecosystem.config.js')
+
+  assert.match(ecosystemSource, /process\.env\.BOT_WORKER_COUNT \|\| process\.env\.BOT_SHARD_COUNT \|\| 8/)
+  assert.match(ecosystemSource, /BOT_SHARD_START_OFFSET_SECONDS: "2\.5"/)
+  assert.match(workerSource, /BOT_SHARD_START_OFFSET_SECONDS = max\(/)
+  assert.match(workerSource, /shard_start_offset_seconds = BOT_SHARD_START_OFFSET_SECONDS \* shard_index/)
+  assert.match(workerSource, /await asyncio\.sleep\(shard_start_offset_seconds\)/)
+})

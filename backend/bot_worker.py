@@ -58,6 +58,10 @@ REVIEW_DISPATCH_BATCH_SIZE = max(1, int(os.environ.get("BOT_REVIEW_DISPATCH_BATC
 REVIEW_DISPATCH_STALE_SECONDS = max(60, int(os.environ.get("BOT_REVIEW_DISPATCH_STALE_SECONDS", "300") or 300))
 AUTOSTART_RECONCILE_SECONDS = max(10.0, float(os.environ.get("BOT_AUTOSTART_RECONCILE_SECONDS", "30") or 30))
 STATUS_REFRESH_SECONDS = max(10.0, float(os.environ.get("BOT_STATUS_REFRESH_SECONDS", "30") or 30))
+BOT_SHARD_START_OFFSET_SECONDS = max(
+    0.0,
+    float(os.environ.get("BOT_SHARD_START_OFFSET_SECONDS", "0") or 0),
+)
 
 
 def _coerce_int(value: Any, default: Optional[int] = None) -> Optional[int]:
@@ -481,6 +485,15 @@ async def main() -> None:
             loop.add_signal_handler(sig, shutdown_event.set)
         except NotImplementedError:
             pass
+
+    shard_start_offset_seconds = BOT_SHARD_START_OFFSET_SECONDS * shard_index
+    if shard_start_offset_seconds > 0:
+        logger.info(
+            "delaying shard startup shard=%s offset=%.2fs",
+            shard_index,
+            shard_start_offset_seconds,
+        )
+        await asyncio.sleep(shard_start_offset_seconds)
 
     await _start_accounts(accounts, shutdown_event)
     background_tasks = [

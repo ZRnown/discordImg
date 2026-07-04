@@ -21,7 +21,7 @@ const resolvePythonInterpreter = () => {
   return "python3"
 }
 
-const discordWorkerCount = Number(process.env.BOT_WORKER_COUNT || process.env.BOT_SHARD_COUNT || 4)
+const discordWorkerCount = Number(process.env.BOT_WORKER_COUNT || process.env.BOT_SHARD_COUNT || 8)
 
 const discordWorkerEnv = {
   NODE_ENV: "production",
@@ -49,6 +49,7 @@ const discordWorkerEnv = {
   DISCORD_IMAGE_RECOGNITION_MAX_ATTEMPTS: "3",
   DISCORD_IMAGE_RECOGNITION_RETRY_DELAY_SECONDS: "3.0",
   BOT_SHARD_COUNT: String(discordWorkerCount),
+  BOT_SHARD_START_OFFSET_SECONDS: "2.5",
   BOT_WATCHDOG_INTERVAL_SECONDS: "60",
   BOT_WATCHDOG_RESTART_INTERVAL_SECONDS: "300",
   BOT_WATCHDOG_DISCONNECTED_GRACE_SECONDS: "180",
