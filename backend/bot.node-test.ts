@@ -61,6 +61,19 @@ test('approved review dispatch preserves saved sender ids and thread targets', (
   assert.match(dispatchSource, /strict_saved_reply_target=bool\(saved_reply_target_payload\.get\('used_thread_reply'\)\)/)
 })
 
+test('approved review action can be dispatched by workers without API bot loop', () => {
+  const source = readAppSource()
+  const start = source.indexOf('def _apply_keyword_review_action')
+  const end = source.indexOf('def _format_keyword_review_item_summary', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+
+  const reviewActionSource = source.slice(start, end)
+  assert.match(source, /def is_review_worker_dispatch_enabled\(\):/)
+  assert.match(reviewActionSource, /if normalized_action == "approved" and not is_review_worker_dispatch_enabled\(\):/)
+  assert.doesNotMatch(reviewActionSource, /if normalized_action == "approved":\s*scheduled, schedule_result = schedule_keyword_review_item_dispatch\(item\)/)
+})
+
 test('image attachment replies do not bypass channel review', () => {
   const source = readSource()
   const start = source.indexOf('async def handle_image')

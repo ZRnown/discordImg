@@ -977,6 +977,10 @@ def is_embedded_discord_runtime_enabled():
     return _env_flag_enabled(os.getenv('DISCORD_BOT_EMBEDDED_ENABLED'), True)
 
 
+def is_review_worker_dispatch_enabled():
+    return _env_flag_enabled(os.getenv('BOT_REVIEW_WORKER_DISPATCH'), False)
+
+
 # 全局特征提取器实例（在应用启动时创建）
 feature_extractor_instance = None
 feature_extractor_lock = threading.Lock()
@@ -1198,7 +1202,7 @@ def _apply_keyword_review_action(item: Dict[str, Any], normalized_action: str, *
     ):
         return False, "更新审核状态失败", current_status
 
-    if normalized_action == "approved":
+    if normalized_action == "approved" and not is_review_worker_dispatch_enabled():
         scheduled, schedule_result = schedule_keyword_review_item_dispatch(item)
         if not scheduled:
             db.update_keyword_reply_review_item_status(
