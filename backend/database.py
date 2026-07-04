@@ -3455,6 +3455,27 @@ class Database:
             logger.error(f"更新Discord账号自动恢复开关失败: {e}")
             return 0
 
+    def disable_discord_account_autostart(self, account_id: int) -> bool:
+        """关闭单个 Discord 账号的自动恢复，并标记为离线。"""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    '''
+                    UPDATE discord_accounts
+                    SET auto_start_enabled = 0,
+                        status = 'offline',
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    ''',
+                    (account_id,),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+        except Exception as e:
+            logger.error(f"关闭Discord账号自动恢复失败: {e}")
+            return False
+
     def update_product_title(self, product_id: int, title: str) -> bool:
         """更新商品标题"""
         try:

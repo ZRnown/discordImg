@@ -50,3 +50,12 @@ test('Discord worker fast mode and image timeout are environment driven', () => 
   assert.match(appSource, /if is_embedded_discord_runtime_enabled\(\):[\s\S]*?schedule_discord_bot_restore\(\)[\s\S]*?schedule_discord_bot_watchdog\(\)[\s\S]*?else:[\s\S]*?Discord embedded bot runtime disabled/)
   assert.match(appSource, /if TEXT_SEARCH_QUEUE_TIMEOUT_SECONDS > 0:[\s\S]*?TEXT_SEARCH_SEMAPHORE\.acquire\([\s\S]*?timeout=TEXT_SEARCH_QUEUE_TIMEOUT_SECONDS[\s\S]*?else:[\s\S]*?TEXT_SEARCH_SEMAPHORE\.acquire\(\)/)
 })
+
+test('Discord worker disables autostart for invalid account tokens', () => {
+  const workerSource = readSource('backend/bot_worker.py')
+  const databaseSource = readSource('backend/database.py')
+
+  assert.match(databaseSource, /def disable_discord_account_autostart\(/)
+  assert.match(workerSource, /LoginFailure/)
+  assert.match(workerSource, /disable_discord_account_autostart\(account_id\)/)
+})

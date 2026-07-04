@@ -195,6 +195,19 @@ def _log_finished_account_task(task: asyncio.Task, account_id: int) -> None:
             type(exc).__name__,
             exc,
         )
+        if type(exc).__name__ == "LoginFailure" and "Improper token" in str(exc):
+            try:
+                db.disable_discord_account_autostart(account_id)
+                logger.warning(
+                    "disabled Discord account autostart after LoginFailure id=%s",
+                    account_id,
+                )
+            except Exception as disable_error:
+                logger.error(
+                    "failed disabling Discord account autostart id=%s: %s",
+                    account_id,
+                    disable_error,
+                )
 
 
 async def _start_accounts(
