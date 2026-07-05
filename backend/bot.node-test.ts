@@ -212,6 +212,19 @@ test('keyword search is scheduled in background so message handling is not block
   assert.doesNotMatch(keywordStageSource, /'keyword_search'/)
 })
 
+test('background keyword search is deduplicated per user message', () => {
+  const source = readSource()
+  const start = source.indexOf('def _start_keyword_search_background_task')
+  const end = source.indexOf('    def _start_image_reply_background_task', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+
+  const keywordTaskSource = source.slice(start, end)
+  assert.match(keywordTaskSource, /keyword_search_message_id = f"keyword_search:\{self\.user_id\}:\{message\.id\}"/)
+  assert.match(keywordTaskSource, /mark_message_as_processed\(keyword_search_message_id\)/)
+  assert.match(keywordTaskSource, /关键词搜索后台已由其他账号处理/)
+})
+
 test('image recognition is scheduled in the background so keyword replies are not blocked by live search', () => {
   const source = readSource()
   const start = source.indexOf('# 处理图片')

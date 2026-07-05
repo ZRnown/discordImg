@@ -3232,6 +3232,21 @@ class DiscordBotClient(discord.Client):
         return task
 
     def _start_keyword_search_background_task(self, message, website_configs_to_process):
+        keyword_search_message_id = f"keyword_search:{self.user_id}:{message.id}"
+        try:
+            if not mark_message_as_processed(keyword_search_message_id):
+                logger.debug(
+                    f"关键词搜索后台已由其他账号处理: message_id={message.id} "
+                    f"| user_id={self.user_id} | channel_id={message.channel.id}"
+                )
+                return None
+        except Exception as e:
+            logger.error(
+                f"关键词搜索后台去重失败: message_id={message.id} "
+                f"| user_id={self.user_id} | channel_id={message.channel.id} | error={e}"
+            )
+            return None
+
         task_name = (
             f"keyword-search message={getattr(message, 'id', 'unknown')} "
             f"channel={getattr(getattr(message, 'channel', None), 'id', 'unknown')}"
