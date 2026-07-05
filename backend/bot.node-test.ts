@@ -225,6 +225,23 @@ test('background keyword search is deduplicated per user message', () => {
   assert.match(keywordTaskSource, /关键词搜索后台已由其他账号处理/)
 })
 
+test('background keyword search disables keyword image search work', () => {
+  const source = readSource()
+  const taskStart = source.indexOf('def _start_keyword_search_background_task')
+  const taskEnd = source.indexOf('    def _start_image_reply_background_task', taskStart)
+  const imageStart = source.indexOf('async def _run_keyword_image_search_for_context')
+  const imageEnd = source.indexOf('            for website_context in website_match_contexts:', imageStart)
+  assert.notEqual(taskStart, -1)
+  assert.notEqual(taskEnd, -1)
+  assert.notEqual(imageStart, -1)
+  assert.notEqual(imageEnd, -1)
+
+  const keywordTaskSource = source.slice(taskStart, taskEnd)
+  const imageSearchSource = source.slice(imageStart, imageEnd)
+  assert.match(keywordTaskSource, /allow_keyword_image_search=False/)
+  assert.match(imageSearchSource, /if not allow_keyword_image_search:\s+return False, False/)
+})
+
 test('image recognition is scheduled in the background so keyword replies are not blocked by live search', () => {
   const source = readSource()
   const start = source.indexOf('# 处理图片')

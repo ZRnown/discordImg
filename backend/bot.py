@@ -6923,6 +6923,9 @@ class DiscordBotClient(discord.Client):
                 db = None
 
             async def _run_keyword_image_search_for_context(website_context):
+                if not allow_keyword_image_search:
+                    return False, False
+
                 if db is None or not self.user_id:
                     return False, False
 
