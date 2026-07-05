@@ -6681,6 +6681,29 @@ class DiscordBotClient(discord.Client):
     ):
         """处理关键词商品搜索"""
         keyword_triggered = False
+        keyword_stage_started_at = time.perf_counter()
+        keyword_stage_timings = {}
+
+        def _record_keyword_stage(stage_name, started_at):
+            elapsed = time.perf_counter() - started_at
+            keyword_stage_timings[stage_name] = keyword_stage_timings.get(stage_name, 0.0) + elapsed
+            return time.perf_counter()
+
+        def _log_keyword_stage_timings(reason):
+            total_elapsed = time.perf_counter() - keyword_stage_started_at
+            if total_elapsed < MESSAGE_STAGE_SLOW_SECONDS:
+                return
+            stage_summary = ' '.join(
+                f'{name}={elapsed:.2f}s'
+                for name, elapsed in keyword_stage_timings.items()
+            ) or 'none'
+            logger.warning(
+                f"关键词搜索步骤耗时: reason={reason} message_id={getattr(message, 'id', 'unknown')} "
+                f"| channel_id={getattr(getattr(message, 'channel', None), 'id', 'unknown')} "
+                f"| total={total_elapsed:.2f}s | allow_keyword_image_search={allow_keyword_image_search} "
+                f"| stages={stage_summary} | query={str(search_query)[:120] if 'search_query' in locals() else '<unset>'}"
+            )
+
         try:
             search_query = _build_forum_post_search_text(message)
             if not search_query:
@@ -6704,7 +6727,9 @@ class DiscordBotClient(discord.Client):
                 return False
 
             # 调用搜索API
+            stage_started = time.perf_counter()
             result = await self.search_products_by_keyword(search_query)
+            stage_started = _record_keyword_stage('text_search', stage_started)
 
             all_products = []
             if result and result.get('success') and result.get('products'):
@@ -6712,6 +6737,7 @@ class DiscordBotClient(discord.Client):
 
             if not all_products:
                 logger.debug(f'关键词搜索无结果: {search_query}')
+                _log_keyword_stage_timings('no_products')
                 return False
 
             if self.user_shops:
@@ -6734,19 +6760,25 @@ class DiscordBotClient(discord.Client):
                         all_products = filtered_products
                     else:
                         logger.debug(f'关键词搜索结果被店铺权限过滤: {search_query}')
+                        _record_keyword_stage('shop_filter', stage_started)
+                        _log_keyword_stage_timings('shop_filter_empty')
                         return
+            stage_started = _record_keyword_stage('shop_filter', stage_started)
 
             query_normalized = _normalize_keyword_search_text(search_query)
             query_keyword_candidates = _build_query_keyword_candidates(query_normalized)
 
             # 检查频道是否绑定了网站配置（必须绑定才能回复）
+            stage_started = time.perf_counter()
             website_configs = (
                 website_configs_override
                 if website_configs_override is not None
                 else await self.get_website_configs_by_channel_async(message.channel)
             )
+            stage_started = _record_keyword_stage('website_configs', stage_started)
             if not website_configs:
                 logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过关键词回复: {search_query}")
+                _log_keyword_stage_timings('no_website_configs')
                 return False
 
             def _match_products_for_languages(allowed_languages):
@@ -6780,6 +6812,7 @@ class DiscordBotClient(discord.Client):
             website_match_contexts = []
             matched_product_ids = set()
             keyword_triggered = False
+            stage_started = time.perf_counter()
             for website_config in website_configs:
                 reply_languages = get_effective_reply_languages(
                     website_config.get('reply_language')
@@ -6807,6 +6840,7 @@ class DiscordBotClient(discord.Client):
                     for product in matched_products
                     if product.get('id') is not None
                 )
+            stage_started = _record_keyword_stage('website_match', stage_started)
 
             matched_website_ids = {
                 context['website_config'].get('id')
@@ -6815,6 +6849,7 @@ class DiscordBotClient(discord.Client):
             }
             db = None
             global_filters = []
+            stage_started = time.perf_counter()
             try:
                 try:
                     from database import db as imported_db
@@ -6835,6 +6870,7 @@ class DiscordBotClient(discord.Client):
                 except Exception as settings_error:
                     logger.error(f'获取全局关键词命中上限失败: {settings_error}')
                     user_settings = {}
+            stage_started = _record_keyword_stage('global_settings', stage_started)
 
             legacy_global_keyword_match_limit = max(
                 0,
@@ -6864,6 +6900,7 @@ class DiscordBotClient(discord.Client):
 
             user_website_settings_map = {}
             if self.user_id:
+                stage_started = time.perf_counter()
                 try:
                     for website_config in website_configs:
                         website_id = website_config.get('id')
@@ -6876,6 +6913,7 @@ class DiscordBotClient(discord.Client):
                             user_website_settings_map[website_id] = settings
                 except Exception as settings_error:
                     logger.error(f'获取网站关键词命中上限失败: {settings_error}')
+                stage_started = _record_keyword_stage('website_settings', stage_started)
 
             def _website_keyword_limit_exceeded(website_context):
                 website_config = website_context['website_config']
@@ -7079,14 +7117,17 @@ class DiscordBotClient(discord.Client):
                     )
                 return job_created, bool(sent)
 
+            reply_loop_started = time.perf_counter()
             for website_context in website_match_contexts:
                 website_config = website_context['website_config']
                 if _website_keyword_limit_exceeded(website_context):
                     continue
 
+                image_stage_started = time.perf_counter()
                 image_job_created, image_reply_sent = await _run_keyword_image_search_for_context(
                     website_context
                 )
+                _record_keyword_stage('keyword_image_search', image_stage_started)
                 if image_job_created:
                     keyword_image_job_created = True
                 if image_reply_sent:
@@ -7229,16 +7270,19 @@ class DiscordBotClient(discord.Client):
                         f"channel={getattr(message.channel, 'id', 'unknown')}"
                     ),
                 )
+            _record_keyword_stage('reply_loop', reply_loop_started)
 
             if not any_reply_scheduled and not keyword_image_job_created:
                 if keyword_triggered:
                     logger.info(f'关键词已命中但无可用回复内容: {search_query}')
                 else:
                     logger.info(f'关键词搜索无可用回复内容: {search_query}')
+            _log_keyword_stage_timings('completed')
             return keyword_triggered or any_reply_scheduled or keyword_image_job_created
 
         except Exception as e:
             logger.error(f'Error handling keyword search: {e}')
+            _log_keyword_stage_timings('exception')
             # 不发送错误消息到Discord，只记录日志
             return keyword_triggered
 

@@ -242,6 +242,21 @@ test('background keyword search disables keyword image search work', () => {
   assert.match(imageSearchSource, /if not allow_keyword_image_search:\s+return False, False/)
 })
 
+test('keyword search slow logs include stage timings', () => {
+  const source = readSource()
+  const start = source.indexOf('async def handle_keyword_search')
+  const end = source.indexOf('    async def search_products_by_keyword', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+
+  const keywordSource = source.slice(start, end)
+  assert.match(keywordSource, /keyword_stage_timings = \{\}/)
+  assert.match(keywordSource, /_record_keyword_stage\('text_search'/)
+  assert.match(keywordSource, /_record_keyword_stage\('keyword_image_search'/)
+  assert.match(keywordSource, /_record_keyword_stage\('reply_loop'/)
+  assert.match(keywordSource, /关键词搜索步骤耗时/)
+})
+
 test('image recognition is scheduled in the background so keyword replies are not blocked by live search', () => {
   const source = readSource()
   const start = source.indexOf('# 处理图片')
