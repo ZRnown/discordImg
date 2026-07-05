@@ -180,6 +180,7 @@ class Database:
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_products_shop_name ON products(shop_name)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_products_rule_enabled ON products(ruleEnabled)')
                 cursor.execute('CREATE INDEX IF NOT EXISTS idx_products_partition_match_enabled ON products(partition_match_enabled)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_products_item_id ON products(item_id)')
             except sqlite3.OperationalError:
                 pass
 
@@ -282,6 +283,26 @@ class Database:
                 cursor.execute('ALTER TABLE products ADD COLUMN item_id TEXT')
             except sqlite3.OperationalError:
                 pass  # 字段已存在
+
+            try:
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_products_item_id ON products(item_id)')
+                cursor.execute("""
+                    UPDATE products
+                    SET item_id = CASE
+                        WHEN instr(substr(product_url, instr(product_url, 'itemID=') + 7), '&') > 0
+                        THEN substr(
+                            substr(product_url, instr(product_url, 'itemID=') + 7),
+                            1,
+                            instr(substr(product_url, instr(product_url, 'itemID=') + 7), '&') - 1
+                        )
+                        ELSE substr(product_url, instr(product_url, 'itemID=') + 7)
+                    END
+                    WHERE (item_id IS NULL OR trim(item_id) = '')
+                      AND product_url IS NOT NULL
+                      AND instr(product_url, 'itemID=') > 0
+                """)
+            except sqlite3.OperationalError:
+                pass
 
             try:
                 cursor.execute('ALTER TABLE products ADD COLUMN updated_at TIMESTAMP')

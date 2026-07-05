@@ -251,6 +251,28 @@ class SearchSimilarTextApiTestCase(unittest.TestCase):
         )
         self.assertEqual(data["products"][0]["title"], "pur牛仔短裤top")
 
+    def test_missing_marketplace_link_query_returns_without_keyword_scan(self):
+        payload = {
+            "query": (
+                "https://www.kakobuy.com/item/details?"
+                "url=https%3A%2F%2Fweidian.com%2Fitem.html%3FitemID%3D9999999999"
+            ),
+            "limit": 5,
+        }
+
+        with patch.object(app_module.db, "get_connection", self._fake_get_connection), patch.object(
+            app_module,
+            "build_text_search_plan",
+            side_effect=AssertionError("marketplace links should not run broad keyword search"),
+        ):
+            response = self.client.post("/api/search_similar_text", json=payload)
+
+        self.assertEqual(response.status_code, 200)
+        data = response.get_json()
+        self.assertTrue(data["success"])
+        self.assertEqual(data["total"], 0)
+        self.assertEqual(data["products"], [])
+
     def test_four_word_hyphenated_english_title_returns_match(self):
         payload = {
             "query": "Shark-Fish Sweatpants Collection",

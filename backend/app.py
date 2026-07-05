@@ -7051,13 +7051,10 @@ def search_similar_text():
                            reply_scope, per_website_reply_settings,
                            uploaded_reply_images
                     FROM products
-                    WHERE (
-                        item_id = ?
-                        OR product_url LIKE ?
-                    )""" + scoped_clause + """
+                    WHERE item_id = ?""" + scoped_clause + """
                     ORDER BY created_at DESC, id DESC
                     LIMIT ?
-                """, (linked_item_id, f"%itemID={linked_item_id}%", *scoped_params, limit))
+                """, (linked_item_id, *scoped_params, limit))
                 direct_rows = cursor.fetchall()
                 if direct_rows:
                     products = build_products_from_rows(direct_rows)
@@ -7070,6 +7067,15 @@ def search_similar_text():
                         'products': products,
                         'total': len(products)
                     })
+                logger.debug(
+                    f'文字搜索链接直查无结果: "{query}" -> item_id={linked_item_id}'
+                )
+                return jsonify({
+                    'success': True,
+                    'query': query,
+                    'products': [],
+                    'total': 0
+                })
 
             if TEXT_SEARCH_QUEUE_TIMEOUT_SECONDS > 0:
                 acquired_text_search_slot = TEXT_SEARCH_SEMAPHORE.acquire(
