@@ -197,6 +197,21 @@ test('text messages with image attachments still run image recognition after key
   assert.doesNotMatch(onMessageTailSource, /图文消息已处理文字关键词路径，跳过图片识别/)
 })
 
+test('keyword search is scheduled in background so message handling is not blocked', () => {
+  const source = readSource()
+  const start = source.indexOf('# 处理关键词搜索')
+  const end = source.indexOf('# 处理图片', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+
+  const keywordStageSource = source.slice(start, end)
+  assert.match(source, /def _start_keyword_search_background_task/)
+  assert.match(source, /关键词搜索后台超时/)
+  assert.match(keywordStageSource, /self\._start_keyword_search_background_task\(\s*message,\s*website_configs_to_process,\s*\)/)
+  assert.doesNotMatch(keywordStageSource, /await self\._run_message_stage_with_timeout/)
+  assert.doesNotMatch(keywordStageSource, /'keyword_search'/)
+})
+
 test('image recognition is scheduled in the background so keyword replies are not blocked by live search', () => {
   const source = readSource()
   const start = source.indexOf('# 处理图片')

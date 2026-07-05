@@ -3231,6 +3231,45 @@ class DiscordBotClient(discord.Client):
         task.add_done_callback(_on_done)
         return task
 
+    def _start_keyword_search_background_task(self, message, website_configs_to_process):
+        task_name = (
+            f"keyword-search message={getattr(message, 'id', 'unknown')} "
+            f"channel={getattr(getattr(message, 'channel', None), 'id', 'unknown')}"
+        )
+
+        async def _runner():
+            start_time = time.monotonic()
+            try:
+                await asyncio.wait_for(
+                    self.handle_keyword_search(
+                        message,
+                        website_configs_override=website_configs_to_process,
+                        allow_keyword_image_search=False,
+                    ),
+                    timeout=MESSAGE_KEYWORD_SEARCH_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    f"⏱️ 关键词搜索后台超时: message_id={message.id} "
+                    f"| channel_id={message.channel.id} | timeout={MESSAGE_KEYWORD_SEARCH_TIMEOUT_SECONDS:.1f}s"
+                )
+                return
+            except Exception as e:
+                logger.error(
+                    f"关键词搜索后台失败: message_id={message.id} "
+                    f"| channel_id={message.channel.id} | error={e}"
+                )
+                return
+
+            elapsed = time.monotonic() - start_time
+            if elapsed >= MESSAGE_STAGE_SLOW_SECONDS:
+                logger.warning(
+                    f"关键词搜索后台耗时较长: message_id={message.id} "
+                    f"| channel_id={message.channel.id} | elapsed={elapsed:.2f}s"
+                )
+
+        return self._start_keyword_reply_background_task(_runner(), task_name)
+
     def _start_image_reply_background_task(self, message, attachment, website_configs_to_process):
         filename = getattr(attachment, 'filename', 'unknown')
         task_name = (
@@ -6093,18 +6132,11 @@ class DiscordBotClient(discord.Client):
         )
 
         # 处理关键词搜索。图文同发时仍继续处理附件图片，避免错过以图搜图。
-        keyword_search_hit = False
         if keyword_reply_enabled:
-            keyword_search_hit = bool(await self._run_message_stage_with_timeout(
+            self._start_keyword_search_background_task(
                 message,
-                'keyword_search',
-                self.handle_keyword_search(
-                    message,
-                    website_configs_override=website_configs_to_process,
-                    allow_keyword_image_search=False,
-                ),
-                MESSAGE_KEYWORD_SEARCH_TIMEOUT_SECONDS,
-            ))
+                website_configs_to_process,
+            )
 
         # 处理图片
         if image_reply_enabled and message.attachments:
