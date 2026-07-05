@@ -101,12 +101,14 @@ def collect_watchdog_restart_candidates(
     *,
     now_monotonic: Optional[float] = None,
     restart_attempt_timestamps: Optional[Mapping[int, float]] = None,
+    suspended_until_timestamps: Optional[Mapping[int, float]] = None,
     min_restart_interval_seconds: float = 30.0,
     task_done_restart_interval_seconds: Optional[float] = None,
     disconnected_grace_seconds: float = 10.0,
 ) -> List[Dict[str, Any]]:
     now = float(time.monotonic() if now_monotonic is None else now_monotonic)
     restart_attempt_timestamps = restart_attempt_timestamps or {}
+    suspended_until_timestamps = suspended_until_timestamps or {}
     cooldown_seconds = max(float(min_restart_interval_seconds or 0.0), 0.0)
     task_done_cooldown_seconds = max(
         float(
@@ -124,6 +126,10 @@ def collect_watchdog_restart_candidates(
         except (TypeError, ValueError):
             continue
         if account_id <= 0:
+            continue
+
+        suspended_until = float(suspended_until_timestamps.get(account_id, 0.0) or 0.0)
+        if suspended_until > now:
             continue
 
         runtime_entry = runtime_entries.get(account_id)

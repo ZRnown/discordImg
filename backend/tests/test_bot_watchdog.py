@@ -139,6 +139,20 @@ class BotWatchdogCandidateTestCase(unittest.TestCase):
 
         self.assertEqual(candidates, [])
 
+    def test_recent_flapping_account_is_not_selected_for_restart(self):
+        module = _load_watchdog_module(self)
+
+        candidates = module.collect_watchdog_restart_candidates(
+            [{"id": 42, "username": "oopbuy_listener"}],
+            {},
+            now_monotonic=120.0,
+            restart_attempt_timestamps={},
+            suspended_until_timestamps={42: 300.0},
+            min_restart_interval_seconds=30.0,
+        )
+
+        self.assertEqual(candidates, [])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -2508,6 +2508,9 @@ class DiscordBotClient(discord.Client):
         self.role = role  # 'listener', 'sender', 'both' - 账号角色
         self.last_ready_at = 0.0
         self.last_disconnect_at = 0.0
+        self.disconnect_count = 0
+        self._gateway_disconnect_events = []
+        self._offline_status_task = None
         # DM 会话提醒去重：避免“会话创建 + 首条DM消息”重复推送
         self._dm_alert_cache = {}
 
@@ -5967,25 +5970,74 @@ class DiscordBotClient(discord.Client):
 
     async def on_disconnect(self):
         self.running = False
-        self.last_disconnect_at = time.monotonic()
+        now_monotonic = time.monotonic()
+        self.last_disconnect_at = now_monotonic
+        window_seconds = max(
+            float(getattr(config, 'DISCORD_GATEWAY_FLAP_WINDOW_SECONDS', 600.0) or 600.0),
+            30.0,
+        )
+        flap_threshold = max(
+            int(getattr(config, 'DISCORD_GATEWAY_FLAP_THRESHOLD', 5) or 5),
+            2,
+        )
+        self._gateway_disconnect_events = [
+            timestamp
+            for timestamp in getattr(self, '_gateway_disconnect_events', [])
+            if timestamp >= now_monotonic - window_seconds
+        ]
+        self._gateway_disconnect_events.append(now_monotonic)
+        self.disconnect_count = len(self._gateway_disconnect_events)
         logger.warning(
-            'Discord连接已断开，等待自动恢复: account_id=%s user_id=%s',
+            'Discord连接已断开，等待自动恢复: account_id=%s user_id=%s recent_disconnects=%s',
             self.account_id,
             self.user_id,
+            self.disconnect_count,
         )
-        try:
+        if self.disconnect_count >= flap_threshold:
+            logger.warning(
+                'Discord连接频繁断开，关闭账号等待worker冷却重启: account_id=%s user_id=%s recent_disconnects=%s window=%.0fs',
+                self.account_id,
+                self.user_id,
+                self.disconnect_count,
+                window_seconds,
+            )
             try:
-                from database import db
-            except ImportError:
-                from .database import db
-            if hasattr(self, 'account_id') and self.account_id:
-                db.update_account_status(self.account_id, 'offline')
-        except Exception as e:
-            logger.error(f'更新账号离线状态失败: {e}')
+                await self.close()
+            except Exception as e:
+                logger.error(f'关闭频繁断开账号失败: {e}')
+            return
+
+        async def _mark_offline_if_still_disconnected(disconnect_at):
+            grace_seconds = max(
+                float(getattr(config, 'DISCORD_DISCONNECT_OFFLINE_GRACE_SECONDS', 45.0) or 45.0),
+                5.0,
+            )
+            await asyncio.sleep(grace_seconds)
+            if self.running or self.last_ready_at >= disconnect_at:
+                return
+            try:
+                try:
+                    from database import db
+                except ImportError:
+                    from .database import db
+                if hasattr(self, 'account_id') and self.account_id:
+                    db.update_account_status(self.account_id, 'offline')
+            except Exception as e:
+                logger.error(f'更新账号离线状态失败: {e}')
+
+        old_offline_task = getattr(self, '_offline_status_task', None)
+        if old_offline_task and not old_offline_task.done():
+            old_offline_task.cancel()
+        self._offline_status_task = asyncio.create_task(
+            _mark_offline_if_still_disconnected(now_monotonic)
+        )
 
     async def on_resumed(self):
         self.running = True
         self.last_ready_at = time.monotonic()
+        old_offline_task = getattr(self, '_offline_status_task', None)
+        if old_offline_task and not old_offline_task.done():
+            old_offline_task.cancel()
         logger.info(
             'Discord连接已恢复: account_id=%s user_id=%s',
             self.account_id,

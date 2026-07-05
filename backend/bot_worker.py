@@ -53,6 +53,18 @@ BOT_WATCHDOG_RESTART_START_DELAY_SECONDS = max(
     0.0,
     float(os.environ.get("BOT_WATCHDOG_RESTART_START_DELAY_SECONDS", "20") or 20),
 )
+BOT_ACCOUNT_FLAP_WINDOW_SECONDS = max(
+    30.0,
+    float(os.environ.get("BOT_ACCOUNT_FLAP_WINDOW_SECONDS", "600") or 600),
+)
+BOT_ACCOUNT_FLAP_THRESHOLD = max(
+    2,
+    int(os.environ.get("BOT_ACCOUNT_FLAP_THRESHOLD", "3") or 3),
+)
+BOT_ACCOUNT_FLAP_COOLDOWN_SECONDS = max(
+    60.0,
+    float(os.environ.get("BOT_ACCOUNT_FLAP_COOLDOWN_SECONDS", "900") or 900),
+)
 REVIEW_DISPATCH_POLL_SECONDS = float(os.environ.get("BOT_REVIEW_DISPATCH_POLL_SECONDS", "2") or 2)
 REVIEW_DISPATCH_BATCH_SIZE = max(1, int(os.environ.get("BOT_REVIEW_DISPATCH_BATCH_SIZE", "20") or 20))
 REVIEW_DISPATCH_STALE_SECONDS = max(60, int(os.environ.get("BOT_REVIEW_DISPATCH_STALE_SECONDS", "300") or 300))
@@ -62,6 +74,9 @@ BOT_SHARD_START_OFFSET_SECONDS = max(
     0.0,
     float(os.environ.get("BOT_SHARD_START_OFFSET_SECONDS", "0") or 0),
 )
+
+account_restart_history: Dict[int, List[float]] = {}
+account_suspended_until: Dict[int, float] = {}
 
 
 def _coerce_int(value: Any, default: Optional[int] = None) -> Optional[int]:
@@ -153,6 +168,43 @@ def _local_account_ids() -> Set[int]:
     }
 
 
+def _is_account_suspended(account_id: int, now_monotonic: Optional[float] = None) -> bool:
+    now = time.monotonic() if now_monotonic is None else float(now_monotonic)
+    suspended_until = float(account_suspended_until.get(account_id, 0.0) or 0.0)
+    if suspended_until <= now:
+        account_suspended_until.pop(account_id, None)
+        return False
+    return True
+
+
+def _record_account_restart(account_id: int, reason: str) -> bool:
+    now = time.monotonic()
+    window_start = now - BOT_ACCOUNT_FLAP_WINDOW_SECONDS
+    history = [
+        timestamp
+        for timestamp in account_restart_history.get(account_id, [])
+        if timestamp >= window_start
+    ]
+    history.append(now)
+    account_restart_history[account_id] = history
+
+    if len(history) < BOT_ACCOUNT_FLAP_THRESHOLD:
+        return False
+
+    suspended_until = now + BOT_ACCOUNT_FLAP_COOLDOWN_SECONDS
+    account_suspended_until[account_id] = suspended_until
+    account_restart_history[account_id] = []
+    logger.warning(
+        "suspending flapping Discord account id=%s reason=%s restarts=%s window=%.0fs cooldown=%.0fs",
+        account_id,
+        reason,
+        len(history),
+        BOT_ACCOUNT_FLAP_WINDOW_SECONDS,
+        BOT_ACCOUNT_FLAP_COOLDOWN_SECONDS,
+    )
+    return True
+
+
 async def _stop_account(account_id: int, reason: str = "") -> bool:
     runtime_entries = build_bot_runtime_entries(bot_clients, bot_tasks)
     runtime_entry = runtime_entries.get(account_id)
@@ -228,6 +280,10 @@ async def _start_accounts(
         if account_id is None or not token:
             continue
 
+        if _is_account_suspended(account_id):
+            logger.warning("skip starting suspended Discord account id=%s", account_id)
+            continue
+
         username = account.get("username") or f"account_{account_id}"
         user_id = _coerce_int(account.get("user_id"), None)
         user_shops = _build_user_shop_scope(user_id)
@@ -277,6 +333,7 @@ async def _watchdog_loop(shard_accounts: List[Dict[str, Any]], shutdown_event: a
                 runtime_entries,
                 now_monotonic=time.monotonic(),
                 restart_attempt_timestamps=restart_attempts,
+                suspended_until_timestamps=account_suspended_until,
                 min_restart_interval_seconds=BOT_WATCHDOG_RESTART_INTERVAL_SECONDS,
                 disconnected_grace_seconds=BOT_WATCHDOG_DISCONNECTED_GRACE_SECONDS,
             )
@@ -290,6 +347,12 @@ async def _watchdog_loop(shard_accounts: List[Dict[str, Any]], shutdown_event: a
                         account_id,
                         candidate.get("reason"),
                     )
+                    if _record_account_restart(
+                        account_id,
+                        reason=str(candidate.get("reason") or "watchdog"),
+                    ):
+                        await _stop_account(account_id, reason="flapping_suspended")
+                        continue
                     if account_id is not None:
                         await _stop_account(account_id, reason=str(candidate.get("reason") or "watchdog"))
                     await _start_accounts(
@@ -322,6 +385,7 @@ async def _autostart_reconcile_loop(shard_accounts: List[Dict[str, Any]], shutdo
                 account
                 for account_id, account in sorted(desired_by_id.items())
                 if account_id not in _local_account_ids()
+                and not _is_account_suspended(account_id)
             ]
             if missing_accounts:
                 logger.info("starting %s newly enabled accounts: %s", len(missing_accounts), list(desired_by_id))
