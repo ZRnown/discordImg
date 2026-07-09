@@ -178,6 +178,19 @@ test('successful discord image matches are saved into search history with channe
   assert.match(successSource, /is_skipped=False/)
 })
 
+test('discord image searches without a candidate are not saved as zero-similarity skipped matches', () => {
+  const source = readSource()
+  const start = source.indexOf("elif result and result.get('success'):")
+  const end = source.indexOf('        except Exception as e:', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+
+  const noCandidateSource = source.slice(start, end)
+  assert.doesNotMatch(noCandidateSource, /_record_skipped_image_history/)
+  assert.doesNotMatch(noCandidateSource, /similarity=0\\.0/)
+  assert.match(noCandidateSource, /图片未命中任何商品，跳过历史记录/)
+})
+
 test('backend suppresses generic search history for internal bot image retrieval', () => {
   const source = readAppSource()
   assert.match(source, /suppress_search_history = /)

@@ -6651,16 +6651,8 @@ class DiscordBotClient(discord.Client):
                 logger.debug(f'图片识别完成，相似度: {similarity:.4f}')
                 return bool(reply_sent)
             elif result and result.get('success'):
-                await self._record_skipped_image_history(
-                    image_data=image_data,
-                    attachment=attachment,
-                    message=message,
-                    similarity=0.0,
-                    threshold=skip_threshold,
-                    best_match=None,
-                )
                 logger.info(
-                    f'⏭️ 图片未命中任何商品，已记录历史: 阈值 {skip_threshold:.3f} | 频道: {message.channel.name}'
+                    f'⏭️ 图片未命中任何商品，跳过历史记录: 阈值 {skip_threshold:.3f} | 频道: {message.channel.name}'
                 )
                 return False
 
