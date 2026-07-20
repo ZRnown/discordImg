@@ -1975,7 +1975,7 @@ class Database:
 
         if normalized_shop_names:
             placeholders = ','.join('?' for _ in normalized_shop_names)
-            params: List[Any] = [*normalized_shop_names, strategy_name]
+            params: List[Any] = [strategy_name, *normalized_shop_names]
             query = f'''
                 SELECT
                     p.id AS product_id,

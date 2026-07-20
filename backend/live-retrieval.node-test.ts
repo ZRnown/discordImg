@@ -192,6 +192,7 @@ test('shop-scoped vector batches start from the shop index', () => {
   assert.match(body, /if normalized_shop_names:[\s\S]+FROM products p INDEXED BY idx_products_shop_name/)
   assert.match(body, /JOIN product_images pi INDEXED BY idx_product_images_product_id/)
   assert.match(body, /JOIN product_image_retrieval_cache rc INDEXED BY sqlite_autoindex_product_image_retrieval_cache_1/)
+  assert.match(body, /params: List\[Any\] = \[strategy_name, \*normalized_shop_names\]/)
 })
 
 test('empty fast vector signatures do not scan vector batches', () => {
