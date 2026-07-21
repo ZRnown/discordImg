@@ -1988,6 +1988,55 @@ def _find_query_keyword_match(
     )
 
 
+def _match_products_for_keyword_reply(
+    products,
+    query_keyword_candidates,
+    allowed_languages,
+    search_query,
+    linked_item_id=None,
+):
+    if linked_item_id:
+        matched_products = list(products or [])
+        match_reasons = {
+            product.get('id'): {
+                'canonical_keyword': str(linked_item_id),
+                'phrase': str(linked_item_id),
+                'source': 'marketplace_link',
+                'rule': 'linked_item_id',
+            }
+            for product in matched_products
+            if product.get('id') is not None
+        }
+        return matched_products, match_reasons, {str(linked_item_id)}
+
+    matched_products = []
+    match_reasons = {}
+    for product in products or []:
+        reason = _find_query_keyword_match(
+            query_keyword_candidates,
+            product.get('english_title') or product.get('englishTitle') or '',
+            product.get('title') or '',
+            title_translations=product.get('title_translations') or product.get('titleTranslations'),
+            allowed_languages=allowed_languages,
+            query_text=search_query,
+            partition_match_enabled=product.get('partition_match_enabled') or product.get('partitionMatchEnabled'),
+            partition_match_rules=product.get('partition_match_rules') or product.get('partitionMatchRules'),
+        )
+        if not reason:
+            continue
+        matched_products.append(product)
+        product_id = product.get('id')
+        if product_id is not None:
+            match_reasons[product_id] = reason
+
+    matched_keyword_set = {
+        str(reason.get('canonical_keyword')).strip()
+        for reason in match_reasons.values()
+        if str(reason.get('canonical_keyword') or '').strip()
+    }
+    return matched_products, match_reasons, matched_keyword_set
+
+
 def _get_repeat_seconds_from_filters(filters):
     max_seconds = 0.0
     for rule in filters or []:
@@ -6825,34 +6874,6 @@ class DiscordBotClient(discord.Client):
                 _log_keyword_stage_timings('no_website_configs')
                 return False
 
-            def _match_products_for_languages(allowed_languages):
-                matched_products = []
-                match_reasons = {}
-                for product in all_products:
-                    reason = _find_query_keyword_match(
-                        query_keyword_candidates,
-                        product.get('english_title') or product.get('englishTitle') or '',
-                        product.get('title') or '',
-                        title_translations=product.get('title_translations') or product.get('titleTranslations'),
-                        allowed_languages=allowed_languages,
-                        query_text=search_query,
-                        partition_match_enabled=product.get('partition_match_enabled') or product.get('partitionMatchEnabled'),
-                        partition_match_rules=product.get('partition_match_rules') or product.get('partitionMatchRules'),
-                    )
-                    if not reason:
-                        continue
-                    matched_products.append(product)
-                    product_id = product.get('id')
-                    if product_id is not None:
-                        match_reasons[product_id] = reason
-
-                matched_keyword_set = {
-                    str(reason.get('canonical_keyword')).strip()
-                    for reason in match_reasons.values()
-                    if str(reason.get('canonical_keyword') or '').strip()
-                }
-                return matched_products, match_reasons, matched_keyword_set
-
             website_match_contexts = []
             matched_product_ids = set()
             keyword_triggered = False
@@ -6861,8 +6882,12 @@ class DiscordBotClient(discord.Client):
                 reply_languages = get_effective_reply_languages(
                     website_config.get('reply_language')
                 )
-                matched_products, match_reasons, matched_keyword_set = _match_products_for_languages(
-                    reply_languages
+                matched_products, match_reasons, matched_keyword_set = _match_products_for_keyword_reply(
+                    all_products,
+                    query_keyword_candidates,
+                    reply_languages,
+                    search_query,
+                    linked_item_id=linked_item_id,
                 )
                 if not matched_products:
                     logger.debug(

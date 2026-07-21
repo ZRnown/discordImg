@@ -19,6 +19,7 @@ from backend.bot import (
     _resolve_message_reply_channel,
     _resolve_cooldown_channel_id,
     _should_send_best_match_reply_image,
+    _match_products_for_keyword_reply,
     resolve_reply_target_channel,
 )
 
@@ -170,6 +171,28 @@ class BotTimeoutHelpersTestCase(unittest.TestCase):
         )
 
         self.assertEqual(filtered, parent_configs)
+
+    def test_marketplace_link_search_result_is_keyword_reply_match(self):
+        products = [
+            {
+                "id": 123,
+                "title": "F50 football boots",
+                "englishTitle": "F50",
+            }
+        ]
+
+        matched_products, match_reasons, matched_keyword_set = _match_products_for_keyword_reply(
+            products,
+            {},
+            ["en"],
+            "https://www.kakobuy.com/item/details?url=https%3A%2F%2Fweidian.com%2Fitem.html%3FitemID%3D7658860695",
+            linked_item_id="7658860695",
+        )
+
+        self.assertEqual(matched_products, products)
+        self.assertEqual(matched_keyword_set, {"7658860695"})
+        self.assertEqual(match_reasons[123]["source"], "marketplace_link")
+        self.assertEqual(match_reasons[123]["rule"], "linked_item_id")
 
 
     def test_image_match_threshold_uses_website_override(self):
