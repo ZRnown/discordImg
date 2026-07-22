@@ -4803,6 +4803,27 @@ class DiscordBotClient(discord.Client):
                 if website_configs_override is not None
                 else await self.get_website_configs_by_channel_async(message.channel)
             )
+            if website_configs_override is not None and website_configs:
+                try:
+                    current_configs = await self.get_website_configs_by_channel_async(message.channel)
+                    current_config_by_id = {
+                        config.get('id'): config
+                        for config in (current_configs or [])
+                        if config.get('id') is not None
+                    }
+                    website_configs = [
+                        current_config_by_id[config.get('id')]
+                        for config in website_configs
+                        if config.get('id') in current_config_by_id
+                    ]
+                    if not website_configs:
+                        logger.info(
+                            f"频道 {message.channel.id} 的网站配置已不再绑定当前用户，跳过回复"
+                        )
+                        return False
+                except Exception as binding_error:
+                    logger.error(f"发送前刷新频道网站绑定失败: {binding_error}")
+                    return False
             if not website_configs:
                 logger.info(f"频道 {message.channel.id} 未绑定网站配置，跳过回复")
                 return False

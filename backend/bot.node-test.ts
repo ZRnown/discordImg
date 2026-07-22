@@ -255,6 +255,21 @@ test('background keyword search disables keyword image search work', () => {
   assert.match(imageSearchSource, /if not allow_keyword_image_search:\s+return False, False/)
 })
 
+test('reply scheduling revalidates overridden website configs against current channel bindings', () => {
+  const source = readSource()
+  const start = source.indexOf('async def schedule_reply')
+  const end = source.indexOf('    async def handle_image', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+
+  const scheduleReplySource = source.slice(start, end)
+  assert.match(scheduleReplySource, /if website_configs_override is not None and website_configs:/)
+  assert.match(scheduleReplySource, /current_configs = await self\.get_website_configs_by_channel_async\(message\.channel\)/)
+  assert.match(scheduleReplySource, /current_config_by_id = \{/)
+  assert.match(scheduleReplySource, /if not website_configs:\s+logger\.info\(\s+f"频道 \{message\.channel\.id\} 的网站配置已不再绑定当前用户，跳过回复"/)
+  assert.match(scheduleReplySource, /return False/)
+})
+
 test('keyword search slow logs include stage timings', () => {
   const source = readSource()
   const start = source.indexOf('async def handle_keyword_search')
