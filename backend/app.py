@@ -2937,11 +2937,7 @@ def get_website_configs():
         channel_bindings_map = db.get_website_channel_bindings_map(current_user['id'])
         channel_bindings_details_map = db.get_website_channel_bindings_details_map(current_user['id'])
         user_settings_map = db.get_user_website_settings_map(current_user['id'], website_ids)
-        user_website_stats_map = (
-            db.get_user_website_reply_stats_map(current_user['id'], website_ids)
-            if current_user.get('role') != 'admin'
-            else {}
-        )
+        user_website_stats_map = db.get_user_website_reply_stats_map(current_user['id'], website_ids)
 
         # 为每个配置添加绑定信息
         for config in configs:
@@ -2954,15 +2950,14 @@ def get_website_configs():
             config['channels'] = channel_bindings_map.get(config_id, [])
             config['channel_bindings'] = channel_bindings_details_map.get(config_id, [])
 
-            # 2.5) 普通用户展示自己的网站回复统计，不展示管理员全局累计
-            if current_user.get('role') != 'admin':
-                user_stats = user_website_stats_map.get(config_id, {})
-                config['stat_replies_total'] = user_stats.get('stat_replies_total', 0)
-                config['stat_replies_text'] = user_stats.get('stat_replies_text', 0)
-                config['stat_replies_image'] = user_stats.get('stat_replies_image', 0)
-                config['stat_replies_daily_total'] = user_stats.get('stat_replies_daily_total', 0)
-                config['stat_replies_daily_text'] = user_stats.get('stat_replies_daily_text', 0)
-                config['stat_replies_daily_image'] = user_stats.get('stat_replies_daily_image', 0)
+            # 2.5) 展示当前登录用户维度的网站回复统计，避免管理员看到全局累计。
+            user_stats = user_website_stats_map.get(config_id, {})
+            config['stat_replies_total'] = user_stats.get('stat_replies_total', 0)
+            config['stat_replies_text'] = user_stats.get('stat_replies_text', 0)
+            config['stat_replies_image'] = user_stats.get('stat_replies_image', 0)
+            config['stat_replies_daily_total'] = user_stats.get('stat_replies_daily_total', 0)
+            config['stat_replies_daily_text'] = user_stats.get('stat_replies_daily_text', 0)
+            config['stat_replies_daily_image'] = user_stats.get('stat_replies_daily_image', 0)
 
             # 3) 用户级别的轮换设置
             user_settings = user_settings_map.get(config_id, {})
