@@ -586,9 +586,10 @@ def get_discord_start_delay_seconds(start_index: int) -> float:
 
 
 class DiscordSendLimiter:
-    def __init__(self, max_inflight=1, interval_seconds=0.75):
+    def __init__(self, max_inflight=1, interval_seconds=0.75, timeout_seconds=20.0):
         self.max_inflight = max(int(max_inflight or 1), 1)
         self.interval_seconds = max(float(interval_seconds or 0.0), 0.0)
+        self.timeout_seconds = max(float(timeout_seconds or 0.0), 0.0)
         self._semaphore = asyncio.Semaphore(self.max_inflight)
         self._lock = asyncio.Lock()
         self._last_send_at = 0.0
@@ -601,7 +602,13 @@ class DiscordSendLimiter:
                     wait_seconds = self.interval_seconds - elapsed
                     if wait_seconds > 0:
                         await asyncio.sleep(wait_seconds)
-                result = await send_coro_factory()
+                if self.timeout_seconds > 0:
+                    result = await asyncio.wait_for(
+                        send_coro_factory(),
+                        timeout=self.timeout_seconds,
+                    )
+                else:
+                    result = await send_coro_factory()
                 self._last_send_at = time.monotonic()
                 return result
 
@@ -617,11 +624,16 @@ def _get_discord_send_limiter():
         float(getattr(config, 'DISCORD_SEND_INTERVAL_SECONDS', 0.75) or 0.0),
         0.0,
     )
-    signature = (max_inflight, interval_seconds)
+    timeout_seconds = max(
+        float(getattr(config, 'DISCORD_SEND_TIMEOUT_SECONDS', 20.0) or 0.0),
+        0.0,
+    )
+    signature = (max_inflight, interval_seconds, timeout_seconds)
     if _discord_send_limiter is None or _discord_send_limiter_signature != signature:
         _discord_send_limiter = DiscordSendLimiter(
             max_inflight=max_inflight,
             interval_seconds=interval_seconds,
+            timeout_seconds=timeout_seconds,
         )
         _discord_send_limiter_signature = signature
     return _discord_send_limiter

@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -445,6 +446,20 @@ class DiscordSendThrottleTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(max_active_sends, 1)
         self.assertEqual([item["content"] for item in sent_payloads], ["one", "two"])
         self.assertEqual([item["content"] for item in results], ["one", "two"])
+
+    async def test_send_discord_message_times_out_long_rate_limit_waits(self):
+        class Channel:
+            async def send(self, **kwargs):
+                await bot_module.asyncio.sleep(10)
+                return kwargs
+
+        with patch.object(bot_module.config, "DISCORD_SEND_MAX_INFLIGHT", 1, create=True), patch.object(
+            bot_module.config, "DISCORD_SEND_INTERVAL_SECONDS", 0.0, create=True
+        ), patch.object(
+            bot_module.config, "DISCORD_SEND_TIMEOUT_SECONDS", 0.01, create=True
+        ):
+            with self.assertRaises(asyncio.TimeoutError):
+                await _send_discord_message(Channel(), content="slow")
 
     async def test_thread_message_requires_access_to_thread_not_parent(self):
         message = SimpleNamespace(channel=SimpleNamespace(id=555001, parent_id=123001))

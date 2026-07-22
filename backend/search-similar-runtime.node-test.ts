@@ -13,15 +13,16 @@ test('live search runtime can wait without dropping queued image searches', () =
   assert.match(runtimeSource, /if execution_timeout > 0:[\s\S]+?else:\s+self\.finished\.wait\(\)/)
 })
 
-test('production image search queues all work instead of failing at a five-second cap', () => {
+test('production image search fails stuck work quickly enough to keep workers free', () => {
   const source = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
 
   assert.equal(source.includes('LIVE_IMAGE_SEARCH_MAX_INFLIGHT: "2"'), true)
   assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_MAX_SIZE: "0"'), true)
-  assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_TIMEOUT_SECONDS: "0"'), true)
-  assert.equal(source.includes('LIVE_IMAGE_SEARCH_EXECUTION_TIMEOUT_SECONDS: "0"'), true)
-  assert.equal(source.includes('DISCORD_IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS: "900.0"'), true)
-  assert.equal(source.includes('DISCORD_MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS: "900"'), true)
+  assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_TIMEOUT_SECONDS: "30"'), true)
+  assert.equal(source.includes('LIVE_IMAGE_SEARCH_EXECUTION_TIMEOUT_SECONDS: "45"'), true)
+  assert.equal(source.includes('DISCORD_IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS: "60.0"'), true)
+  assert.equal(source.includes('DISCORD_MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS: "90"'), true)
+  assert.equal(source.includes('DISCORD_SEND_TIMEOUT_SECONDS: "20"'), true)
 })
 
 test('production image encoding uses multiple CPU threads per cold query', () => {
@@ -93,18 +94,20 @@ test('startup warmup prepares fast vector contexts for autostart shop scopes', (
   assert.match(retrievalSource, /fast_vector_prepared/)
 })
 
-test('bot keeps image recognition queued long enough for backend completion', () => {
+test('bot does not retry image recognition long enough to block Discord workers', () => {
   const ecosystemSource = readFileSync(new URL('../ecosystem.config.js', import.meta.url), 'utf8')
   const configSource = readFileSync(new URL('./config.py', import.meta.url), 'utf8')
   const botSource = readFileSync(new URL('./bot.py', import.meta.url), 'utf8')
 
   assert.equal(ecosystemSource.includes('DISCORD_IMAGE_RECOGNITION_MAX_INFLIGHT: "4"'), true)
-  assert.equal(ecosystemSource.includes('DISCORD_IMAGE_RECOGNITION_MAX_ATTEMPTS: "3"'), true)
-  assert.equal(ecosystemSource.includes('DISCORD_IMAGE_RECOGNITION_RETRY_DELAY_SECONDS: "3.0"'), true)
+  assert.equal(ecosystemSource.includes('DISCORD_IMAGE_RECOGNITION_MAX_ATTEMPTS: "1"'), true)
+  assert.equal(ecosystemSource.includes('DISCORD_IMAGE_RECOGNITION_RETRY_DELAY_SECONDS: "1.0"'), true)
   assert.match(configSource, /DISCORD_IMAGE_RECOGNITION_MAX_INFLIGHT = _env_int/)
   assert.match(configSource, /DISCORD_IMAGE_RECOGNITION_MAX_ATTEMPTS = _env_int/)
   assert.match(configSource, /DISCORD_IMAGE_RECOGNITION_RETRY_DELAY_SECONDS = _env_float/)
+  assert.match(configSource, /DISCORD_SEND_TIMEOUT_SECONDS = _env_float/)
   assert.match(botSource, /IMAGE_RECOGNITION_MAX_INFLIGHT/)
   assert.match(botSource, /IMAGE_RECOGNITION_MAX_ATTEMPTS/)
+  assert.match(botSource, /DISCORD_SEND_TIMEOUT_SECONDS/)
   assert.match(botSource, /resp\.status in \{429, 503\}/)
 })
