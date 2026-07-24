@@ -225,7 +225,7 @@ test('keyword search is scheduled in background so message handling is not block
   assert.doesNotMatch(keywordStageSource, /'keyword_search'/)
 })
 
-test('background keyword search is deduplicated per user message', () => {
+test('background keyword search is deduplicated per channel message', () => {
   const source = readSource()
   const start = source.indexOf('def _start_keyword_search_background_task')
   const end = source.indexOf('    def _start_image_reply_background_task', start)
@@ -233,9 +233,21 @@ test('background keyword search is deduplicated per user message', () => {
   assert.notEqual(end, -1)
 
   const keywordTaskSource = source.slice(start, end)
-  assert.match(keywordTaskSource, /keyword_search_message_id = f"keyword_search:\{self\.user_id\}:\{message\.id\}"/)
+  assert.match(keywordTaskSource, /keyword_search_message_id = f"keyword_search:\{message\.channel\.id\}:\{message\.id\}"/)
   assert.match(keywordTaskSource, /mark_message_as_processed\(keyword_search_message_id\)/)
   assert.match(keywordTaskSource, /关键词搜索后台已由其他账号处理/)
+})
+
+test('message processing is deduplicated across users before keyword and image work', () => {
+  const source = readSource()
+  const start = source.indexOf('async def on_message')
+  const end = source.indexOf('        website_configs_to_process = list(website_configs or [])', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+
+  const onMessageSource = source.slice(start, end)
+  assert.match(onMessageSource, /mark_message_as_processed\(message\.id\)/)
+  assert.doesNotMatch(onMessageSource, /mark_message_as_processed\(message\.id,\s*self\.user_id\)/)
 })
 
 test('background keyword search disables keyword image search work', () => {

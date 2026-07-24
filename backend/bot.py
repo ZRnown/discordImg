@@ -2368,7 +2368,7 @@ def cleanup_expired_cooldowns():
         logger.info(f"清理了 {len(expired_keys)} 个过期的冷却状态")
 
 def mark_message_as_processed(message_id, user_id=None):
-    """检查消息是否已处理（按用户隔离的原子去重）"""
+    """检查消息是否已处理（原子去重）"""
     try:
         from database import db
         scoped_message_id = str(message_id)
@@ -3296,7 +3296,7 @@ class DiscordBotClient(discord.Client):
         return task
 
     def _start_keyword_search_background_task(self, message, website_configs_to_process):
-        keyword_search_message_id = f"keyword_search:{self.user_id}:{message.id}"
+        keyword_search_message_id = f"keyword_search:{message.channel.id}:{message.id}"
         try:
             if not mark_message_as_processed(keyword_search_message_id):
                 logger.debug(
@@ -6205,7 +6205,7 @@ class DiscordBotClient(discord.Client):
             return
 
         try:
-            if not mark_message_as_processed(message.id, self.user_id):
+            if not mark_message_as_processed(message.id):
                 logger.debug(f"消息 {message.id} 已被其他(合法的)Bot处理，跳过")
                 return
         except Exception as e:
