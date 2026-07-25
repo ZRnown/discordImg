@@ -5865,7 +5865,7 @@ class DiscordBotClient(discord.Client):
         return self._is_plain_text_keyword_trigger_candidate(message)
 
     def _should_allow_managed_account_trigger(self, message) -> bool:
-        return self._is_plain_text_keyword_trigger_candidate(message)
+        return False
 
     def _log_message_skip(self, message, reason):
         author = getattr(message, 'author', None)

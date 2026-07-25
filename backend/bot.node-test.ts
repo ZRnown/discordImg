@@ -252,6 +252,18 @@ test('discord message dedupe can use a remote processed-message lock', () => {
   assert.match(appSource, /"claimed": False/)
 })
 
+test('managed account authors do not trigger product replies from other managed accounts', () => {
+  const source = readSource()
+  const start = source.indexOf('def _should_allow_managed_account_trigger')
+  const end = source.indexOf('    def _log_message_skip', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+
+  const managedTriggerSource = source.slice(start, end)
+  assert.match(managedTriggerSource, /return False/)
+  assert.doesNotMatch(managedTriggerSource, /_is_plain_text_keyword_trigger_candidate/)
+})
+
 test('message processing is deduplicated across users before keyword and image work', () => {
   const source = readSource()
   const start = source.indexOf('async def on_message')
