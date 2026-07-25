@@ -22,6 +22,8 @@ from flask import Flask, request, jsonify, Response, session
 import numpy as np
 import logging
 import sys
+import sqlite3
+import secrets
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, Dict
@@ -4474,6 +4476,37 @@ def health_check():
         'ai_ready': ai_model_ready,
         'timestamp': datetime.now().isoformat()
     })
+
+
+@app.route('/api/internal/processed-message-lock', methods=['POST'])
+def claim_processed_message_lock():
+    """跨服务器 Discord 消息去重锁。"""
+    expected_token = (os.getenv("PROCESSED_MESSAGE_LOCK_TOKEN") or "").strip()
+    data = request.get_json(silent=True) or {}
+    if expected_token:
+        provided_token = (
+            request.headers.get("X-Processed-Message-Lock-Token")
+            or data.get("token")
+            or ""
+        )
+        if not secrets.compare_digest(str(provided_token), expected_token):
+            return jsonify({"success": False, "error": "unauthorized"}), 401
+
+    message_id = str(data.get("message_id") or "").strip()
+    if not message_id:
+        return jsonify({"success": False, "error": "message_id is required"}), 400
+
+    try:
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO processed_messages (message_id) VALUES (?)", (message_id,))
+            conn.commit()
+        return jsonify({"success": True, "claimed": True})
+    except sqlite3.IntegrityError:
+        return jsonify({"success": True, "claimed": False})
+    except Exception as exc:
+        logger.error("跨服务器消息锁写入失败: %s", exc)
+        return jsonify({"success": False, "error": "lock_failed"}), 500
 
 # === 新增：系统统计信息API ===
 @app.route('/api/system/stats', methods=['GET'])

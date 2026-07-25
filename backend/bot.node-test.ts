@@ -238,6 +238,20 @@ test('background keyword search is deduplicated per channel message', () => {
   assert.match(keywordTaskSource, /关键词搜索后台已由其他账号处理/)
 })
 
+test('discord message dedupe can use a remote processed-message lock', () => {
+  const source = readSource()
+  const appSource = readAppSource()
+
+  assert.match(source, /def _claim_remote_processed_message/)
+  assert.match(source, /PROCESSED_MESSAGE_LOCK_URL/)
+  assert.match(source, /X-Processed-Message-Lock-Token/)
+  assert.match(source, /remote_result = _claim_remote_processed_message\(scoped_message_id\)/)
+  assert.match(appSource, /@app\.route\('\/api\/internal\/processed-message-lock', methods=\['POST'\]\)/)
+  assert.match(appSource, /INSERT INTO processed_messages \(message_id\) VALUES \(\?\)/)
+  assert.match(appSource, /except sqlite3\.IntegrityError:/)
+  assert.match(appSource, /"claimed": False/)
+})
+
 test('message processing is deduplicated across users before keyword and image work', () => {
   const source = readSource()
   const start = source.indexOf('async def on_message')

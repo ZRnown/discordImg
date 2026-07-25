@@ -10,6 +10,8 @@ import io
 import sqlite3
 import re
 import sys
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta
 from functools import partial
 from types import SimpleNamespace
@@ -2367,18 +2369,65 @@ def cleanup_expired_cooldowns():
     if expired_keys:
         logger.info(f"清理了 {len(expired_keys)} 个过期的冷却状态")
 
-def mark_message_as_processed(message_id, user_id=None):
-    """检查消息是否已处理（原子去重）"""
+def _mark_message_as_processed_locally(scoped_message_id):
     try:
         from database import db
+        with db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO processed_messages (message_id) VALUES (?)", (str(scoped_message_id),))
+            conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+
+def _claim_remote_processed_message(scoped_message_id):
+    lock_url = (os.getenv("PROCESSED_MESSAGE_LOCK_URL") or "").strip()
+    if not lock_url:
+        return None
+
+    payload = json.dumps({"message_id": str(scoped_message_id)}).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "User-Agent": "discord-marketing-worker/1.0",
+    }
+    lock_token = (os.getenv("PROCESSED_MESSAGE_LOCK_TOKEN") or "").strip()
+    if lock_token:
+        headers["X-Processed-Message-Lock-Token"] = lock_token
+
+    timeout = float(os.getenv("PROCESSED_MESSAGE_LOCK_TIMEOUT_SECONDS", "2.0") or 2.0)
+    request = urllib.request.Request(lock_url, data=payload, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read().decode("utf-8", "replace")
+            data = json.loads(body or "{}")
+            return bool(data.get("claimed"))
+    except Exception as exc:
+        fail_open = str(os.getenv("PROCESSED_MESSAGE_LOCK_FAIL_OPEN", "0")).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        logger.warning(
+            "跨服务器消息锁请求失败: message_id=%s fail_open=%s error=%s",
+            scoped_message_id,
+            1 if fail_open else 0,
+            exc,
+        )
+        return True if fail_open else False
+
+
+def mark_message_as_processed(message_id, user_id=None):
+    """检查消息是否已处理（支持跨服务器原子去重）"""
+    try:
         scoped_message_id = str(message_id)
         if user_id is not None:
             scoped_message_id = f"{user_id}:{message_id}"
-        with db.get_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("INSERT INTO processed_messages (message_id) VALUES (?)", (scoped_message_id,))
-            conn.commit()
-        return True  # 抢锁成功
+        remote_result = _claim_remote_processed_message(scoped_message_id)
+        if remote_result is not None:
+            return remote_result
+        return _mark_message_as_processed_locally(scoped_message_id)  # 抢锁成功
     except sqlite3.IntegrityError:
         return False  # 已经被其他Bot抢锁
 
