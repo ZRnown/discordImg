@@ -264,6 +264,34 @@ test('managed account authors do not trigger product replies from other managed 
   assert.doesNotMatch(managedTriggerSource, /_is_plain_text_keyword_trigger_candidate/)
 })
 
+test('generated reply site links are skipped before product search', () => {
+  const source = readSource()
+  const start = source.indexOf('async def on_message')
+  const end = source.indexOf('        # 3. 忽略 @别人的信息', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+
+  const onMessageSource = source.slice(start, end)
+  assert.match(source, /_DEFAULT_GENERATED_REPLY_DOMAINS = \{[\s\S]*'hipobuy\.com'/)
+  assert.match(source, /def _message_contains_generated_reply_url/)
+  assert.match(onMessageSource, /_message_contains_generated_reply_url\(message, website_configs\)/)
+  assert.match(onMessageSource, /已包含推广站链接/)
+})
+
+test('batched reply content removes duplicate links', () => {
+  const source = readSource()
+  const start = source.indexOf('def _build_multi_reply_content')
+  const end = source.indexOf('def _should_mention_reply_author', start)
+  assert.notEqual(start, -1)
+  assert.notEqual(end, -1)
+
+  const multiReplySource = source.slice(start, end)
+  assert.match(source, /def _dedupe_reply_content_urls/)
+  assert.match(multiReplySource, /seen_contents = set\(\)/)
+  assert.match(multiReplySource, /_dedupe_reply_content_urls\(content\)/)
+  assert.match(multiReplySource, /if normalized in seen_contents:/)
+})
+
 test('message processing is deduplicated across users before keyword and image work', () => {
   const source = readSource()
   const start = source.indexOf('async def on_message')

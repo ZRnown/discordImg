@@ -15,7 +15,7 @@ import urllib.request
 from datetime import datetime, timedelta
 from functools import partial
 from types import SimpleNamespace
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 try:
     from itsdangerous import URLSafeTimedSerializer
@@ -138,6 +138,23 @@ _repeat_reply_cache = {}
 _repeat_filter_cache = {'seconds': 0.0, 'ts': 0.0}
 _repeat_cache_lock = asyncio.Lock()
 _keyword_reply_window_manager = KeywordReplyWindowManager()
+_generated_reply_domain_cache = {'domains': set(), 'ts': 0.0}
+
+_URL_PATTERN = re.compile(r'https?://[^\s<>()]+', re.IGNORECASE)
+_DEFAULT_GENERATED_REPLY_DOMAINS = {
+    'acbuy.com',
+    'cnfans.com',
+    'cssbuy.com',
+    'hipobuy.com',
+    'kakobuy.com',
+    'oopbuy.com',
+}
+_SOURCE_MARKETPLACE_DOMAINS = {
+    '1688.com',
+    'item.taobao.com',
+    'taobao.com',
+    'weidian.com',
+}
 _keyword_reply_window_lock = asyncio.Lock()
 _keyword_reply_flush_tasks = {}
 _keyword_reply_window_configs = {}
@@ -1378,11 +1395,17 @@ async def dispatch_keyword_review_item(review_item):
 
 
 def _build_multi_reply_content(author_id, reply_contents, reply_mode):
-    cleaned_contents = [
-        (content or "").strip()
-        for content in (reply_contents or ())
-        if (content or "").strip()
-    ]
+    cleaned_contents = []
+    seen_contents = set()
+    for content in (reply_contents or ()):
+        cleaned = _dedupe_reply_content_urls(content)
+        if not cleaned:
+            continue
+        normalized = re.sub(r'\s+', ' ', cleaned).strip().lower()
+        if normalized in seen_contents:
+            continue
+        cleaned_contents.append(cleaned)
+        seen_contents.add(normalized)
     if not cleaned_contents:
         return ""
 
@@ -1398,6 +1421,119 @@ def _build_multi_reply_content(author_id, reply_contents, reply_mode):
         for content in cleaned_contents
     ]
     return build_batched_reply_content(entries)
+
+
+def _normalize_url_for_reply_dedupe(raw_url):
+    normalized = str(raw_url or '').strip().rstrip('.,，。;；')
+    return normalized
+
+
+def _dedupe_reply_content_urls(content):
+    text = str(content or '').strip()
+    if not text:
+        return ''
+
+    seen_urls = set()
+
+    def replace_url(match):
+        url = _normalize_url_for_reply_dedupe(match.group(0))
+        key = url.lower()
+        if key in seen_urls:
+            return ''
+        seen_urls.add(key)
+        return url
+
+    deduped = _URL_PATTERN.sub(replace_url, text)
+    deduped_lines = []
+    seen_lines = set()
+    for raw_line in deduped.splitlines():
+        line = re.sub(r'[ \t]+', ' ', raw_line).strip()
+        if not line:
+            continue
+        line_key = line.lower()
+        if line_key in seen_lines:
+            continue
+        deduped_lines.append(line)
+        seen_lines.add(line_key)
+    return '\n'.join(deduped_lines).strip()
+
+
+def _normalize_url_domain(raw_url):
+    try:
+        parsed = urlparse(str(raw_url or '').strip())
+    except Exception:
+        return ''
+    host = (parsed.netloc or '').split('@')[-1].split(':')[0].strip().lower()
+    if host.startswith('www.'):
+        host = host[4:]
+    return host
+
+
+def _domain_matches(host, domain):
+    host = (host or '').strip().lower()
+    domain = (domain or '').strip().lower()
+    return bool(host and domain and (host == domain or host.endswith(f'.{domain}')))
+
+
+def _is_source_marketplace_domain(host):
+    return any(_domain_matches(host, domain) for domain in _SOURCE_MARKETPLACE_DOMAINS)
+
+
+def _extract_domain_from_url_template(url_template):
+    template = str(url_template or '').strip()
+    if not template:
+        return ''
+    sample_url = template.replace('{id}', '123456789')
+    return _normalize_url_domain(sample_url)
+
+
+def _get_generated_reply_domains(website_configs=None):
+    domains = set(_DEFAULT_GENERATED_REPLY_DOMAINS)
+    for website_config in website_configs or []:
+        host = _extract_domain_from_url_template(website_config.get('url_template'))
+        if host and not _is_source_marketplace_domain(host):
+            domains.add(host)
+
+    now = time.monotonic()
+    cached_ts = float(_generated_reply_domain_cache.get('ts') or 0.0)
+    if now - cached_ts < 60:
+        domains.update(_generated_reply_domain_cache.get('domains') or set())
+        return domains
+
+    try:
+        try:
+            from database import db
+        except ImportError:
+            from .database import db
+        configured_domains = set()
+        for config_item in db.get_website_url_configs():
+            host = _extract_domain_from_url_template(config_item.get('url_template'))
+            if host and not _is_source_marketplace_domain(host):
+                configured_domains.add(host)
+        _generated_reply_domain_cache['domains'] = configured_domains
+        _generated_reply_domain_cache['ts'] = now
+        domains.update(configured_domains)
+    except Exception as exc:
+        logger.debug(f"读取回复站域名失败，使用内置域名: {exc}")
+
+    return domains
+
+
+def _message_contains_generated_reply_url(message, website_configs=None):
+    content = str(getattr(message, 'content', '') or '')
+    if not content:
+        return False
+
+    urls = _URL_PATTERN.findall(content)
+    if not urls:
+        return False
+
+    generated_domains = _get_generated_reply_domains(website_configs)
+    for raw_url in urls:
+        host = _normalize_url_domain(raw_url)
+        if any(_domain_matches(host, domain) for domain in generated_domains):
+            return True
+    return False
 
 
 def _should_mention_reply_author(explicit_mentions, reply_mode):
@@ -5668,10 +5804,10 @@ class DiscordBotClient(discord.Client):
                     reply_languages=active_reply_languages,
                 )
                 if '{url}' in template_text:
-                    return rendered
+                    return _dedupe_reply_content_urls(rendered)
                 if append_link:
-                    return f"{rendered}\n{response_url}".strip()
-                return rendered
+                    return _dedupe_reply_content_urls(f"{rendered}\n{response_url}")
+                return _dedupe_reply_content_urls(rendered)
 
             # 1) 商品级自定义回复（优先级最高）
             if is_product_custom or force_custom_reply:
@@ -6241,6 +6377,10 @@ class DiscordBotClient(discord.Client):
                 return
         except Exception as e:
             logger.error(f"检查监听权限失败: {e}")
+            return
+
+        if _message_contains_generated_reply_url(message, website_configs):
+            self._log_message_skip(message, '已包含推广站链接')
             return
 
         # 3. 忽略 @别人的信息（避免进入商品回复链路）
