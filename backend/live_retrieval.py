@@ -2343,6 +2343,11 @@ class LiveImageRetriever:
             self._scoped_catalog_prepare_inflight.clear()
             if self._catalog_signature is None:
                 self._prepared_catalog = []
+        # The vector matrix is derived from the same product-image cache. Clear
+        # it when products or retrieval embeddings change so a longer runtime
+        # TTL cannot serve stale search results.
+        with self._fast_vector_context_cache_lock:
+            self._fast_vector_context_cache.clear()
 
     def _has_active_catalog_locked(self) -> bool:
         return self._strategy is not None and self._catalog_signature is not None

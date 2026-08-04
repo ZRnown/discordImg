@@ -1110,6 +1110,19 @@ def test_live_image_retriever_search_keeps_using_previous_catalog_while_refreshi
     assert started == [True]
 
 
+def test_live_image_retriever_invalidate_clears_fast_vector_context_cache():
+    retriever = LiveImageRetriever(object(), "siglip2_rerank")
+    retriever._fast_vector_context_cache[("shop-a",)] = (
+        ("siglip2_rerank", ("shop-a",), 1),
+        {"matrix": np.zeros((1, 2), dtype=np.float32)},
+        0.0,
+    )
+
+    retriever.invalidate()
+
+    assert retriever._fast_vector_context_cache == {}
+
+
 def test_live_image_retriever_search_prefers_prepared_catalog_by_default(monkeypatch):
     class FakeDB:
         def __init__(self):
