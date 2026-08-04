@@ -306,6 +306,7 @@ def _load_cluster_spec_env(
 
 class CurrentDinoHybridStrategy:
     name = "current_dino_hybrid"
+    fast_rank_candidate_k = 32
 
     def __init__(self):
         try:
@@ -345,6 +346,66 @@ class CurrentDinoHybridStrategy:
             query_signature=query_context.get("query_signature"),
         )
         return float(hybrid.get("score", dino_score))
+
+    def rank_products_fast(
+        self,
+        query_context: Dict[str, Any],
+        prepared_catalog: list[Dict[str, Any]],
+        top_k: int = 10,
+    ) -> Optional[Dict[str, Any]]:
+        query_embedding = query_context.get("embedding")
+        if query_embedding is None or not prepared_catalog:
+            return {"ranked_products": [], "fast_rank": True}
+
+        query_vector = np.asarray(query_embedding, dtype=np.float32).reshape(-1)
+        valid_entries = []
+        vectors = []
+        for entry in prepared_catalog:
+            embedding = entry.get("context", {}).get("embedding")
+            if embedding is None:
+                continue
+            vector = np.asarray(embedding, dtype=np.float32).reshape(-1)
+            if vector.size != query_vector.size:
+                continue
+            valid_entries.append(entry)
+            vectors.append(vector)
+        if not vectors:
+            return {"ranked_products": [], "fast_rank": True}
+
+        matrix = np.vstack(vectors)
+        image_scores = matrix @ query_vector
+        candidate_k = min(
+            max(int(self.fast_rank_candidate_k), max(int(top_k or 1) * 4, 1)),
+            len(valid_entries),
+        )
+        if candidate_k < len(valid_entries):
+            candidate_indices = np.argpartition(image_scores, -candidate_k)[-candidate_k:]
+        else:
+            candidate_indices = np.arange(len(valid_entries), dtype=np.int64)
+
+        image_rankings = []
+        for index in candidate_indices:
+            entry = valid_entries[int(index)]
+            record = entry["record"]
+            image_rankings.append(
+                {
+                    "product_id": record.product_id,
+                    "title": record.title,
+                    "score": float(self.score(query_context, entry["context"])),
+                    "image_path": record.image_path,
+                    "image_index": record.image_index,
+                }
+            )
+
+        return {
+            "ranked_products": aggregate_product_rankings(
+                image_rankings,
+                top_k=max(int(top_k or 1), 1),
+            ),
+            "fast_rank": True,
+            "candidate_count": len(image_rankings),
+            "scanned_vector_count": len(valid_entries),
+        }
 
 
 class _Siglip2Encoder:

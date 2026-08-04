@@ -7,6 +7,7 @@ import pytest
 from PIL import Image
 
 from backend.benchmarks.strategies import (
+    CurrentDinoHybridStrategy,
     Siglip2RerankStrategy,
     _coerce_siglip_embedding,
 )
@@ -334,6 +335,43 @@ def test_rank_query_products_uses_vectorized_ranker_when_available(monkeypatch):
     assert calls == [(1, 1)]
     assert [item["product_id"] for item in ranked] == ["1001"]
     assert ranked[0]["shop_name"] == "shop-a"
+
+
+def test_current_dino_hybrid_fast_rank_scans_all_vectors_and_limits_heavy_scores():
+    strategy = object.__new__(CurrentDinoHybridStrategy)
+    score_calls = []
+
+    def score(query_context, catalog_context):
+        score_calls.append(catalog_context["index"])
+        return float(catalog_context["embedding"][0])
+
+    strategy.score = score
+    prepared_catalog = []
+    for index in range(100):
+        vector = np.array([float(index), 1.0], dtype=np.float32)
+        prepared_catalog.append(
+            {
+                "record": LiveCatalogImageRecord(
+                    product_id=str(index),
+                    title=f"Product {index}",
+                    english_title="",
+                    description="",
+                    shop_name="shop-a",
+                    image_path=f"/tmp/{index}.jpg",
+                    image_index=0,
+                ),
+                "context": {"embedding": vector, "index": index},
+            }
+        )
+
+    payload = strategy.rank_products_fast(
+        query_context={"embedding": np.array([1.0, 0.0], dtype=np.float32)},
+        prepared_catalog=prepared_catalog,
+        top_k=1,
+    )
+
+    assert payload["ranked_products"][0]["product_id"] == "99"
+    assert len(score_calls) < len(prepared_catalog)
 
 
 def test_siglip2_fast_rank_matches_standard_score_path(monkeypatch):

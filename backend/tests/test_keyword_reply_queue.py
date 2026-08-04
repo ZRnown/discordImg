@@ -1022,6 +1022,75 @@ class KeywordSearchMatchingTestCase(unittest.IsolatedAsyncioTestCase):
 
 
 class ImageReplyFilterIntegrationTestCase(unittest.IsolatedAsyncioTestCase):
+    async def test_attachment_download_uses_discord_attachment_reader_first(self):
+        client = object.__new__(DiscordBotClient)
+        attachment = SimpleNamespace(
+            filename="0.png",
+            url="https://cdn.discordapp.com/0.png",
+            read=AsyncMock(return_value=b"image-bytes"),
+        )
+
+        with (
+            patch.object(client, "_download_attachment_with_curl_cffi", AsyncMock()) as curl_download,
+            patch.object(client, "_download_attachment_once", AsyncMock()) as fallback,
+        ):
+            result = await client._download_discord_attachment(attachment)
+
+        self.assertEqual(result, b"image-bytes")
+        attachment.read.assert_awaited_once()
+        curl_download.assert_not_awaited()
+        fallback.assert_not_awaited()
+
+    async def test_attachment_download_uses_curl_cffi_proxy_after_reader_failure(self):
+        client = object.__new__(DiscordBotClient)
+        attachment = SimpleNamespace(
+            filename="0.png",
+            url="https://cdn.discordapp.com/0.png",
+            read=AsyncMock(side_effect=ConnectionError("reset")),
+        )
+
+        with (
+            patch.object(
+                client,
+                "_download_attachment_with_curl_cffi",
+                AsyncMock(return_value=b"proxy-image-bytes"),
+            ) as curl_download,
+            patch.object(client, "_download_attachment_once", AsyncMock()) as fallback,
+        ):
+            result = await client._download_discord_attachment(attachment)
+
+        self.assertEqual(result, b"proxy-image-bytes")
+        curl_download.assert_awaited_once_with(attachment)
+        fallback.assert_not_awaited()
+
+    async def test_attachment_download_retries_timeout_and_logs_clearly(self):
+        client = object.__new__(DiscordBotClient)
+        attachment = SimpleNamespace(
+            filename="0.png",
+            url="https://cdn.discordapp.com/0.png",
+        )
+        download_attempt = AsyncMock(
+            side_effect=[asyncio.TimeoutError(), b"image-bytes"]
+        )
+
+        with (
+            patch.object(
+                client,
+                "_download_attachment_with_curl_cffi",
+                AsyncMock(return_value=None),
+            ),
+            patch.object(client, "_download_attachment_once", download_attempt),
+            patch("backend.bot.asyncio.sleep", new=AsyncMock()),
+            self.assertLogs("backend.bot", level="WARNING") as captured_logs,
+        ):
+            result = await client._download_discord_attachment(attachment)
+
+        self.assertEqual(result, b"image-bytes")
+        self.assertEqual(download_attempt.await_count, 2)
+        self.assertTrue(
+            any("图片下载超时" in message for message in captured_logs.output)
+        )
+
     @patch("backend.bot.get_response_url_for_channel", return_value="https://weidian.com/item.html?itemID=123")
     async def test_build_keyword_reply_job_blocks_image_reply_when_global_ocr_filter_matches(
         self,

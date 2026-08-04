@@ -604,7 +604,7 @@ class RecognizeImageRetryPolicyTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fake_session.post_calls, 2)
         mock_sleep.assert_awaited_once()
 
-    async def test_recognize_image_does_not_retry_search_warming_503(self):
+    async def test_recognize_image_waits_until_search_warmup_finishes(self):
         class FakeResponse:
             def __init__(self, status, body):
                 self.status = status
@@ -618,6 +618,11 @@ class RecognizeImageRetryPolicyTestCase(unittest.IsolatedAsyncioTestCase):
 
             async def text(self):
                 return self._body
+
+            async def json(self):
+                import json
+
+                return json.loads(self._body)
 
         class FakeSession:
             def __init__(self, responses):
@@ -641,6 +646,11 @@ class RecognizeImageRetryPolicyTestCase(unittest.IsolatedAsyncioTestCase):
                     503,
                     '{"error":"search warming up","message":"图搜服务预热中，请稍后重试","retryable":true}',
                 ),
+                FakeResponse(
+                    503,
+                    '{"error":"search warming up","message":"图搜服务预热中，请稍后重试","retryable":true}',
+                ),
+                FakeResponse(200, '{"success":true,"results":[]}'),
             ]
         )
 
@@ -664,9 +674,9 @@ class RecognizeImageRetryPolicyTestCase(unittest.IsolatedAsyncioTestCase):
                 user_shops=["1771550301", "TIP"],
             )
 
-        self.assertIsNone(result)
-        self.assertEqual(fake_session.post_calls, 1)
-        mock_sleep.assert_not_awaited()
+        self.assertEqual(result, {"success": True, "results": []})
+        self.assertEqual(fake_session.post_calls, 3)
+        self.assertEqual(mock_sleep.await_count, 2)
 
 
 class KeywordSearchEntryTestCase(unittest.IsolatedAsyncioTestCase):
@@ -690,6 +700,24 @@ class KeywordSearchEntryTestCase(unittest.IsolatedAsyncioTestCase):
 
 
 class DiscordClientEventSchedulingTestCase(unittest.IsolatedAsyncioTestCase):
+    async def test_image_reply_background_task_is_not_cancelled_by_stage_timeout(self):
+        client = object.__new__(bot_module.DiscordBotClient)
+        client.handle_image = AsyncMock(return_value=True)
+        client._run_message_stage_with_timeout = AsyncMock()
+        message = SimpleNamespace(id=123, channel=SimpleNamespace(id=456))
+        attachment = SimpleNamespace(filename="image.png")
+
+        task = bot_module.DiscordBotClient._start_image_reply_background_task(
+            client,
+            message,
+            attachment,
+            [{"id": 1}],
+        )
+        await task
+
+        client.handle_image.assert_awaited_once()
+        client._run_message_stage_with_timeout.assert_not_awaited()
+
     async def test_schedule_event_drops_event_when_discord_loop_is_unavailable(self):
         client = object.__new__(bot_module.DiscordBotClient)
         client.account_id = 221

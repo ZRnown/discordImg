@@ -3540,17 +3540,27 @@ class DiscordBotClient(discord.Client):
             f"image-reply message={getattr(message, 'id', 'unknown')} "
             f"attachment={filename}"
         )
-        task = asyncio.create_task(
-            self._run_message_stage_with_timeout(
-                message,
-                f'image_reply:{filename}',
-                self.handle_image(
+
+        async def _runner():
+            started_at = time.monotonic()
+            try:
+                return await self.handle_image(
                     message,
                     attachment,
                     website_configs_override=website_configs_to_process,
-                ),
-                MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS,
-            ),
+                )
+            finally:
+                elapsed = time.monotonic() - started_at
+                if elapsed >= MESSAGE_STAGE_SLOW_SECONDS:
+                    logger.warning(
+                        "图片搜索后台耗时较长: message_id=%s | channel_id=%s | elapsed=%.2fs",
+                        getattr(message, 'id', 'unknown'),
+                        getattr(getattr(message, 'channel', None), 'id', 'unknown'),
+                        elapsed,
+                    )
+
+        task = asyncio.create_task(
+            _runner(),
             name=task_name,
         )
         _image_reply_background_tasks.add(task)
@@ -6655,6 +6665,145 @@ class DiscordBotClient(discord.Client):
         self._mark_dm_alert(channel_id)
         logger.info(f"📱 Bark通知已发送: 账号:{account_name} | 类型:发起私信 | 发送者:{sender_name}")
 
+    async def _download_attachment_once(self, attachment, timeout, headers, proxy_url):
+        async with aiohttp.ClientSession(
+            timeout=timeout,
+            headers=headers,
+            trust_env=True,
+        ) as session:
+            async with session.get(attachment.url, proxy=proxy_url) as response:
+                if response.status != 200:
+                    logger.warning(
+                        "Discord图片下载失败: status=%s host=%s filename=%s",
+                        response.status,
+                        urlparse(attachment.url).hostname,
+                        attachment.filename,
+                    )
+                    return None
+                return await response.read()
+
+    async def _download_attachment_with_curl_cffi(self, attachment):
+        proxy_url = (
+            os.getenv("DISCORD_CDN_PROXY")
+            or os.getenv("HTTPS_PROXY")
+            or os.getenv("HTTP_PROXY")
+            or None
+        )
+        if not proxy_url:
+            return None
+
+        def _download():
+            from curl_cffi import requests as curl_requests
+
+            response = curl_requests.get(
+                attachment.url,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/131.0.0.0 Safari/537.36"
+                    )
+                },
+                proxies={"http": proxy_url, "https": proxy_url},
+                impersonate="chrome",
+                timeout=15,
+                allow_redirects=True,
+            )
+            if response.status_code != 200:
+                logger.warning(
+                    "curl-cffi图片下载失败: status=%s host=%s filename=%s",
+                    response.status_code,
+                    urlparse(attachment.url).hostname,
+                    attachment.filename,
+                )
+                return None
+            return bytes(response.content)
+
+        try:
+            image_data = await asyncio.to_thread(_download)
+            if image_data:
+                logger.info(
+                    "curl-cffi代理图片下载成功: host=%s filename=%s size=%s",
+                    urlparse(attachment.url).hostname,
+                    attachment.filename,
+                    len(image_data),
+                )
+                return image_data
+        except Exception as error:
+            logger.warning(
+                "curl-cffi代理图片下载失败: %s: %s",
+                type(error).__name__,
+                error,
+            )
+        return None
+
+    async def _download_discord_attachment(self, attachment):
+        attachment_reader = getattr(attachment, "read", None)
+        if callable(attachment_reader):
+            try:
+                image_data = await attachment_reader()
+                if image_data:
+                    logger.debug(
+                        "通过Discord附件通道下载成功，大小: %s bytes",
+                        len(image_data),
+                    )
+                    return image_data
+            except Exception as error:
+                logger.warning(
+                    "Discord附件通道下载失败，回退HTTP下载: %s: %s",
+                    type(error).__name__,
+                    error,
+                )
+
+        image_data = await self._download_attachment_with_curl_cffi(attachment)
+        if image_data is not None:
+            return image_data
+
+        timeout = aiohttp.ClientTimeout(total=30, connect=10)
+        proxy_url = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or None
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        }
+
+        for attempt in range(3):
+            try:
+                image_data = await self._download_attachment_once(
+                    attachment,
+                    timeout,
+                    headers,
+                    proxy_url,
+                )
+                if image_data is not None:
+                    logger.debug("图片下载成功，大小: %s bytes", len(image_data))
+                    return image_data
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "图片下载超时 (尝试 %s/3): host=%s filename=%s timeout=30s",
+                    attempt + 1,
+                    urlparse(attachment.url).hostname,
+                    attachment.filename,
+                )
+            except aiohttp.ClientError as error:
+                logger.warning(
+                    "图片下载网络错误 (尝试 %s/3): %s: %s",
+                    attempt + 1,
+                    type(error).__name__,
+                    error,
+                )
+            except Exception as error:
+                logger.exception(
+                    "图片下载异常 (尝试 %s/3): %s",
+                    attempt + 1,
+                    type(error).__name__,
+                )
+                return None
+
+            if attempt < 2:
+                await asyncio.sleep(2)
+
+        return None
+
     async def handle_image(self, message, attachment, website_configs_override=None):
         try:
             website_configs = (
@@ -6677,38 +6826,7 @@ class DiscordBotClient(discord.Client):
                 website_filters = self._parse_message_filters(website_settings.get('message_filters', '[]'))
                 website_filters_map[int(website_id)] = website_filters
 
-            # 【增强稳定性】增加超时时间，添加代理支持
-            timeout = aiohttp.ClientTimeout(total=30, connect=10)  # 30秒总超时，10秒连接超时
-            image_data = None
-
-            # 【代理配置】从环境变量获取代理（支持国内网络环境）
-            proxy_url = os.getenv("HTTPS_PROXY") or os.getenv("HTTP_PROXY") or None
-
-            # 【伪装头】添加 User-Agent 防止被 Discord CDN 拒绝
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            }
-
-            # 重试最多3次
-            for attempt in range(3):
-                try:
-                    logger.debug(f"下载Discord图片 (尝试 {attempt + 1}/3): {attachment.filename}")
-                    # 【关键修复】trust_env=True 允许使用系统代理
-                    async with aiohttp.ClientSession(timeout=timeout, headers=headers, trust_env=True) as session:
-                        async with session.get(attachment.url, proxy=proxy_url) as resp:
-                            if resp.status == 200:
-                                image_data = await resp.read()
-                                logger.debug(f"图片下载成功，大小: {len(image_data)} bytes")
-                                break
-                            else:
-                                logger.debug(f"图片下载失败，状态码: {resp.status}")
-                except aiohttp.ClientError as e:
-                    logger.debug(f"图片下载网络错误 (尝试 {attempt + 1}/3): {e}")
-                    if attempt < 2:  # 不是最后一次尝试
-                        await asyncio.sleep(2)  # 【增强】等待2秒后重试
-                except Exception as e:
-                    logger.error(f"图片下载未知错误 (尝试 {attempt + 1}/3): {e}")
-                    break
+            image_data = await self._download_discord_attachment(attachment)
 
             if image_data is None:
                 logger.error("图片下载失败，已达到最大重试次数")
@@ -7670,6 +7788,7 @@ class DiscordBotClient(discord.Client):
                 # 调用后端实时图片检索服务。
                 request_url = f'{config.BACKEND_API_URL.replace("/api", "")}/search_similar'
                 max_attempts = IMAGE_RECOGNITION_MAX_ATTEMPTS
+                busy_max_attempts = max(max_attempts, 2)
                 retry_delay = IMAGE_RECOGNITION_RETRY_DELAY_SECONDS
 
                 def _build_form_data():
@@ -7687,7 +7806,10 @@ class DiscordBotClient(discord.Client):
                         form.add_field('query_text', normalized_query_text[:500])
                     return form
 
-                for attempt in range(max_attempts):
+                attempt = 0
+                busy_attempts = 0
+                while True:
+                    attempt += 1
                     async with session.post(request_url, data=_build_form_data()) as resp:
                         if resp.status == 200:
                             result = await resp.json()
@@ -7698,20 +7820,21 @@ class DiscordBotClient(discord.Client):
                         logger.warning(
                             'recognize_image backend status=%s attempt=%s body=%s',
                             resp.status,
-                            attempt + 1,
+                            attempt,
                             compact_response_text or '<empty>',
                         )
-                        if resp.status == 503 and attempt >= max_attempts - 1 and (
+                        search_warming_up = resp.status == 503 and (
                             'search warming up' in compact_response_text
                             or '图搜服务预热中' in compact_response_text
                             or '预热中' in compact_response_text
-                        ):
-                            logger.warning(
-                                'recognize_image search service still warming up after retries; skip image reply for this message'
-                            )
-                            return None
+                        )
+                        if search_warming_up:
+                            await asyncio.sleep(retry_delay)
+                            retry_delay = min(retry_delay * 1.3, 6.0)
+                            continue
                         # 后端繁忙/预热时短暂退避，避免一次队列抖动就放弃这张图。
-                        if resp.status in {429, 503} and attempt < max_attempts - 1:
+                        busy_attempts += 1
+                        if resp.status in {429, 503} and busy_attempts < busy_max_attempts:
                             await asyncio.sleep(retry_delay)
                             retry_delay = min(retry_delay * 1.8, 6.0)
                             continue
