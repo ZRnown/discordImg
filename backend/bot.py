@@ -108,7 +108,11 @@ except ImportError:
 def _apply_discord_presence_compat_patch():
     """兼容部分 discord.py-self 版本缺少 FakeClientPresence.hidden_activities 的问题。"""
     fake_presence_cls = getattr(discord_state, 'FakeClientPresence', None) if discord_state else None
-    if fake_presence_cls is None or hasattr(fake_presence_cls, 'hidden_activities'):
+    # FakeClientPresence inherits Presence's slot descriptor. `hasattr` therefore
+    # reports success even though the subclass still lacks the property required
+    # by Presence._copy(). Check the subclass dictionary so the compatibility
+    # property actually overrides that descriptor.
+    if fake_presence_cls is None or 'hidden_activities' in fake_presence_cls.__dict__:
         return
 
     @property
@@ -260,6 +264,11 @@ def _is_discord_missing_access_error(error):
         or "Missing Permissions" in text
         or "缺少权限" in text
     )
+
+
+def _should_retry_discord_reply_after_error(error):
+    """Only retry when Discord rejected the request before its result was ambiguous."""
+    return not isinstance(error, (asyncio.TimeoutError, TimeoutError))
 
 
 def _log_rate_limited_bark_issue(scene, detail, *, level="error"):
@@ -5644,7 +5653,22 @@ class DiscordBotClient(discord.Client):
                                     )
                                     continue
 
-                                logger.warning(f"回复失败，尝试直接发送: {reply_error}")
+                                if not _should_retry_discord_reply_after_error(reply_error):
+                                    logger.error(
+                                        "回复发送结果未知，停止文本重试以避免重复链接: "
+                                        f"account_id={getattr(target_client, 'account_id', None)} "
+                                        f"channel={getattr(reply_target_channel, 'id', None)} "
+                                        f"message={getattr(message, 'id', None)} "
+                                        f"error={_summarize_exception_for_log(reply_error)}"
+                                    )
+                                    continue
+
+                                logger.warning(
+                                    "回复失败，尝试直接发送: "
+                                    f"account_id={getattr(target_client, 'account_id', None)} "
+                                    f"channel={getattr(reply_target_channel, 'id', None)} "
+                                    f"error={_summarize_exception_for_log(reply_error)}"
+                                )
                                 fallback_sent = False
                                 if response_content:
                                     try:
@@ -5666,7 +5690,13 @@ class DiscordBotClient(discord.Client):
                                         await _send_discord_message(reply_target_channel, response_content, **fallback_kwargs)
                                         fallback_sent = True
                                     except Exception as fallback_error:
-                                        logger.error(f"文本兜底发送失败: {fallback_error}")
+                                        logger.error(
+                                            "文本兜底发送失败: "
+                                            f"account_id={getattr(target_client, 'account_id', None)} "
+                                            f"channel={getattr(reply_target_channel, 'id', None)} "
+                                            f"message={getattr(message, 'id', None)} "
+                                            f"error={_summarize_exception_for_log(fallback_error)}"
+                                        )
                                         continue
                                 elif files:
                                     logger.error(

@@ -16,6 +16,7 @@ from backend.bot import (
     _is_discord_missing_access_error,
     _is_image_match_above_reply_threshold,
     _is_discord_blocked_content_error,
+    _should_retry_discord_reply_after_error,
     _resolve_best_match_image_threshold,
     _resolve_message_reply_channel,
     _resolve_cooldown_channel_id,
@@ -26,6 +27,15 @@ from backend.bot import (
 
 
 class BotTimeoutHelpersTestCase(unittest.TestCase):
+    def test_presence_compat_patch_overrides_inherited_slot_descriptor(self):
+        fake_presence_cls = getattr(bot_module.discord_state, "FakeClientPresence", None)
+        if fake_presence_cls is None:
+            self.skipTest("discord.py-self does not expose FakeClientPresence")
+
+        bot_module._apply_discord_presence_compat_patch()
+
+        self.assertIn("hidden_activities", fake_presence_cls.__dict__)
+
     def test_detects_discord_blocked_content_error_by_code(self):
         error = SimpleNamespace(code=200000)
 
@@ -55,6 +65,14 @@ class BotTimeoutHelpersTestCase(unittest.TestCase):
         error = RuntimeError("403 Forbidden (error code: 50013): Missing Permissions")
 
         self.assertTrue(_is_discord_missing_access_error(error))
+
+    def test_does_not_retry_when_discord_send_result_is_unknown(self):
+        self.assertFalse(
+            _should_retry_discord_reply_after_error(asyncio.TimeoutError())
+        )
+        self.assertTrue(
+            _should_retry_discord_reply_after_error(RuntimeError("bad reference"))
+        )
 
     def test_image_recognition_request_timeout_tracks_stage_timeout(self):
         self.assertEqual(
