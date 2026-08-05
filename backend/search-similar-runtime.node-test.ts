@@ -18,11 +18,13 @@ test('production image search fails stuck work quickly enough to keep workers fr
 
   assert.equal(source.includes('LIVE_IMAGE_SEARCH_MAX_INFLIGHT: "2"'), true)
   assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_MAX_SIZE: "0"'), true)
-  assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_TIMEOUT_SECONDS: "30"'), true)
-  assert.equal(source.includes('LIVE_IMAGE_SEARCH_EXECUTION_TIMEOUT_SECONDS: "45"'), true)
-  assert.equal(source.includes('DISCORD_IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS: "60.0"'), true)
+  assert.equal(source.includes('LIVE_IMAGE_SEARCH_QUEUE_TIMEOUT_SECONDS: "180"'), true)
+  assert.equal(source.includes('LIVE_IMAGE_SEARCH_EXECUTION_TIMEOUT_SECONDS: "90"'), true)
+  assert.equal(source.includes('DISCORD_IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS: "240.0"'), true)
   assert.equal(source.includes('DISCORD_MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS: "90"'), true)
   assert.equal(source.includes('DISCORD_SEND_TIMEOUT_SECONDS: "20"'), true)
+  assert.equal(source.includes('DISCORD_SEND_SHARED_LOCK_PATH: "data/discord_send_rate.lock"'), true)
+  assert.equal(source.includes('DISCORD_MAX_RATELIMIT_TIMEOUT: "30"'), true)
 })
 
 test('production image encoding uses multiple CPU threads per cold query', () => {

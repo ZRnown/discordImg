@@ -18,6 +18,11 @@ from types import SimpleNamespace
 from urllib.parse import quote, urlparse
 
 try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows does not provide POSIX file locks
+    fcntl = None
+
+try:
     from itsdangerous import URLSafeTimedSerializer
 except Exception:
     URLSafeTimedSerializer = None
@@ -266,9 +271,36 @@ def _is_discord_missing_access_error(error):
     )
 
 
+def _is_discord_rate_limited_error(error):
+    rate_limited_type = getattr(discord, "RateLimited", None)
+    if rate_limited_type is not None and isinstance(error, rate_limited_type):
+        return True
+    return getattr(error, "status", None) == 429
+
+
+def _get_discord_rate_limit_retry_after(error, default_seconds=1.0):
+    retry_after = getattr(error, "retry_after", None)
+    try:
+        if retry_after is not None:
+            return max(float(retry_after), 0.0)
+    except (TypeError, ValueError):
+        pass
+
+    response = getattr(error, "response", None)
+    headers = getattr(response, "headers", None) or {}
+    for header_name in ("Retry-After", "X-RateLimit-Reset-After"):
+        try:
+            value = headers.get(header_name)
+            if value is not None:
+                return max(float(value), 0.0)
+        except (TypeError, ValueError):
+            continue
+    return max(float(default_seconds or 0.0), 0.0)
+
+
 def _should_retry_discord_reply_after_error(error):
     """Only retry when Discord rejected the request before its result was ambiguous."""
-    return not isinstance(error, (asyncio.TimeoutError, TimeoutError))
+    return not isinstance(error, (asyncio.TimeoutError, TimeoutError)) and not _is_discord_rate_limited_error(error)
 
 
 def _log_rate_limited_bark_issue(scene, detail, *, level="error"):
@@ -586,6 +618,10 @@ def build_discord_client_runtime_options(intents=None):
             int(getattr(config, 'DISCORD_MAX_MESSAGES', 1000) or 0),
             0,
         ),
+        'max_ratelimit_timeout': max(
+            float(getattr(config, 'DISCORD_MAX_RATELIMIT_TIMEOUT', 30.0) or 0.0),
+            0.0,
+        ),
     }
     if intents is not None:
         options['intents'] = intents
@@ -614,31 +650,106 @@ def get_discord_start_delay_seconds(start_index: int) -> float:
 
 
 class DiscordSendLimiter:
-    def __init__(self, max_inflight=1, interval_seconds=0.75, timeout_seconds=20.0):
+    def __init__(
+        self,
+        max_inflight=1,
+        interval_seconds=0.75,
+        timeout_seconds=20.0,
+        shared_lock_path="",
+    ):
         self.max_inflight = max(int(max_inflight or 1), 1)
         self.interval_seconds = max(float(interval_seconds or 0.0), 0.0)
         self.timeout_seconds = max(float(timeout_seconds or 0.0), 0.0)
+        self.shared_lock_path = str(shared_lock_path or "").strip()
         self._semaphore = asyncio.Semaphore(self.max_inflight)
         self._lock = asyncio.Lock()
         self._last_send_at = 0.0
 
+    async def _reserve_shared_send_slot(self):
+        if not self.shared_lock_path or self.interval_seconds <= 0 or fcntl is None:
+            return
+        await asyncio.to_thread(
+            _reserve_shared_send_slot,
+            self.shared_lock_path,
+            self.interval_seconds,
+        )
+
     async def run(self, send_coro_factory):
-        async with self._semaphore:
-            async with self._lock:
-                if self.interval_seconds > 0 and self._last_send_at > 0:
-                    elapsed = time.monotonic() - self._last_send_at
-                    wait_seconds = self.interval_seconds - elapsed
-                    if wait_seconds > 0:
-                        await asyncio.sleep(wait_seconds)
-                if self.timeout_seconds > 0:
-                    result = await asyncio.wait_for(
-                        send_coro_factory(),
-                        timeout=self.timeout_seconds,
-                    )
-                else:
-                    result = await send_coro_factory()
-                self._last_send_at = time.monotonic()
-                return result
+        while True:
+            rate_limit_error = None
+            async with self._semaphore:
+                async with self._lock:
+                    if self.interval_seconds > 0 and self._last_send_at > 0:
+                        elapsed = time.monotonic() - self._last_send_at
+                        wait_seconds = self.interval_seconds - elapsed
+                        if wait_seconds > 0:
+                            await asyncio.sleep(wait_seconds)
+                    await self._reserve_shared_send_slot()
+                    try:
+                        if self.timeout_seconds > 0:
+                            result = await asyncio.wait_for(
+                                send_coro_factory(),
+                                timeout=self.timeout_seconds,
+                            )
+                        else:
+                            result = await send_coro_factory()
+                    except Exception as error:
+                        if not _is_discord_rate_limited_error(error):
+                            raise
+                        rate_limit_error = error
+                        self._last_send_at = time.monotonic()
+                    else:
+                        self._last_send_at = time.monotonic()
+                        return result
+
+            retry_after = _get_discord_rate_limit_retry_after(
+                rate_limit_error,
+                default_seconds=max(self.interval_seconds, 1.0),
+            )
+            logger.warning(
+                "Discord 发送触发限流，延迟后重试: retry_after=%.2fs error=%s",
+                retry_after,
+                _summarize_exception_for_log(rate_limit_error),
+            )
+            await asyncio.sleep(retry_after)
+
+
+def _reserve_shared_send_slot(lock_path, interval_seconds):
+    """Reserve a send start time shared by all PM2 worker processes on this host."""
+    if fcntl is None:
+        return
+
+    normalized_path = os.path.abspath(os.path.expanduser(str(lock_path or "").strip()))
+    if not normalized_path:
+        return
+    os.makedirs(os.path.dirname(normalized_path), exist_ok=True)
+
+    interval = max(float(interval_seconds or 0.0), 0.0)
+    if interval <= 0:
+        return
+
+    with open(normalized_path, "a+", encoding="ascii") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            handle.seek(0)
+            raw_value = handle.read().strip()
+            try:
+                next_available_at = float(raw_value)
+            except (TypeError, ValueError):
+                next_available_at = 0.0
+
+            now = time.time()
+            send_at = max(now, next_available_at)
+            handle.seek(0)
+            handle.truncate()
+            handle.write(f"{send_at + interval:.6f}\n")
+            handle.flush()
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    wait_seconds = send_at - time.time()
+    if wait_seconds > 0:
+        time.sleep(wait_seconds)
 
 
 def _get_discord_send_limiter():
@@ -656,12 +767,16 @@ def _get_discord_send_limiter():
         float(getattr(config, 'DISCORD_SEND_TIMEOUT_SECONDS', 20.0) or 0.0),
         0.0,
     )
-    signature = (max_inflight, interval_seconds, timeout_seconds)
+    shared_lock_path = str(
+        getattr(config, 'DISCORD_SEND_SHARED_LOCK_PATH', '') or ''
+    ).strip()
+    signature = (max_inflight, interval_seconds, timeout_seconds, shared_lock_path)
     if _discord_send_limiter is None or _discord_send_limiter_signature != signature:
         _discord_send_limiter = DiscordSendLimiter(
             max_inflight=max_inflight,
             interval_seconds=interval_seconds,
             timeout_seconds=timeout_seconds,
+            shared_lock_path=shared_lock_path,
         )
         _discord_send_limiter_signature = signature
     return _discord_send_limiter
@@ -6695,11 +6810,19 @@ class DiscordBotClient(discord.Client):
         self._mark_dm_alert(channel_id)
         logger.info(f"📱 Bark通知已发送: 账号:{account_name} | 类型:发起私信 | 发送者:{sender_name}")
 
-    async def _download_attachment_once(self, attachment, timeout, headers, proxy_url):
+    async def _download_attachment_once(
+        self,
+        attachment,
+        timeout,
+        headers,
+        proxy_url,
+        *,
+        trust_env=True,
+    ):
         async with aiohttp.ClientSession(
             timeout=timeout,
             headers=headers,
-            trust_env=True,
+            trust_env=trust_env,
         ) as session:
             async with session.get(attachment.url, proxy=proxy_url) as response:
                 if response.status != 200:
@@ -6796,41 +6919,68 @@ class DiscordBotClient(discord.Client):
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         }
 
-        for attempt in range(3):
-            try:
-                image_data = await self._download_attachment_once(
-                    attachment,
-                    timeout,
-                    headers,
-                    proxy_url,
-                )
-                if image_data is not None:
-                    logger.debug("图片下载成功，大小: %s bytes", len(image_data))
-                    return image_data
-            except asyncio.TimeoutError:
-                logger.warning(
-                    "图片下载超时 (尝试 %s/3): host=%s filename=%s timeout=30s",
-                    attempt + 1,
+        download_sources = []
+        if proxy_url:
+            download_sources.append((proxy_url, True, "proxy"))
+            download_sources.append((None, False, "direct"))
+        else:
+            download_sources.append((None, True, "direct"))
+
+        for source_index, (source_proxy, trust_env, source_name) in enumerate(download_sources):
+            source_attempts = 2 if source_proxy else 1
+            for attempt in range(source_attempts):
+                try:
+                    image_data = await self._download_attachment_once(
+                        attachment,
+                        timeout,
+                        headers,
+                        source_proxy,
+                        trust_env=trust_env,
+                    )
+                    if image_data is not None:
+                        logger.debug(
+                            "图片下载成功，大小: %s bytes source=%s",
+                            len(image_data),
+                            source_name,
+                        )
+                        return image_data
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "图片下载超时 source=%s attempt=%s/%s host=%s filename=%s timeout=30s",
+                        source_name,
+                        attempt + 1,
+                        source_attempts,
+                        urlparse(attachment.url).hostname,
+                        attachment.filename,
+                    )
+                except aiohttp.ClientError as error:
+                    logger.warning(
+                        "图片下载网络错误 source=%s attempt=%s/%s: %s: %s",
+                        source_name,
+                        attempt + 1,
+                        source_attempts,
+                        type(error).__name__,
+                        error,
+                    )
+                except Exception as error:
+                    logger.warning(
+                        "图片下载异常 source=%s attempt=%s/%s: %s: %s",
+                        source_name,
+                        attempt + 1,
+                        source_attempts,
+                        type(error).__name__,
+                        _summarize_exception_for_log(error),
+                    )
+
+                if attempt + 1 < source_attempts:
+                    await asyncio.sleep(1)
+
+            if source_index + 1 < len(download_sources):
+                logger.info(
+                    "代理图片下载失败，切换直连 CDN: host=%s filename=%s",
                     urlparse(attachment.url).hostname,
                     attachment.filename,
                 )
-            except aiohttp.ClientError as error:
-                logger.warning(
-                    "图片下载网络错误 (尝试 %s/3): %s: %s",
-                    attempt + 1,
-                    type(error).__name__,
-                    error,
-                )
-            except Exception as error:
-                logger.exception(
-                    "图片下载异常 (尝试 %s/3): %s",
-                    attempt + 1,
-                    type(error).__name__,
-                )
-                return None
-
-            if attempt < 2:
-                await asyncio.sleep(2)
 
         return None
 
@@ -7817,8 +7967,6 @@ class DiscordBotClient(discord.Client):
 
                 # 调用后端实时图片检索服务。
                 request_url = f'{config.BACKEND_API_URL.replace("/api", "")}/search_similar'
-                max_attempts = IMAGE_RECOGNITION_MAX_ATTEMPTS
-                busy_max_attempts = max(max_attempts, 2)
                 retry_delay = IMAGE_RECOGNITION_RETRY_DELAY_SECONDS
 
                 def _build_form_data():
@@ -7837,38 +7985,54 @@ class DiscordBotClient(discord.Client):
                     return form
 
                 attempt = 0
-                busy_attempts = 0
                 while True:
                     attempt += 1
-                    async with session.post(request_url, data=_build_form_data()) as resp:
-                        if resp.status == 200:
-                            result = await resp.json()
-                            return result
+                    try:
+                        async with session.post(request_url, data=_build_form_data()) as resp:
+                            if resp.status == 200:
+                                result = await resp.json()
+                                return result
 
-                        response_text = (await resp.text()).strip()
-                        compact_response_text = re.sub(r'\s+', ' ', response_text)[:300]
+                            response_text = (await resp.text()).strip()
+                            compact_response_text = re.sub(r'\s+', ' ', response_text)[:300]
+                            logger.warning(
+                                'recognize_image backend status=%s attempt=%s body=%s',
+                                resp.status,
+                                attempt,
+                                compact_response_text or '<empty>',
+                            )
+                            search_warming_up = resp.status == 503 and (
+                                'search warming up' in compact_response_text
+                                or '图搜服务预热中' in compact_response_text
+                                or '预热中' in compact_response_text
+                            )
+                            # 搜索队列满、检索超时和短暂 API 限流都属于可恢复状态。
+                            # 图片任务在后台运行，保持退避等待，避免把已收到的图片直接丢掉。
+                            if resp.status in {429, 503}:
+                                await asyncio.sleep(retry_delay)
+                                retry_delay = min(
+                                    retry_delay * (1.3 if search_warming_up else 1.8),
+                                    30.0,
+                                )
+                                continue
+                            return None
+                    except asyncio.TimeoutError:
                         logger.warning(
-                            'recognize_image backend status=%s attempt=%s body=%s',
-                            resp.status,
+                            'recognize_image backend request timeout, retrying: attempt=%s timeout=%.1fs',
                             attempt,
-                            compact_response_text or '<empty>',
+                            IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS,
                         )
-                        search_warming_up = resp.status == 503 and (
-                            'search warming up' in compact_response_text
-                            or '图搜服务预热中' in compact_response_text
-                            or '预热中' in compact_response_text
+                        await asyncio.sleep(retry_delay)
+                        retry_delay = min(retry_delay * 1.8, 30.0)
+                    except aiohttp.ClientError as error:
+                        logger.warning(
+                            'recognize_image backend network error, retrying: attempt=%s type=%s error=%s',
+                            attempt,
+                            type(error).__name__,
+                            _summarize_exception_for_log(error),
                         )
-                        if search_warming_up:
-                            await asyncio.sleep(retry_delay)
-                            retry_delay = min(retry_delay * 1.3, 6.0)
-                            continue
-                        # 后端繁忙/预热时短暂退避，避免一次队列抖动就放弃这张图。
-                        busy_attempts += 1
-                        if resp.status in {429, 503} and busy_attempts < busy_max_attempts:
-                            await asyncio.sleep(retry_delay)
-                            retry_delay = min(retry_delay * 1.8, 6.0)
-                            continue
-                        return None
+                        await asyncio.sleep(retry_delay)
+                        retry_delay = min(retry_delay * 1.8, 30.0)
 
         except asyncio.TimeoutError:
             logger.error(

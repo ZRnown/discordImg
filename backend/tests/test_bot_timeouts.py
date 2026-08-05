@@ -1,4 +1,5 @@
 import asyncio
+import os
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -6,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 from backend import bot as bot_module
 from backend.bot import (
-    MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS,
+    DiscordSendLimiter,
     _auto_reply_thread_ids,
     _send_discord_message,
     _get_image_match_reply_block_reason,
@@ -74,13 +75,24 @@ class BotTimeoutHelpersTestCase(unittest.TestCase):
             _should_retry_discord_reply_after_error(RuntimeError("bad reference"))
         )
 
-    def test_image_recognition_request_timeout_tracks_stage_timeout(self):
-        self.assertEqual(
-            _get_image_recognition_request_timeout_seconds(
-                MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS
-            ),
-            85.0,
+    def test_does_not_fallback_after_discord_rate_limit(self):
+        self.assertFalse(
+            _should_retry_discord_reply_after_error(bot_module.discord.RateLimited(5.0))
         )
+
+    def test_image_recognition_request_timeout_tracks_stage_timeout(self):
+        with patch.object(
+            bot_module.config,
+            "DISCORD_IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS",
+            None,
+            create=True,
+        ):
+            self.assertEqual(
+                _get_image_recognition_request_timeout_seconds(
+                    90
+                ),
+                85.0,
+            )
 
     def test_image_recognition_request_timeout_never_drops_below_floor(self):
         self.assertEqual(
@@ -123,6 +135,17 @@ class BotTimeoutHelpersTestCase(unittest.TestCase):
                     options["member_cache_flags"],
                     bot_module.discord.MemberCacheFlags.none(),
                 )
+
+    def test_build_discord_client_runtime_options_limits_long_rate_limit_waits(self):
+        with patch.object(
+            bot_module.config,
+            "DISCORD_MAX_RATELIMIT_TIMEOUT",
+            30.0,
+            create=True,
+        ):
+            options = bot_module.build_discord_client_runtime_options()
+
+        self.assertEqual(options["max_ratelimit_timeout"], 30.0)
 
     def test_get_discord_start_delay_seconds_uses_configured_stagger(self):
         with patch.object(
@@ -392,6 +415,28 @@ class SenderChannelAccessTestCase(unittest.IsolatedAsyncioTestCase):
 
 
 class DiscordSendThrottleTestCase(unittest.IsolatedAsyncioTestCase):
+    async def test_send_discord_message_retries_preflight_rate_limit_without_duplicate_fallback(self):
+        attempts = 0
+
+        async def send_message():
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise bot_module.discord.RateLimited(0.5)
+            return {"content": "one"}
+
+        limiter = DiscordSendLimiter(
+            max_inflight=1,
+            interval_seconds=0.0,
+            timeout_seconds=1.0,
+        )
+        with patch.object(bot_module.asyncio, "sleep", new=AsyncMock()) as sleep_mock:
+            result = await limiter.run(send_message)
+
+        self.assertEqual(result, {"content": "one"})
+        self.assertEqual(attempts, 2)
+        sleep_mock.assert_awaited_once_with(0.5)
+
     async def test_reply_delay_skips_typing_when_disabled(self):
         typing_calls = 0
 
@@ -622,6 +667,79 @@ class RecognizeImageRetryPolicyTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fake_session.post_calls, 2)
         mock_sleep.assert_awaited_once()
 
+    async def test_recognize_image_keeps_waiting_through_multiple_backend_busy_responses(self):
+        class FakeResponse:
+            def __init__(self, status, body):
+                self.status = status
+                self._body = body
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def text(self):
+                return self._body
+
+            async def json(self):
+                import json
+
+                return json.loads(self._body)
+
+        class FakeSession:
+            def __init__(self, responses):
+                self._responses = list(responses)
+                self.post_calls = 0
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def post(self, *args, **kwargs):
+                response = self._responses[self.post_calls]
+                self.post_calls += 1
+                return response
+
+        fake_session = FakeSession(
+            [
+                FakeResponse(503, '{"error":"search busy","retryable":true}'),
+                FakeResponse(503, '{"error":"search busy","retryable":true}'),
+                FakeResponse(503, '{"error":"search busy","retryable":true}'),
+                FakeResponse(200, '{"success":true,"results":[]}'),
+            ]
+        )
+
+        with patch.object(
+            bot_module.aiohttp,
+            "ClientSession",
+            return_value=fake_session,
+        ), patch.object(
+            bot_module.asyncio,
+            "sleep",
+            AsyncMock(),
+        ) as mock_sleep, patch.object(
+            bot_module.config,
+            "BACKEND_API_URL",
+            "http://127.0.0.1:5001",
+            create=True,
+        ), patch.object(
+            bot_module,
+            "IMAGE_RECOGNITION_MAX_ATTEMPTS",
+            1,
+        ):
+            result = await bot_module.DiscordBotClient.recognize_image(
+                SimpleNamespace(user_id=None),
+                b"fake-image-bytes",
+                user_shops=["Vibeo"],
+            )
+
+        self.assertEqual(result, {"success": True, "results": []})
+        self.assertEqual(fake_session.post_calls, 4)
+        self.assertEqual(mock_sleep.await_count, 3)
+
     async def test_recognize_image_waits_until_search_warmup_finishes(self):
         class FakeResponse:
             def __init__(self, status, body):
@@ -695,6 +813,33 @@ class RecognizeImageRetryPolicyTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, {"success": True, "results": []})
         self.assertEqual(fake_session.post_calls, 3)
         self.assertEqual(mock_sleep.await_count, 2)
+
+
+class AttachmentDownloadFallbackTestCase(unittest.IsolatedAsyncioTestCase):
+    async def test_attachment_download_falls_back_to_direct_after_proxy_failures(self):
+        client = object.__new__(bot_module.DiscordBotClient)
+        attachment = SimpleNamespace(
+            url="https://cdn.discordapp.com/attachments/1/image.jpg",
+            filename="image.jpg",
+            read=AsyncMock(side_effect=RuntimeError("gateway download failed")),
+        )
+        client._download_attachment_with_curl_cffi = AsyncMock(return_value=None)
+        client._download_attachment_once = AsyncMock(
+            side_effect=[None, None, b"direct-image-bytes"]
+        )
+
+        with patch.dict(os.environ, {"HTTPS_PROXY": "http://127.0.0.1:7897"}), patch.object(
+            bot_module.asyncio,
+            "sleep",
+            new=AsyncMock(),
+        ):
+            result = await client._download_discord_attachment(attachment)
+
+        self.assertEqual(result, b"direct-image-bytes")
+        self.assertEqual(client._download_attachment_once.await_count, 3)
+        last_call = client._download_attachment_once.await_args_list[-1]
+        self.assertIsNone(last_call.args[3])
+        self.assertFalse(last_call.kwargs["trust_env"])
 
 
 class KeywordSearchEntryTestCase(unittest.IsolatedAsyncioTestCase):
