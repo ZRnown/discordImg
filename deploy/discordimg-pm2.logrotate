@@ -1,0 +1,10 @@
+/home/administrator/.pm2/logs/*.log {
+    daily
+    maxsize 100M
+    rotate 7
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+}
