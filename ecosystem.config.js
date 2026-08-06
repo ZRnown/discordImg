@@ -21,7 +21,15 @@ const resolvePythonInterpreter = () => {
   return "python3"
 }
 
-const discordWorkerCount = Number(process.env.BOT_WORKER_COUNT || process.env.BOT_SHARD_COUNT || 8)
+// Each worker loads the retrieval runtime. Four workers keep the service
+// responsive on the available VPS memory while still covering every account.
+const configuredDiscordWorkerCount = Number(
+  process.env.BOT_WORKER_COUNT || process.env.BOT_SHARD_COUNT || 4,
+)
+const discordWorkerCount = Number.isInteger(configuredDiscordWorkerCount)
+  && configuredDiscordWorkerCount > 0
+  ? configuredDiscordWorkerCount
+  : 4
 
 const discordWorkerEnv = {
   NODE_ENV: "production",
@@ -45,9 +53,11 @@ const discordWorkerEnv = {
   DISCORD_MAX_RATELIMIT_TIMEOUT: "30",
   DISCORD_SEND_TYPING_ENABLED: "0",
   DISCORD_BOUND_CHANNEL_CACHE_TTL_SECONDS: "5",
-  DISCORD_DISCONNECT_OFFLINE_GRACE_SECONDS: "45",
+  // A Gateway resume is normally faster than this; keep transient network
+  // resets from making the dashboard flip accounts offline.
+  DISCORD_DISCONNECT_OFFLINE_GRACE_SECONDS: "300",
   DISCORD_GATEWAY_FLAP_WINDOW_SECONDS: "600",
-  DISCORD_GATEWAY_FLAP_THRESHOLD: "5",
+  DISCORD_GATEWAY_FLAP_THRESHOLD: "20",
   DISCORD_HEARTBEAT_TIMEOUT: "240.0",
   DISCORD_STARTUP_STAGGER_SECONDS: "5.0",
   DISCORD_IMAGE_RECOGNITION_REQUEST_TIMEOUT_SECONDS: "240.0",
@@ -57,8 +67,8 @@ const discordWorkerEnv = {
   BOT_SHARD_COUNT: String(discordWorkerCount),
   BOT_SHARD_START_OFFSET_SECONDS: "2.5",
   BOT_WATCHDOG_INTERVAL_SECONDS: "60",
-  BOT_WATCHDOG_RESTART_INTERVAL_SECONDS: "300",
-  BOT_WATCHDOG_DISCONNECTED_GRACE_SECONDS: "180",
+  BOT_WATCHDOG_RESTART_INTERVAL_SECONDS: "600",
+  BOT_WATCHDOG_DISCONNECTED_GRACE_SECONDS: "600",
   BOT_WATCHDOG_RESTART_START_DELAY_SECONDS: "20",
   BOT_ACCOUNT_FLAP_WINDOW_SECONDS: "600",
   BOT_ACCOUNT_FLAP_THRESHOLD: "3",
