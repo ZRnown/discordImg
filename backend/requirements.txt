@@ -22,6 +22,8 @@ lxml>=4.9.0
 selenium>=4.15.0
 webdriver-manager>=4.0.0
 
-# Discord Bot Dependencies
-discord.py-self>=2.0.0
-aiohttp>=3.8.0
+# Discord Gateway dependencies are pinned together. Minor curl_cffi releases
+# can change the async WebSocket transport and should be rolled out explicitly.
+discord.py-self==2.1.0
+curl_cffi==0.16.0
+aiohttp==3.14.3
