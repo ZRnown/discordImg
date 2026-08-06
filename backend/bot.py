@@ -7,6 +7,7 @@ import random
 import os
 import json
 import io
+import inspect
 import sqlite3
 import re
 import sys
@@ -111,24 +112,54 @@ except ImportError:
 
 
 def _apply_discord_presence_compat_patch():
-    """兼容部分 discord.py-self 版本缺少 FakeClientPresence.hidden_activities 的问题。"""
+    """兼容 discord.py-self 的 FakeClientPresence 接口不一致。"""
     fake_presence_cls = getattr(discord_state, 'FakeClientPresence', None) if discord_state else None
+    if fake_presence_cls is None:
+        return
+
     # FakeClientPresence inherits Presence's slot descriptor. `hasattr` therefore
     # reports success even though the subclass still lacks the property required
     # by Presence._copy(). Check the subclass dictionary so the compatibility
     # property actually overrides that descriptor.
-    if fake_presence_cls is None or 'hidden_activities' in fake_presence_cls.__dict__:
+    if 'hidden_activities' not in fake_presence_cls.__dict__:
+        @property
+        def hidden_activities(self):
+            all_session = getattr(getattr(self, '_state', None), 'all_session', None)
+            hidden = getattr(all_session, 'hidden_activities', None)
+            if hidden is None:
+                return ()
+            return hidden
+
+        setattr(fake_presence_cls, 'hidden_activities', hidden_activities)
+
+    original_update = getattr(fake_presence_cls, '_update', None)
+    if original_update is None or getattr(original_update, '_accepts_optional_user_id', False):
         return
 
-    @property
-    def hidden_activities(self):
-        all_session = getattr(getattr(self, '_state', None), 'all_session', None)
-        hidden = getattr(all_session, 'hidden_activities', None)
-        if hidden is None:
-            return ()
-        return hidden
+    try:
+        update_parameters = list(inspect.signature(original_update).parameters.values())
+    except (TypeError, ValueError):
+        return
 
-    setattr(fake_presence_cls, 'hidden_activities', hidden_activities)
+    positional_count = sum(
+        parameter.kind in {
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        }
+        for parameter in update_parameters
+    )
+    accepts_extra_args = any(
+        parameter.kind == inspect.Parameter.VAR_POSITIONAL
+        for parameter in update_parameters
+    )
+    if accepts_extra_args or positional_count >= 4:
+        return
+
+    def update_with_optional_user_id(self, data, state, user_id=None):
+        return original_update(self, data, state)
+
+    setattr(update_with_optional_user_id, '_accepts_optional_user_id', True)
+    setattr(fake_presence_cls, '_update', update_with_optional_user_id)
 
 
 _apply_discord_presence_compat_patch()

@@ -37,6 +37,16 @@ class BotTimeoutHelpersTestCase(unittest.TestCase):
 
         self.assertIn("hidden_activities", fake_presence_cls.__dict__)
 
+    def test_presence_compat_patch_accepts_optional_user_id(self):
+        fake_presence_cls = getattr(bot_module.discord_state, "FakeClientPresence", None)
+        if fake_presence_cls is None:
+            self.skipTest("discord.py-self does not expose FakeClientPresence")
+
+        bot_module._apply_discord_presence_compat_patch()
+        presence = object.__new__(fake_presence_cls)
+
+        presence._update({}, SimpleNamespace(), "123456")
+
     def test_detects_discord_blocked_content_error_by_code(self):
         error = SimpleNamespace(code=200000)
 
