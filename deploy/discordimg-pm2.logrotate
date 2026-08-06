@@ -1,4 +1,5 @@
 /home/administrator/.pm2/logs/*.log {
+    su administrator administrator
     daily
     maxsize 100M
     rotate 7
