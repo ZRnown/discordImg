@@ -43,7 +43,9 @@ const discordWorkerEnv = {
   DISCORD_MESSAGE_STAGE_SLOW_SECONDS: "45.0",
   DISCORD_MESSAGE_KEYWORD_SEARCH_TIMEOUT_SECONDS: "240",
   KEYWORD_TEXT_SEARCH_TIMEOUT_SECONDS: "120",
-  KEYWORD_TEXT_SEARCH_MAX_INFLIGHT: "2",
+  // Four workers feed three API search slots. One request per worker keeps a
+  // burst within the API queue budget instead of dropping keyword replies.
+  KEYWORD_TEXT_SEARCH_MAX_INFLIGHT: "1",
   DISCORD_MESSAGE_IMAGE_REPLY_TIMEOUT_SECONDS: "90",
   DISCORD_IMAGE_REPLY_MAX_ATTACHMENTS_PER_MESSAGE: "8",
   DISCORD_SEND_MAX_INFLIGHT: "1",
