@@ -2106,16 +2106,35 @@ class Database:
             logger.error(f"删除用户失败: {e}")
             return False
 
-    def update_account_status(self, account_id: int, status: str) -> bool:
+    def update_account_status(
+        self,
+        account_id: int,
+        status: str,
+        min_update_interval_seconds: Optional[int] = None,
+    ) -> bool:
         """更新Discord账号状态"""
         try:
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute('''
-                    UPDATE discord_accounts
-                    SET status = ?, last_active = datetime('now')
-                    WHERE id = ?
-                ''', (status, account_id))
+                min_interval = max(int(min_update_interval_seconds or 0), 0)
+                if min_interval > 0:
+                    cursor.execute('''
+                        UPDATE discord_accounts
+                        SET status = ?, last_active = datetime('now')
+                        WHERE id = ?
+                          AND (
+                              status IS NULL
+                              OR status <> ?
+                              OR last_active IS NULL
+                              OR last_active <= datetime('now', ?)
+                          )
+                    ''', (status, account_id, status, f'-{min_interval} seconds'))
+                else:
+                    cursor.execute('''
+                        UPDATE discord_accounts
+                        SET status = ?, last_active = datetime('now')
+                        WHERE id = ?
+                    ''', (status, account_id))
                 conn.commit()
                 return cursor.rowcount > 0
         except Exception as e:

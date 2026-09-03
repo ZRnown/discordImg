@@ -1039,6 +1039,25 @@ def _build_keyword_window_key(user_id, website_id, guild_id):
     )
 
 
+def get_discord_start_delay_seconds(start_index: int) -> float:
+    stagger_seconds = float(
+        getattr(config, 'DISCORD_STARTUP_STAGGER_SECONDS', 1.5) or 0.0
+    )
+    return max(stagger_seconds, 0.0) * max(int(start_index or 0), 0)
+
+
+async def start_discord_client_with_delay(
+    client,
+    token,
+    reconnect=True,
+    start_delay_seconds=0.0,
+):
+    delay_seconds = max(float(start_delay_seconds or 0.0), 0.0)
+    if delay_seconds > 0:
+        await asyncio.sleep(delay_seconds)
+    await client.start(token, reconnect=reconnect)
+
+
 def _normalize_keyword_search_text(value: str) -> str:
     return _shared_normalize_keyword_search_text(value)
 
@@ -1450,6 +1469,20 @@ class DiscordBotClient(discord.Client):
         if not ts:
             return False
         return (time.time() - ts) < window_seconds
+
+    @staticmethod
+    def _resolve_channel_lookup_ids(channel_or_id):
+        if channel_or_id is None:
+            return []
+        current_id = getattr(channel_or_id, 'id', channel_or_id)
+        parent = getattr(channel_or_id, 'parent', None)
+        parent_id = getattr(channel_or_id, 'parent_id', None) or getattr(parent, 'id', None)
+        result = []
+        for value in (current_id, parent_id):
+            value = str(value or '').strip()
+            if value and value not in result:
+                result.append(value)
+        return result
 
     async def _run_message_stage_with_timeout(self, message, stage_name, coro, timeout_seconds):
         start_time = time.monotonic()
