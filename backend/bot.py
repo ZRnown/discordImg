@@ -605,7 +605,9 @@ def _resolve_current_review_dispatch_website_config(review_item, message, payloa
             from .database import db
 
         lookup_ids = DiscordBotClient._resolve_channel_lookup_ids(getattr(message, 'channel', None))
-        current_configs = db.get_website_configs_by_channel(lookup_ids, user_id)
+        current_configs = []
+        for lookup_id in lookup_ids:
+            current_configs.extend(db.get_website_configs_by_channel(lookup_id, user_id) or [])
         matched_config = next(
             (config for config in (current_configs or []) if _coerce_int(config.get('id'), None) == website_id),
             None,
@@ -2649,6 +2651,10 @@ class DiscordBotClient(discord.Client):
                 )
                 reply_mode = str(effective_settings.get('reply_mode', 'rotation')).strip().lower()
                 rotation_enabled = _coerce_bool(effective_settings.get('rotation_enabled', 0), False)
+                thread_reply_enabled = _coerce_bool(
+                    (user_website_settings or {}).get('thread_reply_enabled', 0),
+                    False,
+                )
                 rotation_interval = _coerce_int(
                     effective_settings.get('rotation_interval', website_config.get('rotation_interval', 180)),
                     _coerce_int(website_config.get('rotation_interval', 180), 180),
@@ -2743,7 +2749,23 @@ class DiscordBotClient(discord.Client):
                     target_channel = target_client.get_channel(message.channel.id)
 
                     if target_channel:
-                        async with target_channel.typing():
+                        reply_target_channel, used_thread_reply = await resolve_reply_target_channel(
+                            target_client=target_client,
+                            target_channel=target_channel,
+                            message=message,
+                            thread_reply_enabled=thread_reply_enabled,
+                        )
+                        explicit_mentions = bool(
+                            active_custom_reply
+                            and active_custom_reply.get('explicit_mentions')
+                        )
+                        send_plain_message = _should_send_plain_keyword_message(
+                            prevalidated_batch=prevalidated_batch,
+                            explicit_mentions=explicit_mentions,
+                            reply_mode=reply_mode,
+                        )
+
+                        async with reply_target_channel.typing():
                             await asyncio.sleep(random.uniform(min_delay, max_delay))
 
                         # 【关键修复】
@@ -2925,7 +2947,7 @@ class DiscordBotClient(discord.Client):
                                         replied_user=False,
                                     )
 
-                            await target_channel.send(**send_kwargs)
+                            await reply_target_channel.send(**send_kwargs)
                             sent_any = True
 
                             if prevalidated_batch:
@@ -2991,7 +3013,7 @@ class DiscordBotClient(discord.Client):
                                             everyone=False,
                                             replied_user=False,
                                         )
-                                    await target_channel.send(response_content, **fallback_kwargs)
+                                    await reply_target_channel.send(response_content, **fallback_kwargs)
                                     fallback_sent = True
                                 except Exception as fallback_error:
                                     logger.error(f"文本兜底发送失败: {fallback_error}")
@@ -3145,8 +3167,10 @@ class DiscordBotClient(discord.Client):
                 from .database import db
 
             lookup_ids = self._resolve_channel_lookup_ids(channel_id)
-            if len(lookup_ids) <= 1:
-                return db.get_website_configs_by_channel(lookup_ids, self.user_id)
+            if not lookup_ids:
+                return []
+            if len(lookup_ids) == 1:
+                return db.get_website_configs_by_channel(lookup_ids[0], self.user_id)
 
             direct_configs = db.get_website_configs_by_channel(lookup_ids[0], self.user_id)
             parent_configs = db.get_website_configs_by_channel(lookup_ids[1], self.user_id)
@@ -3187,9 +3211,11 @@ class DiscordBotClient(discord.Client):
                 from .database import db
 
             lookup_ids = self._resolve_channel_lookup_ids(channel_id)
-            if len(lookup_ids) <= 1:
+            if not lookup_ids:
+                return []
+            if len(lookup_ids) == 1:
                 return await asyncio.get_event_loop().run_in_executor(
-                    None, db.get_website_configs_by_channel, lookup_ids, self.user_id
+                    None, db.get_website_configs_by_channel, lookup_ids[0], self.user_id
                 )
 
             direct_configs = await asyncio.get_event_loop().run_in_executor(
@@ -3451,6 +3477,17 @@ class DiscordBotClient(discord.Client):
             logger.error(f'更新账号状态失败: {e}')
 
     async def on_message(self, message):
+        logger.info(
+            'Discord消息事件: account_id=%s user_id=%s message_id=%s channel_id=%s '
+            'author_id=%s self=%s attachments=%s',
+            self.account_id,
+            self.user_id,
+            getattr(message, 'id', None),
+            getattr(getattr(message, 'channel', None), 'id', None),
+            getattr(getattr(message, 'author', None), 'id', None),
+            getattr(message, 'author', None) == self.user,
+            len(getattr(message, 'attachments', None) or []),
+        )
         if not self.running:
             return
 
